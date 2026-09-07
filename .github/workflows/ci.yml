@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check host (tsc --noEmit)
+        run: node_modules/.bin/tsc --noEmit -p tsconfig.json
+
+      # SEPARATE project - host tsc does NOT cover webview-ui. Skipping this
+      # step is exactly how CI-only type failures happen.
+      - name: Type-check webview (tsc --noEmit)
+        run: npx tsc --noEmit -p webview-ui/tsconfig.json
+
+      - name: Build host bundle (esbuild)
+        run: node esbuild.js
+
+      - name: Webview tests
+        run: npm run test:webview
+
+      # Browser E2E for the webview bundle. Linux runners need the system
+      # libraries (sudo is available); Windows runners ship them already.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        if: runner.os == 'Linux'
+
+      - name: Install Playwright Chromium (Windows)
+        run: npx playwright install chromium
+        if: runner.os == 'Windows'
+
+      - name: Webview E2E (Playwright)
+        run: npm run test:e2e
+
+      # Host-side security suites. endpoint-guard tests require the compiled
+      # JS (they require out/endpointGuard.js), so emit it once here.
+      - name: Compile host for node test suites
+        run: npx tsc -p . --outDir out
+
+      - name: HTML sanitizer tests
+        run: npm run test:sanitizer
+
+      - name: Endpoint guard tests
+        run: npm run test:endpoint-guard
+
+      - name: Compaction tests
+        run: npm run test:compaction
+
+      - name: Session approval tests
+        run: npm run test:session-approval
+
+      - name: Agent skills tests
+        run: npm run test:skills
+
+      - name: Shadow checkpoint restore tests
+        run: npm run test:shadow-checkpoint
+
+      - name: Session store tests
+        run: npm run test:session-store

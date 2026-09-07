@@ -1,0 +1,5943 @@
+/* ===========================================================================
+   Project Xratu - Webview theme
+   Brand: bright teal accent used ONLY on corners, borders, and subtle touches.
+   Bubbles & input are deliberately darker than the sidebar.
+   Feel: modern, minimal, smooth streaming (Cursor-like).
+   =========================================================================== */
+
+:root {
+    /* Bright teal accent - used sparingly */
+    --xratu-accent: #14e3c8;
+    --xratu-accent-strong: #2af0d6;
+    --xratu-accent-dim: rgba(20, 227, 200, 0.18);
+    --xratu-accent-faint: rgba(20, 227, 200, 0.08);
+
+    /* Darker bubbles (darkened relative to the VS Code theme tokens) */
+    --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+    --xratu-bubble-user: color-mix(in srgb, var(--vscode-sideBar-background) 90%, #000);
+    --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
+
+    /* Sub-page card tone - the composer card's exact color, kept from the
+       sub-page redesign (settings/capabilities/credentials/welcome). */
+    --xratu-surface: var(--vscode-input-background);
+
+    /* Shared shell tone - toolbar, chat section and composer strip are ONE
+       surface; bubbles float on it. Matches VS Code EXACTLY. */
+    --xratu-shell: var(--vscode-sideBar-background);
+
+    /* Borders blend the widget border with the accent (subtle) */
+    --xratu-border: color-mix(in srgb, var(--vscode-widget-border) 60%, var(--xratu-accent));
+
+    /* Neutral resting border for sub-page forms/rows - the accent-mixed
+       --xratu-border stays chat-only (suggestion chips, bubbles). */
+    --xratu-border-quiet: var(--vscode-widget-border);
+
+    --xratu-radius: 10px;
+    --xratu-radius-sm: 7px;
+    --xratu-radius-xs: 5px;
+    --xratu-gap: 12px;
+
+    --xratu-fs-xs: 10.5px;
+    --xratu-fs-sm: 11px;
+    --xratu-fs-md: 12px;
+    --xratu-fs-base: 13px;
+    --xratu-fs-lg: 15px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+}
+
+body {
+    font-family: var(--vscode-font-family);
+    color: var(--vscode-editor-foreground);
+    background: var(--vscode-sideBar-background);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+#root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Accessibility: visible focus ring in the accent color */
+:focus-visible {
+    outline: 2px solid var(--xratu-accent);
+    outline-offset: 1px;
+    border-radius: 4px;
+}
+
+button {
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* ---------------------------------------------------------------------------
+   App shell
+   --------------------------------------------------------------------------- */
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Toolbar - slim header: brand · connection · ghost actions
+   --------------------------------------------------------------------------- */
+.toolbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    /* Same inline padding as .messages/.input-bar - one aligned column */
+    padding: 6px 12px;
+    background: var(--xratu-shell);
+}
+
+/* Centered session button - shows the current conversation's title
+   (truncated) and opens the session picker. Absolutely centered so it
+   reads as the toolbar's middle anchor regardless of side-group widths. */
+.session-btn {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: min(46%, 260px);
+    height: 28px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: 12px;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.session-btn:hover:not(:disabled),
+.session-btn.open {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.session-btn-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.session-btn-chevron {
+    flex: 0 0 auto;
+    transition: transform 0.15s ease;
+}
+
+.session-btn.open .session-btn-chevron {
+    transform: rotate(180deg);
+}
+
+/* Session picker - drops DOWN from the toolbar like a second toolbar row:
+   same shell background, no border, no shadow - the panel reads as the
+   toolbar expanding, and the bottom edge dissolves with the same soft
+   fade the message list uses. */
+.session-pop {
+    position: absolute;
+    z-index: 40;
+    top: 100%;
+    inset-inline: 0;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 12px;
+    background: var(--xratu-shell);
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
+    animation: xratu-drop 0.16s ease-out;
+}
+
+.session-pop-head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px 6px;
+}
+
+.session-scope {
+    border: none;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: var(--xratu-radius-sm);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.session-scope:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.session-scope.active {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.session-pop-close {
+    margin-inline-start: auto;
+}
+
+.session-pop-list {
+    overflow-y: auto;
+    max-height: 42vh;
+    scrollbar-width: none;
+    padding: 0 6px;
+}
+
+.session-pop-list::-webkit-scrollbar {
+    display: none;
+}
+
+.session-empty {
+    padding: 14px 8px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.session-group-label {
+    padding: 8px 8px 3px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.75;
+}
+
+.session-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: var(--xratu-radius-sm);
+}
+
+.session-row.current {
+    background: var(--xratu-accent-faint);
+}
+
+.session-row-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    border: none;
+    background: transparent;
+    color: var(--vscode-foreground);
+    font-family: inherit;
+    font-size: 12px;
+    text-align: start;
+    padding: 6px 8px;
+    border-radius: var(--xratu-radius-sm);
+    transition: background 0.15s ease;
+}
+
+.session-row-main:hover:not(:disabled) {
+    background: var(--xratu-accent-faint);
+}
+
+.session-row-main:disabled {
+    cursor: default;
+}
+
+.session-row-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.session-row.current .session-row-title {
+    color: var(--xratu-accent-strong);
+}
+
+.session-row-ws {
+    flex: 0 0 auto;
+    max-width: 40%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.session-row-action {
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.session-row:hover .session-row-action,
+.session-row-action:focus-visible {
+    opacity: 1;
+}
+
+.session-row-delete:hover:not(:disabled) {
+    color: var(--vscode-errorForeground, #f66);
+}
+
+.session-row-edit {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 4px;
+}
+
+.session-edit-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: var(--xratu-radius-sm);
+}
+
+.session-row-confirm {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+}
+
+.session-row-confirm-text {
+    flex: 1 1 auto;
+    font-size: 11px;
+    color: var(--vscode-foreground);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.session-danger {
+    flex: 0 0 auto;
+    border: none;
+    background: var(--xratu-accent-faint);
+    color: var(--vscode-errorForeground, #f66);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: var(--xratu-radius-sm);
+    transition: background 0.15s ease;
+}
+
+.session-danger:hover {
+    background: var(--xratu-accent-dim);
+}
+
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ghost-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ghost-btn.small {
+    width: 26px;
+    height: 26px;
+}
+
+.ghost-btn:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+/* Latched state (plan / YOLO toggles) - visibly ON, not just hovered */
+.ghost-btn.active {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    box-shadow: inset 0 0 0 1px var(--xratu-accent-dim);
+}
+
+.ghost-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Refresh-in-progress: the spinning icon must stay visible instead of
+   fading out with :disabled - cursor shows work is happening. */
+.ghost-btn:disabled:has(svg.spinning) {
+    opacity: 0.85;
+    cursor: progress;
+}
+
+/* Connection status */
+.conn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* ---------------------------------------------------------------------------
+   Message list
+   --------------------------------------------------------------------------- */
+.messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--xratu-gap);
+    /* Pinning is handled in JS: CSS smooth-scroll here animated layout
+       changes (e.g. expanding a tool/thinking row) against our own
+       programmatic scrolls -> jitter/"tearing". */
+    scroll-behavior: auto;
+    overflow-anchor: none;
+    /* No visible scrollbar: a classic one consumes layout width and breaks
+       column alignment with toolbar/composer. Scrolling itself (wheel,
+       touch, auto-follow) is unaffected; the jump button + edge fade keep
+       orientation. */
+    scrollbar-width: none;
+}
+
+.messages::-webkit-scrollbar {
+    display: none;
+}
+
+/* Inner content wrapper: carries the flex column layout (moved from
+   .messages when the host's ResizeObserver needed a sized element to
+   watch - the scroller's own box is fixed, so pill expand/collapse only
+   resizes THIS node). */
+.messages-inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--xratu-gap);
+    /* Stretch to the scroller even when empty so the empty state's
+       margin:auto can center it vertically. */
+    min-height: 100%;
+}
+
+/* Chat area wraps the scroller so floating controls can overlay it.
+   Same shell tone as toolbar/composer - one continuous surface. */
+.chat-area {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--xratu-shell);
+}
+
+/* Edge fade: overlay gradients instead of a mask-image on the scroller.
+   A mask on an overflow-y container forces a composited mask layer that
+   desyncs from scrolled content in VS Code webviews - the whole list
+   ghost-renders at stale offsets after a burst of scroll + animated
+   bubbles (seen right after steering a live run). An overlay paints
+   ABOVE the scroll layer and can never desync from it. */
+.chat-area::before,
+.chat-area::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 12px;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.chat-area::before {
+    top: 0;
+    background: linear-gradient(to bottom, var(--xratu-shell), transparent);
+}
+
+.chat-area::after {
+    bottom: 0;
+    background: linear-gradient(to top, var(--xratu-shell), transparent);
+}
+
+.jump-btn {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--xratu-shell) 72%, #000);
+    color: var(--vscode-descriptionForeground);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+    /* Own keyframes: the shared xratu-rise animates `transform`, which would
+       clobber the translateX(-50%) centering while it runs - the button
+       appears off-center and then jumps into place. */
+    animation: xratu-jump-in 0.15s ease-out;
+    transition: color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+@keyframes xratu-jump-in {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%);
+    }
+}
+
+.jump-btn:hover {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent);
+    transform: translateX(-50%) translateY(-2px);
+}
+
+.jump-btn:active {
+    transform: translateX(-50%) translateY(0);
+}
+
+.approval-card {
+    width: 100%;
+    margin: 10px 0 2px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    overflow: hidden;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+}
+
+.approval-card.pending {
+    border-color: var(--vscode-widget-border);
+}
+
+.approval-card.resolved {
+    opacity: 0.86;
+}
+
+.approval-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 9px;
+    min-height: 48px;
+    padding: 9px 11px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.approval-head-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    flex: 1;
+}
+
+.approval-state-icon {
+    width: 27px;
+    height: 27px;
+    flex: 0 0 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+}
+
+.approval-state-icon.resolved {
+    background: transparent;
+}
+
+.approval-heading-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.approval-heading-copy strong {
+    font-size: 12px;
+    line-height: 1.25;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.approval-heading-copy span {
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.approval-count {
+    margin-inline-start: auto;
+    min-width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--xratu-accent-strong);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.approval-header-stats {
+    margin-inline-start: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.approval-header-stats span:first-child {
+    color: var(--vscode-descriptionForeground);
+    font-weight: 500;
+}
+
+.approval-stat {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-weight: 650;
+}
+
+.approval-stat.add,
+.approval-file-stats .add {
+    color: #3fb950;
+}
+
+.approval-stat.del,
+.approval-file-stats .del {
+    color: #f85149;
+}
+
+.approval-items {
+    display: flex;
+    flex-direction: column;
+}
+
+.approval-item {
+    border: 0;
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.approval-item:last-child {
+    border-bottom: 0;
+}
+
+.approval-item summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.approval-item summary::-webkit-details-marker {
+    display: none;
+}
+
+.approval-item summary:hover {
+    background: color-mix(in srgb, var(--vscode-list-hoverBackground) 55%, transparent);
+}
+
+.approval-file-icon {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-input-background) 75%, transparent);
+}
+
+.approval-file-copy {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.approval-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+    font-size: 11.5px;
+    font-weight: 600;
+    direction: ltr;
+    text-align: start;
+}
+
+.approval-file-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    direction: ltr;
+    text-align: start;
+}
+
+.approval-file-stats {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.approval-tool-mini {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+    color: var(--xratu-accent-strong);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9.5px;
+}
+
+.approval-denied-tag {
+    flex: 0 0 auto;
+    font-size: 9px;
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.08);
+    border: 1px solid rgba(248, 81, 73, 0.25);
+    border-radius: 999px;
+    padding: 2px 6px;
+}
+
+.approval-item-chevron {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+    transition: transform 0.12s ease;
+}
+
+.approval-item[open] .approval-item-chevron {
+    transform: rotate(180deg);
+}
+
+.approval-item-body {
+    padding: 0 10px 9px;
+}
+
+.approval-diff-wrap {
+    overflow: hidden;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+}
+
+.approval-diff {
+    max-height: 310px;
+    overflow: auto;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+    line-height: 1.5;
+    tab-size: 4;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.diff-row {
+    white-space: pre;
+}
+
+.diff-no {
+    width: 36px;
+    padding: 0 6px;
+    text-align: right;
+    user-select: none;
+    color: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, transparent);
+    border-right: 1px solid color-mix(in srgb, var(--vscode-widget-border) 70%, transparent);
+}
+
+.diff-no-old {
+    border-right: 1px solid color-mix(in srgb, var(--vscode-widget-border) 70%, transparent);
+}
+
+.diff-mark {
+    width: 16px;
+    text-align: center;
+    user-select: none;
+    color: var(--vscode-descriptionForeground);
+}
+
+.diff-code {
+    padding: 1px 8px;
+    white-space: pre;
+    word-break: break-word;
+}
+
+.diff-code span {
+    background: transparent !important;
+    filter: saturate(1.25) brightness(1.15);
+}
+
+.diff-row.diff-add {
+    background: rgba(63, 185, 80, 0.10);
+}
+
+.diff-row.diff-add .diff-mark,
+.diff-row.diff-add .diff-code {
+    color: #3fb950;
+}
+
+.diff-row.diff-del {
+    background: rgba(248, 81, 73, 0.10);
+}
+
+.diff-row.diff-del .diff-mark,
+.diff-row.diff-del .diff-code {
+    color: #f85149;
+}
+
+.diff-row.diff-ctx .diff-code {
+    color: var(--vscode-descriptionForeground);
+}
+
+.approval-action-preview {
+    padding: 9px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--vscode-input-background) 80%, #000);
+}
+
+.approval-action-label {
+    margin-bottom: 5px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.approval-action-path {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--xratu-accent-strong);
+    font-size: 11px;
+}
+
+.approval-action-preview pre {
+    margin: 5px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--vscode-foreground);
+}
+
+.approval-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 8px 9px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 88%, #000);
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+/* Same chip language as the composer: quiet pills, icon-tinted hover,
+   accent used sparingly on the primary action only. */
+.approval-actions button {
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 12px;
+    border-radius: 999px;
+    font-size: var(--xratu-fs-sm);
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.approval-actions .deny-btn {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    /* Transparent border, not none: all three actions share the same box
+       structure (1px border inside a fixed border-box height), so the row
+       can never render mixed heights under fractional-DPR rounding. */
+    border: 1px solid transparent;
+}
+
+.approval-actions .deny-btn:hover:not(:disabled) {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.09);
+}
+
+/* Middle action: quiet ghost pill between Deny and Approve - trusts one KIND
+   of command/tool for the rest of the session without touching settings. */
+.approval-actions .session-allow-btn {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: 1px solid var(--vscode-widget-border);
+}
+
+.approval-actions .session-allow-btn:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+}
+
+.approval-actions .apply-btn {
+    flex: 1;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+}
+
+.approval-actions .apply-btn:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-dim);
+    border-color: color-mix(in srgb, var(--xratu-accent) 60%, transparent);
+}
+
+.approval-actions button:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+.approval-resolution {
+    padding: 8px 10px 9px;
+    border-top: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 10.5px;
+}
+
+.approval-resolution.approved {
+    color: #3fb950;
+}
+
+.approval-resolution.rejected {
+    color: var(--vscode-descriptionForeground);
+}
+
+.approval-resolution.mixed {
+    color: var(--xratu-accent-strong);
+}
+
+.approval-waiting-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 7px 0 1px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10.5px;
+}
+
+.approval-waiting-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    border-radius: 50%;
+    background: var(--xratu-accent);
+    box-shadow: 0 0 0 3px var(--xratu-accent-faint);
+}
+
+.msg.approval-paused .msg-content.streaming::after {
+    display: none;
+}
+
+/* Empty state - brand mark + suggestion chips */
+.empty-state {
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+    padding: 24px;
+    max-width: 340px;
+}
+
+.empty-mark {
+    position: relative;
+    width: 52px;
+    height: 52px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+}
+
+.empty-mark::before,
+.empty-mark::after {
+    content: '';
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--xratu-accent);
+    opacity: 0.85;
+}
+
+.empty-mark::before {
+    top: -2px;
+    left: -2px;
+    border-right: none;
+    border-bottom: none;
+    border-top-left-radius: 12px;
+}
+
+.empty-mark::after {
+    right: -2px;
+    bottom: -2px;
+    border-left: none;
+    border-top: none;
+    border-bottom-right-radius: 12px;
+}
+
+.empty-state h2 {
+    font-size: var(--xratu-fs-lg);
+    font-weight: 600;
+    margin: 0;
+}
+
+.empty-state p {
+    font-size: var(--xratu-fs-md);
+    color: var(--vscode-descriptionForeground);
+    margin: 0;
+}
+
+.chip-row {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: 100%;
+    margin-top: 12px;
+}
+
+.chip {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 12px;
+    font-size: var(--xratu-fs-base);
+    text-align: start;
+    color: var(--vscode-foreground);
+    background: var(--xratu-input);
+    border: 1px solid var(--xratu-border);
+    border-radius: var(--xratu-radius-sm);
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.chip svg {
+    flex-shrink: 0;
+    color: var(--xratu-accent);
+}
+
+.chip:hover {
+    border-color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+}
+
+/* Suggestion chips ride in one after another - the stagger is the hook. */
+.chip-suggest {
+    animation: xratu-rise 0.22s ease-out backwards;
+}
+
+.chip:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.chip:disabled:hover {
+    border-color: var(--xratu-border);
+    background: var(--xratu-input);
+}
+
+/* ---------------------------------------------------------------------------
+   Message bubbles - darker, rounded, with teal corner accents
+   --------------------------------------------------------------------------- */
+.msg {
+    position: relative;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius);
+    padding: 11px 13px;
+    background: var(--xratu-bubble);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    animation: xratu-rise 0.18s ease-out;
+}
+
+@keyframes xratu-rise {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Teal corner brackets - accent only on corners */
+.msg::before,
+.msg::after {
+    content: '';
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--xratu-accent);
+    opacity: 0.85;
+}
+
+.msg::before {
+    top: -1px;
+    left: -1px;
+    border-right: none;
+    border-bottom: none;
+    border-top-left-radius: var(--xratu-radius);
+}
+
+.msg::after {
+    right: -1px;
+    bottom: -1px;
+    border-left: none;
+    border-top: none;
+    border-bottom-right-radius: var(--xratu-radius);
+}
+
+/* Connection-status corner brackets: the dot is gone, the brackets
+   carry the signal instead. */
+.msg.conn-error::before,
+.msg.conn-error::after {
+    border-color: #f85149;
+}
+
+.msg.conn-disconnected::before,
+.msg.conn-disconnected::after {
+    border-color: #bf8700;
+}
+
+/* Steered user turn - sent into a LIVE run (queued at the agent loop's
+   next round). Same amber signal as a dropped connection on the corner
+   brackets plus an explicit badge, so "the model got this mid-run" is
+   stated, not implied. */
+.msg.user.steered::before,
+.msg.user.steered::after {
+    border-color: #bf8700;
+}
+
+.msg-steered-badge {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin-bottom: 6px;
+    color: #bf8700;
+    font-size: var(--xratu-fs-xs);
+}
+
+.msg-steered-badge svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+.msg-steered-badge span {
+    overflow-wrap: anywhere;
+}
+
+/* Error bubbles get red corner brackets too. */
+.msg.error::before,
+.msg.error::after {
+    border-color: #f85149;
+}
+
+/* Corner brackets carry the accent - no side stripes on bubbles */
+.msg.user {
+    background: var(--xratu-bubble-user);
+}
+
+.msg.system {
+    background: transparent;
+    border: 1px dashed var(--vscode-widget-border);
+    box-shadow: none;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    text-align: center;
+}
+
+.msg.system.error {
+    border-color: var(--vscode-errorForeground);
+    color: var(--vscode-errorForeground);
+}
+
+.msg.system.pending {
+    border-color: var(--xratu-accent);
+    color: var(--xratu-accent-strong);
+}
+
+/* ---------------------------------------------------------------------------
+   Xratu Markdown surface
+   The host emits semantic Markdown HTML; these rules make the DOM feel like
+   a coding assistant rather than a generic article renderer.
+   --------------------------------------------------------------------------- */
+.message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin: 0 0 9px;
+}
+
+.message-attachment-image {
+    position: relative;
+    width: min(100%, 240px);
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-editor-background);
+}
+
+.message-attachment-image img {
+    display: block;
+    width: 100%;
+    max-height: 240px;
+    object-fit: cover;
+    background: var(--vscode-editor-background);
+}
+
+.message-attachment-image figcaption {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    padding: 5px 7px;
+    border-top: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 10.5px;
+}
+
+.message-attachment-image figcaption span,
+.message-attachment-file span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 240px;
+    padding: 5px 8px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-xs);
+    background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000);
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+}
+
+.message-attachment-file-icon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--xratu-accent);
+}
+
+.msg-content {
+    font-size: 13.5px;
+    line-height: 1.62;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+/* Raw (non-markdown) bubble text - user prompts and pre-markdown stream
+   chunks are plain text; keep their newlines visible instead of merging
+   every line into one run. */
+.msg-content.msg-text {
+    white-space: pre-wrap;
+}
+
+.msg-content > :first-child {
+    margin-top: 0;
+}
+
+.msg-content > :last-child {
+    margin-bottom: 0;
+}
+
+.msg-content p {
+    margin: 8px 0;
+}
+
+.msg-content ul,
+.msg-content ol {
+    margin: 8px 0;
+    padding-inline-start: 22px;
+}
+
+.msg-content li + li {
+    margin-top: 3px;
+}
+
+.msg-content li > p {
+    margin: 2px 0;
+}
+
+.msg-content h1,
+.msg-content h2,
+.msg-content h3,
+.msg-content h4,
+.msg-content h5,
+.msg-content h6 {
+    color: var(--vscode-foreground);
+    font-weight: 600;
+    line-height: 1.32;
+    letter-spacing: -0.01em;
+}
+
+.msg-content h1 {
+    font-size: 1.35em;
+    margin: 18px 0 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.msg-content h2 {
+    font-size: 1.18em;
+    margin: 16px 0 7px;
+}
+
+.msg-content h3 {
+    font-size: 1.08em;
+    margin: 14px 0 6px;
+}
+
+.msg-content h4,
+.msg-content h5,
+.msg-content h6 {
+    font-size: 1em;
+    margin: 12px 0 5px;
+}
+
+.msg-content strong {
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.msg-content blockquote {
+    margin: 10px 0;
+    padding: 7px 12px;
+    border-inline-start: 2px solid var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+    color: var(--vscode-descriptionForeground);
+    border-radius: 0 var(--xratu-radius-xs) var(--xratu-radius-xs) 0;
+}
+
+.msg-content blockquote > :first-child {
+    margin-top: 0;
+}
+
+.msg-content blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+.msg-content hr {
+    border: 0;
+    border-top: 1px solid var(--vscode-widget-border);
+    margin: 16px 0;
+}
+
+.msg-content a {
+    color: var(--vscode-textLink-foreground);
+    text-decoration: none;
+}
+
+.msg-content a:hover {
+    text-decoration: underline;
+}
+
+.msg-content code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.9em;
+}
+
+.msg-content code.xratu-inline-code {
+    display: inline;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--vscode-textBlockQuote-background, #1e1e1e) 80%, #000);
+    border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 75%, transparent);
+    color: var(--vscode-foreground);
+    white-space: break-spaces;
+}
+
+.msg-content code.xratu-path {
+    color: var(--xratu-accent-strong);
+    border-bottom: 1px dotted var(--xratu-accent);
+}
+
+.msg-content code.xratu-symbol {
+    color: var(--vscode-textPreformat-foreground);
+}
+
+.msg-content table {
+    width: 100%;
+    margin: 12px 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    overflow: hidden;
+    font-size: 0.95em;
+}
+
+.msg-content th,
+.msg-content td {
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    text-align: start;
+    vertical-align: top;
+}
+
+.msg-content th {
+    background: color-mix(in srgb, var(--vscode-editor-background) 90%, #000);
+    color: var(--vscode-foreground);
+    font-weight: 600;
+}
+
+.msg-content tr:last-child td {
+    border-bottom: 0;
+}
+
+.msg-content kbd {
+    padding: 1px 5px;
+    border: 1px solid var(--vscode-widget-border);
+    border-bottom-color: var(--vscode-descriptionForeground);
+    border-radius: 4px;
+    background: var(--vscode-input-background);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.85em;
+}
+
+/* Fenced code blocks are emitted as a stable shell for both live and final
+   renders. Only the inner highlighting changes when Shiki becomes available. */
+.code-block {
+    margin: 12px 0;
+    overflow: hidden;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+.code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 30px;
+    padding: 4px 8px 4px 10px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+}
+
+.code-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+}
+
+.code-copy {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 22px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-font-family, inherit);
+    font-size: 10.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.code-copy:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: var(--xratu-accent-dim);
+}
+
+.code-copy.copied {
+    color: var(--xratu-accent-strong);
+}
+
+.code-copy svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    flex: 0 0 13px;
+}
+
+.code-surface {
+    overflow-x: auto;
+}
+
+.code-surface > pre {
+    margin: 0;
+    padding: 10px 12px;
+    overflow-x: auto;
+    background: transparent !important;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.55;
+    tab-size: 4;
+}
+
+.code-surface > pre > code {
+    background: transparent !important;
+    padding: 0;
+}
+
+.code-surface > pre.shiki {
+    margin: 0;
+    padding: 10px 12px;
+}
+
+.code-surface > pre.shiki code {
+    background: transparent !important;
+}
+
+.msg-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--xratu-radius-xs);
+}
+
+@media (max-width: 420px) {
+    .msg-content {
+        font-size: 13px;
+    }
+
+    .code-surface > pre,
+    .code-surface > pre.shiki {
+        padding: 9px 10px;
+        font-size: 11.5px;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Streaming cursor (Cursor-like blinking caret at end of streamed content).
+   Lives on .msg-content::after so it also works while the host streams live
+   markdown HTML - no JS span needed. Rendered markdown always ends in a BLOCK
+   element (markdown-it wraps text in <p>…), which would push a container-level
+   inline-block caret onto its own empty line BELOW the text - so the caret
+   attaches INSIDE the last block (::after of the last child / grandchild),
+   and the container caret only renders for raw text-node content.
+   --------------------------------------------------------------------------- */
+.msg-content.streaming::after,
+.msg-content.streaming > :last-child:not(:has(*))::after,
+.msg-content.streaming > :last-child > :last-child::after {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-inline-start: 2px;
+    vertical-align: text-bottom;
+    background: var(--xratu-accent);
+    border-radius: 1px;
+    animation: xratu-blink 1.05s steps(1, end) infinite;
+}
+
+/* Content made of element children (rendered markdown) carries the caret on
+   its last block (rules above) - suppress the container-level one so it can't
+   render a second, orphaned caret on a line of its own. */
+.msg-content.streaming:has(> *)::after {
+    content: none;
+}
+
+@keyframes xratu-blink {
+    0%,
+    50% {
+        opacity: 1;
+    }
+    50.01%,
+    100% {
+        opacity: 0;
+    }
+}
+
+/* Retry countdown shown in the streaming bubble while the host retries
+   a failed request. */
+.retry-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+}
+
+.retry-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #bf8700;
+    animation: xratu-blink 1.05s steps(1, end) infinite;
+}
+
+.retry-countdown {
+    font-variant-numeric: tabular-nums;
+    color: #bf8700;
+    font-weight: 600;
+    min-width: 1.5em;
+    text-align: center;
+}
+
+/* Yellow typing dots on the streaming bubble while disconnected. */
+.msg.conn-disconnected .msg-content.typing .dot {
+    background: #bf8700;
+}
+
+/* ---------------------------------------------------------------------------
+   Agent activity timeline - compact collapsible tool rows (Cursor/Cline-like)
+   --------------------------------------------------------------------------- */
+.steps {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+/* Tool pills sit between the sidebar background and the message bubble -
+   darker than the bubble, lightened when open. (Committed state.) */
+.step {
+    border-radius: var(--xratu-radius-sm);
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 75%, #000);
+    font-size: var(--xratu-fs-md);
+    overflow: hidden;
+}
+
+/* Open pill drops the teal ring - sits BETWEEN the sidebar background and
+   the closed pill (75% sidebar / 25% black): lightened, not lit up. */
+.step[open] {
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, #000);
+}
+
+.step[open] > summary .step-label {
+    color: var(--vscode-foreground);
+}
+
+.step summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 8px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--vscode-descriptionForeground);
+    list-style: none;
+    border-radius: var(--xratu-radius-sm);
+    transition: background 0.15s ease;
+}
+
+.step summary:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.step summary::-webkit-details-marker {
+    display: none;
+}
+
+.step-icon {
+    flex-shrink: 0;
+    color: var(--xratu-accent);
+}
+
+.step-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.step.running .step-label {
+    color: var(--vscode-foreground);
+}
+
+.step-status {
+    flex-shrink: 0;
+    display: inline-flex;
+}
+
+.step-status.ok {
+    color: #3fb950;
+}
+
+.step-status.err {
+    color: #f85149;
+}
+
+/* Failed tool call - red-tinted pill, still EXPANDABLE (the error text is
+   the payload): red tint background, red icon/label/X. */
+.step.fail {
+    background: rgba(248, 81, 73, 0.08);
+}
+
+.step.fail .step-icon,
+.step.fail summary .step-label {
+    color: #f85149;
+}
+
+/* A tool GROUP with at least one failed member: red summary, body still
+   expandable (members render as failure rows). */
+.step.group-fail summary .step-icon,
+.step.group-fail summary .step-label {
+    color: #f85149;
+}
+
+/* Duration badge on a finished thinking pill ("2.4s") */
+.step-dur {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 60%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.6;
+}
+
+/* Run-length badge on a collapsed tool-group pill ("Read file ×8") */
+.step-count {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------------------
+   Session task list (the plan artifact) - interactive checklist row + chip
+   --------------------------------------------------------------------------- */
+.task-list-progress {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.6;
+}
+
+.task-list-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 6px 8px;
+}
+
+/* Bare inline task list - NO pill chrome: the checklist sits directly in
+   the message bubble (hidden update_task_list pill; malformed args still
+   fall back to the plain tool pill in MessageItem.tsx). */
+.task-list-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 2px 2px 4px;
+}
+
+.task-list-inline-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.task-list-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* Soft hairline between task rows - inset past the hover-band radius so
+ * the rounded corners don't clip it. */
+.task-list-item + .task-list-item::before {
+    content: '';
+    position: absolute;
+    top: -1.5px;
+    left: 8px;
+    right: 8px;
+    height: 1px;
+    background: color-mix(in srgb, var(--vscode-widget-border) 45%, transparent);
+}
+
+.task-list-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 26px;
+    padding: 3px 8px;
+    border-radius: 8px;
+    position: relative;
+}
+
+.task-list-check {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 60%, #000);
+    color: #fff;
+    cursor: pointer;
+    padding: 0;
+}
+
+.task-list-check:disabled {
+    cursor: default;
+    opacity: 0.8;
+}
+
+.task-list-item.completed .task-list-check {
+    background: var(--xratu-accent);
+    border-color: var(--xratu-accent);
+}
+
+.task-list-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--vscode-foreground);
+}
+
+.task-list-item.completed .task-list-label {
+    color: var(--vscode-descriptionForeground);
+    text-decoration: line-through;
+}
+
+.task-list-item.in_progress .task-list-label {
+    color: var(--xratu-accent-strong);
+}
+
+/* Drag-to-reorder: grab handle; the rows themselves reorder live under the
+ * cursor, so no insertion markers or dimming are needed. */
+.task-list-drag-handle {
+    cursor: grab;
+}
+
+.task-list-drag-handle:active {
+    cursor: grabbing;
+}
+
+.task-list-edit-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--xratu-fs-md);
+    font-family: inherit;
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: none;
+    outline: none;
+    border-radius: var(--xratu-radius-sm);
+    padding: 1px 6px;
+}
+
+.task-list-controls {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    /* Always faintly visible so editing is discoverable; full opacity on hover. */
+    opacity: 0.45;
+    transition: opacity 0.12s ease;
+}
+
+.task-list-item:hover .task-list-controls,
+.task-list-add:hover .task-list-mini {
+    opacity: 1;
+}
+
+.task-list-mini {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    padding: 0;
+}
+
+.task-list-mini:hover:not(:disabled) {
+    background: var(--xratu-accent-faint);
+    color: var(--vscode-foreground);
+}
+
+.task-list-mini.active {
+    color: var(--xratu-accent);
+}
+
+.task-list-mini.danger:hover:not(:disabled) {
+    color: #f85149;
+}
+
+.task-list-add {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 2px;
+    margin: 4px 0;
+}
+
+.task-list-add-btn {
+    display: flex;
+    width: fit-content;
+    margin: 4px auto;
+    align-items: center;
+    gap: 4px;
+    border: 1px dashed var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-sm);
+    padding: 2px 8px;
+    cursor: pointer;
+}
+
+.task-list-add-btn:hover:not(:disabled) {
+    color: var(--vscode-foreground);
+    border-color: var(--xratu-accent-dim);
+}
+
+/* Compact header progress chip (Cline/Kilo-style "3/8" readout) - no fill of
+ * its own; clicking toggles the dropdown panel below (task-list-chip-menu). */
+.task-list-chip-wrap {
+    position: relative;
+    z-index: 30;
+}
+
+.task-list-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: calc(100% - 16px);
+    margin: 0 8px 4px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-xs);
+    padding: 4px 12px;
+    cursor: pointer;
+}
+
+.task-list-chip:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--xratu-accent-dim);
+}
+
+.task-list-chip > svg {
+    color: var(--xratu-accent);
+    flex-shrink: 0;
+}
+
+.task-list-chip-caret {
+    color: var(--vscode-descriptionForeground);
+    transition: transform 0.15s ease;
+}
+
+.task-list-chip.open .task-list-chip-caret {
+    transform: rotate(180deg);
+}
+
+.task-list-chip-bar {
+    flex: 1 1 auto;
+    height: 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 72%, #fff);
+    overflow: hidden;
+}
+
+.task-list-chip-bar > span {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--xratu-accent);
+    transition: width 0.25s ease;
+}
+
+/* Header task-list expansion - mirrors .session-pop: drops down like a
+ * second row of the chat shell (same shell background, no border, no
+ * shadow), the bottom edge dissolving with the same soft fade. Scrolling
+ * lives on the inner list so the fade stays put. */
+.task-list-chip-menu {
+    position: absolute;
+    z-index: 40;
+    top: 100%;
+    inset-inline: 0;
+    padding-bottom: 12px;
+    background: var(--xratu-shell);
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
+}
+
+.task-list-chip-menu-list {
+    overflow-y: auto;
+    max-height: 42vh;
+    scrollbar-width: none;
+    padding: 0 6px;
+}
+
+.task-list-chip-menu-list::-webkit-scrollbar {
+    display: none;
+}
+
+/* Collapsed run of identical tool calls - members indent inside the group */
+.step-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 2px 8px 6px 14px;
+}
+
+.spinner {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--xratu-accent-dim);
+    border-top-color: var(--xratu-accent);
+    animation: xratu-spin 0.8s linear infinite;
+}
+
+@keyframes xratu-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.step-chev {
+    flex-shrink: 0;
+    opacity: 0.5;
+    transition: transform 0.15s ease;
+}
+
+/* Direct-child only: sub-pills live INSIDE an open group pill, and a
+   descendant selector would flip every nested chevron permanently. */
+.step[open] > summary .step-chev {
+    transform: rotate(180deg);
+}
+
+.step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 2px 8px 8px;
+}
+
+.step-io-tag {
+    font-size: var(--xratu-fs-xs);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.8;
+}
+
+.step pre {
+    margin: 0;
+    padding: 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-md);
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 200px;
+    text-align: left;
+}
+
+.step pre.result-tall {
+    max-height: 280px;
+}
+
+/* Thinking rows render their pre DIRECTLY under <details> (no .step-body
+   wrapper) - re-add the body inset here and give the pill a taller
+   scroll window (reasoning blocks read better without cramped paging). */
+.step > pre {
+    padding: 2px 8px 8px;
+    max-height: 340px;
+}
+
+/* Rendered-markdown thinking body: same scroll window as the raw pre
+   fallback; the auto-scroll "pinned to bottom" logic attaches here. */
+.step-think-body {
+    max-height: 340px;
+    overflow-y: auto;
+    padding: 2px 8px 8px;
+    font-size: var(--xratu-fs-md);
+    line-height: 1.55;
+    color: var(--vscode-editor-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+   Tool dropdown bodies - one dedicated design per tool family. Content sits
+   DIRECTLY on the pill background: no inner boxes, no borders.
+   --------------------------------------------------------------------------- */
+
+/* Path / command header lines (edit, read, terminal, web families) */
+.tool-path,
+pre.tool-cmd {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-md);
+    color: var(--xratu-accent);
+    word-break: break-all;
+    text-align: left;
+}
+
+pre.tool-cmd {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+/* Small mode badge on edit bodies (overwrite / create / append) */
+.tool-mode {
+    align-self: flex-start;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.6;
+}
+
+/* One-line result notes (edit family success / diagnostics text) */
+.tool-note {
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: left;
+}
+
+.tool-note.err {
+    color: #f85149;
+}
+
+/* Terminal body: loading row while the command runs (auto-opened pill) */
+.tool-loading {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Per-line diff rows inside pill diff blocks (LCS-diffed SEARCH↔REPLACE):
+   only real changes carry the tint + colored gutter bar - unchanged lines
+   stay neutral so the actual edit pops. Tints are deliberately LOW-alpha:
+   the diffEditor token backgrounds are tuned for the lighter editor
+   background and read as a dark veil over the tokens on the pill. */
+.pill-diff-line {
+    display: flex;
+    align-items: baseline;
+    min-height: 1.4em;
+    padding: 0 6px 0 0;
+}
+
+.pill-diff-line.del {
+    background: rgba(248, 81, 73, 0.09);
+    border-inline-start: 2px solid #f85149;
+}
+
+.pill-diff-line.add {
+    background: rgba(63, 185, 80, 0.09);
+    border-inline-start: 2px solid #3fb950;
+}
+
+.pill-diff-mark {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    user-select: none;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.pill-diff-line.del .pill-diff-mark {
+    color: #f85149;
+}
+
+.pill-diff-line.add .pill-diff-mark {
+    color: #3fb950;
+}
+
+.pill-diff-code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-md);
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: left;
+}
+
+/* Shiki token colors sit on the pill's diff tint instead of the editor
+   background - a mild boost keeps them at editor strength. */
+.pill-diff-code span {
+    filter: saturate(1.25) brightness(1.15);
+}
+
+/* Inline scalar arg hints (search / git / ops families) */
+.tool-hints {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tool-hint {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.tool-hint-val {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-md);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+}
+
+/* apply_patch SEARCH/REPLACE blocks - whole-section tinted rows (fallback
+   for oversized blocks the per-line LCS can't diff); palette mirrors the
+   approval diff via the theme's diff editor tokens. Empty SEARCH section =
+   file creation, only the REPLACE block renders. */
+.pill-diff {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pill-diff-block {
+    display: flex;
+    flex-direction: column;
+}
+
+.step pre.pill-diff-del {
+    background: rgba(248, 81, 73, 0.09);
+    border-inline-start: 2px solid #f85149;
+    border-radius: var(--xratu-radius-xs);
+    padding: 3px 6px;
+}
+
+.step pre.pill-diff-add {
+    background: rgba(63, 185, 80, 0.09);
+    border-inline-start: 2px solid #3fb950;
+    border-radius: var(--xratu-radius-xs);
+    padding: 3px 6px;
+}
+
+/* Terminal body sections - labeled STDOUT/STDERR/exit-code output */
+.term-out {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.term-out pre {
+    margin: 0;
+}
+
+.term-err {
+    color: #f85149;
+}
+
+.term-exit {
+    align-self: flex-start;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.1);
+    border-radius: 999px;
+    padding: 0 7px;
+    line-height: 1.6;
+}
+
+.term-exit.err {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.1);
+}
+
+/* ---------------------------------------------------------------------------
+   Typing indicator (agent is thinking, no text yet)
+   --------------------------------------------------------------------------- */
+.typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0;
+}.typing .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--xratu-accent);
+    opacity: 0.4;
+    animation: xratu-typing 1.2s infinite ease-in-out;
+}
+
+.typing .dot:nth-child(2) {
+    animation-delay: 0.18s;
+}
+
+.typing .dot:nth-child(3) {
+    animation-delay: 0.36s;
+}
+
+@keyframes xratu-typing {
+    0%,
+    60%,
+    100% {
+        transform: translateY(0);
+        opacity: 0.4;
+    }
+    30% {
+        transform: translateY(-4px);
+        opacity: 1;
+    }
+}
+
+/* Heartbeat row: run is live but no step row is spinning (e.g. right after
+   a tool finished, before the next reasoning deltas arrive). */
+.working-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px;
+    font-size: var(--xratu-fs-md);
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Streamed AI text segment living between the pills - chronological with
+   the thinking/tool rows around it. Raw while streaming, host-rendered
+   markdown once the final per-segment HTML arrives. */
+.step-text-seg {
+    padding: 3px 8px;
+    font-size: var(--xratu-fs-md);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--vscode-editor-foreground);
+}
+
+.step-text-seg.streaming {
+    color: var(--vscode-descriptionForeground);
+}
+
+.step-text-seg .msg-content {
+    padding: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Answer footer - copy action, token usage, timestamp (competitor parity)
+   --------------------------------------------------------------------------- */
+/* Inline error reason on a failed bubble that already carries streamed
+   content - the red tone alone explains nothing. */
+.msg-error-text {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin-top: 4px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--vscode-inputValidation-errorBackground, color-mix(in srgb, #f14c4c 12%, transparent));
+    color: var(--vscode-errorForeground, #f14c4c);
+    font-size: var(--xratu-fs-xs);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.msg-error-text svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+.msg-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+.icon-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.icon-btn:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.msg-footer .icon-btn {
+    width: 22px;
+    height: 22px;
+}
+
+.msg-meta {
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
+    font-variant-numeric: tabular-nums;
+}
+
+.msg-meta:last-child {
+    margin-inline-start: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Composer - Cursor-like card with embedded action row
+   --------------------------------------------------------------------------- */
+.input-bar {
+    /* Same inline padding as .messages/.toolbar - one aligned column */
+    padding: 10px 12px 12px;
+    background: var(--xratu-shell);
+}
+
+/* Edit mode: the pencil loaded a past user message into the composer.
+   Accent border + a slim banner stating the rewind-resend consequence;
+   the banner's X exits edit mode. */
+.composer.is-editing {
+    border-color: color-mix(in srgb, var(--xratu-accent) 45%, var(--vscode-input-border));
+}
+
+.composer-edit-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 4px 0;
+    padding: 4px 8px;
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-size: var(--xratu-fs-xs);
+}
+
+.composer-edit-banner svg {
+    flex: 0 0 auto;
+}
+
+.composer-edit-banner span {
+    overflow-wrap: anywhere;
+}
+
+.composer-edit-cancel {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.composer-edit-cancel:hover {
+    background: color-mix(in srgb, var(--xratu-accent) 22%, transparent);
+}
+
+.composer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--xratu-input);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius);
+    padding: 4px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composer:focus-within {
+    border-color: color-mix(in srgb, var(--xratu-accent) 40%, var(--vscode-input-border));
+    box-shadow: 0 0 0 1px rgba(20, 227, 200, 0.08);
+}
+
+/* Suggestion auto-typing in progress - the composer "breathes" until the
+   auto-send beat fires. */
+.composer.is-typing {
+    border-color: var(--xratu-accent);
+    animation: xratu-composer-breathe 1.1s ease-in-out infinite;
+}
+
+@keyframes xratu-composer-breathe {
+    0%, 100% {
+        box-shadow: 0 0 0 1px rgba(20, 227, 200, 0.10);
+    }
+    50% {
+        box-shadow: 0 0 0 3px rgba(20, 227, 200, 0.16);
+    }
+}
+
+/* Attachments riding along - steady accent glow so the payload is visible
+   at a glance. */
+.composer.has-attachments {
+    border-color: color-mix(in srgb, var(--xratu-accent) 55%, var(--vscode-input-border));
+    box-shadow: 0 0 0 2px rgba(20, 227, 200, 0.12);
+}
+
+.composer-top-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px 0;
+}
+
+.attach-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.attach-btn:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.attach-menu {
+    position: absolute;
+    z-index: 30;
+    bottom: calc(100% - 2px);
+    top: auto;
+    inset-inline-start: 4px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+@keyframes xratu-drop-up {
+    from {
+        opacity: 0;
+        transform: translateY(5px) scale(0.98);
+        transform-origin: bottom left;
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.attach-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    font-size: var(--xratu-fs-md);
+    text-align: start;
+    color: var(--vscode-foreground);
+    background: transparent;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.attach-menu-item:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.attach-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 2px 8px 0;
+}
+
+.attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 180px;
+    height: 22px;
+    padding: 0 6px 0 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--xratu-accent) 10%, transparent);
+    border: 1px solid var(--xratu-accent-dim);
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-foreground);
+}
+
+.attach-chip-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.attach-chip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--xratu-accent);
+}
+
+.attach-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--xratu-fs-xs);
+}
+
+.attach-chip-size {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.7;
+}
+
+/* Tiny non-blocking vision doubt badge on image chips (tooltip = full text). */
+.attach-chip-warn {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: #d29922;
+    cursor: help;
+}
+
+.attach-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    flex-shrink: 0;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.attach-chip-remove:hover {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.12);
+}
+
+.attach-error {
+    margin: 0;
+    padding: 2px 10px 0;
+    font-size: var(--xratu-fs-xs);
+    color: #f85149;
+}
+
+/* Queued messages (typed while a run streams, sent FIFO when it settles).
+   Neutral gray - distinct from attachment chips so "pending" never reads as
+   "attached". Logical padding only: RTL-safe. */
+
+.composer-input {
+    width: 100%;
+    resize: none;
+    overflow-y: auto;
+    max-height: 140px;
+    min-height: 40px;
+    padding: 8px 11px 2px;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--vscode-input-foreground);
+    background: transparent;
+    border: none;
+    outline: none;
+    caret-color: var(--xratu-accent);
+}
+
+.composer-input::placeholder {
+    color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+}
+
+.composer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 6px 6px;
+}
+
+.composer-hint {
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.composer-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    /* Claim the flexible room beside the send button - the model chip needs
+       it now that the thinking-level badge shares the pill. */
+    flex: 1 1 auto;
+}
+
+.chip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 180px;
+    height: 24px;
+    padding: 0 10px;
+    font-size: var(--xratu-fs-sm);
+    font-family: inherit;
+    /* Tighten the line box so text sits truly centered against the icons */
+    line-height: 1;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.chip-btn:hover:not(.static) {
+    color: var(--xratu-accent-strong);
+    background: color-mix(in srgb, var(--xratu-accent) 12%, transparent);
+}
+
+/* Optical lift: Persian glyph runs resolve to a fallback font with taller
+   ascent metrics, dragging the baseline below the flex-centered box - nudge
+   the text back up so it sits level with the icons. */
+.chip-btn > span {
+    transform: translateY(-1px);
+}
+
+.chip-btn.static {
+    cursor: default;
+}
+
+/* Model picker chip: shrinks gracefully (min-width: 0) but starts from a
+   roomier cap than the generic 180px - the thinking-level badge eats into
+   the same pill, and long model ids truncate too easily otherwise. */
+.picker-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 280px;
+}
+
+.chip-model-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* Room for descenders: the pill's line-height: 1 gives this clipped
+       span an 11px line box, cropping g/y/p and Persian tails. */
+    line-height: 1.4;
+}
+
+.model-pop {
+    /* Anchored to the COMPOSER card: same width, floating above it */
+    position: absolute;
+    z-index: 30;
+    inset-inline: 0;
+    top: auto;
+    bottom: calc(100% + 10px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+@keyframes xratu-drop {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.99);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.model-pop-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px;
+}
+
+/* Refresh-in-progress: gentle spin; keep the icon visible instead of
+   letting :disabled fade it out. */
+.model-pop-head .ghost-btn.spinning {
+    opacity: 0.85;
+    cursor: progress;
+}
+
+.model-pop-head .ghost-btn.spinning svg {
+    animation: xratu-spin 1.2s linear infinite;
+}
+
+.spinning {
+    animation: xratu-spin 1.2s linear infinite;
+}
+
+/* Empty-state setup chips: the primary "connect" action gets the accent -
+   the secondary option stays a quiet ghost chip. */
+.chip.chip-action {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: var(--xratu-accent-dim);
+}
+
+.chip.chip-action:hover {
+    background: var(--xratu-accent-dim);
+    border-color: color-mix(in srgb, var(--xratu-accent) 60%, transparent);
+}
+
+.model-search {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius-xs);
+    background: var(--xratu-input);
+    color: var(--vscode-descriptionForeground);
+}
+
+.model-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--vscode-input-foreground);
+    font-size: var(--xratu-fs-md);
+    font-family: inherit;
+}
+
+.model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.model-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 9px;
+    font-size: var(--xratu-fs-md);
+    text-align: start;
+    color: var(--vscode-foreground);
+    background: transparent;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    transition: background 0.15s ease;
+}
+
+.model-item:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.model-item.selected {
+    color: var(--xratu-accent-strong);
+}
+
+.model-check {
+    flex-shrink: 0;
+}
+
+.model-empty {
+    margin: 0;
+    padding: 10px;
+    font-size: var(--xratu-fs-md);
+    text-align: center;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* --- @-mention workspace file popup (reuses .model-pop as the base) --- */
+
+.mention-pop .mention-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    font-size: var(--xratu-fs-md);
+    color: var(--vscode-descriptionForeground);
+}
+
+.mention-pop .mention-query {
+    margin-inline-start: auto;
+    font-family: var(--xratu-mono, monospace);
+    font-size: var(--xratu-fs-sm);
+    color: var(--xratu-accent-strong);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mention-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.mention-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    padding: 5px 9px;
+    font-size: var(--xratu-fs-md);
+    text-align: start;
+    color: var(--vscode-foreground);
+    background: transparent;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    transition: background 0.15s ease;
+}
+
+.mention-item:hover,
+.mention-item.selected {
+    background: var(--xratu-accent-faint);
+}
+
+.mention-item.selected .mention-item-name {
+    color: var(--xratu-accent-strong);
+}
+
+.mention-item-name {
+    font-family: var(--xratu-mono, monospace);
+    flex-shrink: 0;
+}
+
+.mention-item-dir {
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Reference chips (workspace @-mentions): accent-tinted so they read as
+   "pointer to a workspace file", distinct from byte-carrying attachments. */
+.attach-chip.attach-chip-ref {
+    border-color: color-mix(in srgb, var(--xratu-accent) 55%, transparent);
+    background: var(--xratu-accent-faint);
+}
+
+.attach-chip.attach-chip-ref .attach-chip-icon {
+    color: var(--xratu-accent-strong);
+}
+
+.attach-chip.attach-chip-ref .attach-chip-name {
+    max-width: 260px;
+}
+
+.composer-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.send-btn {
+    width: 28px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 999px;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.send-btn > svg {
+    display: block;
+}
+
+.send-btn {
+    border: none;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Hover colors the ICON itself - never a background pill */
+.send-btn:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+}
+
+.send-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* Busy state: the same button is stop - teal idle, red on hover */
+.send-btn.is-stop {
+    color: var(--xratu-accent);
+}
+
+.send-btn.is-stop:hover:not(:disabled) {
+    color: #f85149;
+}
+
+/* ---------------------------------------------------------------------------
+   Welcome / Auth - same Xratu visual language as the chat
+   --------------------------------------------------------------------------- */
+.welcome {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px 18px;
+    gap: 16px;
+    overflow-y: auto;
+}
+
+.welcome h1 {
+    color: var(--vscode-foreground);
+    font-size: 21px;
+    font-weight: 650;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+
+.welcome p {
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    margin: 2px 0 0;
+}
+
+/* Welcome hero: provider-setup entry (first run, no credentials). */
+.welcome-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    max-width: 420px;
+}
+
+.welcome-mark {
+    position: relative;
+    width: 54px;
+    height: 54px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--xratu-accent) 14%, transparent);
+    color: var(--xratu-accent);
+    margin-bottom: 4px;
+}
+
+/* Corner-bracket motif - the brand device carried over from chat bubbles. */
+.welcome-mark::before,
+.welcome-mark::after {
+    content: '';
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--xratu-accent);
+    opacity: 0.85;
+}
+
+.welcome-mark::before {
+    top: -4px;
+    left: -4px;
+    border-right: none;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+}
+
+.welcome-mark::after {
+    right: -4px;
+    bottom: -4px;
+    border-left: none;
+    border-top: none;
+    border-bottom-right-radius: 10px;
+}
+
+.welcome-cta {
+    margin-top: 8px;
+}
+
+.welcome-privacy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-descriptionForeground);
+}
+
+/* fa/en flip right on the welcome hero - same chips as Settings. */
+.welcome-lang {
+    justify-content: center;
+    margin-top: 2px;
+}
+
+/* Welcome: local runtimes discovered on this machine. */
+.welcome-local {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: start;
+}
+
+.welcome-local h2 {
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--vscode-descriptionForeground);
+    margin: 6px 0 0;
+}
+
+.welcome-runtime {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    background: var(--xratu-surface);
+}
+
+.welcome-runtime-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.welcome-runtime-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: var(--xratu-fs-sm);
+}
+
+.welcome-runtime-meta {
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-descriptionForeground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.welcome-runtime-connect {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px;
+    border: 1px solid var(--xratu-accent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--xratu-accent);
+    font: inherit;
+    font-size: var(--xratu-fs-xs);
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.welcome-runtime-connect:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--xratu-accent) 14%, transparent);
+}
+
+.welcome-runtime-connect:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+/* Scan/empty status row: one-line message + trailing refresh icon. */
+.welcome-empty {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px;
+    border-radius: 8px;
+    background: var(--xratu-surface);
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-sm);
+}
+
+.welcome-empty span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.welcome-empty .ghost-btn {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+}
+
+.primary-btn,
+.secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+}
+
+.primary-btn {
+    width: 100%;
+    min-height: 34px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 650;
+    color: #04201c;
+    background: var(--xratu-accent);
+    border: 1px solid var(--xratu-accent);
+    border-radius: var(--xratu-radius-sm);
+    transition: background 0.15s ease, transform 0.12s ease;
+}
+
+.primary-btn:hover:not(:disabled) {
+    background: var(--xratu-accent-strong);
+}
+
+.primary-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.primary-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.secondary-btn {
+    width: 100%;
+    min-height: 34px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--vscode-button-secondaryForeground);
+    background: var(--vscode-button-secondaryBackground);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+}
+
+.secondary-btn:hover {
+    border-color: var(--xratu-accent);
+}
+
+/* "Use local mode" CTA - sits OUTSIDE the auth card, under it; quiet size
+   but the teal accent carries the whole link. */
+
+/* Small teal link inside the auth card (back to local mode). */
+
+.link-btn {
+    background: none;
+    border: none;
+    color: var(--vscode-textLink-foreground);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0;
+}
+
+.link-btn:hover {
+    color: var(--xratu-accent-strong);
+    text-decoration: underline;
+}
+
+.form-hint.ok {
+    color: #3fb950;
+}
+
+.form-hint.bad {
+    color: var(--vscode-errorForeground);
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Token usage meter (ring + text)
+   --------------------------------------------------------------------------- */
+.tok-meter {
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.tok-ring {
+    width: 14px;
+    height: 14px;
+    transform: rotate(-90deg);
+}
+
+.tok-ring circle {
+    fill: none;
+    stroke-width: 3;
+}
+
+.tok-ring-bg {
+    stroke: rgba(128, 128, 128, 0.3);
+}
+
+.tok-ring-fill {
+    stroke: #4cc38a;
+    transition: stroke-dasharray 0.25s ease, stroke 0.15s ease;
+}
+
+.tok-ring-fill.warn {
+    stroke: #e2b341;
+}
+
+.tok-ring-fill.danger {
+    stroke: #f14c4c;
+}
+
+.tok-text {
+    font-size: 11px;
+    line-height: 1;
+}
+
+/* Context-window preset menu (anchored above the pill) */
+.ctx-wrap {
+    position: relative;
+    display: inline-flex;
+    /* The token meter never shrinks - the model picker chip absorbs any
+       pressure instead (only it has an ellipsis name to give up). */
+    flex: none;
+}
+
+.ctx-menu {
+    position: absolute;
+    z-index: 30;
+    bottom: calc(100% + 8px);
+    inset-inline-start: 0;
+    min-width: 130px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+.ctx-opt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 9px;
+    font-size: var(--xratu-fs-md);
+    text-align: start;
+    color: var(--vscode-foreground);
+    background: transparent;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.ctx-opt:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.ctx-opt.selected {
+    color: var(--xratu-accent-strong);
+}
+
+/* Windows smaller than the context already occupied by the conversation -
+   selecting one would force-compact nearly everything on the next send. */
+.ctx-opt:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.ctx-opt:disabled:hover {
+    background: transparent;
+}
+
+/* Free-runtime label pill: static - no model picker, no dropdowns; the
+   gateway owns model routing and the context window is a fixed constant. */
+
+/* Thinking-level selector (inside the model picker popup) */
+.thinking-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+.thinking-row-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--xratu-fs-md);
+    color: var(--vscode-descriptionForeground);
+}
+
+.thinking-seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 70%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-xs);
+}
+
+.thinking-seg-opt {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-foreground);
+    background: transparent;
+    border: none;
+    border-radius: calc(var(--xratu-radius-xs) - 1px);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+}
+
+.thinking-seg-opt:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.thinking-seg-opt.selected {
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+}
+
+/* Thinking-level badge on the composer's model chip */
+.chip-think {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 5px;
+    font-size: 10px;
+    line-height: 1.4;
+    border-radius: 999px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+}
+
+/* ---------------------------------------------------------------------------
+   BYOK onboarding banner - shown after sign-in when no usable provider exists
+   --------------------------------------------------------------------------- */
+.byok-hint {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 12px 8px;
+    padding: 8px 9px;
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-accent-faint);
+}
+
+.byok-hint.err {
+    border-color: rgba(241, 76, 76, 0.35);
+    background: rgba(241, 76, 76, 0.08);
+}
+
+.byok-hint-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+    color: var(--xratu-accent);
+    background: color-mix(in srgb, var(--xratu-accent) 12%, transparent);
+}
+
+.byok-hint.err .byok-hint-icon {
+    color: var(--vscode-errorForeground);
+    background: rgba(241, 76, 76, 0.1);
+}
+
+.byok-hint-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+}
+
+.byok-hint-copy strong {
+    color: var(--vscode-foreground);
+    font-size: 10.5px;
+    font-weight: 650;
+}
+
+.byok-hint-copy span {
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    line-height: 1.45;
+}
+
+.byok-hint .chip-btn {
+    flex: 0 0 auto;
+}
+
+@media (max-width: 420px) {
+    .byok-hint {
+        margin-inline: 8px;
+    }
+
+    .byok-hint-copy {
+        display: none;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Notification banner - in-app replacement for vscode.window toasts
+   --------------------------------------------------------------------------- */
+.notif {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+    margin: 0 12px 8px;
+    padding: 8px 9px;
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-accent-faint);
+}
+
+.notif-warning {
+    border-color: rgba(240, 173, 78, 0.4);
+    background: rgba(240, 173, 78, 0.08);
+}
+
+.notif-error {
+    border-color: rgba(241, 76, 76, 0.35);
+    background: rgba(241, 76, 76, 0.08);
+}
+
+.notif-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+    color: var(--xratu-accent);
+    background: color-mix(in srgb, var(--xratu-accent) 12%, transparent);
+}
+
+.notif-warning .notif-icon {
+    color: #f0ad4e;
+    background: rgba(240, 173, 78, 0.12);
+}
+
+.notif-error .notif-icon {
+    color: var(--vscode-errorForeground);
+    background: rgba(241, 76, 76, 0.1);
+}
+
+.notif-copy {
+    flex: 1;
+    min-width: 0;
+    color: var(--vscode-foreground);
+    font-size: 10.5px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.notif-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+/* Banner action buttons: compact, NOT the composer chip's 24px pill -
+   two side-by-side actions must fit beside the copy without squashing it. */
+.notif-action {
+    height: 20px;
+    max-width: none;
+    padding: 0 8px;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.notif-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+}
+
+.notif-close:hover {
+    background: rgba(128, 128, 128, 0.15);
+    color: var(--vscode-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+   Credentials page - provider vault / connection switcher
+   --------------------------------------------------------------------------- */
+.cred-page {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    height: 100%;
+    padding: 14px;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+/* Children must keep their natural height: flex-shrink would squash the
+   cards to the viewport instead of letting the page scroll. */
+.cred-page > * {
+    flex-shrink: 0;
+}
+
+.cred-page::-webkit-scrollbar {
+    display: none;
+}
+
+.cred-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.cred-head-copy {
+    min-width: 0;
+}
+
+.cred-head h2 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0;
+    color: var(--vscode-foreground);
+}
+
+.cred-head-copy > span {
+    display: block;
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-notice {
+    padding: 9px 10px;
+    border-radius: var(--xratu-radius-sm);
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-widget-border) 30%, transparent);
+    border: none;
+}
+
+.cred-notice-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--vscode-foreground);
+    font-size: 11px;
+    font-weight: 650;
+}
+
+.cred-notice-body {
+    margin-top: 4px;
+    font-size: 10.5px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.cred-notice.err {
+    color: var(--vscode-errorForeground);
+    background: rgba(241, 76, 76, 0.08);
+    border-color: rgba(241, 76, 76, 0.35);
+}
+
+.cred-notice.err .cred-notice-title {
+    color: var(--vscode-errorForeground);
+}
+
+.cred-notice-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.cred-notice-retry {
+    margin-top: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 11px;
+    font-family: inherit;
+    font-size: var(--xratu-fs-sm);
+    line-height: 1;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.cred-notice-retry:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    background: var(--xratu-accent-faint);
+}
+
+.cred-notice-retry:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+/* --- Connection card (primary action) ------------------------------- */
+.cred-connect .cred-form {
+    padding: 12px;
+    background: var(--xratu-surface);
+}
+
+.cred-providers-inline {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.prov-card-inline {
+    flex: 0 0 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    text-align: start;
+    font-family: inherit;
+    font-size: 10px;
+    white-space: nowrap;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.prov-card-inline:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--xratu-surface) 72%, var(--xratu-accent-faint));
+}
+
+.prov-card-inline.selected {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+}
+
+.prov-card-inline .provider-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+}
+
+.cred-security-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    margin: 2px 0 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    opacity: 0.75;
+}
+
+/* --- Provider discovery section ------------------------------------- */
+.cred-discovery {
+    padding-top: 2px;
+}
+
+/* --- Section structure --------------------------------------------- */
+
+.cred-section {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.cred-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.cred-section-head h3 {
+    margin: 0;
+    color: var(--vscode-foreground);
+    font-size: 11.5px;
+    font-weight: 650;
+}
+
+.cred-section-head span {
+    display: block;
+    margin-top: 2px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+}
+
+.cred-saved-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.saved-credential {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 50px;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.saved-credential:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.saved-credential.active {
+    border-color: var(--xratu-border-quiet);
+    background: var(--xratu-accent-faint);
+}
+
+.saved-credential-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: start;
+}
+
+.saved-credential-main:hover {
+    background: color-mix(in srgb, var(--xratu-accent-faint) 55%, transparent);
+}
+
+.provider-mark {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    border: 1px solid var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    color: var(--vscode-descriptionForeground);
+}
+
+.provider-mark-popular {
+    color: var(--vscode-descriptionForeground);
+    border-color: var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+}
+
+.provider-mark-local {
+    color: var(--vscode-textLink-foreground);
+}
+
+.saved-credential-copy {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.saved-credential-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-foreground);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.saved-credential-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9.5px;
+}
+
+.saved-active {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--xratu-accent-strong);
+    font-size: 9.5px;
+    font-weight: 600;
+}
+
+/* Credential switch in flight - spinner in the pill slot, keep width stable. */
+.saved-switching {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    color: var(--xratu-accent);
+}
+
+.saved-delete {
+    flex: 0 0 31px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    border: 0;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+.saved-delete:hover {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.08);
+}
+
+.saved-delete.confirm {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.cred-discovery-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-surface);
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    text-align: start;
+    font-family: inherit;
+    font-size: 11px;
+    transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.cred-discovery-toggle:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--xratu-accent-dim);
+    background: color-mix(in srgb, var(--xratu-surface) 85%, var(--xratu-accent-faint));
+}
+
+.cred-discovery-toggle-left {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.cred-discovery-toggle-left svg {
+    color: var(--xratu-accent);
+}
+
+.cred-discovery-toggle .chevron-open {
+    transform: rotate(180deg);
+    transition: transform 0.18s ease;
+}
+
+.cred-discovery-toggle .chevron-closed {
+    transform: rotate(0deg);
+    transition: transform 0.18s ease;
+}
+
+.cred-discovery-body {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+.cred-search-wrap input {
+    width: 100%;
+    min-height: 31px;
+    padding: 7px 9px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius-sm);
+    outline: none;
+    background: var(--xratu-input);
+    color: var(--vscode-input-foreground);
+    font-family: inherit;
+    font-size: 11px;
+}
+
+.cred-search-wrap input:focus {
+    border-color: var(--xratu-accent);
+    box-shadow: 0 0 0 2px var(--xratu-accent-faint);
+}
+
+.cred-provider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cred-group-label {
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+/* Group label row with a trailing icon action (e.g. local rescan) -
+   mirrors .cred-section-head's space-between layout. */
+.cred-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.cred-providers {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.prov-card {
+    min-width: 0;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 8px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-surface);
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    text-align: start;
+    font-family: inherit;
+    font-size: 10px;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.1s ease;
+}
+
+.prov-card:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--xratu-surface) 72%, var(--xratu-accent-faint));
+}
+
+.prov-card:active {
+    transform: translateY(1px);
+}
+
+.prov-card.selected {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+}
+
+.prov-card .provider-mark {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+}
+
+.prov-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prov-hint {
+    flex: 0 0 auto;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(127, 127, 127, 0.1);
+    color: var(--vscode-descriptionForeground);
+    font-size: 8px;
+}
+
+.prov-check {
+    flex: 0 0 auto;
+}
+
+.cred-form {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 10px;
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-list-hoverBackground);
+}
+
+.cred-form-provider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 2px;
+}
+
+.cred-form-provider > div {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.cred-form-provider strong {
+    color: var(--vscode-foreground);
+    font-size: 11px;
+}
+
+.cred-form-provider span {
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+}
+
+.cred-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-field input {
+    width: 100%;
+    min-height: 33px;
+    padding: 8px 9px;
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--vscode-input-foreground);
+    background: var(--xratu-input);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius-sm);
+    outline: none;
+}
+
+.cred-field input:focus {
+    border-color: var(--xratu-accent);
+    box-shadow: 0 0 0 2px var(--xratu-accent-faint);
+}
+
+.cred-secret {
+    position: relative;
+    direction: ltr;
+}
+
+.cred-secret input {
+    padding-right: 36px;
+}
+
+.cred-secret-toggle {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    width: 27px;
+    height: 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-secret-toggle:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+.cred-form-actions {
+    display: flex;
+    gap: 7px;
+}
+
+.cred-save,
+.cred-cancel {
+    min-height: 33px;
+    border-radius: var(--xratu-radius-sm);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.cred-save {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 7px 10px;
+    font-weight: 650;
+    color: #04201c;
+    background: var(--xratu-accent);
+    border: 1px solid var(--xratu-accent);
+}
+
+.cred-save:hover:not(:disabled) {
+    background: var(--xratu-accent-strong);
+}
+
+.cred-save:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.cred-local-models {
+    background: var(--xratu-surface);
+    border: 1px solid var(--xratu-border);
+    border-radius: var(--xratu-radius);
+    overflow: hidden;
+}
+.cred-local-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 12px 14px;
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.cred-local-toggle:hover {
+    background: var(--xratu-accent-faint);
+}
+.cred-local-toggle-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+}
+.cred-local-toggle-left svg {
+    color: var(--xratu-accent);
+}
+.cred-local-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.cred-local-toggle-icon {
+    animation: gentleSpin 4s ease-in-out infinite;
+}
+@keyframes gentleSpin {
+    0%, 80%, 100% { transform: rotate(0deg); }
+    85% { transform: rotate(15deg); }
+    90% { transform: rotate(-10deg); }
+    95% { transform: rotate(5deg); }
+}
+.cred-local-empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+.cred-local-empty {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+.cred-local-runtime {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--vscode-list-hoverBackground);
+    border-radius: var(--xratu-radius-sm);
+}
+.cred-local-runtime-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.cred-local-runtime-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.cred-local-runtime-name svg {
+    color: var(--xratu-accent);
+}
+.cred-local-runtime-meta {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+.cred-local-connect {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.cred-local-connect:hover {
+    background: var(--xratu-accent-dim);
+    border-color: color-mix(in srgb, var(--xratu-accent) 60%, transparent);
+}
+.cred-local-connect:disabled {
+    opacity: 0.75;
+    cursor: progress;
+}
+/* This runtime's URL is the active credential - steady connected pill. */
+.cred-local-connected {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent);
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.cred-key-optional {
+    font-style: normal;
+    font-weight: 400;
+    color: var(--text-muted, #a6adc8);
+}
+
+@media (max-width: 420px) {
+    .cred-providers {
+        grid-template-columns: 1fr;
+    }
+
+    .saved-active {
+        display: none;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Credentials page - runtime picker (Free / Own key / Local cards)
+   Same tokens and visual language as the vault rows above.
+   --------------------------------------------------------------------------- */
+.cred-card {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid transparent;
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-surface);
+    overflow: hidden;
+    transition: border-color 0.14s ease;
+}
+
+.cred-card.open {
+    border-color: var(--xratu-border-quiet);
+}
+
+.cred-card.active-runtime {
+    border-color: var(--xratu-border-quiet);
+}
+
+.cred-card-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 10px 11px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: start;
+    font-family: inherit;
+    transition: background 0.14s ease;
+}
+
+.cred-card-head:hover {
+    background: var(--xratu-accent-faint);
+}
+
+/* Static (non-accordion) section head - not interactive. */
+.cred-card-head.static {
+    cursor: default;
+}
+
+.cred-card-head.static:hover {
+    background: transparent;
+}
+
+.cred-card-icon {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    border: 1px solid var(--vscode-widget-border);
+    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    color: var(--xratu-accent);
+}
+
+.cred-card-copy {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.cred-card-copy strong {
+    font-size: 12px;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.cred-card-copy > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-card-side {
+    flex: 0 1 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.cred-card-mini {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.cred-runtime-active {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--xratu-accent-strong);
+    font-size: 9.5px;
+    font-weight: 650;
+}
+
+.cred-card-head .chevron-open {
+    transform: rotate(180deg);
+    transition: transform 0.18s ease;
+}
+
+.cred-card-head .chevron-closed {
+    transform: rotate(0deg);
+    transition: transform 0.18s ease;
+}
+
+.cred-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 11px;
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+.cred-card-note {
+    margin: 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+/* Provider combobox - search field with a floating option menu */
+.cred-provider-box {
+    position: relative;
+}
+
+.cred-search-wrap.combobox {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.cred-search-wrap.combobox > svg {
+    position: absolute;
+    inset-inline-start: 9px;
+    color: var(--vscode-descriptionForeground);
+    pointer-events: none;
+}
+
+.cred-search-wrap.combobox input {
+    padding-inline-start: 27px;
+}
+
+.cred-provider-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 4px);
+    inset-inline: 0;
+    max-height: 210px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    animation: xratu-drop-up 0.16s ease-out;
+}
+
+.cred-provider-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    text-align: start;
+    font-family: inherit;
+    font-size: 11px;
+    transition: background 0.14s ease;
+}
+
+.cred-provider-option:hover,
+.cred-provider-option.selected {
+    background: var(--xratu-accent-faint);
+}
+
+.cred-provider-option .provider-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+}
+
+.cred-provider-option-label {
+    flex: 0 0 auto;
+    font-weight: 600;
+}
+
+.cred-provider-option-hint {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9.5px;
+}
+
+/* Elegant labeled separator above the saved-connections list */
+.cred-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 2px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.cred-divider::before,
+.cred-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: color-mix(in srgb, var(--vscode-widget-border) 80%, transparent);
+}
+
+.cred-divider span {
+    flex: 0 0 auto;
+    opacity: 0.9;
+}
+
+.saved-credential-actions {
+    display: inline-flex;
+    align-items: stretch;
+    align-self: stretch;
+}
+
+.saved-edit {
+    flex: 0 0 31px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-inline-start: 1px solid var(--vscode-widget-border);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+}
+
+.saved-edit:hover {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+}
+
+/* Inline edit form - REPLACES the row content (never appended beside it).
+   Fixed row height matches the normal state so nothing shifts on toggle. */
+.saved-edit-row {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 9px;
+}
+
+.saved-edit-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: var(--xratu-radius-xs);
+    outline: none;
+    background: var(--xratu-input);
+    color: var(--vscode-input-foreground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+}
+
+.saved-edit-row input:focus {
+    border-color: var(--xratu-accent);
+    box-shadow: 0 0 0 2px var(--xratu-accent-faint);
+}
+
+.saved-edit-btn {
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    transition: color 0.14s ease, background 0.14s ease;
+}
+
+.saved-edit-btn.save {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: var(--xratu-radius-xs);
+}
+
+.saved-edit-btn.save:hover:not(:disabled) {
+    background: var(--xratu-accent-dim);
+}
+
+.saved-edit-btn.save:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.saved-edit-btn.cancel:hover {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.08);
+}
+
+/* Cloud connection seen from local (signed-out) mode: visible, inert. */
+.saved-credential.locked {
+    opacity: 0.72;
+}
+
+.saved-credential.locked .saved-credential-main {
+    cursor: default;
+}
+
+/* Local card panel - vertical rhythm for its sub-sections */
+.cred-local-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.cred-scan-error-detail {
+    display: block;
+    color: var(--vscode-errorForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9.5px;
+    overflow-wrap: anywhere;
+}
+
+.arg-view {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.arg-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.arg-item > pre {
+    margin: 0;
+    padding: 2px 0 0;
+    overflow-x: auto;
+}
+
+/* Xratu Settings */
+
+.settings-page {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--xratu-shell);
+    color: var(--vscode-editor-foreground);
+}
+
+.settings-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    background: var(--xratu-shell);
+}
+
+.settings-back-icon {
+    transform: rotate(90deg);
+}
+
+.settings-head-copy {
+    min-width: 0;
+}
+
+.settings-eyebrow {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--xratu-accent);
+    font-size: 9px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.settings-head h2 {
+    margin: 0;
+    font-size: 16.5px;
+    line-height: 1.25;
+}
+
+.settings-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    scrollbar-width: none;
+}
+
+/* Same as .cred-page > *: without this, flex-shrink squashes cards to the
+   viewport height instead of overflowing into a scroll. */
+.settings-scroll > * {
+    flex-shrink: 0;
+}
+
+.settings-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.settings-status {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 10px;
+    border-radius: var(--xratu-radius-sm);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.settings-status.error {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.07);
+    border: 1px solid rgba(248, 81, 73, 0.28);
+}
+
+.settings-status-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.settings-card {
+    border: none;
+    border-radius: var(--xratu-radius);
+    background: var(--xratu-surface);
+    overflow: hidden;
+    /* Flex child of the scroll column: without this, `overflow: hidden`
+       zeroes the card's automatic min-height and flex-shrink squeezes it
+       to the viewport - content CLIPS and the page never scrolls (the
+       add-server form's Save button became unreachable). */
+    flex-shrink: 0;
+}
+
+.settings-section-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 11px;
+    border-bottom: 1px solid var(--xratu-border-quiet);
+}
+
+.settings-section-icon {
+    width: 27px;
+    height: 27px;
+    flex: 0 0 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 7px;
+}
+
+.settings-section-head > div:nth-child(2) {
+    min-width: 0;
+    flex: 1;
+}
+
+.settings-section-head h3 {
+    margin: 0 0 2px;
+    font-size: 13px;
+    line-height: 1.3;
+}
+
+.settings-section-head p {
+    margin: 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.settings-icon-action {
+    width: 27px;
+    height: 27px;
+    flex: 0 0 27px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+.settings-icon-action:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: var(--xratu-accent-dim);
+}
+
+.settings-icon-action:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.settings-card-body {
+    padding: 10px 11px;
+}
+
+.settings-field-label {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.settings-select-wrap {
+    position: relative;
+    min-width: 0;
+}
+
+.settings-select-wrap select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    appearance: none;
+    padding: 7px 30px 7px 9px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font: inherit;
+    font-size: 11px;
+}
+
+.settings-select-wrap select:focus {
+    border-color: var(--xratu-accent);
+}
+
+.settings-select-wrap select:disabled {
+    opacity: .55;
+}
+
+.settings-select-wrap > svg {
+    position: absolute;
+    inset-inline-end: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--vscode-descriptionForeground);
+}
+
+.settings-select-wrap.compact {
+    min-width: 86px;
+}
+
+.settings-model-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 5px 10px;
+    margin-top: 6px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    line-height: 1.4;
+}
+
+.settings-model-meta code {
+    color: var(--xratu-accent-strong);
+    font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.settings-override-list {
+    padding: 8px 10px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.settings-override-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 24px;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 6px 7px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 50%, transparent);
+}
+
+.settings-override-model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+}
+
+.settings-override-value {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9.5px;
+    white-space: nowrap;
+}
+
+.settings-remove-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+.settings-remove-btn:hover {
+    color: var(--vscode-errorForeground);
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.settings-empty-inline {
+    padding: 10px 11px 4px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+}
+
+.settings-override-add {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 86px auto;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 10px 10px;
+}
+
+.settings-primary-action,
+.settings-ghost-action,
+.settings-danger-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 29px;
+    padding: 5px 9px;
+    border-radius: var(--xratu-radius-sm);
+    border: 1px solid var(--vscode-widget-border);
+    font: inherit;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.settings-primary-action {
+    background: var(--xratu-accent);
+    border-color: var(--xratu-accent);
+    color: #04201c;
+    font-weight: 650;
+}
+
+.settings-primary-action:hover:not(:disabled) {
+    background: var(--xratu-accent-strong);
+}
+
+.settings-primary-action:disabled,
+.settings-ghost-action:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.settings-ghost-action {
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+}
+
+.settings-ghost-action:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+}
+
+/* Language flip (Settings → گفتگو) - fa/en choice chips inside a
+   settings-nav-row; sizing mirrors the neighboring rows' svg slots */
+.lang-choice {
+    display: flex;
+    gap: 6px;
+}
+
+.lang-chip {
+    padding: 4px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+}
+
+.lang-chip:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.lang-chip.active {
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+}
+
+.lang-chip:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.lang-chip:disabled:hover {
+    border-color: transparent;
+    background: transparent;
+}
+
+/* Free daily-quota ring: WHITE - visually distinct from the green
+   context-window meter beside it so the two can never be confused. */
+.tok-ring-fill.quota {
+    stroke: #ffffff;
+}
+
+.settings-nav-row,
+.settings-danger-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 9px;
+    padding: 10px 11px;
+    border: 0;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-foreground);
+    text-align: start;
+    font: inherit;
+}
+
+.settings-nav-row:last-child,
+.settings-danger-row:last-child {
+    border-bottom: 0;
+}
+
+button.settings-nav-row:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.settings-nav-row > svg,
+.settings-danger-row > svg {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+}
+
+.settings-nav-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.settings-nav-main strong,
+.settings-danger-row strong {
+    font-size: 10.5px;
+}
+
+.settings-nav-main span,
+.settings-danger-row span {
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    line-height: 1.4;
+}
+
+.settings-danger-row {
+    color: var(--vscode-errorForeground);
+}
+
+.settings-danger-row:hover {
+    background: rgba(248, 81, 73, 0.06);
+}
+
+.settings-confirm-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 11px;
+    border-inline-start: 2px solid var(--vscode-errorForeground);
+}
+
+.settings-confirm-row > div:first-child {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.settings-confirm-row strong {
+    color: var(--vscode-foreground);
+    font-size: 10.5px;
+}
+
+.settings-confirm-row span {
+    color: var(--vscode-descriptionForeground);
+    font-size: 9.5px;
+    line-height: 1.4;
+}
+
+.settings-confirm-actions {
+    display: flex;
+    gap: 5px;
+    flex: 0 0 auto;
+}
+
+.settings-danger-action {
+    color: var(--vscode-errorForeground);
+    background: transparent;
+    border-color: color-mix(in srgb, var(--vscode-errorForeground) 45%, var(--vscode-widget-border));
+}
+
+.settings-danger-action:hover {
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.settings-footer {
+    padding: 2px 3px 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 9px;
+    opacity: .7;
+}
+
+@media (max-width: 430px) {
+    .settings-override-add {
+        grid-template-columns: minmax(0, 1fr) 86px;
+    }
+
+    .settings-primary-action {
+        grid-column: 1 / -1;
+    }
+
+    .settings-confirm-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .settings-confirm-actions {
+        width: 100%;
+    }
+
+    .settings-confirm-actions button {
+        flex: 1;
+    }
+}
+
+/* ==========================================================================
+   MCP page - mirrors the Settings/Credentials card system
+   ========================================================================== */
+
+.mcp-apply-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 2px 10px;
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-xs);
+    opacity: 0.8;
+}
+
+.mcp-apply-hint svg {
+    flex: 0 0 auto;
+}
+
+.mcp-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 0 2px 2px;
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 4px;
+}
+
+/* Footer variant: pinned to the bottom of the scroll area. */
+.mcp-hint.foot {
+    margin-top: auto;
+    margin-bottom: 0;
+    padding-top: 8px;
+}
+
+.mcp-hint.warn {
+    padding: 9px 10px;
+    border-radius: var(--xratu-radius-sm);
+    background: rgba(255, 176, 32, 0.12);
+    border: 1px solid rgba(255, 176, 32, 0.35);
+}
+
+.mcp-hint svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+.mcp-hint-text {
+    margin: 2px 2px 8px;
+    font-size: var(--xratu-fs-xs);
+    opacity: 0.7;
+}
+
+.mcp-hint-text.warn-text {
+    color: #ffb020;
+    opacity: 1;
+}
+
+/* Page-level tab switcher - segmented, full width */
+.mcp-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.mcp-tabs .lang-chip {
+    flex: 1;
+    padding: 7px 12px;
+}
+
+.mcp-target-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0 0 8px;
+}
+
+/* Registry block: the target row sits under the section-head divider -
+   breathe it away from the header line. */
+.mcp-registry-block .mcp-target-row {
+    margin-top: 10px;
+}
+
+.mcp-empty {
+    padding: 18px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    font-size: var(--xratu-fs-sm);
+    opacity: 0.85;
+}
+
+/* Flat Extensions-style list row: no box, hover highlight only. */
+.mcp-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: var(--xratu-radius-sm);
+    margin-bottom: 2px;
+    background: transparent;
+}
+
+.mcp-row:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.mcp-row.off {
+    opacity: 0.55;
+}
+
+.mcp-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+button.mcp-row-main:hover strong {
+    color: var(--xratu-accent-strong);
+}
+
+.mcp-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.mcp-row-title strong {
+    font-size: var(--xratu-fs-base);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-row-meta {
+    font-size: var(--xratu-fs-xs);
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-badge {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.mcp-badge.src-workspace {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+}
+
+.mcp-badge.src-legacy {
+    color: #ffb020;
+    border-color: rgba(255, 176, 32, 0.4);
+    background: rgba(255, 176, 32, 0.12);
+}
+
+.mcp-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.mcp-row-actions .icon-btn.danger:hover {
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.12);
+}
+
+.mcp-row-actions .icon-btn.danger.confirm {
+    color: #fff;
+    background: #e5534b;
+    box-shadow: 0 0 0 1px rgba(255, 107, 107, 0.6);
+}
+
+.mcp-added-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-size: var(--xratu-fs-xs);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.mcp-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--vscode-descriptionForeground);
+}
+
+.mcp-dot.connected {
+    background: var(--xratu-accent);
+    box-shadow: 0 0 6px var(--xratu-accent-dim);
+}
+
+.mcp-dot.error {
+    background: #ff6b6b;
+}
+
+.mcp-dot.disabled {
+    background: var(--vscode-descriptionForeground);
+    opacity: 0.5;
+}
+
+.mcp-form {
+    border: none;
+    border-radius: var(--xratu-radius);
+    padding: 12px;
+    margin: 4px 0 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    background: color-mix(in srgb, var(--xratu-shell) 55%, var(--xratu-surface));
+}
+
+.mcp-form-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mcp-form-head-side {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mcp-form-head h3 {
+    margin: 0;
+    font-size: var(--xratu-fs-md);
+    font-weight: 600;
+}
+
+.mcp-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.mcp-field-label {
+    font-size: var(--xratu-fs-xs);
+    font-weight: 600;
+    opacity: 0.75;
+}
+
+.mcp-field input,
+.mcp-field select,
+.mcp-field textarea {
+    background: var(--xratu-input);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--xratu-border-quiet);
+    border-radius: var(--xratu-radius-xs);
+    padding: 5px 8px;
+    font-size: var(--xratu-fs-sm);
+    font-family: inherit;
+}
+
+.mcp-field textarea {
+    font-family: var(--vscode-editor-font-family, monospace);
+    resize: vertical;
+}
+
+.mcp-field input:focus,
+.mcp-field select:focus,
+.mcp-field textarea:focus {
+    outline: 1px solid var(--xratu-accent);
+}
+
+.mcp-field .mcp-hint-text {
+    margin: 0;
+}
+
+.mcp-field-error {
+    color: #ff6b6b;
+    font-size: var(--xratu-fs-xs);
+}
+
+.mcp-foot-hints {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 12px 2px 0;
+}
+
+.mcp-foot-hints .mcp-apply-hint {
+    margin: 0;
+}
+
+.mcp-form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.mcp-save {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 29px;
+    padding: 5px 9px;
+    border: 1px solid var(--xratu-accent);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-accent);
+    color: #04201c;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.mcp-save:hover {
+    background: var(--xratu-accent-strong);
+}
+
+/* --- capabilities page additions ------------------------------------- */
+
+/* Wrapped multi-line error text - never ellipsized away. */
+.mcp-row-error {
+    font-size: var(--xratu-fs-xs);
+    color: #ff6b6b;
+    opacity: 0.9;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Kebab overflow menu (RTL-safe: anchored to the inline-end edge). */
+.mcp-menu-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.mcp-menu {
+    position: absolute;
+    inset-inline-end: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    min-width: 132px;
+    padding: 4px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-editorWidget-background, var(--xratu-surface));
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+}
+
+.mcp-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border: none;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--xratu-fs-xs);
+    text-align: start;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.mcp-menu-item:hover {
+    background: var(--xratu-accent-faint);
+}
+
+.mcp-menu-item.danger:hover {
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.12);
+}
+
+.mcp-menu-item.danger.confirm {
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.12);
+}
+
+/* Real switch for skill enable/disable. */
+.mcp-switch {
+    position: relative;
+    width: 30px;
+    height: 17px;
+    padding: 0;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    background: var(--vscode-descriptionForeground);
+    opacity: 0.55;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.mcp-switch.on {
+    background: var(--xratu-accent);
+    border-color: var(--xratu-accent);
+    opacity: 1;
+}
+
+.mcp-switch:disabled {
+    cursor: default;
+    opacity: 0.3;
+}
+
+.mcp-switch-knob {
+    position: absolute;
+    top: 2px;
+    /* Physical, not logical: the rows are LTR islands inside the RTL page,
+       so inline-direction rules would resolve inconsistently. */
+    left: 2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.12s ease;
+}
+
+.mcp-switch.on .mcp-switch-knob {
+    transform: translateX(13px);
+}
+
+/* Skill source groups. */
+.mcp-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.mcp-group:last-child {
+    margin-bottom: 0;
+}
+
+.mcp-group-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    padding-inline-start: 2px;
+}
+
+/* Editor-form field groups (Connection / Security / Advanced). */
+.mcp-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.mcp-form-group-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    padding-bottom: 3px;
+}
+
+/* Disabled state chip in the form head. */
+.mcp-state-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 8px;
+    font-size: var(--xratu-fs-xs);
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    background: transparent;
+    border: 1px solid var(--xratu-border-quiet);
+    border-radius: 999px;
+}
+
+.mcp-state-chip.off {
+    color: var(--vscode-editorWarning-foreground);
+    border-color: rgba(255, 176, 32, 0.4);
+    background: rgba(255, 176, 32, 0.1);
+}
+
+/* Skill-source badges reuse the mcp-badge src-* classes. */
+.mcp-badge.src-project-xratu {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+}
+
+.mcp-badge.src-shadowed {
+    color: #ffb020;
+    border-color: rgba(255, 176, 32, 0.4);
+    background: rgba(255, 176, 32, 0.12);
+}
+
+.flip-v {
+    transform: scaleY(-1);
+}
+
+/* ---------------------------------------------------------------------------
+ * RTL (fa) fixes - inputs stay LTR-locked for their VALUES, but Persian
+ * placeholders and start-alignment must follow the page direction.
+ * ------------------------------------------------------------------------- */
+
+/* Persian placeholders inside LTR-locked key inputs render scrambled word
+   order under the input's LTR base direction - flip the placeholder only
+   (typed values remain LTR: keys, URLs). */
+[dir='rtl'] .cred-secret input::placeholder,
+[dir='rtl'] .saved-edit-row input::placeholder,
+[dir='rtl'] .task-list-edit-input::placeholder {
+    direction: rtl;
+}
+

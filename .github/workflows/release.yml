@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Least privilege - packaging only needs to read the repo and upload artifacts.
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      # Pin actions to full-length commit SHAs (version in comment).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the release on the same checks as CI.
+      - name: Type-check host (tsc --noEmit)
+        run: node_modules/.bin/tsc --noEmit -p tsconfig.json
+
+      - name: Type-check webview (tsc --noEmit)
+        run: npx tsc --noEmit -p webview-ui/tsconfig.json
+
+      - name: Webview tests
+        run: npm run test:webview
+
+      # Tag names matching the v* trigger may contain shell metacharacters;
+      # only strict semver tags reach the shell below.
+      - name: Validate tag
+        run: |
+          echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "unexpected tag: $RELEASE_TAG"; exit 1; }
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Package VSIX
+        run: npx vsce package --no-dependencies -o "xratu-${RELEASE_TAG}.vsix"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: xratu-${{ github.ref_name }}-vsix
+          path: xratu-*.vsix
+          if-no-files-found: error

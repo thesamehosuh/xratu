@@ -1,0 +1,35 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+dist/
+out/
+dist-tests/
+*.vsix
+
+# Playwright
+test-results/
+playwright-report/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env / secrets - this repo must never carry environment files
+.env
+.env.*
+*.secrets.env
+
+# Editor
+.idea/
+*.swp
+
+# Machine-local agent tooling - never commit
+.kilo/
+.playwright-mcp/
+kilo.json

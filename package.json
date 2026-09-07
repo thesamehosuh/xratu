@@ -1,0 +1,182 @@
+{
+	"name": "xratu",
+	"displayName": "Xratu",
+	"description": "AI coding assistant for VS Code. Bring your own key or use a local runtime.",
+	"version": "1.0.0",
+	"publisher": "xratu",
+	"license": "SEE LICENSE IN LICENSE",
+	"icon": "assets/icon.png",
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"AI",
+		"Chat"
+	],
+	"keywords": [
+		"ai",
+		"coding assistant",
+		"agent",
+		"chatgpt",
+		"claude",
+		"ollama",
+		"llm",
+		"local llm",
+		"byok",
+		"mcp",
+		"خراتو",
+		"هوش مصنوعی",
+		"کدنویسی"
+	],
+	"activationEvents": [
+		"onView:xratu-chat-view"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"configuration": {
+			"title": "Xratu",
+			"properties": {
+				"xratu.mcpServers": {
+					"type": "object",
+					"default": {},
+					"markdownDescription": "Legacy fallback for **MCP servers** - configure them in the Xratu panel's dedicated **MCP page** instead (files: global `mcp.json` / workspace `.xratu/mcp.json`). This setting is only read when both files are empty.\n\nTheir tools are exposed to the agent as `mcp__<server>__<tool>` and require your approval unless auto-approved on the MCP page."
+				},
+				"xratu.webSearchProvider": {
+					"type": "string",
+					"enum": [
+						"auto",
+						"searxng",
+						"brave",
+						"parallel"
+					],
+					"default": "auto",
+					"description": "Web-search provider for local mode's web_search tool. Auto uses SearXNG when a search URL is set, otherwise Brave."
+				},
+				"xratu.webSearchUrl": {
+					"type": "string",
+					"default": "",
+					"description": "SearXNG instance base URL (e.g. http://localhost:8888) used by local mode's web_search tool."
+				},
+				"xratu.webSearchApiKey": {
+					"type": "string",
+					"default": "",
+					"description": "Brave Search API key used by local mode's web_search tool."
+				}
+			},
+			"restrictedConfigurations": [
+				"xratu.mcpServers"
+			]
+		},
+		"commands": [
+			{
+				"command": "xratu.clearHistory",
+				"title": "Xratu: New Session",
+				"category": "Xratu"
+			},
+			{
+				"command": "xratu.setLlmCredentials",
+				"title": "Xratu: Set LLM Credentials",
+				"category": "Xratu"
+			},
+			{
+				"command": "xratu.openSettings",
+				"title": "Xratu: Open Settings",
+				"category": "Xratu"
+			},
+			{
+				"command": "xratu.restoreCheckpoint",
+				"title": "Xratu: Restore Checkpoint…",
+				"category": "Xratu"
+			},
+			{
+				"command": "xratu.attachFile",
+				"title": "Xratu: Attach Files…",
+				"category": "Xratu"
+			},
+			{
+				"command": "xratu.attachFromExplorer",
+				"title": "Attach to Xratu Chat"
+			}
+		],
+		"menus": {
+			"explorer/context": [
+				{
+					"command": "xratu.attachFromExplorer",
+					"group": "9_xratu"
+				}
+			]
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "xratu-sidebar",
+					"title": "Xratu",
+					"icon": "assets/activitybar.svg"
+				}
+			]
+		},
+		"views": {
+			"xratu-sidebar": [
+				{
+					"type": "webview",
+					"id": "xratu-chat-view",
+					"name": "Xratu Chat",
+					"webviewOptions": {
+						"retainContextWhenHidden": true
+					}
+				}
+			]
+		}
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/thesamehosuh/xratu"
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run package",
+		"compile": "node esbuild.js && vite build",
+		"watch": "node esbuild.js --watch",
+		"watch:webview": "vite build --watch",
+		"build:webview": "vite build",
+		"test:webview": "node test/run-webview-tests.mjs",
+		"test:e2e": "npm run build:webview && playwright test -c test/e2e/playwright.config.ts",
+		"test:sanitizer": "node test/test-sanitizer.mjs",
+		"test:endpoint-guard": "node test/test-endpoint-guard.mjs",
+		"test:compaction": "node test/test-compaction.mjs",
+		"test:session-approval": "node test/test-session-approval.mjs",
+		"test:skills": "node test/test-skills.mjs",
+		"test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",
+		"test:session-store": "node test/test-session-store.mjs",
+		"package": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && node esbuild.js --production && vite build --mode production",
+		"package-vsix": "npx vsce package --no-dependencies",
+		"compile-tests": "tsc -p . --outDir out",
+		"watch-tests": "tsc -p . -w --outDir out"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.63.0",
+		"@types/cross-spawn": "^6.0.6",
+		"@types/markdown-it": "^14.1.2",
+		"@types/node": "^22.0.0",
+		"@types/react": "^18.3.12",
+		"@types/react-dom": "^18.3.1",
+		"@types/vscode": "^1.90.0",
+		"@types/ws": "^8.18.1",
+		"@vitejs/plugin-react": "^4.3.4",
+		"@vscode/vsce": "^3.9.2",
+		"esbuild": "^0.28.1",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1",
+		"typescript": "^5.4.5",
+		"vite": "^5.4.11",
+		"vite-plugin-singlefile": "^2.0.3"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"cross-spawn": "^7.0.6",
+		"lucide-react": "^1.33.0",
+		"markdown-it": "^14.2.0",
+		"pdfjs-dist": "^4.10.38",
+		"shiki": "^4.2.0",
+		"ws": "^8.21.0"
+	}
+}

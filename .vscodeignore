@@ -1,0 +1,32 @@
+# Don't include dev/build files in the VSIX package
+.vscode/
+.vscode-test/
+src/
+node_modules/
+.git/
+*.ts
+tsconfig.json
+esbuild.js
+webpack.config.js
+.gitignore
+*.md
+LICENSE
+test/
+**/*.test.ts
+
+# Bundled default skills seed ~/.agents/skills on first run - the SKILL.md
+# assets must ship despite the *.md exclusion above.
+!assets/skills/**
+
+# Brand logo ladder is repo/marketing material - the VSIX only needs the
+# marketplace icon and the activity bar SVG.
+assets/brand/**
+
+# Marketplace license badge reads the LICENSE file shipped in the VSIX.
+!LICENSE
+
+# React webview sources are compiled into dist/webview-ui; exclude the source
+# tree and the test bundles (npm run test:webview writes dist-tests/).
+webview-ui/
+dist-tests/
+dist/*.map
