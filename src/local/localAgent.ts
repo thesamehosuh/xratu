@@ -524,6 +524,16 @@ export const HISTORY_TRUNCATION_MARKER =
     '[Earlier messages in this conversation were removed to fit the context window. '
     + 'Continue seamlessly; do not mention this.]';
 
+/** Appended to the system message for the ONE tool-free wrap-up round that
+ *  replaces the old hard stop when the round budget runs out mid-turn: the
+ *  model must stop calling tools and deliver its final answer now, so the
+ *  turn ends normally (status done) instead of erroring away everything the
+ *  run did. Model-facing wire string, like HISTORY_TRUNCATION_MARKER. */
+const ROUND_LIMIT_WRAPUP_NUDGE =
+    '\n\n⚠ ROUND LIMIT REACHED: your tool-call budget for this turn is exhausted. '
+    + 'Stop calling tools. Based on the work already done, give your final answer now: '
+    + 'state what you completed, what remains, and any next steps for the user.';
+
 function contextStatusLine(usedTokens: number, windowTokens?: number | null): string {
     if (!windowTokens || windowTokens <= 0) return '';
     const pct = Math.min(100, Math.round((usedTokens / windowTokens) * 100));
@@ -1115,7 +1125,78 @@ export async function* runLocalAgent(
         }
     }
 
-    throw new Error(`Local agent stopped after ${rounds} rounds without completing.`);
+    // Round budget exhausted while the model was still calling tools. A hard
+    // stop here throws away everything the run did mid-turn and surfaces as
+    // an error bubble; instead, give the model ONE tool-free wrap-up round
+    // (tools omitted from the body so strict servers never offer them) to
+    // deliver its final answer/summary, then end the turn normally.
+    yield { type: 'status', value: 'continuing' };
+    const wrapMessages: LocalAgentMessage[] = [
+        { role: 'system', content: (messages[0]?.content ?? request.systemPrompt) + ROUND_LIMIT_WRAPUP_NUDGE },
+        ...messages.slice(1),
+    ];
+
+    // The wrap-up runs when the conversation is at its largest, so the same
+    // one-shot overflow recovery as the main loop applies: on a server-side
+    // context-overflow rejection, compact deterministically (forced - the
+    // estimate just proved wrong) and retry ONCE. The system message at
+    // index 0 survives compaction, so the nudge rides on the retry as-is.
+    let wrapRecovered = false;
+    let wrapResult: CompletionResult | null = null;
+    let wrapError: unknown = null;
+    for (let wrapAttempt = 0; wrapAttempt < 2; wrapAttempt++) {
+        wrapResult = null;
+        wrapError = null;
+        const wrapQueue = new AsyncPushQueue<string>();
+        const wrapPromise = requestStreamingCompletion(
+            { ...request, tools: [] },
+            wrapMessages,
+            (delta) => wrapQueue.push(delta),
+        )
+            .then((value) => { wrapResult = value; return value; })
+            // null (not void) on failure: keeps the promise CompletionResult |
+            // null so the success re-read below assigns cleanly.
+            .catch((err) => { wrapError = err; return null; })
+            .finally(() => wrapQueue.close());
+
+        while (wrapResult === null && wrapError === null) {
+            const delta = await wrapQueue.pop();
+            if (delta !== null) yield { type: 'chunk', value: delta };
+        }
+        while (true) {
+            const delta = await wrapQueue.pop();
+            if (delta === null) break;
+            yield { type: 'chunk', value: delta };
+        }
+        await wrapPromise;
+        if (!wrapError) {
+            wrapResult = await wrapPromise;
+            break;
+        }
+        if (
+            wrapRecovered
+            || !windowTokens
+            || !(wrapError instanceof Error)
+            || !CONTEXT_OVERFLOW_RE.test(wrapError.message)
+            || !compactMessages(wrapMessages, windowTokens, undefined, toolTokens, true).length
+        ) break;
+        wrapRecovered = true;
+    }
+    if (wrapError) throw wrapError;
+    if (!wrapResult) throw new Error('Local model returned no wrap-up completion result.');
+    if (wrapResult.usage) yield { type: 'usage', usage: wrapResult.usage };
+    // Tool calls in the wrap-up round are ignored: tools were not offered,
+    // the budget is spent, and executing un-reviewed calls would silently
+    // extend the run past its limit. A stubborn model that returns ONLY a
+    // (ignored) tool call still leaves the turn with a visible final message
+    // instead of committing blank.
+    yield {
+        type: 'assistantMessage',
+        text: wrapResult.text
+            || `[Round limit reached: the agent used all ${rounds} tool rounds without a final answer. Ask it to continue for the remaining steps.]`,
+        toolCalls: [],
+    };
+    yield { type: 'status', value: 'done' };
 }
 
 function cryptoRandomId(): string {
