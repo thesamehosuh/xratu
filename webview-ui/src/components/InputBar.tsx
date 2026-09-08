@@ -183,6 +183,12 @@ async function processPdfAttachment(a: ComposerAttachment): Promise<ComposerAtta
 
 /** Resolve a reliable MIME type: browsers frequently report an empty or
  *  generic type for code/config files, so fall back to the extension. */
+/** Separator-insensitive matching: "glm 52" and "glm52" must find
+ *  "glm-5.2" - punctuation in model ids never gates the query. */
+function normalizeModelQuery(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+}
+
 function mimeForFile(file: File): string {
     const ext = file.name.includes('.')
         ? file.name.split('.').pop()!.toLowerCase()
@@ -501,9 +507,9 @@ export function InputBar({
     }, [value]);
 
     const filteredModels = useMemo(() => {
-        const q = filter.trim().toLowerCase();
+        const q = normalizeModelQuery(filter);
         if (!q) return models;
-        return models.filter((m) => m.toLowerCase().includes(q));
+        return models.filter((m) => normalizeModelQuery(m).includes(q));
     }, [filter, models]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
