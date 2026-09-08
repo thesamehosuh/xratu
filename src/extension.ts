@@ -1928,7 +1928,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
                     signal: controller.signal,
-                    maxRounds: 12,
+                    maxRounds: 25,
                     // Window for compaction/budget math. Prefer the probed or
                     // override value; the fallback is deliberately CONSERVATIVE
                     // (not 32k): claiming a window larger than the runtime

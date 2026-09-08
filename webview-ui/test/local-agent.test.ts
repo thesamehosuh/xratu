@@ -670,6 +670,264 @@ async function testSteerJoinsBeforeNextRound() {
 }
 
 
+async function testRoundBudgetEndsWithWrapupInsteadOfError() {
+    const requests: any[] = [];
+    const executed: string[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        call++;
+        if (call <= 2) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: `f${call}.txt` }), `call-${call}`));
+        }
+        return sse(textSse(['wrap-up ', 'summary']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 2,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async (toolCall) => {
+                    executed.push(toolCall.name);
+                    return { output: 'contents' };
+                },
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // 2 budgeted rounds + 1 wrap-up round; no throw.
+        assert.equal(requests.length, 3);
+        // The wrap-up request offers NO tools and carries the nudge.
+        assert.equal(requests[2].tools, undefined);
+        assert.ok(requests[2].messages[0].content.includes('ROUND LIMIT REACHED'));
+        // The final answer rides a normal assistantMessage; the turn ends done.
+        const final = events.find((e: any) => e.type === 'assistantMessage' && e.text.includes('wrap-up'));
+        assert.ok(final);
+        assert.deepEqual(final.toolCalls, []);
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+        // Only the two budgeted rounds executed tools - not the wrap-up.
+        assert.deepEqual(executed, ['read_file', 'read_file']);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+
+async function testWrapupToolCallIsIgnored() {
+    const executed: string[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        // The wrap-up round hallucinates a tool call alongside its text.
+        return sse([
+            ...toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2'),
+            ...textSse(['final answer']),
+        ]);
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => {
+                    executed.push('read_file');
+                    return { output: 'contents' };
+                },
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // The wrap-up tool call was NOT executed and produced no tool events.
+        assert.deepEqual(executed, ['read_file']);
+        assert.ok(!events.some((e: any) => e.type === 'toolCall' && e.id === 'call-2'));
+        assert.ok(!events.some((e: any) => e.type === 'toolResult' && e.id === 'call-2'));
+        // Its text still lands as the final message; the turn completes.
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'final answer'));
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+
+async function testWrapupRequestFailureStillErrors() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        return {
+            ok: false,
+            status: 503,
+            text: async () => 'server unavailable',
+        } as MockResponse;
+    }) as typeof fetch;
+
+    try {
+        await assert.rejects(
+            collect(
+                runLocalAgent(baseRequest({
+                    maxRounds: 1,
+                    tools: [{
+                        name: 'read_file',
+                        description: 'Read a file',
+                        inputSchema: { type: 'object' },
+                    }],
+                }), {
+                    execute: async () => ({ output: 'contents' }),
+                }, {
+                    requestApproval: async () => ({}),
+                })
+            ),
+            /503.*server unavailable/
+        );
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+
+async function testWrapupWithoutTextEmitsFallback() {
+    const executed: string[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        // Stubborn model: the wrap-up round returns ONLY a tool call.
+        return sse(toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2'));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => {
+                    executed.push('read_file');
+                    return { output: 'contents' };
+                },
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // The wrap-up tool call was ignored - only the budgeted round ran.
+        assert.deepEqual(executed, ['read_file']);
+        // The turn still commits with a visible final message, not blank.
+        const final = events.find((e: any) => e.type === 'assistantMessage' && e.text.includes('Round limit reached'));
+        assert.ok(final);
+        assert.deepEqual(final.toolCalls, []);
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+
+async function testWrapupOverflowCompactsAndRetries() {
+    const requests: any[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+
+    globalThis.fetch = (async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        if (call === 2) {
+            // The wrap-up prompt overflows the window - the server rejects
+            // before streaming anything, like Ollama/llama.cpp do.
+            return {
+                ok: false,
+                status: 400,
+                body: undefined,
+                text: async () => 'input length exceeds context length',
+            } as MockResponse;
+        }
+        return sse(textSse(['recovered answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                contextWindow: 8192,
+                history: [
+                    { role: 'user', content: 'old question one' },
+                    { role: 'assistant', content: 'old answer one' },
+                    { role: 'user', content: 'old question two' },
+                    { role: 'assistant', content: 'old answer two' },
+                ],
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // 1 budgeted round + failed wrap-up + successful retry.
+        assert.equal(requests.length, 3);
+        const serialized = JSON.stringify(requests[2].messages);
+        // The retry compacted: oldest pair dropped, truncation marker in.
+        assert.ok(requests[2].messages[1].content.includes('Earlier messages in this conversation were removed'));
+        assert.ok(!serialized.includes('old question one'));
+        // Compaction never touches the current turn.
+        assert.ok(serialized.includes('old question two'));
+        assert.ok(serialized.includes('contents'));
+        // The turn completes normally after the recovered retry.
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'recovered answer'));
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+
 async function main() {
     await testStreamingDeltas();
     await testToolCallApprovalAndContinuation();
@@ -684,6 +942,11 @@ async function main() {
     await testProactiveCompactDropsOldTurnsAtStart();
     await testMidRunCompactionFromServerUsage();
     await testSteerJoinsBeforeNextRound();
+    await testRoundBudgetEndsWithWrapupInsteadOfError();
+    await testWrapupToolCallIsIgnored();
+    await testWrapupRequestFailureStillErrors();
+    await testWrapupWithoutTextEmitsFallback();
+    await testWrapupOverflowCompactsAndRetries();
 
     console.log('local-agent.test.ts: all tests passed');
 }
