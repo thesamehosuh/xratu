@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "Xratu",
 	"description": "AI coding assistant for VS Code. Bring your own key or use a local runtime.",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
