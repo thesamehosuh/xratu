@@ -1214,6 +1214,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (v.includes('googleapis.com')) return 'google';
         if (v.includes('generativelanguage.googleapis.com')) return 'google';
         if (v.includes('x.ai')) return 'xai';
+        if (v.includes('kayaai.ir')) return 'kayaai';
         if (v.includes('api.groq.com')) return 'groq';
         if (v.includes('localhost:11434')) return 'ollama';
         if (v.includes('localhost:1234')) return 'lmstudio';
@@ -1222,7 +1223,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private _providerLabelForUrl(baseUrl: string): string {
         const labels: Record<string, string> = {
-            openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq',
+            openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq', kayaai: 'Kaya AI',
             deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together',
             fireworks: 'Fireworks', cerebras: 'Cerebras', anthropic: 'Anthropic',
             google: 'Google', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
