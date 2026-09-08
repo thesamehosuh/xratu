@@ -354,6 +354,7 @@ const fa = {
     credPopular: 'محبوب',
     credLocal: 'محلی',
     credOpenAICompatible: 'سازگار با OpenAI API',
+    kayaHint: 'سرویس ایرانی؛ بدون نیاز به فیلترشکن، پرداخت ریالی',
     credActive: 'فعال',
     credDelete: 'حذف اتصال',
     credDeleteConfirm: 'برای تایید دوباره بزنید',
@@ -423,7 +424,7 @@ const fa = {
     // Host-posted error keys (extension.ts / pdfExtract.ts)
     credUrlRequired: 'آدرس سرویس لازم است.',
     credUrlKeyRequired: 'آدرس سرویس و کلید API هر دو لازم هستند.',
-    localCredMissing: 'اعتبارنامه مدل محلی یافت نشد.',
+    localCredMissing: 'اعتبارنامه مدل یافت نشد.',
     noModelSelected: 'مدلی انتخاب نشده است.',
     requestCancelled: 'درخواست لغو شد.',
     clearHistoryIncomplete: 'پاکسازی تاریخچه کامل نشد؛ {count} گفتگو حذف نشد.',
@@ -775,6 +776,7 @@ const en: Record<keyof typeof fa, string> = {
     credPopular: 'Popular',
     credLocal: 'Local',
     credOpenAICompatible: 'OpenAI-compatible API',
+    kayaHint: 'Iranian provider; no VPN needed, pay in rial',
     credActive: 'Active',
     credDelete: 'Delete connection',
     credDeleteConfirm: 'Click again to confirm',
@@ -838,7 +840,7 @@ const en: Record<keyof typeof fa, string> = {
 
     credUrlRequired: 'A service URL is required.',
     credUrlKeyRequired: 'Both service URL and API key are required.',
-    localCredMissing: 'Local model credentials not found.',
+    localCredMissing: 'Model credentials not found.',
     noModelSelected: 'No model selected.',
     requestCancelled: 'Request cancelled.',
     clearHistoryIncomplete: 'History clear incomplete; {count} conversation(s) could not be deleted.',

@@ -144,9 +144,12 @@ type OpenAITool = {
 function normalizeBaseUrl(value: string): string {
     const raw = value.trim().replace(/\/+$/, '');
     if (!/^https?:\/\//i.test(raw)) {
-        throw new Error('Local model URL must start with http:// or https://');
+        throw new Error('Model URL must start with http:// or https://');
     }
-    return raw.endsWith('/v1') ? raw : `${raw}/v1`;
+    // Bases already rooted at a version segment (/v1) or an /api root
+    // (e.g. Kaya AI's https://kayaai.ir/api) are used as-is; everything
+    // else gets the standard OpenAI /v1 suffix.
+    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
 }
 
 function toOpenAITools(tools: LocalToolDefinition[]): OpenAITool[] {
@@ -286,7 +289,7 @@ async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>):
             reader.read(),
             new Promise<never>((_, reject) => {
                 timer = setTimeout(
-                    () => reject(new Error(`Local model stream stalled (no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`)),
+                    () => reject(new Error(`Model stream stalled (no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`)),
                     STREAM_IDLE_TIMEOUT_MS,
                 );
             }),
@@ -341,7 +344,7 @@ async function requestStreamingCompletion(
         });
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw new Error(`Local model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -350,11 +353,11 @@ async function requestStreamingCompletion(
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Local model request failed (${response.status}): ${text.slice(0, 600)}`);
+        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
     }
 
     if (!response.body) {
-        throw new Error('Local model returned no response body.');
+        throw new Error('Model returned no response body.');
     }
 
     const reader = response.body.getReader();
@@ -1023,7 +1026,7 @@ export async function* runLocalAgent(
             throw requestError;
         }
         const finalResult = result ?? await requestPromise.then((r) => r);
-        if (!finalResult) throw new Error('Local model returned no completion result.');
+        if (!finalResult) throw new Error('Model returned no completion result.');
 
         if (finalResult.usage) yield { type: 'usage', usage: finalResult.usage };
 
@@ -1183,7 +1186,7 @@ export async function* runLocalAgent(
         wrapRecovered = true;
     }
     if (wrapError) throw wrapError;
-    if (!wrapResult) throw new Error('Local model returned no wrap-up completion result.');
+    if (!wrapResult) throw new Error('Model returned no wrap-up completion result.');
     if (wrapResult.usage) yield { type: 'usage', usage: wrapResult.usage };
     // Tool calls in the wrap-up round are ignored: tools were not offered,
     // the budget is spent, and executing un-reviewed calls would silently

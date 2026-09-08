@@ -6,6 +6,7 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 import { createJavaScriptRegexEngine, getSingletonHighlighter } from 'shiki';
 import {
     Brain,
+    BookOpen,
     Check,
     ChevronDown,
     CircleDot,
@@ -30,7 +31,6 @@ import {
     RefreshCw,
     Search,
     ShieldCheck,
-    Sparkles,
     SquareTerminal,
     Trash2,
     TriangleAlert,
@@ -135,7 +135,7 @@ function pushToolRow(rows: Row[], row: ToolRow): void {
 const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^update_task_list$/, icon: ListChecks },
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
-    { re: /^skill$/, icon: Sparkles },
+    { re: /^skill$/, icon: BookOpen },
     { re: /terminal|command/, icon: SquareTerminal },
     { re: /grep/, icon: Search },
     { re: /glob/, icon: Search },

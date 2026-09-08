@@ -7,6 +7,7 @@
  */
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
+import { isLikelyLocalUrl } from '../endpointGuard';
 
 export interface DiscoveredLocalModel {
     connection: LocalModelConnection;
@@ -83,11 +84,16 @@ export async function probeLocalEndpoint(
 ): Promise<{ models: LocalModelInfo[] } | null> {
     const rawBase = baseUrl.trim().replace(/\/+$/, '');
 
+    // Localhost runtimes get the tight 1.8s deadline; remote gateways need
+    // seconds - e.g. kayaai.ir serves a ~230KB models list that takes
+    // 2-3s over a slow international route.
+    const probeTimeoutMs = isLikelyLocalUrl(baseUrl) ? 1800 : 10_000;
+
     // LM Studio's native v1 model endpoint exposes max_context_length and
     // per-loaded-instance context/capability metadata that the OpenAI /v1/models
     // compatibility endpoint often omits. Prefer it when available.
     if (/localhost:1234|127\.0\.0\.1:1234/.test(rawBase)) {
-        const native = await fetchJson(`${rawBase}/api/v1/models`, signal, 1800, apiKey);
+        const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey);
         if (native && Array.isArray(native.models)) {
             return {
                 models: native.models
@@ -110,7 +116,7 @@ export async function probeLocalEndpoint(
     }
 
     // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, 1800, apiKey);
+    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, probeTimeoutMs, apiKey);
     if (openai && Array.isArray(openai.data)) {
         return {
             models: openai.data.map((m: any) => ({
@@ -124,8 +130,26 @@ export async function probeLocalEndpoint(
         };
     }
 
+    // Kaya AI-style native gateway listing: { models: [{ id, provider,
+    // maxTokens, inputModalities, ... }] } at <base>/models when the base
+    // is an /api root. Richer than the OpenAI shape - maxTokens is the
+    // context window, inputModalities detects vision.
+    if (openai && Array.isArray(openai.models) && openai.models.some((m: any) => typeof m?.id === 'string')) {
+        return {
+            models: openai.models
+                .filter((m: any) => typeof m.id === 'string')
+                .map((m: any) => ({
+                    id: m.id,
+                    object: 'model',
+                    ownedBy: m.provider ?? m.ownedBy,
+                    contextWindow: numberFromFields(m.maxTokens, m.context_length, m.context_window),
+                    supportsVision: (Array.isArray(m.inputModalities) && m.inputModalities.includes('image')) || undefined,
+                })),
+        };
+    }
+
     // Fall back to Ollama's native /api/tags endpoint.
-    const ollama = await fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/tags`, signal, 1800, apiKey);
+    const ollama = await fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/tags`, signal, probeTimeoutMs, apiKey);
     if (ollama && Array.isArray(ollama.models)) {
         return {
             models: ollama.models.map((m: any) => ({
@@ -142,7 +166,7 @@ export async function probeLocalEndpoint(
 
 function normalizeForProbe(value: string): string {
     const raw = value.trim().replace(/\/+$/, '');
-    return raw.endsWith('/v1') ? raw : `${raw}/v1`;
+    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
 }
 
 /**

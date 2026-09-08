@@ -58,7 +58,7 @@ checkTrue('too many input tokens', CONTEXT_OVERFLOW_RE.test('400: too many input
 checkFalse('image encoding error', CONTEXT_OVERFLOW_RE.test("'url' field must be a base64 encoded image"));
 checkFalse('connection refused', CONTEXT_OVERFLOW_RE.test('connect ECONNREFUSED 127.0.0.1:11434'));
 checkFalse('model not found', CONTEXT_OVERFLOW_RE.test('model "foo" not found, try pulling it first'));
-checkFalse('stream stalled', CONTEXT_OVERFLOW_RE.test('Local model stream stalled (no data for 120s).'));
+checkFalse('stream stalled', CONTEXT_OVERFLOW_RE.test('Model stream stalled (no data for 120s).'));
 checkFalse('bad json', CONTEXT_OVERFLOW_RE.test('Unexpected token < in JSON at position 0'));
 
 // --- compactMessages: drops whole turns, lands on user boundaries ---
