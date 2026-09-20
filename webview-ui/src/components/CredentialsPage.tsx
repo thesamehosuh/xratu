@@ -71,10 +71,14 @@ const PRESETS: Preset[] = [
     // editable in the form; verify against the provider's dashboard.
     { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
     { id: 'avalai', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
-    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: 'https://api.metisai.ir/openai/v1', hintKey: 'credIranianHint' },
-    { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: 'https://ai.liara.ir/api/v1', hintKey: 'credIranianHint' },
-    { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: 'https://api.arvancloud.ir/ai/v1', hintKey: 'credIranianHint' },
-    { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: 'https://api.navaan.ai/v1', hintKey: 'credIranianHint' },
+    // These providers have no shared OpenAI-compatible base URL: Metis serves a
+    // per-API wrapper route and Liara/Arvan/Navaan hand out a URL containing an
+    // account/workspace id. Leave the URL empty so the user pastes the one from
+    // their dashboard instead of shipping a route that would 404.
+    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'xai', label: 'xAI', group: 'other', baseUrl: 'https://api.x.ai/v1' },
     { id: 'perplexity', label: 'Perplexity', group: 'other', baseUrl: 'https://api.perplexity.ai' },
     { id: 'cohere', label: 'Cohere', group: 'other', baseUrl: 'https://api.cohere.com/compatibility/v1' },
