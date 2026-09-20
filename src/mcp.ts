@@ -341,6 +341,8 @@ async function dispatchTool(
     args: any,
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
     skillResolver?: (name: string) => SkillResolution,
+    /** Incremental output sink for long-running tools (terminal commands). */
+    onOutput?: (chunk: string) => void,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     if (name === 'edit_file') {
         await ensureTurnSnapshot(workspaceRoot, 'before edit');
@@ -505,16 +507,22 @@ async function dispatchTool(
             };
             resetIdle();
             child.stdout.on('data', (d: Buffer) => {
-                stdout += d.toString();
+                const chunk = d.toString();
+                stdout += chunk;
                 // Cap CONTINUOUSLY (like runProcess): chatty output (`yes`, a
                 // huge log) can reach GBs inside the timeout window - the
                 // slice at finish() runs long after the extension host has OOM'd.
                 if (stdout.length > 200000) stdout = stdout.slice(-200000);
+                // Stream to the UI as it arrives (the model still gets the
+                // capped result at exit; this is for the human watching).
+                onOutput?.(chunk);
                 resetIdle();
             });
             child.stderr.on('data', (d: Buffer) => {
-                stderr += d.toString();
+                const chunk = d.toString();
+                stderr += chunk;
                 if (stderr.length > 200000) stderr = stderr.slice(-200000);
+                onOutput?.(chunk);
                 resetIdle();
             });
             child.on('error', (e) => finish(null, e));
@@ -910,6 +918,7 @@ export async function executeLocalTool(
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
     externalMcp?: ExternalMcpManager,
     skillResolver?: (name: string) => SkillResolution,
+    onOutput?: (chunk: string) => void,
 ): Promise<{ output: string; isError?: boolean }> {
     try {
         if (name.startsWith(EXTERNAL_PREFIX)) {
@@ -918,7 +927,7 @@ export async function executeLocalTool(
             }
             return { output: await externalMcp.callTool(name, args ?? {}) };
         }
-        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver);
+        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
@@ -934,6 +943,7 @@ export function createLocalToolExecutor(
     skillResolver?: (name: string) => SkillResolution,
 ): import('./local/localAgent').LocalToolExecutor {
     return {
-        execute: async (call) => executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver),
+        execute: async (call, onOutput) =>
+            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput),
     };
 }

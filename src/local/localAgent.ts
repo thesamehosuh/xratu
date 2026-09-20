@@ -47,6 +47,8 @@ export type LocalAgentEvent =
     | { type: 'thinking'; value: string }
     | { type: 'toolCall'; id: string; tool: string; args: Record<string, unknown> }
     | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean }
+    /** Incremental output from a still-running tool (terminal commands). */
+    | { type: 'toolOutput'; id: string; value: string }
     | { type: 'assistantMessage'; text: string; toolCalls: LocalToolCall[] }
     | { type: 'steer'; text: string; attachments?: LocalImageAttachment[] }
     | {
@@ -125,6 +127,9 @@ export interface LocalAgentRequest {
 export interface LocalToolExecutor {
     execute(
         call: LocalToolCall,
+        /** Called with incremental output for long-running tools (terminal
+         *  commands). Optional: executors may ignore it. */
+        onOutput?: (chunk: string) => void,
     ): Promise<{ output: string; isError?: boolean }>;
 }
 
@@ -2223,14 +2228,40 @@ export async function* runLocalAgent(
                 continue;
             }
 
-            const execResult = await executor.execute(call);
-            messages.push({ role: 'tool', tool_call_id: call.id, content: execResult.output, isError: execResult.isError === true });
+            // Stream long-running tool output (terminal commands) as it is
+            // produced. The queue lets us yield while execute() is still
+            // pending - a callback cannot yield into this generator directly.
+            const toolQueue = new AsyncPushQueue<string>();
+            let execResult: { output: string; isError?: boolean } | null = null;
+            let execError: unknown = null;
+            const execPromise = executor
+                .execute(call, (chunk) => toolQueue.push(chunk))
+                .then((r) => { execResult = r; return r; })
+                .catch((e) => { execError = e; return null; })
+                .finally(() => toolQueue.close());
+
+            while (execResult === null && execError === null) {
+                const chunk = await toolQueue.pop();
+                if (chunk !== null) yield { type: 'toolOutput', id: call.id, value: chunk };
+            }
+            while (true) {
+                const chunk = await toolQueue.pop();
+                if (chunk === null) break;
+                yield { type: 'toolOutput', id: call.id, value: chunk };
+            }
+            // Await the promise for the settled value (the closure assignment
+            // above is invisible to TS's control-flow analysis).
+            const result = await execPromise;
+            if (execError) throw execError;
+            if (!result) throw new Error('Tool executor returned no result.');
+
+            messages.push({ role: 'tool', tool_call_id: call.id, content: result.output, isError: result.isError === true });
             yield {
                 type: 'toolResult',
                 id: call.id,
                 tool: call.name,
-                output: execResult.output,
-                isError: execResult.isError,
+                output: result.output,
+                isError: result.isError,
             };
         }
 

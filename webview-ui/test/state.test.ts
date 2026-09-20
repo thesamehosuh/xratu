@@ -336,5 +336,20 @@ ok(
     'rewind drops the target turn and everything after'
 );
 
+// 26. toolOutput appends live output to the matching open tool row.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'run it' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('toolCall', { tool: 'run_terminal_command', args: '{}', callId: 'c1' }));
+s = reduceChat(s, M('toolOutput', { callId: 'c1', value: 'line 1\n' }));
+s = reduceChat(s, M('toolOutput', { callId: 'c1', value: 'line 2\n' }));
+const liveStep = s.messages.at(-1)!.steps.find((st) => st.kind === 'toolCall' && st.callId === 'c1');
+ok(liveStep?.live === 'line 1\nline 2\n', 'toolOutput accumulates on the open call row');
+s = reduceChat(s, M('toolResult', { tool: 'run_terminal_command', output: 'line 1\nline 2\n', callId: 'c1' }));
+ok(
+    s.messages.at(-1)!.steps.find((st) => st.kind === 'toolCall' && st.callId === 'c1')?.result === 'line 1\nline 2\n',
+    'the final toolResult still lands on the same row'
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

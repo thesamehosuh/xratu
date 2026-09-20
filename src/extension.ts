@@ -2176,6 +2176,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     callId: event.id,
                 });
                 break;
+            case 'toolOutput':
+                // Live output while a long tool runs - display only, never
+                // persisted (the final tool_result carries the capped output).
+                this._view?.webview.postMessage({
+                    type: 'toolOutput',
+                    callId: event.id,
+                    value: event.value,
+                });
+                break;
             case 'steer':
                 // Ledger-only: the webview rendered the steer bubble
                 // optimistically when it sent the steer. Events order it

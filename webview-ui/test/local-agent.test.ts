@@ -1398,6 +1398,45 @@ async function testResponsesApiTextToolAndUsage() {
     }
 }
 
+async function testToolOutputStreamsWhileRunning() {
+    // A long tool (terminal command) can report progress before it returns;
+    // those chunks must surface as toolOutput events, in order, before the
+    // final toolResult.
+    const responses = [
+        sse(toolCallSse('run_terminal_command', JSON.stringify({ command: 'echo hi' }), 'call-1')),
+        sse(textSse(['done'])),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => responses[index++]) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                tools: [{ name: 'run_terminal_command', description: 'run', inputSchema: { type: 'object' } }],
+            }), {
+                execute: async (_call: any, onOutput?: (chunk: string) => void) => {
+                    onOutput?.('line 1\n');
+                    onOutput?.('line 2\n');
+                    return { output: 'line 1\nline 2\n' };
+                },
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        const outputs = events.filter((e: any) => e.type === 'toolOutput').map((e: any) => e.value);
+        assert.deepEqual(outputs, ['line 1\n', 'line 2\n']);
+        const firstOutput = events.findIndex((e: any) => e.type === 'toolOutput');
+        const resultIdx = events.findIndex((e: any) => e.type === 'toolResult');
+        assert.ok(firstOutput >= 0 && firstOutput < resultIdx, 'toolOutput precedes toolResult');
+        const result = events.find((e: any) => e.type === 'toolResult');
+        assert.equal(result.output, 'line 1\nline 2\n');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testGoogleApiTextToolAndUsage() {
     const calls: Array<{ url: string; body: any; headers: any }> = [];
     const responses = [
@@ -1466,6 +1505,7 @@ async function main() {
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
     await testResponsesApiTextToolAndUsage();
+    await testToolOutputStreamsWhileRunning();
     await testGoogleApiTextToolAndUsage();
     await testStreamingDeltas();
     await testStreamOptionsRejectedRetriesWithout();

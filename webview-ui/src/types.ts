@@ -206,6 +206,8 @@ export type FromExtensionMessage =
     | { type: 'thinkingHtml'; value: string }
     | { type: 'toolCall'; tool: string; args: string; callId?: string }
     | { type: 'toolResult'; tool: string; output: string; callId?: string }
+    /** Incremental output from a still-running tool (terminal commands). */
+    | { type: 'toolOutput'; callId?: string; value: string }
     // Mid-run cumulative usage (emitted after each model round) - lets the
     // context meter track tool/thinking
     // growth WHILE the response streams instead of only at fullResponse.
@@ -391,6 +393,9 @@ export interface Step {
     callId?: string;
     /** Filled when the matching tool_result arrives (Cline-style paired row). */
     result?: string;
+    /** Live output streamed WHILE a long tool (terminal command) runs, shown
+     *  under the call row until the final result replaces it. */
+    live?: string;
     /** Wall-clock span of a thinking segment (webview-side timing). */
     startedAt?: number;
     endedAt?: number;

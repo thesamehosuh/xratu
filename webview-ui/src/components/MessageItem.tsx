@@ -710,10 +710,18 @@ function TerminalBody({ call, result }: { call: Step; result?: Step }) {
                     <pre className="result-tall" dir="ltr">{text}</pre>
                 )
             ) : (
-                <div className="tool-loading">
-                    <span className="spinner" aria-hidden="true" />
-                    <span>{t('toolRunning')}</span>
-                </div>
+                <>
+                    <div className="tool-loading">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>{t('toolRunning')}</span>
+                    </div>
+                    {/* Live output while the command runs (display only; the
+                        final result replaces it). Tail-capped so a chatty
+                        command cannot grow the DOM without bound. */}
+                    {call.live && (
+                        <pre className="term-out result-tall" dir="ltr">{call.live.slice(-20000)}</pre>
+                    )}
+                </>
             )}
         </>
     );
