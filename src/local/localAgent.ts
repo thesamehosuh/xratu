@@ -10,6 +10,7 @@
  */
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
+import { normalizeBaseUrl } from './baseUrl';
 
 export type LocalChatTextContent = string;
 
@@ -143,17 +144,6 @@ type OpenAITool = {
         parameters: Record<string, unknown>;
     };
 };
-
-function normalizeBaseUrl(value: string): string {
-    const raw = value.trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(raw)) {
-        throw new Error('Model URL must start with http:// or https://');
-    }
-    // Bases already rooted at a version segment (/v1) or an /api root
-    // (e.g. Kaya AI's https://kayaai.ir/api) are used as-is; everything
-    // else gets the standard OpenAI /v1 suffix.
-    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
-}
 
 function toOpenAITools(tools: LocalToolDefinition[]): OpenAITool[] {
     return tools.map((tool) => ({
@@ -310,10 +300,14 @@ function withDispatcher(init: RequestInit, dispatcher: unknown): RequestInit {
     return dispatcher ? ({ ...init, dispatcher } as RequestInit) : init;
 }
 
+/** Tagged stream delta so text and cumulative thinking keep their order. */
+type StreamDelta = { kind: 'text' | 'thinking'; value: string };
+
 async function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
     onDelta: (textDelta: string) => void,
+    onThinking?: (thinking: string) => void,
 ): Promise<{
     text: string;
     toolCalls: LocalToolCall[];
@@ -372,6 +366,7 @@ async function requestStreamingCompletion(
     const decoder = new TextDecoder();
     let buffer = '';
     let text = '';
+    let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -400,6 +395,20 @@ async function requestStreamingCompletion(
         if (textDelta) {
             text += textDelta;
             onDelta(textDelta);
+        }
+
+        // Reasoning models stream chain-of-thought separately from content.
+        // DeepSeek/QwQ use `reasoning_content`; some OpenAI-compatible gateways
+        // (e.g. OpenRouter) use `reasoning`. The host's `thinking` event carries
+        // a CUMULATIVE snapshot, so accumulate and re-emit the whole block.
+        const reasoningDelta = typeof delta.reasoning_content === 'string'
+            ? delta.reasoning_content
+            : typeof delta.reasoning === 'string'
+                ? delta.reasoning
+                : '';
+        if (reasoningDelta) {
+            reasoning += reasoningDelta;
+            onThinking?.(reasoning);
         }
 
         const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
@@ -943,7 +952,7 @@ export async function* runLocalAgent(
     for (let round = 0; round < rounds; round++) {
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
-        const queue = new AsyncPushQueue<string>();
+        const queue = new AsyncPushQueue<StreamDelta>();
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
 
@@ -971,7 +980,12 @@ export async function* runLocalAgent(
             };
         };
 
-        const requestPromise = requestStreamingCompletion(request, messages, (delta) => queue.push(delta))
+        const requestPromise = requestStreamingCompletion(
+            request,
+            messages,
+            (delta) => queue.push({ kind: 'text', value: delta }),
+            (thinking) => queue.push({ kind: 'thinking', value: thinking }),
+        )
             .then((value) => { result = value; return value; })
             .catch((err) => { requestError = err; })
             .finally(() => queue.close());
@@ -979,16 +993,24 @@ export async function* runLocalAgent(
         while (result === null && requestError === null) {
             const delta = await queue.pop();
             if (delta !== null) {
-                const estUsage = estimatedUsageForDelta(delta);
+                if (delta.kind === 'thinking') {
+                    yield { type: 'thinking', value: delta.value };
+                    continue;
+                }
+                const estUsage = estimatedUsageForDelta(delta.value);
                 if (estUsage) yield estUsage;
-                yield { type: 'chunk', value: delta };
+                yield { type: 'chunk', value: delta.value };
             }
         }
         // Drain anything queued between the final response payload and close().
         while (true) {
             const delta = await queue.pop();
             if (delta === null) break;
-            yield { type: 'chunk', value: delta };
+            if (delta.kind === 'thinking') {
+                yield { type: 'thinking', value: delta.value };
+                continue;
+            }
+            yield { type: 'chunk', value: delta.value };
         }
         await requestPromise;
         if (requestError) {
@@ -1158,11 +1180,12 @@ export async function* runLocalAgent(
     for (let wrapAttempt = 0; wrapAttempt < 2; wrapAttempt++) {
         wrapResult = null;
         wrapError = null;
-        const wrapQueue = new AsyncPushQueue<string>();
+        const wrapQueue = new AsyncPushQueue<StreamDelta>();
         const wrapPromise = requestStreamingCompletion(
             { ...request, tools: [] },
             wrapMessages,
-            (delta) => wrapQueue.push(delta),
+            (delta) => wrapQueue.push({ kind: 'text', value: delta }),
+            (thinking) => wrapQueue.push({ kind: 'thinking', value: thinking }),
         )
             .then((value) => { wrapResult = value; return value; })
             // null (not void) on failure: keeps the promise CompletionResult |
@@ -1172,12 +1195,22 @@ export async function* runLocalAgent(
 
         while (wrapResult === null && wrapError === null) {
             const delta = await wrapQueue.pop();
-            if (delta !== null) yield { type: 'chunk', value: delta };
+            if (delta !== null) {
+                if (delta.kind === 'thinking') {
+                    yield { type: 'thinking', value: delta.value };
+                    continue;
+                }
+                yield { type: 'chunk', value: delta.value };
+            }
         }
         while (true) {
             const delta = await wrapQueue.pop();
             if (delta === null) break;
-            yield { type: 'chunk', value: delta };
+            if (delta.kind === 'thinking') {
+                yield { type: 'thinking', value: delta.value };
+                continue;
+            }
+            yield { type: 'chunk', value: delta.value };
         }
         await wrapPromise;
         if (!wrapError) {

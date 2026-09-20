@@ -61,8 +61,14 @@ jobs:
       - name: Endpoint guard tests
         run: npm run test:endpoint-guard
 
+      - name: Base URL normalization tests
+        run: npm run test:base-url
+
       - name: Proxy resolution tests
         run: npm run test:proxy
+
+      - name: Provider identity tests
+        run: npm run test:provider-identity
 
       - name: Compaction tests
         run: npm run test:compaction

@@ -8,6 +8,7 @@
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
 import { isLikelyLocalUrl } from '../endpointGuard';
+import { normalizeBaseUrl } from './baseUrl';
 
 export interface DiscoveredLocalModel {
     connection: LocalModelConnection;
@@ -123,7 +124,16 @@ export async function probeLocalEndpoint(
     }
 
     // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, probeTimeoutMs, apiKey, proxy);
+    // A malformed base URL must keep probeLocalEndpoint's "unreachable -> null"
+    // contract - normalizeBaseUrl throws on invalid input, and one throw here
+    // would reject the whole discoverLocalRuntimes Promise.all.
+    let modelsUrl: string;
+    try {
+        modelsUrl = `${normalizeBaseUrl(baseUrl)}/models`;
+    } catch {
+        return null;
+    }
+    const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey, proxy);
     if (openai && Array.isArray(openai.data)) {
         return {
             models: openai.data.map((m: any) => ({
@@ -169,11 +179,6 @@ export async function probeLocalEndpoint(
     }
 
     return null;
-}
-
-function normalizeForProbe(value: string): string {
-    const raw = value.trim().replace(/\/+$/, '');
-    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
 }
 
 /**

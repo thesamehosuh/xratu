@@ -56,6 +56,18 @@ function textSse(parts: string[]): string[] {
     ];
 }
 
+function reasoningSse(reasoningParts: string[], contentParts: string[]): string[] {
+    return [
+        ...reasoningParts.map((reasoning_content) =>
+            `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content } }] })}\n\n`
+        ),
+        ...contentParts.map((content) =>
+            `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
+        ),
+        'data: [DONE]\n\n',
+    ];
+}
+
 function jsonResponse(obj: unknown): MockResponse {
     return {
         ok: true,
@@ -110,6 +122,43 @@ async function testStreamingDeltas() {
         assert.deepEqual(chunks, ['hel', 'lo', ' world']);
         assert.equal(calls[0].url, 'http://127.0.0.1:11434/v1/chat/completions');
         assert.equal(calls[0].body.stream, true);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testReasoningStreamsAsCumulativeThinking() {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+        sse(reasoningSse(['step one ', 'step two'], ['answer']))) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest(), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // Reasoning models send chain-of-thought on a separate delta field.
+        // The host's `thinking` event is a CUMULATIVE snapshot, so each event
+        // must carry the whole block so far - not just the latest delta.
+        const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
+        assert.deepEqual(thinking, ['step one ', 'step one step two']);
+
+        // Ordering: reasoning must arrive BEFORE the answer content, not be
+        // reordered behind it.
+        const kinds = events
+            .filter((e: any) => e.type === 'thinking' || e.type === 'chunk')
+            .map((e: any) => e.type);
+        assert.deepEqual(kinds, ['thinking', 'thinking', 'chunk']);
+
+        // Reasoning must never leak into the assistant's answer text.
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['answer']);
+        const final = events.find((e: any) => e.type === 'assistantMessage');
+        assert.equal(final.text, 'answer');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -861,6 +910,44 @@ async function testWrapupWithoutTextEmitsFallback() {
 }
 
 
+async function testWrapupReasoningIsForwarded() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        // Wrap-up round offers no tools and streams reasoning + final text.
+        return sse(reasoningSse(['wrap reasoning'], ['final answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // The wrap-up path must forward thinking too - it used to parse
+        // reasoning and drop it.
+        const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
+        assert.deepEqual(thinking, ['wrap reasoning']);
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'final answer'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testWrapupOverflowCompactsAndRetries() {
     const requests: any[] = [];
     const originalFetch = globalThis.fetch;
@@ -930,6 +1017,7 @@ async function testWrapupOverflowCompactsAndRetries() {
 
 async function main() {
     await testStreamingDeltas();
+    await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();
     await testDeniedToolProducesToolResultAndContinues();
     await testImageIsCurrentTurnOnly();
@@ -946,6 +1034,7 @@ async function main() {
     await testWrapupToolCallIsIgnored();
     await testWrapupRequestFailureStillErrors();
     await testWrapupWithoutTextEmitsFallback();
+    await testWrapupReasoningIsForwarded();
     await testWrapupOverflowCompactsAndRetries();
 
     console.log('local-agent.test.ts: all tests passed');

@@ -24,6 +24,7 @@ import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } 
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
+import { providerIdForUrl, providerLabelForUrl } from './providerIdentity';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** External MCP manager + config store - module-level so deactivate() can
@@ -731,6 +732,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Accumulated local text for the current assistant turn - mirrors the cloud "result" event. */
     private _localAccumulatedText: string = '';
     private _localAccumulatedThinking: string = '';
+    /** Timeline event for the CURRENT reasoning block: the first delta pushes
+     *  it into outcome.events (so reasoning survives reload in the right place
+     *  relative to tool/text steps), later cumulative deltas extend it in
+     *  place. Null between blocks. */
+    private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
     /** The in-flight local turn, held so a throttled snapshot can persist it
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
@@ -1202,35 +1208,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** "on-machine runtime" heuristic - see _isLikelyLocalUrl. */
     private _providerIdForUrl(baseUrl: string): string {
-        const v = baseUrl.toLowerCase();
-        if (v.includes('openai.com')) return 'openai';
-        if (v.includes('openrouter.ai')) return 'openrouter';
-        if (v.includes('groq.com')) return 'groq';
-        if (v.includes('deepseek.com')) return 'deepseek';
-        if (v.includes('mistral.ai')) return 'mistral';
-        if (v.includes('together.xyz')) return 'together';
-        if (v.includes('fireworks.ai')) return 'fireworks';
-        if (v.includes('cerebras.ai')) return 'cerebras';
-        if (v.includes('anthropic.com')) return 'anthropic';
-        if (v.includes('googleapis.com')) return 'google';
-        if (v.includes('generativelanguage.googleapis.com')) return 'google';
-        if (v.includes('x.ai')) return 'xai';
-        if (v.includes('kayaai.ir')) return 'kayaai';
-        if (v.includes('api.groq.com')) return 'groq';
-        if (v.includes('localhost:11434')) return 'ollama';
-        if (v.includes('localhost:1234')) return 'lmstudio';
-        return 'custom';
+        return providerIdForUrl(baseUrl);
     }
 
     private _providerLabelForUrl(baseUrl: string): string {
-        const labels: Record<string, string> = {
-            openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq', kayaai: 'Kaya AI',
-            deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together',
-            fireworks: 'Fireworks', cerebras: 'Cerebras', anthropic: 'Anthropic',
-            google: 'Google', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
-            custom: 'Custom',
-        };
-        return labels[this._providerIdForUrl(baseUrl)] ?? 'Custom';
+        return providerLabelForUrl(baseUrl);
     }
 
     private _maskApiKey(apiKey: string): string {
@@ -1856,6 +1838,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         this._localAccumulatedText = '';
         this._localAccumulatedThinking = '';
+        this._localThinkingBlockEvent = null;
         this._localCurrentUsage = null;
         // `events` is held by reference and grows as the run streams - the
         // throttled snapshot below always captures the current tail.
@@ -2017,10 +2000,24 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._localAccumulatedThinking = event.value;
                 this._flushLiveSegment();
                 this._noteThinking(event.value);
+                // Record the reasoning in the turn's event timeline so it keeps
+                // its position relative to tool/text steps and survives reload
+                // (_restoreChatUI replays thinking events in order). The first
+                // delta of a block pushes the event; later cumulative deltas
+                // extend it in place instead of growing the array.
+                if (this._localThinkingBlockEvent && event.value.startsWith(this._localThinkingBlockEvent.content)) {
+                    this._localThinkingBlockEvent.content = event.value;
+                } else {
+                    this._localThinkingBlockEvent = { type: 'thinking', content: event.value };
+                    outcome.events.push(this._localThinkingBlockEvent);
+                }
                 this._scheduleLocalPartialPersist();
                 break;
             case 'toolCall':
                 this._flushLiveSegment();
+                // A tool call closes the current reasoning block - reasoning
+                // after it belongs to a fresh block and needs its own pill.
+                this._localThinkingBlockEvent = null;
                 outcome.events.push({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args });
                 this._scheduleLocalPartialPersist();
                 if (event.tool === TASK_LIST_TOOL_NAME) {
@@ -2035,6 +2032,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'toolResult':
                 this._flushLiveSegment();
+                this._localThinkingBlockEvent = null;
                 outcome.events.push({ type: 'tool_result', id: event.id, tool: event.tool, output: event.output });
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({
@@ -3014,6 +3012,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     for (const parsed of msg.events) {
                         if (parsed.type === 'thinking') {
                             this._view.webview.postMessage({ type: 'thinking', value: parsed.content });
+                            this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.content, true) });
                         } else if (parsed.type === 'tool_call') {
                             this._view.webview.postMessage({
                                 type: 'toolCall',
@@ -3291,7 +3290,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // the pendingTurn below so it can never restore twice.
             const pt = snapshot.pendingTurn;
             const restoredEvents: any[] = [];
-            if (pt.thinking) restoredEvents.push({ type: 'thinking', content: pt.thinking });
+            // Legacy snapshots stored reasoning only on the side (pt.thinking);
+            // newer ones record it as an ordered event inside pt.events.
+            // Prepending the side copy when an event already exists would
+            // duplicate (and misorder) the reasoning pill.
+            const hasThinkingEvent = (pt.events ?? []).some((e: any) => e?.type === 'thinking');
+            if (pt.thinking && !hasThinkingEvent) {
+                restoredEvents.push({ type: 'thinking', content: pt.thinking });
+            }
             restoredEvents.push(...(pt.events ?? []).map(trimDisplayEvent));
             if (pt.text) restoredEvents.push({ type: 'result', persian_explanation: pt.text });
             this._history.push({
@@ -3567,6 +3573,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             ? this._liveSegments.map((seg) => this._renderMarkdown(seg))
             : undefined;
         this._resetLiveSegments();
+
+        // Legacy turns (persisted before reasoning entered the event timeline)
+        // carry thinking only on the result event - restore it so the pill
+        // isn't lost. Newer turns replay it as an ordered timeline event, and
+        // re-posting the same cumulative text here is idempotent for live runs.
+        if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) {
+            this._view.webview.postMessage({ type: 'thinking', value: parsed.thinking });
+            this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.thinking, true) });
+        }
 
         this._view.webview.postMessage({
             type: 'fullResponse',
@@ -4472,7 +4487,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             `style-src ${cspSource} 'unsafe-inline'`,
             `script-src 'nonce-${nonce}'`,
             `img-src ${cspSource} data:`,
-            `font-src ${cspSource}`,
+            // data: is required for the inlined Vazirmatn woff2 (Vite inlines
+            // every asset into the single-file webview; see vite.config.ts).
+            `font-src ${cspSource} data:`,
             "connect-src 'none'",
             "frame-src 'none'",
             "form-action 'none'",
