@@ -45,6 +45,44 @@ const MAX_STORED_CONTENT = 20_000;
 const MAX_STORED_HISTORY = 120;
 const TITLE_MAX_LEN = 48;
 
+/** Windows transient rename failures: an AV scanner or the search indexer can
+ *  briefly hold the destination. Retry with backoff before giving up. */
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'EEXIST', 'ENOTEMPTY']);
+const RENAME_RETRY_DELAYS_MS = [0, 20, 50, 120, 250, 500];
+
+/**
+ * `fs.rename` with a short backoff for transient Windows failures, then a
+ * copy+unlink fallback. Without this a momentary lock could reject the write
+ * and silently drop a turn (the caller only console.errors the save failure).
+ *
+ * `renameFn` is injectable for tests.
+ */
+export async function renameWithRetry(
+    from: string,
+    to: string,
+    renameFn: (from: string, to: string) => Promise<void> = fs.rename,
+): Promise<void> {
+    let lastError: unknown;
+    for (const delay of RENAME_RETRY_DELAYS_MS) {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+            await renameFn(from, to);
+            return;
+        } catch (e) {
+            lastError = e;
+            const code = (e as NodeJS.ErrnoException)?.code;
+            if (!code || !TRANSIENT_RENAME_CODES.has(code)) throw e;
+        }
+    }
+    // The destination stayed locked - overwrite in place, then drop the temp.
+    try {
+        await fs.copyFile(from, to);
+        await fs.unlink(from).catch(() => undefined);
+    } catch {
+        throw lastError;
+    }
+}
+
 /** Fallback title: just the folder name - never the full path. */
 function workspaceLabel(workspace: string): string {
     const base = path.basename(workspace.trim());
@@ -191,7 +229,7 @@ export class LocalSessionStore {
         await fs.mkdir(this.rootDir, { recursive: true });
         const temp = path.join(this.rootDir, '_index.json.tmp');
         await fs.writeFile(temp, JSON.stringify(index), 'utf8');
-        await fs.rename(temp, path.join(this.rootDir, '_index.json'));
+        await renameWithRetry(temp, path.join(this.rootDir, '_index.json'));
     }
 
     /** Rebuild the index from the per-session directories (source of truth),
@@ -268,9 +306,9 @@ export class LocalSessionStore {
                 await fs.mkdir(dir, { recursive: true });
                 const temp = path.join(dir, 'snapshot.json.tmp');
                 await fs.writeFile(temp, JSON.stringify(sanitizeSnapshot(payload)), 'utf8');
-                await fs.rename(temp, path.join(dir, 'snapshot.json'));
+                await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
             }
-            await fs.rename(this.legacyPath, `${this.legacyPath}.migrated`);
+            await renameWithRetry(this.legacyPath, `${this.legacyPath}.migrated`);
         } catch {
             /* migration is best-effort; the legacy file stays for next run */
         }
@@ -331,7 +369,7 @@ export class LocalSessionStore {
         const payload = { ...meta, ...sanitizeSnapshot(snapshot) };
         const temp = path.join(dir, 'snapshot.json.tmp');
         await fs.writeFile(temp, JSON.stringify(payload), 'utf8');
-        await fs.rename(temp, path.join(dir, 'snapshot.json'));
+        await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
         const index = await this.readIndex();
         index[meta.id] = meta;
         await this.writeIndex(index);
@@ -383,7 +421,7 @@ export class LocalSessionStore {
             parsed.renamed = true;
             const temp = path.join(dir, 'snapshot.json.tmp');
             await fs.writeFile(temp, JSON.stringify(parsed), 'utf8');
-            await fs.rename(temp, path.join(dir, 'snapshot.json'));
+            await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
         } catch {
             /* index is the list source of truth; directory drift heals on reconcile */
         }
