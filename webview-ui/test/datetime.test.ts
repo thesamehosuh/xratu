@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp } from '../src/datetime';
+import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, isSameLocalDay } from '../src/datetime';
 import { setLocale } from '../src/i18n';
 
 // A LOCAL 13:05 - deliberately past noon so a 12-hour clock would render a
@@ -33,8 +33,14 @@ assert.ok(/[\u06F0-\u06F9]/.test(jalali), `Jalali date should use Persian digits
 assert.ok(jalali.includes('۱۴۰۵'), `expected the Jalali year 1405, got ${jalali}`);
 
 // Message timestamp: clock only for today, date + clock for older messages.
+// The same-day rule is asserted directly (deterministic); the format check is
+// guarded by it so a local-midnight crossing cannot make the test flaky.
+assert.equal(isSameLocalDay(new Date(2026, 8, 20, 0, 0), new Date(2026, 8, 20, 23, 59)), true);
+assert.equal(isSameLocalDay(new Date(2026, 8, 20, 23, 59), new Date(2026, 8, 21, 0, 0)), false);
 const now = Date.now();
-assert.equal(formatMessageTimestamp(now), formatClockTime(now), 'today shows the clock only');
+if (isSameLocalDay(new Date(now), new Date())) {
+    assert.equal(formatMessageTimestamp(now), formatClockTime(now), 'today shows the clock only');
+}
 const older = now - 30 * 86_400_000;
 const olderText = formatMessageTimestamp(older);
 assert.ok(olderText.includes(formatCalendarDate(older)), `older messages carry the date, got ${olderText}`);

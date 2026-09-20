@@ -45,16 +45,20 @@ export function formatFullTimestamp(ts: number): string {
     return `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
 }
 
+/** True when two instants fall on the same LOCAL calendar day. */
+export function isSameLocalDay(a: Date, b: Date): boolean {
+    return a.getFullYear() === b.getFullYear()
+        && a.getMonth() === b.getMonth()
+        && a.getDate() === b.getDate();
+}
+
 /**
  * Message timestamp: just the clock for today, date + clock for older
  * messages. Chat UIs avoid repeating today's date on every bubble, but an
  * older message with only a time is ambiguous.
  */
 export function formatMessageTimestamp(ts: number): string {
-    const date = new Date(ts);
-    const now = new Date();
-    const sameDay = date.getFullYear() === now.getFullYear()
-        && date.getMonth() === now.getMonth()
-        && date.getDate() === now.getDate();
-    return sameDay ? formatClockTime(ts) : `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
+    return isSameLocalDay(new Date(ts), new Date())
+        ? formatClockTime(ts)
+        : `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
 }
