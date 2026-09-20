@@ -1698,7 +1698,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         for (const cred of credentials) {
             if (cred.providerId === 'custom') {
                 if (insecureRemoteHttpError(cred.baseUrl, cred.apiKey)) continue;
-                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey, getProxyDispatcher());
+                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey, getProxyDispatcher(cred.baseUrl));
                 if (probed) {
                     discovered.push(probed);
                 }
@@ -1924,7 +1924,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     reasoningEffort: this._thinkingLevelHint(model),
                     // Route model traffic through the configured proxy. The
                     // dispatcher is cached and undefined when no proxy is set.
-                    dispatcher: getProxyDispatcher(),
+                    dispatcher: getProxyDispatcher(active.baseUrl),
                 },
                 executor,
                 {
@@ -2183,7 +2183,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const fetchCredId = await this._resolveActiveCredentialId();
         this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
         try {
-            const probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher());
+            const probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl));
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }

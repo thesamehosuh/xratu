@@ -35,8 +35,8 @@ export function getWebToolConfig(): WebToolConfig {
 
 /** Attach the configured proxy dispatcher to a fetch init, if any. Node's
  *  global fetch is undici-backed and honors the `dispatcher` option. */
-function withProxy(init: RequestInit): RequestInit {
-    const dispatcher = getProxyDispatcher();
+function withProxy(init: RequestInit, targetUrl: string): RequestInit {
+    const dispatcher = getProxyDispatcher(targetUrl);
     return dispatcher ? ({ ...init, dispatcher } as RequestInit) : init;
 }
 
@@ -132,7 +132,7 @@ async function validatePublicUrl(url: string): Promise<string> {
     if (parsed.username || parsed.password) {
         throw new Error('URLs with embedded credentials are not allowed');
     }
-    if (!isProxyConfigured()) {
+    if (!isProxyConfigured(url)) {
         const host = parsed.hostname.replace(/\.+$/, '').toLowerCase();
         let infos: dns.LookupAddress[];
         try {
@@ -169,7 +169,7 @@ function cleanHtml(text: string): string {
 function fetchWithTimeout(url: string, init: RequestInit, connectTimeoutMs = CONNECT_TIMEOUT_MS): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), connectTimeoutMs);
-    return fetch(url, withProxy({ ...init, signal: controller.signal })).finally(() => clearTimeout(timer));
+    return fetch(url, withProxy({ ...init, signal: controller.signal }, url)).finally(() => clearTimeout(timer));
 }
 
 /** Read with a per-read idle deadline: the fetch timeout above only covers
@@ -229,7 +229,7 @@ async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
                         redirect: 'manual',
                         headers: { 'User-Agent': 'Xratu/1.0' },
                         signal: controller.signal,
-                    }));
+                    }, current));
                 } finally {
                     clearTimeout(timer);
                 }

@@ -36,6 +36,90 @@ export function pickProxyUrl(sources: ProxySources): string | null {
     return null;
 }
 
+export interface NoProxySources {
+    /** `xratu.noProxy` setting - highest priority. */
+    explicit?: string | null;
+    /** VS Code's `http.noProxy` setting. NOTE: VS Code defines this as a
+     *  LIST of hosts, so it can arrive as string[]. */
+    vscodeHttpNoProxy?: string | string[] | null;
+    /** Process environment (upper/lower case accepted). */
+    env?: Record<string, string | undefined>;
+}
+
+/** Normalize a no_proxy source (string, list, or unset) to a comma list. */
+function normalizeNoProxyValue(value: string | string[] | null | undefined): string {
+    if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean).join(',');
+    return (value ?? '').trim();
+}
+
+const NO_PROXY_ENV_KEYS = ['NO_PROXY', 'no_proxy'];
+
+/** Resolve the no_proxy list (comma separated), or '' when none is set. */
+export function pickNoProxy(sources: NoProxySources): string {
+    const explicit = normalizeNoProxyValue(sources.explicit);
+    if (explicit) return explicit;
+
+    const vscode = normalizeNoProxyValue(sources.vscodeHttpNoProxy);
+    if (vscode) return vscode;
+
+    const env = sources.env ?? {};
+    for (const key of NO_PROXY_ENV_KEYS) {
+        const value = (env[key] ?? '').trim();
+        if (value) return value;
+    }
+    return '';
+}
+
+/** Split a no_proxy list into lowercase patterns. */
+export function parseNoProxy(value: string): string[] {
+    return value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+/** Host (hostname[:port]) from a URL, or null when unparseable. */
+export function hostFromUrl(url: string): string | null {
+    const raw = url.trim();
+    if (!raw) return null;
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+        return new URL(withScheme).host.toLowerCase();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * True when `host` matches any no_proxy pattern. Supports `*`, exact hosts,
+ * bare or dot-prefixed domain suffixes, and `host:port` entries. CIDR ranges
+ * are not supported (documented limitation).
+ */
+export function hostMatchesNoProxy(host: string, patterns: string[]): boolean {
+    const h = host.trim().toLowerCase();
+    if (!h) return false;
+    const [hname, hport] = splitHostPort(h);
+
+    for (const raw of patterns) {
+        if (!raw) continue;
+        if (raw === '*') return true;
+        const pattern = raw.startsWith('*') ? raw.slice(1) : raw;
+        const [pname, pport] = splitHostPort(pattern);
+        // A port-scoped pattern matches ONLY a target with that explicit port;
+        // otherwise `internal.corp:443` would bypass `http://internal.corp`.
+        if (pport && hport !== pport) continue;
+        if (!pname) continue;
+        const bare = pname.startsWith('.') ? pname.slice(1) : pname;
+        if (hname === bare || hname.endsWith(`.${bare}`)) return true;
+    }
+    return false;
+}
+
+function splitHostPort(value: string): [string, string | null] {
+    const idx = value.lastIndexOf(':');
+    if (idx > 0 && /^\d+$/.test(value.slice(idx + 1))) {
+        return [value.slice(0, idx), value.slice(idx + 1)];
+    }
+    return [value, null];
+}
+
 /** True for socks://, socks4://, socks4a://, socks5://, socks5h://. */
 export function isSocksProxy(url: string): boolean {
     return /^socks(4|4a|5|5h)?:\/\//i.test(url.trim());

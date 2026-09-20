@@ -8,7 +8,7 @@
  */
 import * as vscode from 'vscode';
 import { ProxyAgent, type Dispatcher } from 'undici';
-import { pickProxyUrl, isHttpProxy, isSocksProxy, redactProxyUrl } from './proxy';
+import { pickProxyUrl, pickNoProxy, parseNoProxy, hostMatchesNoProxy, hostFromUrl, isHttpProxy, isSocksProxy, redactProxyUrl } from './proxy';
 
 let cachedUrl: string | null = null;
 let cachedDispatcher: Dispatcher | undefined;
@@ -23,25 +23,42 @@ export function getProxyUrl(): string | null {
     });
 }
 
-/**
- * True when a proxy will actually be used. The SSRF guard skips its DNS check
- * only when this is true, so it must reflect a USABLE dispatcher - not merely a
- * non-empty setting. A SOCKS or malformed URL returns false and the guard runs.
- */
-export function isProxyConfigured(): boolean {
-    return getProxyDispatcher() !== undefined;
+/** Current no_proxy list: `xratu.noProxy` > VS Code `http.noProxy` > env. */
+export function getNoProxy(): string {
+    return pickNoProxy({
+        explicit: vscode.workspace.getConfiguration('xratu').get<string>('noProxy'),
+        // http.noProxy is a LIST in VS Code - it can come back as string[].
+        vscodeHttpNoProxy: vscode.workspace.getConfiguration('http').get<string | string[]>('noProxy'),
+        env: process.env,
+    });
 }
 
 /**
- * Dispatcher for the configured proxy, or undefined when none is set or the
- * scheme is unsupported. Cached by URL; rebuilt (and the old agent closed)
- * when the URL changes.
+ * True when a proxy will actually be used for `targetUrl`. The SSRF guard
+ * skips its DNS check only when this is true, so it must reflect a USABLE
+ * dispatcher for that target - not merely a non-empty setting. A SOCKS or
+ * malformed URL, or a no_proxy match, returns false and the guard runs.
  */
-export function getProxyDispatcher(): Dispatcher | undefined {
+export function isProxyConfigured(targetUrl?: string): boolean {
+    return getProxyDispatcher(targetUrl) !== undefined;
+}
+
+/**
+ * Dispatcher for the configured proxy, or undefined when none is set, the
+ * scheme is unsupported, or `targetUrl` matches no_proxy. Cached by URL;
+ * rebuilt (and the old agent closed) when the URL changes.
+ */
+export function getProxyDispatcher(targetUrl?: string): Dispatcher | undefined {
     const url = getProxyUrl();
     if (!url) {
         disposeCached();
         return undefined;
+    }
+    // no_proxy bypass: this target talks direct, so the caller's SSRF check
+    // must run. Do NOT dispose the cached agent - other targets still use it.
+    if (targetUrl) {
+        const host = hostFromUrl(targetUrl);
+        if (host && hostMatchesNoProxy(host, parseNoProxy(getNoProxy()))) return undefined;
     }
     if (isSocksProxy(url)) {
         disposeCached();

@@ -662,6 +662,99 @@ export function compactMessages(
     return dropped;
 }
 
+/** ~chars per token used by every estimator in this file. */
+const TOOL_RESULT_CHARS_PER_TOKEN = 3;
+/** Per-result ceiling as a fraction of the window. */
+const TOOL_RESULT_MAX_RATIO = 0.4;
+/** Total current-turn tool-output budget as a fraction of the window. */
+const TOOL_RESULT_TOTAL_RATIO = 0.5;
+/** Never clip a result below this many chars - a clipped stub stays useful. */
+const TOOL_RESULT_MIN_CHARS = 800;
+/** Last-resort replacement when even the floor cannot fit the budget. */
+const TOOL_RESULT_OMISSION = '[tool output omitted to fit the context window]';
+
+/**
+ * Bound tool results to a window-relative budget.
+ *
+ * `compactMessages` only drops COMPLETE turns before the last user message, so
+ * a single huge tool output (terminal results are capped at 200k chars,
+ * expansion tools at 120k) can overflow a small window on its own and make
+ * forced overflow recovery a no-op. Every tool result in the assembled
+ * messages is bounded instead - including results that a STEERING message has
+ * pushed behind the last user message, and large results kept from recent
+ * turns. The most recent results (what the model is about to reason over) are
+ * preserved longest.
+ *
+ * Three passes: a hard per-result cap, then oldest-first shrinking toward the
+ * floor, then oldest-first omission. The final pass guarantees the aggregate
+ * budget is met even when many results or large tool schemas would otherwise
+ * defeat the floor. Accounting uses the ACTUAL returned length (the clip
+ * marker is extra), so the tracked total matches what is sent.
+ *
+ * Mutates `messages`; returns true when anything changed.
+ */
+export function boundToolResults(
+    messages: LocalAgentMessage[],
+    windowTokens?: number | null,
+    toolTokens = 0,
+): boolean {
+    if (!windowTokens || windowTokens < 1024) return false;
+
+    const idxs: number[] = [];
+    for (let i = 1; i < messages.length; i++) {
+        if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
+    }
+    if (!idxs.length) return false;
+
+    const windowChars = windowTokens * TOOL_RESULT_CHARS_PER_TOKEN;
+    const perResultCap = Math.max(TOOL_RESULT_MIN_CHARS, Math.floor(windowChars * TOOL_RESULT_MAX_RATIO));
+    // Tool SCHEMAS also consume the window - subtract them from the budget
+    // (they may consume it entirely; the omission pass still enforces this).
+    const totalBudget = Math.max(
+        0,
+        Math.floor(windowChars * TOOL_RESULT_TOTAL_RATIO) - toolTokens * TOOL_RESULT_CHARS_PER_TOKEN,
+    );
+
+    let changed = false;
+    let total = 0;
+
+    // Pass 1: per-result cap.
+    for (const i of idxs) {
+        const text = messages[i].content as string;
+        if (text.length > perResultCap) {
+            messages[i] = { ...messages[i], content: clipForSummary(text, perResultCap) };
+            changed = true;
+        }
+        total += (messages[i].content as string).length;
+    }
+    if (total <= totalBudget) return changed;
+
+    // Pass 2: shrink the OLDEST results toward the floor.
+    for (const i of idxs) {
+        if (total <= totalBudget) break;
+        const text = messages[i].content as string;
+        if (text.length <= TOOL_RESULT_MIN_CHARS) continue;
+        const target = Math.max(TOOL_RESULT_MIN_CHARS, text.length - (total - totalBudget));
+        if (target >= text.length) continue;
+        const clipped = clipForSummary(text, target);
+        messages[i] = { ...messages[i], content: clipped };
+        total -= text.length - clipped.length;
+        changed = true;
+    }
+
+    // Pass 3: the floor is not enough (many results / schema-heavy window) -
+    // omit the OLDEST results outright so the budget is always enforced.
+    for (const i of idxs) {
+        if (total <= totalBudget) break;
+        const text = messages[i].content as string;
+        if (text.length <= TOOL_RESULT_OMISSION.length) continue;
+        messages[i] = { ...messages[i], content: TOOL_RESULT_OMISSION };
+        total -= text.length - TOOL_RESULT_OMISSION.length;
+        changed = true;
+    }
+    return changed;
+}
+
 // --- AI compaction for the local loop (mirrors the backend's summarizer) ---
 // Mechanical dropping alone discards everything the removed turns contained.
 // Before splicing, the dropped turns are summarized by the user's OWN local
@@ -1009,6 +1102,10 @@ export async function* runLocalAgent(
             };
         };
 
+        // A single huge tool result can exceed the window on its own, and
+        // compaction never touches the current turn - bound it before sending.
+        boundToolResults(messages, windowTokens, toolTokens);
+
         const requestPromise = requestStreamingCompletion(
             request,
             messages,
@@ -1197,6 +1294,10 @@ export async function* runLocalAgent(
         { role: 'system', content: (messages[0]?.content ?? request.systemPrompt) + ROUND_LIMIT_WRAPUP_NUDGE },
         ...messages.slice(1),
     ];
+    // The wrap-up runs at peak context - bound tool output too, or the nudge
+    // itself overflows a small window. The wrap-up sends `tools: []`, so no
+    // schema tokens need to be reserved.
+    boundToolResults(wrapMessages, windowTokens, 0);
 
     // The wrap-up runs when the conversation is at its largest, so the same
     // one-shot overflow recovery as the main loop applies: on a server-side
