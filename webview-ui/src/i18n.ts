@@ -21,6 +21,19 @@ declare global {
 let LOCALE: Locale =
     typeof window !== 'undefined' && window.XRATU_LOCALE === 'en' ? 'en' : 'fa';
 
+/**
+ * Keep the document language in sync with the UI locale. Screen readers,
+ * spellcheck and `:lang()` selectors read `<html lang>`, which ships as a
+ * static default in index.html and must follow a runtime locale flip.
+ */
+function applyDocumentLang(locale: Locale): void {
+    if (typeof document !== 'undefined') {
+        document.documentElement.lang = locale;
+    }
+}
+
+applyDocumentLang(LOCALE);
+
 const fa = {
     // Toolbar
     newSession: 'گفتگوی جدید',
@@ -873,6 +886,7 @@ let STRINGS: Dict = LOCALE === 'fa' ? fa : (en as Dict);
 export function setLocale(locale: Locale): void {
     LOCALE = locale;
     STRINGS = locale === 'fa' ? fa : (en as Dict);
+    applyDocumentLang(locale);
 }
 
 export function getLocale(): Locale {
