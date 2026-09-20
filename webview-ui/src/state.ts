@@ -1,5 +1,6 @@
 import type { ChatMessage, FromExtensionMessage, Step } from './types';
 import { t, tf, tOrRaw } from './i18n';
+import type { Cost } from './cost';
 
 /** Cap on stored live tool output (tail kept). A chatty command (`yes`, a huge
  *  build log) must not grow webview state without bound - the render cap alone
@@ -11,6 +12,9 @@ export interface ChatState {
     busy: boolean;
     streamingId: string | null;
     lastUsage: ChatMessage['usage'];
+    /** Cumulative session spend, HOST-provided and monotonic: a rewind or
+     *  checkpoint restore does not refund already-spent tokens. */
+    sessionCost: Cost | null;
 }
 
 let _id = 0;
@@ -19,7 +23,7 @@ export function nextId(): string {
 }
 
 export function createInitialChatState(): ChatState {
-    return { messages: [], busy: false, streamingId: null, lastUsage: null };
+    return { messages: [], busy: false, streamingId: null, lastUsage: null, sessionCost: null };
 }
 
 function append(state: ChatState, msg: ChatMessage): ChatState {
@@ -338,6 +342,11 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 }),
             };
         }
+
+        case 'sessionCost':
+            // Host-owned cumulative spend. Kept OUT of the message list so a
+            // rewind (truncateFromUser) cannot reduce it.
+            return { ...state, sessionCost: msg.cost ?? null };
 
         case 'usage': {
             // Mid-run cumulative usage - including the per-streamed-token
