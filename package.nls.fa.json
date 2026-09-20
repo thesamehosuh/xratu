@@ -1,0 +1,22 @@
+{
+	"ext.displayName": "خراتو",
+	"ext.description": "دستیار کدنویسی هوش مصنوعی برای VS Code؛ با کلید خودتان یا اجرای محلی.",
+	"config.title": "خراتو",
+	"config.mcpServers.desc": "پشتیبان قدیمی برای **سرورهای MCP** - آنها را در **صفحه MCP** پنل خراتو تنظیم کنید (فایل ها: `mcp.json` سراسری یا `.xratu/mcp.json` ورک اسپیس). این تنظیم فقط وقتی خوانده میشود که هر دو فایل خالی باشند.\n\nابزارهای آنها با نام `mcp__<server>__<tool>` در اختیار ایجنت قرار میگیرد و تا تایید نکنید اجرا نمیشوند، مگر اینکه در صفحه MCP تایید خودکار را روشن کرده باشید.",
+	"config.webSearchProvider.desc": "ارائه دهنده جستجوی وب برای ابزار web_search در حالت محلی. حالت خودکار وقتی آدرس SearXNG تنظیم شده باشد از آن و در غیر این صورت از Brave استفاده میکند.",
+	"config.webSearchUrl.desc": "آدرس پایه نمونه SearXNG (مثلا http://localhost:8888) برای ابزار web_search در حالت محلی.",
+	"config.webSearchApiKey.desc": "کلید API جستجوی Brave برای ابزار web_search در حالت محلی.",
+	"config.proxyUrl.desc": "آدرس پروکسی HTTP/HTTPS برای درخواست های مدل و وب، مثلا http://127.0.0.1:7890. روی تنظیم http.proxy در VS Code و متغیرهای محیطی HTTPS_PROXY/HTTP_PROXY اولویت دارد. پروکسی SOCKS فعلا پشتیبانی نمیشود.",
+	"config.noProxy.desc": "فهرست میزبان هایی که با کاما جدا شده اند و از پروکسی عبور نمیکنند (مثلا localhost,127.0.0.1,.internal). روی تنظیم http.noProxy در VS Code و متغیر محیطی NO_PROXY اولویت دارد. * و host:port پشتیبانی میشود؛ محدوده CIDR پشتیبانی نمیشود.",
+	"config.modelPricing.desc": "بازنویسی قیمت هر مدل به دلار برای هر یک میلیون توکن، با کلید شناسه مدل، مثلا { \"my-model\": { \"input\": 0.5, \"output\": 1.5, \"cachedInput\": 0.05 } }. بر جدول قیمت داخلی اولویت دارد.",
+	"config.tomanPerUsd.desc": "تومان به ازای هر دلار. اگر بزرگتر از صفر باشد، هزینه ارائه دهنده های ایرانی به تومان نمایش داده میشود. صفر این تبدیل را غیرفعال میکند.",
+	"command.category": "خراتو",
+	"command.clearHistory.title": "گفتگوی جدید",
+	"command.setLlmCredentials.title": "تنظیم کلیدهای مدل",
+	"command.openSettings.title": "باز کردن تنظیمات",
+	"command.restoreCheckpoint.title": "بازیابی نقطه بازگشت…",
+	"command.attachFile.title": "پیوست فایل ها…",
+	"command.attachFromExplorer.title": "پیوست به گفتگوی خراتو",
+	"view.container.title": "خراتو",
+	"view.chat.name": "گفتگوی خراتو"
+}

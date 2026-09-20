@@ -1,7 +1,7 @@
 {
 	"name": "xratu",
-	"displayName": "Xratu",
-	"description": "AI coding assistant for VS Code. Bring your own key or use a local runtime.",
+	"displayName": "%ext.displayName%",
+	"description": "%ext.description%",
 	"version": "1.0.2",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
@@ -34,12 +34,12 @@
 	"main": "./dist/extension.js",
 	"contributes": {
 		"configuration": {
-			"title": "Xratu",
+			"title": "%config.title%",
 			"properties": {
 				"xratu.mcpServers": {
 					"type": "object",
 					"default": {},
-					"markdownDescription": "Legacy fallback for **MCP servers** - configure them in the Xratu panel's dedicated **MCP page** instead (files: global `mcp.json` / workspace `.xratu/mcp.json`). This setting is only read when both files are empty.\n\nTheir tools are exposed to the agent as `mcp__<server>__<tool>` and require your approval unless auto-approved on the MCP page."
+					"markdownDescription": "%config.mcpServers.desc%"
 				},
 				"xratu.webSearchProvider": {
 					"type": "string",
@@ -50,37 +50,37 @@
 						"parallel"
 					],
 					"default": "auto",
-					"description": "Web-search provider for local mode's web_search tool. Auto uses SearXNG when a search URL is set, otherwise Brave."
+					"description": "%config.webSearchProvider.desc%"
 				},
 				"xratu.webSearchUrl": {
 					"type": "string",
 					"default": "",
-					"description": "SearXNG instance base URL (e.g. http://localhost:8888) used by local mode's web_search tool."
+					"description": "%config.webSearchUrl.desc%"
 				},
 				"xratu.webSearchApiKey": {
 					"type": "string",
 					"default": "",
-					"description": "Brave Search API key used by local mode's web_search tool."
+					"description": "%config.webSearchApiKey.desc%"
 				},
 				"xratu.proxyUrl": {
 					"type": "string",
 					"default": "",
-					"description": "HTTP/HTTPS proxy URL for model and web requests, e.g. http://127.0.0.1:7890. Overrides VS Code's http.proxy setting and the HTTPS_PROXY/HTTP_PROXY environment variables. SOCKS proxies are not supported yet."
+					"description": "%config.proxyUrl.desc%"
 				},
 				"xratu.noProxy": {
 					"type": "string",
 					"default": "",
-					"description": "Comma-separated hosts that bypass the proxy (e.g. localhost,127.0.0.1,.internal). Overrides VS Code's http.noProxy setting and the NO_PROXY environment variable. Supports * and host:port entries; CIDR ranges are not supported."
+					"description": "%config.noProxy.desc%"
 				},
 				"xratu.modelPricing": {
 					"type": "object",
 					"default": {},
-					"description": "Per-model price overrides in USD per 1M tokens, keyed by model id, e.g. { \"my-model\": { \"input\": 0.5, \"output\": 1.5, \"cachedInput\": 0.05 } }. Wins over the built-in price table."
+					"description": "%config.modelPricing.desc%"
 				},
 				"xratu.tomanPerUsd": {
 					"type": "number",
 					"default": 0,
-					"description": "Toman per USD. When set (> 0), cost for Iranian providers is shown in Toman instead of USD. 0 disables the conversion."
+					"description": "%config.tomanPerUsd.desc%"
 				}
 			},
 			"restrictedConfigurations": [
@@ -92,32 +92,32 @@
 		"commands": [
 			{
 				"command": "xratu.clearHistory",
-				"title": "Xratu: New Session",
-				"category": "Xratu"
+				"title": "%command.clearHistory.title%",
+				"category": "%command.category%"
 			},
 			{
 				"command": "xratu.setLlmCredentials",
-				"title": "Xratu: Set LLM Credentials",
-				"category": "Xratu"
+				"title": "%command.setLlmCredentials.title%",
+				"category": "%command.category%"
 			},
 			{
 				"command": "xratu.openSettings",
-				"title": "Xratu: Open Settings",
-				"category": "Xratu"
+				"title": "%command.openSettings.title%",
+				"category": "%command.category%"
 			},
 			{
 				"command": "xratu.restoreCheckpoint",
-				"title": "Xratu: Restore Checkpoint…",
-				"category": "Xratu"
+				"title": "%command.restoreCheckpoint.title%",
+				"category": "%command.category%"
 			},
 			{
 				"command": "xratu.attachFile",
-				"title": "Xratu: Attach Files…",
-				"category": "Xratu"
+				"title": "%command.attachFile.title%",
+				"category": "%command.category%"
 			},
 			{
 				"command": "xratu.attachFromExplorer",
-				"title": "Attach to Xratu Chat"
+				"title": "%command.attachFromExplorer.title%"
 			}
 		],
 		"menus": {
@@ -132,7 +132,7 @@
 			"activitybar": [
 				{
 					"id": "xratu-sidebar",
-					"title": "Xratu",
+					"title": "%view.container.title%",
 					"icon": "assets/activitybar.svg"
 				}
 			]
@@ -142,7 +142,7 @@
 				{
 					"type": "webview",
 					"id": "xratu-chat-view",
-					"name": "Xratu Chat",
+					"name": "%view.chat.name%",
 					"webviewOptions": {
 						"retainContextWhenHidden": true
 					}
@@ -170,6 +170,7 @@
 		"test:api-style": "node test/test-api-style.mjs",
 		"test:pricing": "node test/test-pricing.mjs",
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
+		"test:nls": "node test/test-nls.mjs",
 		"test:compaction": "node test/test-compaction.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",
 		"test:skills": "node test/test-skills.mjs",

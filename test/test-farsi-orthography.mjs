@@ -17,7 +17,7 @@ import { join, relative } from 'path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const SCAN_DIRS = ['src', 'webview-ui/src', 'assets', 'test'];
-const SCAN_ROOT_FILES = ['README.fa.md'];
+const SCAN_ROOT_FILES = ['README.fa.md', 'package.nls.fa.json'];
 const EXTS = ['.ts', '.tsx', '.css', '.md', '.json', '.yml', '.mjs'];
 // Documentation that intentionally shows the bad characters.
 const EXEMPT = [join('assets', 'skills', 'natural-farsi', 'SKILL.md')];

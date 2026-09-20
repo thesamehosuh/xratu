@@ -79,6 +79,9 @@ jobs:
       - name: Farsi orthography guard
         run: npm run test:farsi-orthography
 
+      - name: package.nls consistency
+        run: npm run test:nls
+
       - name: Compaction tests
         run: npm run test:compaction
 
