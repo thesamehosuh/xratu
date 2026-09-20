@@ -33,7 +33,9 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     notifRegenerateFailed: { fa: 'تولید دوباره ناموفق بود: {error}', en: 'Regeneration failed: {error}' },
     copyCode: { fa: 'کپی', en: 'Copy' },
     checkpointRestorePlaceholder: { fa: 'بازیابی فایل ها به این نقطه (وضعیت فعلی هم قبلش ذخیره میشود)', en: 'Restore files to this checkpoint (current state is saved first)' },
-    // Free-runtime rejections - keys mirror webview-ui/src/i18n.ts.
+    sessionSwitchBusy: { fa: 'صبر کنید کار فعلی تمام شود', en: 'Wait for the current run to finish' },
+    planModeLiveNote: { fa: 'تغییر حالت برنامه ریزی روی پاسخ در حال اجرا اعمال نمیشود؛ از پیام بعد اعمال میشود.', en: 'Plan mode changes do not affect the response in progress; it applies from the next message.' },
+    sessionLoadFailed: { fa: 'بارگذاری گفتگو ناموفق بود.', en: 'Could not load the conversation.' },
 };
 
 /** Translate a native-surface key with optional {param} interpolation. */

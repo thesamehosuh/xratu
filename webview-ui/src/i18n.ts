@@ -21,6 +21,19 @@ declare global {
 let LOCALE: Locale =
     typeof window !== 'undefined' && window.XRATU_LOCALE === 'en' ? 'en' : 'fa';
 
+/**
+ * Keep the document language in sync with the UI locale. Screen readers,
+ * spellcheck and `:lang()` selectors read `<html lang>`, which ships as a
+ * static default in index.html and must follow a runtime locale flip.
+ */
+function applyDocumentLang(locale: Locale): void {
+    if (typeof document !== 'undefined') {
+        document.documentElement.lang = locale;
+    }
+}
+
+applyDocumentLang(LOCALE);
+
 const fa = {
     // Toolbar
     newSession: 'گفتگوی جدید',
@@ -40,6 +53,7 @@ const fa = {
     sessionsDelete: 'حذف گفتگو',
     sessionsDeleteConfirm: 'این گفتگو حذف شود؟',
     sessionSwitchBusy: 'صبر کنید کار فعلی تمام شود',
+    sessionLoadFailed: 'بارگذاری گفتگو ناموفق بود.',
     yoloMode: 'حالت YOLO: اجرای ابزارها بدون گرفتن تایید',
     planMode: 'حالت برنامه ریزی (فقط خواندنی)',
     planHint: 'هیچ تغییری اعمال نمیشود؛ فقط برنامه ارائه میشود.',
@@ -467,6 +481,7 @@ const en: Record<keyof typeof fa, string> = {
     sessionsDelete: 'Delete session',
     sessionsDeleteConfirm: 'Delete this conversation?',
     sessionSwitchBusy: 'Wait for the current run to finish',
+    sessionLoadFailed: 'Could not load the conversation.',
     yoloMode: 'YOLO mode',
     planMode: 'Plan mode (read-only)',
     planHint: 'No changes will be applied; a plan is produced instead.',
@@ -873,6 +888,7 @@ let STRINGS: Dict = LOCALE === 'fa' ? fa : (en as Dict);
 export function setLocale(locale: Locale): void {
     LOCALE = locale;
     STRINGS = locale === 'fa' ? fa : (en as Dict);
+    applyDocumentLang(locale);
 }
 
 export function getLocale(): Locale {
