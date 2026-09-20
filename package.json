@@ -69,7 +69,8 @@
 				}
 			},
 			"restrictedConfigurations": [
-				"xratu.mcpServers"
+				"xratu.mcpServers",
+				"xratu.proxyUrl"
 			]
 		},
 		"commands": [

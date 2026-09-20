@@ -1716,7 +1716,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         for (const cred of credentials) {
             if (cred.providerId === 'custom') {
                 if (insecureRemoteHttpError(cred.baseUrl, cred.apiKey)) continue;
-                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey);
+                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey, getProxyDispatcher());
                 if (probed) {
                     discovered.push(probed);
                 }
@@ -2183,7 +2183,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const fetchCredId = await this._resolveActiveCredentialId();
         this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
         try {
-            const probed = await probeLocalEndpoint(baseUrl, undefined, apiKey);
+            const probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher());
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }

@@ -10,7 +10,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { pickProxyUrl, isSocksProxy, isHttpProxy } = require('../out/proxy.js');
+const { pickProxyUrl, isSocksProxy, isHttpProxy, redactProxyUrl } = require('../out/proxy.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -42,6 +42,13 @@ check('http not socks', isSocksProxy('http://127.0.0.1:7890'), false);
 check('http detected', isHttpProxy('http://127.0.0.1:7890'), true);
 check('https detected', isHttpProxy('https://proxy.example:443'), true);
 check('socks not http', isHttpProxy('socks5://127.0.0.1:1080'), false);
+
+// --- Credential redaction (proxy URLs must never reach logs verbatim) ---
+check('redacts user:pass', redactProxyUrl('http://user:s3cret@proxy.example:8080'), 'http://proxy.example:8080/');
+check('redacts user only', redactProxyUrl('http://user@proxy.example:8080'), 'http://proxy.example:8080/');
+check('no credentials unchanged', redactProxyUrl('http://proxy.example:8080'), 'http://proxy.example:8080/');
+check('unparseable -> placeholder', redactProxyUrl('not a url'), 'invalid URL');
+check('secret absent after redaction', redactProxyUrl('http://user:s3cret@proxy.example:8080').includes('s3cret'), false);
 
 console.log(failed === 0 ? '\nproxy: all tests passed' : `\nproxy: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

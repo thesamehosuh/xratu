@@ -39,13 +39,13 @@ export const LOCAL_RUNTIME_PRESETS: LocalRuntimePreset[] = [
 // Discovery
 // ---------------------------------------------------------------------------
 
-async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, apiKey?: string | null): Promise<any> {
+async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, apiKey?: string | null, dispatcher?: unknown): Promise<any> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const onAbort = () => controller.abort();
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
-        const response = await fetch(url, {
+        const init: RequestInit = {
             method: 'GET',
             headers: {
                 'Accept': 'application/json',
@@ -54,7 +54,10 @@ async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, ap
                 ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             },
             signal: controller.signal,
-        });
+        };
+        // Route remote model-list probes through the proxy too - otherwise a
+        // user behind filtering can send prompts but never discover models.
+        const response = await fetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
         if (!response.ok) return null;
         return response.json();
     } catch {
@@ -81,8 +84,12 @@ export async function probeLocalEndpoint(
     baseUrl: string,
     signal?: AbortSignal,
     apiKey?: string | null,
+    dispatcher?: unknown,
 ): Promise<{ models: LocalModelInfo[] } | null> {
     const rawBase = baseUrl.trim().replace(/\/+$/, '');
+    // Never proxy on-machine runtimes: a proxy would break localhost and is
+    // pointless for local traffic.
+    const proxy = isLikelyLocalUrl(baseUrl) ? undefined : dispatcher;
 
     // Localhost runtimes get the tight 1.8s deadline; remote gateways need
     // seconds - e.g. kayaai.ir serves a ~230KB models list that takes
@@ -93,7 +100,7 @@ export async function probeLocalEndpoint(
     // per-loaded-instance context/capability metadata that the OpenAI /v1/models
     // compatibility endpoint often omits. Prefer it when available.
     if (/localhost:1234|127\.0\.0\.1:1234/.test(rawBase)) {
-        const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey);
+        const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey, proxy);
         if (native && Array.isArray(native.models)) {
             return {
                 models: native.models
@@ -116,7 +123,7 @@ export async function probeLocalEndpoint(
     }
 
     // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, probeTimeoutMs, apiKey);
+    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, probeTimeoutMs, apiKey, proxy);
     if (openai && Array.isArray(openai.data)) {
         return {
             models: openai.data.map((m: any) => ({
@@ -149,7 +156,7 @@ export async function probeLocalEndpoint(
     }
 
     // Fall back to Ollama's native /api/tags endpoint.
-    const ollama = await fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/tags`, signal, probeTimeoutMs, apiKey);
+    const ollama = await fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
     if (ollama && Array.isArray(ollama.models)) {
         return {
             models: ollama.models.map((m: any) => ({
@@ -199,8 +206,9 @@ export async function probeCustomEndpoint(
     baseUrl: string,
     signal?: AbortSignal,
     apiKey?: string | null,
+    dispatcher?: unknown,
 ): Promise<DiscoveredLocalModel | null> {
-    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey);
+    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey, dispatcher);
     if (!probed) return null;
 
     const connection: LocalModelConnection = {

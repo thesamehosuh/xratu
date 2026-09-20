@@ -8,7 +8,7 @@
  */
 import * as vscode from 'vscode';
 import { ProxyAgent, type Dispatcher } from 'undici';
-import { pickProxyUrl, isHttpProxy, isSocksProxy } from './proxy';
+import { pickProxyUrl, isHttpProxy, isSocksProxy, redactProxyUrl } from './proxy';
 
 let cachedUrl: string | null = null;
 let cachedDispatcher: Dispatcher | undefined;
@@ -23,43 +23,60 @@ export function getProxyUrl(): string | null {
     });
 }
 
-/** True when any proxy is configured (the SSRF guard trusts a proxy to
- *  resolve the destination, so it skips its own DNS check). */
+/**
+ * True when a proxy will actually be used. The SSRF guard skips its DNS check
+ * only when this is true, so it must reflect a USABLE dispatcher - not merely a
+ * non-empty setting. A SOCKS or malformed URL returns false and the guard runs.
+ */
 export function isProxyConfigured(): boolean {
-    return !!getProxyUrl();
+    return getProxyDispatcher() !== undefined;
 }
 
 /**
  * Dispatcher for the configured proxy, or undefined when none is set or the
- * scheme is unsupported. Cached by URL; rebuilt when the URL changes.
+ * scheme is unsupported. Cached by URL; rebuilt (and the old agent closed)
+ * when the URL changes.
  */
 export function getProxyDispatcher(): Dispatcher | undefined {
     const url = getProxyUrl();
     if (!url) {
-        cachedUrl = null;
-        cachedDispatcher = undefined;
+        disposeCached();
         return undefined;
     }
     if (isSocksProxy(url)) {
+        disposeCached();
         warnUnsupported('SOCKS proxies are not supported yet - set an HTTP proxy instead');
         return undefined;
     }
     if (!isHttpProxy(url)) {
-        warnUnsupported(`Unsupported proxy scheme: ${url}`);
+        disposeCached();
+        warnUnsupported('Unsupported proxy scheme - use http:// or https://');
         return undefined;
     }
     if (url !== cachedUrl) {
+        let next: Dispatcher;
         try {
-            cachedDispatcher = new ProxyAgent(url);
-            cachedUrl = url;
+            next = new ProxyAgent(url);
         } catch {
-            warnUnsupported(`Invalid proxy URL: ${url}`);
-            cachedUrl = null;
-            cachedDispatcher = undefined;
+            disposeCached();
+            warnUnsupported(`Invalid proxy URL (${redactProxyUrl(url)}) - ignoring`);
             return undefined;
         }
+        disposeCached();
+        cachedDispatcher = next;
+        cachedUrl = url;
     }
     return cachedDispatcher;
+}
+
+/** Close and forget the cached agent so its socket pools are released. */
+function disposeCached(): void {
+    const old = cachedDispatcher;
+    cachedUrl = null;
+    cachedDispatcher = undefined;
+    if (old) {
+        void old.close().catch(() => { /* best effort */ });
+    }
 }
 
 function warnUnsupported(message: string): void {

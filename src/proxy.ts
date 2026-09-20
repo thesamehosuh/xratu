@@ -45,3 +45,18 @@ export function isSocksProxy(url: string): boolean {
 export function isHttpProxy(url: string): boolean {
     return /^https?:\/\//i.test(url.trim());
 }
+
+/**
+ * Strip embedded credentials from a proxy URL before it reaches a log.
+ * Returns a safe placeholder for anything unparseable.
+ */
+export function redactProxyUrl(url: string): string {
+    try {
+        const parsed = new URL(url.trim());
+        parsed.username = '';
+        parsed.password = '';
+        return parsed.toString();
+    } catch {
+        return 'invalid URL';
+    }
+}
