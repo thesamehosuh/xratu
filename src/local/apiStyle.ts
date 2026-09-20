@@ -27,7 +27,8 @@ function hostOf(baseUrl: string): string | null {
     if (!raw) return null;
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
     try {
-        return new URL(withScheme).host.toLowerCase();
+        // hostname (not host): an explicit :port must not defeat the match.
+        return new URL(withScheme).hostname.toLowerCase();
     } catch {
         return null;
     }

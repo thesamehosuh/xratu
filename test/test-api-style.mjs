@@ -27,6 +27,9 @@ const GO = 'https://opencode.ai/zen/go/v1';
 check('opencode host detected', isOpenCodeHost(ZEN), true);
 check('opencode subdomain detected', isOpenCodeHost('https://api.opencode.ai/zen/v1'), true);
 check('non-opencode host', isOpenCodeHost('https://openrouter.ai/api/v1'), false);
+// An explicit port must not defeat the host match.
+check('opencode host with port', isOpenCodeHost('https://opencode.ai:8443/zen/v1'), true);
+check('messages with explicit port', resolveApiStyle('https://opencode.ai:8443/zen/go/v1', 'claude-sonnet-5'), 'messages');
 
 // Messages families
 for (const model of ['claude-sonnet-5', 'claude-opus-4-8', 'qwen3.8-flash', 'qwen3.7-max', 'minimax-m3', 'minimax-m2.7']) {

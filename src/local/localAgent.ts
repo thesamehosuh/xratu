@@ -82,6 +82,9 @@ export interface LocalAgentMessage {
         };
     }>;
     tool_call_id?: string;
+    /** True when a tool message carries a failure (denied/executor error).
+     *  The Messages transport maps it to Anthropic's `is_error`. */
+    isError?: boolean;
 }
 
 export interface LocalAgentRequest {
@@ -312,6 +315,19 @@ function withDispatcher(init: RequestInit, dispatcher: unknown): RequestInit {
 /** Tagged stream delta so text and cumulative thinking keep their order. */
 type StreamDelta = { kind: 'text' | 'thinking'; value: string };
 
+/** Append an API path to a base URL without a query/fragment swallowing it
+ *  (`https://h/v1?tenant=x` must become `https://h/v1/messages?tenant=x`). */
+function endpointUrl(baseUrl: string, endpoint: string): string {
+    const base = normalizeBaseUrl(baseUrl);
+    try {
+        const url = new URL(base);
+        url.pathname = `${url.pathname.replace(/\/+$/, '')}/${endpoint}`;
+        return url.toString();
+    } catch {
+        return `${base}/${endpoint}`;
+    }
+}
+
 interface CompletionResult {
     text: string;
     toolCalls: LocalToolCall[];
@@ -340,7 +356,7 @@ async function requestChatCompletion(
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
-    const url = `${normalizeBaseUrl(request.baseUrl)}/chat/completions`;
+    const url = endpointUrl(request.baseUrl, 'chat/completions');
     const body: Record<string, unknown> = {
         model: request.model,
         messages,
@@ -579,11 +595,14 @@ function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[
             continue;
         }
         if (msg.role === 'tool') {
-            const block = {
+            const block: Record<string, unknown> = {
                 type: 'tool_result',
                 tool_use_id: msg.tool_call_id,
                 content: typeof msg.content === 'string' ? msg.content : '',
             };
+            // Surface failures so the model can react instead of treating a
+            // denied/failed tool as success.
+            if (msg.isError) block.is_error = true;
             const last = out[out.length - 1];
             if (last && last.role === 'user' && Array.isArray(last.content)
                 && last.content.every((b: any) => b.type === 'tool_result')) {
@@ -605,8 +624,11 @@ function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[
 
     const body: Record<string, unknown> = {
         model: request.model,
-        // max_tokens is REQUIRED by the Messages API.
-        max_tokens: request.maxTokens ?? 4096,
+        // max_tokens is REQUIRED by the Messages API. With no explicit cap,
+        // derive a generous one from the context window (4k floor, 16k
+        // ceiling) rather than a silent 4096 that truncates long outputs.
+        max_tokens: request.maxTokens
+            ?? Math.min(16384, Math.max(4096, Math.floor((request.contextWindow ?? 8192) / 4))),
         messages: out,
         stream: true,
     };
@@ -636,7 +658,7 @@ async function requestMessagesCompletion(
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
-    const url = `${normalizeBaseUrl(request.baseUrl)}/messages`;
+    const url = endpointUrl(request.baseUrl, 'messages');
     const body = toMessagesBody(request, messages);
 
     const outerSignal = request.signal ?? new AbortController().signal;
@@ -646,6 +668,7 @@ async function requestMessagesCompletion(
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
 
+    try {
     let response: Response;
     try {
         response = await fetch(url, withDispatcher({
@@ -732,9 +755,12 @@ async function requestMessagesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
-    outerSignal.removeEventListener('abort', onOuterAbort);
-
     return finalizeCompletion(text, toolDeltas, usage);
+    } finally {
+        // Always detach: a throw during fetch/read/consume must not leave the
+        // listener bound to the caller's long-lived run signal.
+        outerSignal.removeEventListener('abort', onOuterAbort);
+    }
 }
 
 // --- OpenAI Responses API (/responses) --------------------------------------
@@ -813,6 +839,9 @@ function toResponsesBody(request: LocalAgentRequest, messages: LocalAgentMessage
     }
     if (request.maxTokens != null) body.max_output_tokens = request.maxTokens;
     if (request.temperature != null) body.temperature = request.temperature;
+    // Responses reasoning models take an effort object (chat uses
+    // `reasoning_effort`); forward the user's thinking level.
+    if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort };
     return body;
 }
 
@@ -832,7 +861,7 @@ async function requestResponsesCompletion(
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
-    const url = `${normalizeBaseUrl(request.baseUrl)}/responses`;
+    const url = endpointUrl(request.baseUrl, 'responses');
     const body = toResponsesBody(request, messages);
 
     const outerSignal = request.signal ?? new AbortController().signal;
@@ -842,6 +871,7 @@ async function requestResponsesCompletion(
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
 
+    try {
     let response: Response;
     try {
         response = await fetch(url, withDispatcher({
@@ -929,9 +959,12 @@ async function requestResponsesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
-    outerSignal.removeEventListener('abort', onOuterAbort);
-
     return finalizeCompletion(text, toolDeltas, usage);
+    } finally {
+        // Always detach: a throw during fetch/read/consume must not leave the
+        // listener bound to the caller's long-lived run signal.
+        outerSignal.removeEventListener('abort', onOuterAbort);
+    }
 }
 
 function finalizeCompletion(
@@ -1722,13 +1755,13 @@ export async function* runLocalAgent(
 
             if (!approved) {
                 const output = 'Tool execution denied by the user.';
-                messages.push({ role: 'tool', tool_call_id: call.id, content: output });
+                messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
                 yield { type: 'toolResult', id: call.id, tool: call.name, output, isError: true };
                 continue;
             }
 
             const execResult = await executor.execute(call);
-            messages.push({ role: 'tool', tool_call_id: call.id, content: execResult.output });
+            messages.push({ role: 'tool', tool_call_id: call.id, content: execResult.output, isError: execResult.isError === true });
             yield {
                 type: 'toolResult',
                 id: call.id,
