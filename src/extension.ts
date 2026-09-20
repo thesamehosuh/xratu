@@ -23,6 +23,7 @@ import { BACKEND_SYSTEM_PROMPT } from './systemPrompt';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { MCP_REGISTRY } from './mcpRegistry';
+import { getProxyDispatcher } from './proxyDispatcher';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** External MCP manager + config store - module-level so deactivate() can
@@ -1938,6 +1939,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // only costs extra history compaction, which is functional.
                     contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
                     reasoningEffort: this._thinkingLevelHint(model),
+                    // Route model traffic through the configured proxy. The
+                    // dispatcher is cached and undefined when no proxy is set.
+                    dispatcher: getProxyDispatcher(),
                 },
                 executor,
                 {

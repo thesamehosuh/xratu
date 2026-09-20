@@ -61,6 +61,11 @@
 					"type": "string",
 					"default": "",
 					"description": "Brave Search API key used by local mode's web_search tool."
+				},
+				"xratu.proxyUrl": {
+					"type": "string",
+					"default": "",
+					"description": "HTTP/HTTPS proxy URL for model and web requests, e.g. http://127.0.0.1:7890. Overrides VS Code's http.proxy setting and the HTTPS_PROXY/HTTP_PROXY environment variables. SOCKS proxies are not supported yet."
 				}
 			},
 			"restrictedConfigurations": [
@@ -142,6 +147,7 @@
 		"test:e2e": "npm run build:webview && playwright test -c test/e2e/playwright.config.ts",
 		"test:sanitizer": "node test/test-sanitizer.mjs",
 		"test:endpoint-guard": "node test/test-endpoint-guard.mjs",
+		"test:proxy": "node test/test-proxy.mjs",
 		"test:compaction": "node test/test-compaction.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",
 		"test:skills": "node test/test-skills.mjs",
@@ -177,6 +183,7 @@
 		"markdown-it": "^14.2.0",
 		"pdfjs-dist": "^4.10.38",
 		"shiki": "^4.2.0",
+		"undici": "^6.28.1",
 		"ws": "^8.21.0"
 	}
 }

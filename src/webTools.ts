@@ -9,6 +9,7 @@
 import * as vscode from 'vscode';
 import * as dns from 'dns';
 import { isIPv4 } from 'net';
+import { isProxyConfigured, getProxyDispatcher } from './proxyDispatcher';
 
 const TIMEOUT_MS = 15000;
 const CONNECT_TIMEOUT_MS = 8000;
@@ -32,12 +33,11 @@ export function getWebToolConfig(): WebToolConfig {
     };
 }
 
-/** A proxy is configured (VS Code http.proxy or env) - the proxy resolves the
- *  destination, so local SSRF IP validation is skipped to avoid false
- *  positives on private/proxy-tunnel addresses (mirrors the backend). */
-function proxyConfigured(): boolean {
-    const httpProxy = (vscode.workspace.getConfiguration('http').get<string>('proxy') ?? '').trim();
-    return !!httpProxy || !!process.env.HTTPS_PROXY || !!process.env.https_proxy || !!process.env.HTTP_PROXY || !!process.env.http_proxy;
+/** Attach the configured proxy dispatcher to a fetch init, if any. Node's
+ *  global fetch is undici-backed and honors the `dispatcher` option. */
+function withProxy(init: RequestInit): RequestInit {
+    const dispatcher = getProxyDispatcher();
+    return dispatcher ? ({ ...init, dispatcher } as RequestInit) : init;
 }
 
 /**
@@ -132,7 +132,7 @@ async function validatePublicUrl(url: string): Promise<string> {
     if (parsed.username || parsed.password) {
         throw new Error('URLs with embedded credentials are not allowed');
     }
-    if (!proxyConfigured()) {
+    if (!isProxyConfigured()) {
         const host = parsed.hostname.replace(/\.+$/, '').toLowerCase();
         let infos: dns.LookupAddress[];
         try {
@@ -169,7 +169,7 @@ function cleanHtml(text: string): string {
 function fetchWithTimeout(url: string, init: RequestInit, connectTimeoutMs = CONNECT_TIMEOUT_MS): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), connectTimeoutMs);
-    return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+    return fetch(url, withProxy({ ...init, signal: controller.signal })).finally(() => clearTimeout(timer));
 }
 
 /** Read with a per-read idle deadline: the fetch timeout above only covers
@@ -225,11 +225,11 @@ async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
             try {
                 const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
                 try {
-                    response = await fetch(current, {
+                    response = await fetch(current, withProxy({
                         redirect: 'manual',
                         headers: { 'User-Agent': 'Xratu/1.0' },
                         signal: controller.signal,
-                    });
+                    }));
                 } finally {
                     clearTimeout(timer);
                 }

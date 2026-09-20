@@ -102,6 +102,9 @@ export interface LocalAgentRequest {
      *  appended to the system message each round so the model stays on-plan
      *  even after compaction dropped the original tool call. */
     taskList?: TaskListItem[];
+    /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
+     *  `unknown` so this module stays free of VS Code / undici imports. */
+    dispatcher?: unknown;
 }
 
 export interface LocalToolExecutor {
@@ -302,6 +305,11 @@ async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>):
     }
 }
 
+/** Attach an undici proxy dispatcher to a fetch init when one is provided. */
+function withDispatcher(init: RequestInit, dispatcher: unknown): RequestInit {
+    return dispatcher ? ({ ...init, dispatcher } as RequestInit) : init;
+}
+
 async function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -336,12 +344,12 @@ async function requestStreamingCompletion(
 
     let response: Response;
     try {
-        response = await fetch(url, {
+        response = await fetch(url, withDispatcher({
             method: 'POST',
             headers: makeHeaders(request.apiKey),
             body: JSON.stringify(body),
             signal: controller.signal,
-        });
+        }, request.dispatcher));
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
             throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
@@ -789,7 +797,7 @@ async function summarizeDroppedTurns(
     try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (request.apiKey) headers['Authorization'] = `Bearer ${request.apiKey}`;
-        const resp = await fetch(`${normalizeBaseUrl(request.baseUrl)}/chat/completions`, {
+        const resp = await fetch(`${normalizeBaseUrl(request.baseUrl)}/chat/completions`, withDispatcher({
             method: 'POST',
             headers,
             signal: controller.signal,
@@ -800,7 +808,7 @@ async function summarizeDroppedTurns(
                 temperature: 0.2,
                 stream: false,
             }),
-        });
+        }, request.dispatcher));
         if (!resp.ok) return null;
         const data = await resp.json() as {
             choices?: Array<{ message?: { content?: unknown } }>;
