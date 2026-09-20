@@ -20,7 +20,10 @@ export type ToExtensionMessage =
     | { type: 'renameSession'; id: string; title: string }
     | { type: 'deleteSession'; id: string }
     | { type: 'cancelRequest' }
-    | { type: 'restoreCheckpoint' }
+    /** Restore workspace files to a shadow checkpoint. With no sha, the host
+     *  shows its checkpoint QuickPick; with a sha, it restores that turn's
+     *  checkpoint after a confirm (files only, or files + rewind chat). */
+    | { type: 'restoreCheckpoint'; userIndex?: number; sha?: string }
     | { type: 'saveLlmCredentials'; base_url: string; api_key: string; returnToChat?: boolean }
     /** Replace the stored API key of a saved connection (webview never sees
      *  the real key - it only ever SENDS a replacement). */
@@ -170,7 +173,10 @@ export type FromExtensionMessage =
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
     | { type: 'showWelcome' }
     | { type: 'showChat' }
-    | { type: 'restoreUser'; value: string; attachments?: AttachmentMeta[] }
+    | { type: 'restoreUser'; value: string; attachments?: AttachmentMeta[]; cp?: string }
+    /** Live turn: the host created the pre-prompt shadow checkpoint for the
+     *  userIndex-th user message - attaches the restore point to that bubble. */
+    | { type: 'userCheckpoint'; userIndex: number; sha: string }
     /** Webview-internal (never sent by the host): a message steered into a
      *  LIVE run. Closes the in-flight assistant bubble at the steer point;
      *  subsequent chunks open a fresh bubble AFTER the steer. */
@@ -403,6 +409,9 @@ export interface ChatMessage {
     usage?: TokenUsage | null;
     /** Attachment metadata for user bubbles (no base64 - never persisted). */
     attachments?: AttachmentMeta[];
+    /** Shadow-checkpoint sha taken just BEFORE this user turn ran - the
+     *  restore point behind the bubble's restore action. */
+    cp?: string;
     /** Webview-internal: this user turn was steered into a LIVE run
      *  (queued at the agent loop's next round) - renders with a badge. */
     steered?: boolean;

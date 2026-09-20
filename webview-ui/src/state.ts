@@ -79,7 +79,22 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 status: 'done',
                 createdAt: Date.now(),
                 attachments: msg.attachments,
+                cp: msg.cp,
             });
+
+        case 'userCheckpoint': {
+            // Attach the pre-prompt checkpoint sha to the userIndex-th user
+            // bubble so its restore action has a target.
+            let seen = -1;
+            return {
+                ...state,
+                messages: state.messages.map((m) => {
+                    if (m.role !== 'user') return m;
+                    seen++;
+                    return seen === msg.userIndex ? { ...m, cp: msg.sha } : m;
+                }),
+            };
+        }
 
         case 'steerUser': {
             // Steering a live run: the in-flight assistant bubble CLOSES at

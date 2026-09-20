@@ -20,6 +20,7 @@ import {
     FolderTree,
     GitBranch,
     GripVertical,
+    History,
     Image as ImageIcon,
     Globe,
     ListChecks,
@@ -1619,7 +1620,7 @@ function ApprovalCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMessage, userIndex, isLastAssistant, busy, conn, taskList }: MessageItemProps) {
+function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, userIndex, isLastAssistant, busy, conn, taskList }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -1668,6 +1669,10 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
     const showUserFooter = role === 'user' && status === 'done';
     const showEditBtn =
         showUserFooter && !busy && userIndex !== undefined && !!onEditMessage;
+    // Restore is offered when this turn has a shadow checkpoint (old or
+    // restored sessions may not) and nothing is running.
+    const showRestoreBtn =
+        showUserFooter && !busy && userIndex !== undefined && !!message.cp && !!onRestoreCheckpoint;
 
     const copyAnswer = async () => {
         try {
@@ -1855,6 +1860,17 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                             <PencilLine size={13} />
                         </button>
                     )}
+                    {showRestoreBtn && (
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => onRestoreCheckpoint?.(userIndex ?? -1, message.cp!)}
+                            aria-label={t('restoreCheckpoint')}
+                            title={t('restoreCheckpointHint')}
+                        >
+                            <History size={13} />
+                        </button>
+                    )}
                     <span className="msg-meta">
                         {formatClockTime(message.createdAt)}
                     </span>
@@ -1873,6 +1889,9 @@ interface MessageItemProps {
      *  the composer rewinds workspace + history and resends (with any
      *  freshly attached files). */
     onEditMessage?: (userIndex: number, value: string) => void;
+    /** Restore workspace files to this turn's shadow checkpoint (the host
+     *  confirms the scope: files only, or files + rewind the conversation). */
+    onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** 0-based index among USER messages; undefined for non-user bubbles. */
     userIndex?: number;
     isLastAssistant?: boolean;
@@ -1896,6 +1915,7 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.onApprovalDecision === b.onApprovalDecision &&
     a.onRegenerate === b.onRegenerate &&
     a.onEditMessage === b.onEditMessage &&
+    a.onRestoreCheckpoint === b.onRestoreCheckpoint &&
     a.userIndex === b.userIndex &&
     a.isLastAssistant === b.isLastAssistant &&
     a.busy === b.busy &&
