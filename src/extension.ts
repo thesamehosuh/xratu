@@ -747,6 +747,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  place. Null between blocks. */
     private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
+    /** Sum of every non-estimated round's usage across the CURRENT turn (a
+     *  tool-calling turn makes several requests) - the basis for turn cost. */
+    private _localTurnUsage: LocalUsage | null = null;
     /** The in-flight local turn, held so a throttled snapshot can persist it
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
      *  turn (local mode has no server copy). Cleared in _runLocalAgent's
@@ -1304,6 +1307,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private _providerLabelForUrl(baseUrl: string): string {
         return providerLabelForUrl(baseUrl);
+    }
+
+    /** Sum two usage records (each field added when present). */
+    private _addUsage(prev: LocalUsage | null, next: LocalUsage): LocalUsage {
+        if (!prev) return { ...next };
+        return {
+            promptTokens: (prev.promptTokens ?? 0) + (next.promptTokens ?? 0),
+            completionTokens: (prev.completionTokens ?? 0) + (next.completionTokens ?? 0),
+            totalTokens: (prev.totalTokens ?? 0) + (next.totalTokens ?? 0),
+            cachedTokens: (prev.cachedTokens ?? 0) + (next.cachedTokens ?? 0),
+        };
     }
 
     /** Estimated cost of one usage record, or null when the model's price is
@@ -1946,6 +1960,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._localAccumulatedThinking = '';
         this._localThinkingBlockEvent = null;
         this._localCurrentUsage = null;
+        this._localTurnUsage = null;
         // `events` is held by reference and grows as the run streams - the
         // throttled snapshot below always captures the current tail.
         this._localPendingTurn = {
@@ -2201,8 +2216,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             case 'usage':
                 // Mid-stream ESTIMATES only feed the webview's live context
                 // meter; the turn's recorded usage stays on the real
-                // round-end event (server-reported), which overwrites it.
-                if (!event.estimated) this._localCurrentUsage = event.usage;
+                // round-end event (server-reported).
+                if (!event.estimated) {
+                    this._localCurrentUsage = event.usage;
+                    // A turn can span several model rounds (tool calls); the
+                    // turn's COST is the sum across rounds, not just the last.
+                    this._localTurnUsage = this._addUsage(this._localTurnUsage, event.usage);
+                }
                 // Mirror cloud behavior: the webview's context meter tracks
                 // each round's cumulative usage while the turn streams.
                 this._view?.webview.postMessage({
@@ -2211,7 +2231,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         input_tokens: event.usage.promptTokens,
                         output_tokens: event.usage.completionTokens,
                         cached_tokens: event.usage.cachedTokens ?? null,
-                        cost: this._localCostFor(event.usage),
+                        cost: this._localCostFor(this._localTurnUsage),
                     } : null,
                 });
                 break;
@@ -2233,7 +2253,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             input_tokens: this._localCurrentUsage.promptTokens,
                             output_tokens: this._localCurrentUsage.completionTokens,
                             cached_tokens: this._localCurrentUsage.cachedTokens ?? null,
-                            cost: this._localCostFor(this._localCurrentUsage),
+                            cost: this._localCostFor(this._localTurnUsage),
                         } : null,
                         context_window: this._contextWindowHint() ?? null,
                     };

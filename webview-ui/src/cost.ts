@@ -21,17 +21,20 @@ export function formatCost(cost: Cost | null | undefined): string | null {
     return `$${usd.toFixed(2)}`;
 }
 
-/** Sum per-message costs. A session runs against one provider, so the last
- *  currency seen wins (mixing USD and Toman in one total would be a lie). */
+/**
+ * Sum per-message costs in ONE currency - the currency of the most recent
+ * cost. Amounts in another currency are skipped rather than added blindly
+ * (USD + Toman would be meaningless, and the webview has no exchange rate).
+ * A session normally runs against a single provider, so this only matters if
+ * the user switches between an Iranian and a non-Iranian provider mid-chat.
+ */
 export function sumCosts(costs: Array<Cost | null | undefined>): Cost | null {
+    const valid = costs.filter((c): c is Cost => !!c && Number.isFinite(c.amount));
+    if (!valid.length) return null;
+    const currency = valid[valid.length - 1].currency;
     let amount = 0;
-    let currency: 'USD' | 'IRT' = 'USD';
-    let any = false;
-    for (const cost of costs) {
-        if (!cost || !Number.isFinite(cost.amount)) continue;
-        amount += cost.amount;
-        currency = cost.currency;
-        any = true;
+    for (const cost of valid) {
+        if (cost.currency === currency) amount += cost.amount;
     }
-    return any ? { amount, currency } : null;
+    return { amount, currency };
 }

@@ -36,6 +36,12 @@ check('override wins', priceForModel('my-model', { 'my-model': { input: 0.5, out
 check('override case-insensitive', priceForModel('My-Model', { 'my-model': { input: 0.25, output: 1 } })?.output, 1);
 check('override beats table', priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 99, output: 99 } })?.input, 99);
 check('incomplete override falls through', priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 1 } })?.input, 2);
+check('negative override rejected', priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: -1, output: 2 } })?.input, 2);
+check('negative cached override rejected', priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 1, output: 2, cachedInput: -1 } })?.input, 2);
+
+// gpt-5-nano must not be shadowed by the generic /gpt-5\b/ entry.
+check('gpt-5-nano not shadowed', priceForModel('gpt-5-nano')?.input, 0.05);
+check('gpt-5-codex still matches generic', priceForModel('gpt-5-codex')?.input, 1.07);
 
 // --- Cost math ---
 const sonnet = priceForModel('claude-sonnet-5');

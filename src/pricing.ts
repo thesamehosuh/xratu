@@ -3,8 +3,8 @@
  *
  * Prices are USD per 1M tokens, curated from each provider's published list.
  * They drift - the table is a convenience default, and `overrides` (from the
- * `xratu.pricing` setting) always win. An unknown model returns null so the UI
- * shows nothing rather than a wrong number.
+ * `xratu.modelPricing` setting) always win. An unknown model returns null so
+ * the UI shows nothing rather than a wrong number.
  *
  * Pure and dependency-free so it can be unit-tested.
  */
@@ -60,8 +60,10 @@ const PRICE_TABLE: ReadonlyArray<readonly [RegExp, ModelPrice]> = [
     [/gpt-5\.3-codex|gpt-5\.2-codex|gpt-5\.2/, { input: 1.75, output: 14, cachedInput: 0.175 }],
     [/gpt-5\.1-codex-max/, { input: 1.25, output: 10, cachedInput: 0.125 }],
     [/gpt-5\.1-codex-mini/, { input: 0.25, output: 2, cachedInput: 0.025 }],
-    [/gpt-5\.1-codex|gpt-5\.1|gpt-5-codex|gpt-5\b/, { input: 1.07, output: 8.5, cachedInput: 0.107 }],
+    // NOTE: must precede the generic /gpt-5\b/ entry below - the word boundary
+    // matches at "gpt-5" in "gpt-5-nano".
     [/gpt-5-nano/, { input: 0.05, output: 0.4, cachedInput: 0.005 }],
+    [/gpt-5\.1-codex|gpt-5\.1|gpt-5-codex|gpt-5\b/, { input: 1.07, output: 8.5, cachedInput: 0.107 }],
     [/gpt-4o-mini/, { input: 0.15, output: 0.6, cachedInput: 0.075 }],
     [/gpt-4o/, { input: 2.5, output: 10, cachedInput: 1.25 }],
     [/o3-mini/, { input: 1.1, output: 4.4, cachedInput: 0.55 }],
@@ -113,12 +115,11 @@ function sanitizeOverride(override: PriceOverride | undefined): ModelPrice | nul
     if (!override) return null;
     const input = Number.isFinite(override.input) ? (override.input as number) : NaN;
     const output = Number.isFinite(override.output) ? (override.output as number) : NaN;
-    if (!Number.isFinite(input) || !Number.isFinite(output)) return null;
-    return {
-        input,
-        output,
-        cachedInput: Number.isFinite(override.cachedInput) ? (override.cachedInput as number) : undefined,
-    };
+    // Reject negative rates too: they would understate (or suppress) a cost.
+    if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) return null;
+    const cachedInput = Number.isFinite(override.cachedInput) ? (override.cachedInput as number) : undefined;
+    if (cachedInput != null && cachedInput < 0) return null;
+    return { input, output, cachedInput };
 }
 
 /** Resolve a model's price: an exact override wins, else the curated table. */
