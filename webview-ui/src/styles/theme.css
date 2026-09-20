@@ -319,7 +319,9 @@ button {
 
 .session-row-ws {
     /* Takes the remaining space and truncates only when it must - a hard 40%
-       cap clipped ordinary paths far too early. */
+       cap clipped ordinary paths far too early. The element is dir-locked to
+       LTR (the `dir` attribute) so the ellipsis lands at the END of the path
+       rather than the start. */
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -327,6 +329,12 @@ button {
     text-overflow: ellipsis;
     font-size: 10px;
     color: var(--vscode-descriptionForeground);
+}
+
+/* LTR-locked text aligns to its own start (left); in RTL that would push the
+   path away from the session name, so align it to the row's inline-start. */
+[dir='rtl'] .session-row-ws {
+    text-align: right;
 }
 
 /* Calendar date on a session row (Jalali in fa). Kept compact and muted so it

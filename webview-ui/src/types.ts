@@ -212,6 +212,9 @@ export type FromExtensionMessage =
     // context meter track tool/thinking
     // growth WHILE the response streams instead of only at fullResponse.
     | { type: 'usage'; usage: TokenUsage | null }
+    /** Cumulative session spend (host-owned, monotonic - never reduced by a
+     *  rewind or checkpoint restore). */
+    | { type: 'sessionCost'; cost?: { amount: number; currency: 'USD' | 'IRT' } | null }
     | {
           type: 'fullResponse';
           renderedHtml?: string;

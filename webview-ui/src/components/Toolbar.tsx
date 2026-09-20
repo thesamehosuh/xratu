@@ -156,11 +156,13 @@ export function Toolbar({
                         title={formatFullTimestamp(item.updatedAt)}
                     >
                         <span className="session-row-title" dir="auto">{item.title || t('sessionsUntitled')}</span>
-                        {/* Jalali date in fa (locale calendar in en), right
-                            beside the name - the group header only says
-                            "Today/Yesterday/…". */}
+                        {/* Path is always LTR: dir-locked so a leading "/" is
+                            not re-ordered by the RTL row, and the ellipsis
+                            lands at the END of the path. */}
+                        {showWorkspace && <span className="session-row-ws" dir="ltr">{item.workspace}</span>}
+                        {/* Jalali date in fa (locale calendar in en) - the group
+                            header only says "Today/Yesterday/…". */}
                         <span className="session-row-date" dir="auto">{formatCalendarDate(item.updatedAt)}</span>
-                        {showWorkspace && <span className="session-row-ws" dir="auto">{item.workspace}</span>}
                     </button>
                     <button
                         type="button"

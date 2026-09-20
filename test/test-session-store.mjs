@@ -241,6 +241,20 @@ try {
         (await store.search('assistant')).some((m) => m.id === meta8.id), false);
     check('search still finds visible text',
         (await store.search('hello world')).some((m) => m.id === meta8.id), true);
+
+    // 14. Cumulative session cost round-trips; a missing value reads as 0.
+    {
+        const withCost = await store.create(ws);
+        await store.save(withCost.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [], totalCostUsd: 1.2345,
+        });
+        check('totalCostUsd round-trips', (await store.load(withCost.id)).totalCostUsd, 1.2345);
+        const withoutCost = await store.create(ws);
+        await store.save(withoutCost.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [],
+        });
+        check('missing totalCostUsd defaults to 0', (await store.load(withoutCost.id)).totalCostUsd, 0);
+    }
 } finally {
     rmSync(root, { recursive: true, force: true });
 }
