@@ -456,6 +456,13 @@ const fa = {
     localUnreachableDetail: 'اتصال به سرور محلی برقرار نشد: {detail}',
     insecureEndpointHttp: 'کلید API هرگز از طریق HTTP رمزنگاری نشده ارسال نمیشود. برای سرویس های غیرمحلی از آدرس HTTPS استفاده کنید؛ سرویس های روی همین سیستم یا شبکه محلی میتوانند بدون کلید بمانند.',
     checkpointRestorePlaceholder: 'بازیابی فایل ها به این نقطه (وضعیت فعلی هم قبلش ذخیره میشود)',
+    // Mirrors src/uiStrings.ts - these resolve in the in-app notification
+    // banner (confirmBanner posts valueKey to the webview).
+    checkpointScopeConfirm: 'چه چیزی بازیابی شود؟ وضعیت فعلی اول ذخیره میشود.',
+    checkpointScopeFiles: 'فقط فایل ها',
+    checkpointScopeFilesAndChat: 'فایل ها و گفتگو',
+    checkpointEmptySeed: 'این نوبت با ورک اسپیس خالی شروع شده بود؛ فایلی برای بازیابی نیست.',
+    checkpointTurnGone: 'این نوبت دیگر در تاریخچه نیست؛ بازیابی انجام نشد.',
 
     // Runtime / free-mode labels
 
@@ -875,6 +882,11 @@ const en: Record<keyof typeof fa, string> = {
     localUnreachableDetail: "Couldn't reach the local server: {detail}",
     insecureEndpointHttp: 'API keys are never sent over unencrypted HTTP. Use an HTTPS URL for remote providers; runtimes on this machine or your local network can stay on HTTP without a key.',
     checkpointRestorePlaceholder: 'Restore files to this checkpoint (current state is saved first)',
+    checkpointScopeConfirm: 'What should be restored? The current state is saved first.',
+    checkpointScopeFiles: 'Files only',
+    checkpointScopeFilesAndChat: 'Files and conversation',
+    checkpointEmptySeed: 'This turn started with an empty workspace; there are no files to restore.',
+    checkpointTurnGone: 'That turn is no longer in the history; nothing was restored.',
 
     // Runtime / free-mode labels
 

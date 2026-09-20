@@ -1007,15 +1007,26 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
         const rewindChat = choice === 'checkpointScopeFilesAndChat';
 
+        // The confirm is non-blocking: a run may have started (or the history
+        // changed) while it was open. Re-check before mutating anything.
+        if (this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchBusy');
+            return;
+        }
+
+        let emptySeed = false;
         try {
             const result = await this._checkpoints.restoreCheckpoint(folder.uri.fsPath, sha);
             if (result.changed) {
                 this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
             }
         } catch (e) {
-            // Empty seed = the workspace was empty at that turn's start; there
-            // is nothing to restore, but a chat rewind is still meaningful.
-            if (!(e instanceof EmptySeedError)) {
+            // Empty seed = the workspace was empty at that turn's start.
+            // Restoring TO the seed would wipe files created since, so skip
+            // the file restore - but never silently.
+            if (e instanceof EmptySeedError) {
+                emptySeed = true;
+            } else {
                 this.notifyBanner('error', 'notifCpRestoreFailed', {
                     error: e instanceof Error ? e.message : String(e),
                 });
@@ -1023,9 +1034,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        if (!rewindChat) return;
+        if (!rewindChat) {
+            if (emptySeed) this.notifyBanner('info', 'checkpointEmptySeed');
+            return;
+        }
+
+        // Re-resolve the turn: the index may be stale after the confirm.
         const targetIdx = this._findUserEntry(userIndex);
-        if (targetIdx >= 0) this._history = this._history.slice(0, targetIdx);
+        if (targetIdx < 0) {
+            this.notifyBanner('warning', 'checkpointTurnGone');
+            return;
+        }
+        // Match _rewindAndResend: discard approval bookkeeping for the turns
+        // being removed, or it can later close timeline items that are gone.
+        this._approvalCloseItems = {};
+        this._history = this._history.slice(0, targetIdx);
         const localIdx = this._findLocalUserEntry(userIndex);
         if (localIdx >= 0) this._localHistory = this._localHistory.slice(0, localIdx);
         this._dropOrphanedTaskListEdit();
@@ -3962,15 +3985,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // New turn -> the shadow-checkpoint store may snapshot once more.
                 this._checkpoints.beginTurn();
 
-                // Tell the webview which bubble owns this checkpoint so its
-                // restore action has a target. The new user row is pushed to
-                // _history only after the run, so the count IS this prompt's
-                // 0-based user index.
-                if (prePromptSha) {
-                    const promptUserIndex = this._history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
-                    this._view?.webview.postMessage({ type: 'userCheckpoint', userIndex: promptUserIndex, sha: prePromptSha });
-                }
-
                 // Cancel during the pre-flight work: settle like any other cancelled
                 // turn (the webview's typing bubble flips to "Request cancelled.") -
                 // nothing was streamed or ledgered yet.
@@ -3990,6 +4004,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         this._view?.webview.postMessage({ type: 'error', valueKey: 'requestCancelled' });
                     }
                     return;
+                }
+
+                // Tell the webview which bubble owns this checkpoint so its
+                // restore action has a target. Posted only AFTER both preflight
+                // abort checks: a cancelled turn never commits its user row, so
+                // attaching a sha then would point at a missing turn. steerCarry
+                // turns re-enter with their user row ALREADY ledgered, so their
+                // index is one less than the user count.
+                if (prePromptSha) {
+                    const userCount = this._history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+                    const promptUserIndex = userCount - (opts?.steerCarry ? 1 : 0);
+                    if (promptUserIndex >= 0) {
+                        this._view?.webview.postMessage({ type: 'userCheckpoint', userIndex: promptUserIndex, sha: prePromptSha });
+                    }
                 }
 
                 // The chat cancel controller was registered right after
