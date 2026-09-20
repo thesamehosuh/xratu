@@ -815,6 +815,7 @@ export function App() {
                     onApprovalDecision={handleApprovalDecision}
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
+                    taskList={taskListView ?? undefined}
                 />
                 {showJump && (
                     <button
