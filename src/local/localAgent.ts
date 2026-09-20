@@ -24,6 +24,8 @@ export interface LocalUsage {
     promptTokens: number | null;
     completionTokens: number | null;
     totalTokens: number | null;
+    /** Prompt tokens served from the provider's cache, when reported. */
+    cachedTokens?: number | null;
 }
 
 export interface LocalToolCall {
@@ -401,10 +403,17 @@ async function requestStreamingCompletion(
 
         const rawUsage = json?.usage;
         if (rawUsage) {
+            // Cache-hit accounting differs per provider: OpenAI nests it under
+            // prompt_tokens_details, Anthropic-style gateways use
+            // cache_read_input_tokens, DeepSeek uses prompt_cache_hit_tokens.
+            const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
+                ?? rawUsage.cache_read_input_tokens
+                ?? rawUsage.prompt_cache_hit_tokens;
             usage = {
                 promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
                 completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
                 totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
+                cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
             };
         }
 

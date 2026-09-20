@@ -127,6 +127,38 @@ async function testStreamingDeltas() {
     }
 }
 
+async function testCachedTokensParsed() {
+    // Cache-hit accounting differs per provider; all three shapes must land.
+    const shapes: Array<{ usage: Record<string, unknown>; expected: number }> = [
+        { usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 64 } }, expected: 64 },
+        { usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, cache_read_input_tokens: 32 }, expected: 32 },
+        { usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_cache_hit_tokens: 16 }, expected: 16 },
+    ];
+
+    for (const shape of shapes) {
+        const originalFetch = globalThis.fetch;
+        const frames = [
+            `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }], usage: shape.usage })}\n\n`,
+            'data: [DONE]\n\n',
+        ];
+        globalThis.fetch = (async () => sse(frames)) as typeof fetch;
+        try {
+            const events = await collect(
+                runLocalAgent(baseRequest(), {
+                    execute: async () => ({ output: '' }),
+                }, {
+                    requestApproval: async () => ({}),
+                })
+            );
+            const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
+            assert.ok(usageEvent, `expected a server usage event for ${JSON.stringify(shape.usage)}`);
+            assert.equal(usageEvent.usage.cachedTokens, shape.expected);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    }
+}
+
 async function testReasoningStreamsAsCumulativeThinking() {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
@@ -1084,6 +1116,7 @@ async function main() {
     await testStreamingDeltas();
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();
+    await testCachedTokensParsed();
     await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();
     await testDeniedToolProducesToolResultAndContinues();

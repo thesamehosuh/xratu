@@ -2086,6 +2086,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     usage: event.usage ? {
                         input_tokens: event.usage.promptTokens,
                         output_tokens: event.usage.completionTokens,
+                        cached_tokens: event.usage.cachedTokens ?? null,
                     } : null,
                 });
                 break;
@@ -2106,6 +2107,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         usage: this._localCurrentUsage ? {
                             input_tokens: this._localCurrentUsage.promptTokens,
                             output_tokens: this._localCurrentUsage.completionTokens,
+                            cached_tokens: this._localCurrentUsage.cachedTokens ?? null,
                         } : null,
                         context_window: this._contextWindowHint() ?? null,
                     };

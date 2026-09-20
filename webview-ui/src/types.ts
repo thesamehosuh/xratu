@@ -384,6 +384,8 @@ export type MessageStatus = 'streaming' | 'done' | 'error';
 export interface TokenUsage {
     input_tokens: number | null;
     output_tokens: number | null;
+    /** Prompt tokens served from the provider's cache, when reported. */
+    cached_tokens?: number | null;
 }
 
 export interface ChatMessage {
