@@ -18,6 +18,7 @@ const suites = [
     { entry: 'webview-ui/test/tasklist-render.test.tsx', outfile: 'dist-tests/tasklist-render-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/local-agent.test.ts', outfile: 'dist-tests/local-agent-test.cjs' },
     { entry: 'webview-ui/test/mention.test.ts', outfile: 'dist-tests/mention-test.cjs' },
+    { entry: 'webview-ui/test/datetime.test.ts', outfile: 'dist-tests/datetime-test.cjs' },
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
