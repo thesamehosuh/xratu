@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -1364,14 +1364,46 @@ function currentShikiTheme(): string {
     return document.body?.classList.contains('vscode-light') ? SHIKI_LIGHT_THEME : SHIKI_DARK_THEME;
 }
 
+// One shared observer watches the body theme class and notifies every mounted
+// code block, so switching VS Code themes re-highlights already-rendered pills
+// instead of leaving stale token colors until the webview is recreated.
+const themeListeners = new Set<() => void>();
+let themeObserver: MutationObserver | null = null;
+
+function onBodyClassMutation(): void {
+    const next = currentShikiTheme();
+    if (next === lastTheme) return;
+    lastTheme = next;
+    for (const listener of themeListeners) listener();
+}
+let lastTheme = currentShikiTheme();
+
+function subscribeTheme(callback: () => void): () => void {
+    if (typeof document !== 'undefined') {
+        if (!themeObserver) {
+            themeObserver = new MutationObserver(onBodyClassMutation);
+            themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        }
+        themeListeners.add(callback);
+    }
+    return () => {
+        themeListeners.delete(callback);
+    };
+}
+
+/** Reactive VS Code code-block theme for the webview. */
+function useShikiTheme(): string {
+    return useSyncExternalStore(subscribeTheme, currentShikiTheme, currentShikiTheme);
+}
+
 function useHighlightedCode(code: string, lang: string): string[] {
     const [highlighted, setHighlighted] = useState<string[]>([]);
+    const theme = useShikiTheme();
     useEffect(() => {
         if (!code || lang === 'text') {
             setHighlighted([]);
             return;
         }
-        const theme = currentShikiTheme();
         let cancelled = false;
         getSingletonHighlighter({
             themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME],
@@ -1393,7 +1425,7 @@ function useHighlightedCode(code: string, lang: string): string[] {
             if (!cancelled) setHighlighted([]);
         });
         return () => { cancelled = true; };
-    }, [code, lang]);
+    }, [code, lang, theme]);
     return highlighted;
 }
 
