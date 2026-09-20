@@ -617,10 +617,12 @@ async function testContextStatusRidesTheTailNotTheSystemPrompt() {
         assert.equal(system, 'You are Xratu.', 'system prompt stays byte-stable');
         assert.ok(!system.includes('[Context status:'), 'status line must not be in the system prompt');
 
+        // Chat appends the note to the LAST message (a trailing system message
+        // is rejected by strict servers).
         const tail = requests[0].messages[requests[0].messages.length - 1];
-        assert.equal(tail.role, 'system', 'the volatile note is a trailing message');
-        assert.ok(tail.content.includes('[Context status:'), `missing status line: ${tail.content}`);
-        assert.ok(tail.content.includes('of the 8192-token context window'), tail.content);
+        assert.equal(tail.role, 'user', 'the volatile note rides the last message');
+        assert.ok(String(tail.content).includes('[Context status:'), `missing status line: ${tail.content}`);
+        assert.ok(String(tail.content).includes('of the 8192-token context window'), tail.content);
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -671,9 +673,9 @@ async function testSystemPromptStaysStableAcrossRounds() {
         // in the history (round 2 must not carry round 1's note mid-array).
         for (const body of requests) {
             const msgs = body.messages;
-            const notes = msgs.filter((m: any) => m.role === 'system' && String(m.content).includes('[Context status:'));
+            const notes = msgs.filter((m: any) => String(m.content).includes('[Context status:'));
             assert.equal(notes.length, 1, 'exactly one trailing note per request');
-            assert.equal(msgs[msgs.length - 1].role, 'system', 'note is the last message');
+            assert.ok(String(msgs[msgs.length - 1].content).includes('[Context status:'), 'note rides the last message');
         }
         assert.ok(!JSON.stringify(requests[1].messages.slice(1, -1)).includes('[Context status:'), 'note must not be stored in history');
     } finally {
@@ -733,12 +735,11 @@ async function testProactiveCompactDropsOldTurnsAtStart() {
         assert.ok(messages[1].content.includes('Earlier messages in this conversation were removed'));
         assert.ok(messages[1].content.includes('[Summary of the removed turns'));
         assert.ok(messages[1].content.includes('Compacted summary: early turns asked about setup.'));
-        // …newest turns survive, and the current turn is last - followed only
-        // by the trailing volatile note (which is not part of the history).
+        // …newest turns survive, and the current user turn is last (the
+        // trailing volatile note rides it, never stored in history).
         assert.ok(messages.length < 2 + history.length + 1);
-        assert.equal(messages.at(-1)!.role, 'system');
+        assert.equal(messages.at(-1)!.role, 'user');
         assert.ok(String(messages.at(-1)!.content).includes('[Context status:'));
-        assert.equal(messages.at(-2)!.role, 'user');
         assert.ok(serialized.includes('turn7') && serialized.includes('reply7'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1'));
         // The host is told about the summary so it can roll it forward.
@@ -822,12 +823,10 @@ async function testMidRunCompactionFromServerUsage() {
         assert.ok(round2[1].content.includes('Mid-run summary: earlier turns read configs.'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1') && !serialized.includes('turn2'));
         assert.ok(serialized.includes('turn3') && serialized.includes('contents'));
-        // Assistant→tool pair of the current turn sits at the tail, followed
-        // only by the trailing volatile note.
-        assert.equal(round2.at(-1)!.role, 'system');
+        // The current turn's tool result is last, carrying the trailing
+        // volatile note; the system prompt stays byte-stable (cacheable).
+        assert.equal(round2.at(-1)!.role, 'tool');
         assert.ok(String(round2.at(-1)!.content).includes('[Context status:'));
-        assert.equal(round2.at(-2)!.role, 'tool');
-        // The system prompt itself stays byte-stable (cacheable prefix).
         assert.ok(!round2[0].content.includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;
@@ -1233,7 +1232,9 @@ async function testMessagesApiTextThinkingAndUsage() {
         const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
         assert.deepEqual(chunks, ['hel', 'lo']);
         const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
-        assert.equal(usageEvent.usage.promptTokens, 120);
+        // Anthropic's input_tokens is the UNCACHED input; the total prompt is
+        // input + cache_read (+ cache_creation). 120 + 40 = 160.
+        assert.equal(usageEvent.usage.promptTokens, 160);
         assert.equal(usageEvent.usage.completionTokens, 2);
         assert.equal(usageEvent.usage.cachedTokens, 40);
     } finally {
@@ -1273,6 +1274,7 @@ async function testMessagesApiToolUse() {
             runLocalAgent(baseRequest({
                 apiStyle: 'messages',
                 model: 'claude-sonnet-5',
+                contextWindow: 8192,
                 tools: [{
                     name: 'read_file',
                     description: 'Read a file',
@@ -1307,6 +1309,16 @@ async function testMessagesApiToolUse() {
         // Order is load-bearing: the thinking block must precede the tool_use.
         const blockTypes = assistantTurn.content.map((b: any) => b.type);
         assert.ok(blockTypes.indexOf('thinking') < blockTypes.indexOf('tool_use'), 'thinking must precede tool_use');
+
+        // History caching: the last STORED block carries a breakpoint so the
+        // growing conversation is cached incrementally; the volatile note
+        // appended after it is NOT cached.
+        const lastTurn = secondInput[secondInput.length - 1];
+        const lastBlock = lastTurn.content[lastTurn.content.length - 1];
+        assert.ok(String(lastBlock.text).includes('[Context status:'), 'note is the last block');
+        assert.equal(lastBlock.cache_control, undefined, 'volatile note must not be cached');
+        const storedBlock = lastTurn.content[lastTurn.content.length - 2];
+        assert.equal(storedBlock.cache_control.type, 'ephemeral', 'history end is a cache breakpoint');
     } finally {
         globalThis.fetch = originalFetch;
     }

@@ -349,6 +349,24 @@ interface CompletionResult {
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
+/** Append the volatile note to a COPY of the last message (chat transport).
+ *  A trailing system message after tool/user turns is rejected by strict
+ *  servers, and appending only touches the tail - everything before the last
+ *  message stays a cacheable prefix. */
+function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
+    if (!messages.length) return messages;
+    const out = messages.slice();
+    const last = out[out.length - 1];
+    if (typeof last.content === 'string') {
+        out[out.length - 1] = { ...last, content: `${last.content}\n\n${note}` };
+    } else if (Array.isArray(last.content)) {
+        out[out.length - 1] = { ...last, content: [...last.content, { type: 'text', text: note }] };
+    } else {
+        out[out.length - 1] = { ...last, content: note };
+    }
+    return out;
+}
+
 /** Volatile context-awareness note appended as the LAST item of each request.
  *  It is deliberately NOT part of `messages` and NOT in the system prompt:
  *  keeping the prefix byte-stable across rounds is what makes prompt caching
@@ -382,9 +400,9 @@ async function requestChatCompletion(
     const url = endpointUrl(request.baseUrl, 'chat/completions');
     const body: Record<string, unknown> = {
         model: request.model,
-        // Trailing system message: read by OpenAI-compatible servers while
-        // leaving every earlier message untouched (cacheable prefix).
-        messages: tailNote ? [...messages, { role: 'system', content: tailNote }] : messages,
+        // Note appended to the last message (see appendTailNote): safe for
+        // strict servers, and the prefix before it stays cacheable.
+        messages: tailNote ? appendTailNote(messages, tailNote) : messages,
         stream: true,
         stream_options: { include_usage: true },
     };
@@ -659,6 +677,16 @@ function toMessagesBody(
         }
     }
 
+    // Second cache breakpoint at the end of the STORED history (everything
+    // before the volatile note below). It advances each round, so the growing
+    // conversation is cached incrementally rather than only tools + system.
+    // Anthropic allows up to 4 breakpoints; two is plenty here.
+    const lastStored = out[out.length - 1];
+    if (lastStored && Array.isArray(lastStored.content) && lastStored.content.length) {
+        const blocks = lastStored.content;
+        blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
+    }
+
     // Volatile note rides the tail: merged into a trailing user turn so the
     // cached prefix (tools + system + history) is untouched. tool_result
     // blocks must stay first, which the sort below already guarantees.
@@ -694,8 +722,37 @@ function toMessagesBody(
     return body;
 }
 
+/** Remove every cache_control breakpoint from a Messages body (a gateway
+ *  rejected the field). Returns true when something was removed. */
+function stripCacheControl(body: Record<string, unknown>): boolean {
+    let removed = false;
+    const visit = (block: any) => {
+        if (block && typeof block === 'object' && block.cache_control) {
+            delete block.cache_control;
+            removed = true;
+        }
+    };
+    const system = body.system as any[] | undefined;
+    if (Array.isArray(system)) system.forEach(visit);
+    const messages = body.messages as any[] | undefined;
+    if (Array.isArray(messages)) {
+        for (const message of messages) {
+            if (Array.isArray(message?.content)) message.content.forEach(visit);
+        }
+    }
+    return removed;
+}
+
 function mergeMessagesUsage(raw: any, previous: LocalUsage | null): LocalUsage {
-    const input = Number.isFinite(raw?.input_tokens) ? raw.input_tokens : previous?.promptTokens ?? null;
+    // Anthropic reports `input_tokens` as the UNCACHED input only; the
+    // cache-creation and cache-read portions are separate fields. The total
+    // prompt - what actually occupies the window - is their sum, otherwise a
+    // cached long prefix makes compaction think there is room to spare.
+    const num = (value: unknown): number => (Number.isFinite(value) ? (value as number) : 0);
+    const totalInput = num(raw?.input_tokens)
+        + num(raw?.cache_creation_input_tokens)
+        + num(raw?.cache_read_input_tokens);
+    const input = totalInput > 0 ? totalInput : previous?.promptTokens ?? null;
     const output = Number.isFinite(raw?.output_tokens) ? raw.output_tokens : previous?.completionTokens ?? null;
     const cached = Number.isFinite(raw?.cache_read_input_tokens) ? raw.cache_read_input_tokens : previous?.cachedTokens ?? null;
     return { promptTokens: input, completionTokens: output, totalTokens: null, cachedTokens: cached };
@@ -730,14 +787,12 @@ async function requestMessagesCompletion(
     let response: Response;
     try {
         response = await send(body);
-        // Some Messages-compatible gateways reject `cache_control`. Drop the
-        // breakpoint ONCE and retry rather than failing the turn (caching is
-        // an optimization, not a requirement).
-        const systemBlocks = body.system as Array<Record<string, unknown>> | undefined;
-        if (!response.ok && response.status === 400 && systemBlocks?.[0]?.cache_control) {
+        // Some Messages-compatible gateways reject `cache_control`. Strip every
+        // breakpoint ONCE and retry rather than failing the turn (caching is an
+        // optimization, not a requirement).
+        if (!response.ok && response.status === 400) {
             const text = await response.text().catch(() => '');
-            if (/cache_control/i.test(text)) {
-                delete systemBlocks[0].cache_control;
+            if (/cache_control/i.test(text) && stripCacheControl(body)) {
                 response = await send(body);
             } else {
                 throw new Error(`Model request failed (400): ${text.slice(0, 600)}`);
@@ -1926,7 +1981,10 @@ export async function* runLocalAgent(
     // model should treat the free headroom as optimistic.
     const estimateUsed = (): number => {
         const systemChars = request.systemPrompt.length;
-        return Math.ceil(systemChars / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
+        // The trailing note ships on every request too - count the task-list
+        // reminder (unbounded) plus a fixed allowance for the status/hint.
+        const tailChars = taskListReminderLine(request.taskList ?? []).length + 400;
+        return Math.ceil((systemChars + tailChars) / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
     };
 
     // Context awareness (fill level + progressive hints + task-list reminder)
@@ -2105,6 +2163,10 @@ export async function* runLocalAgent(
             // system message itself is left untouched so the prompt prefix
             // stays cacheable.
             noteUsed = used;
+        } else {
+            // Provider omitted usage: fall back to the estimate so the note
+            // does not report stale occupancy as history grows.
+            noteUsed = estimateUsed();
         }
 
         if (!finalResult.toolCalls.length) {
