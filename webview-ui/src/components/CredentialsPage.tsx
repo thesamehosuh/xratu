@@ -75,7 +75,7 @@ const PRESETS: Preset[] = [
     // per-API wrapper route and Liara/Arvan/Navaan hand out a URL containing an
     // account/workspace id. Leave the URL empty so the user pastes the one from
     // their dashboard instead of shipping a route that would 404.
-    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: 'https://api.metisai.ir/api/v1/wrapper/openai', hintKey: 'credIranianHint' },
     { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
@@ -234,7 +234,10 @@ export function CredentialsPage({
     const pick = (id: string) => {
         setPresetId(id);
         const preset = PRESETS.find((p) => p.id === id);
-        if (preset?.baseUrl) setUrl(preset.baseUrl);
+        // Always take the preset's URL - including EMPTY, so a user-specific
+        // provider (no shared base URL) clears the previous endpoint instead
+        // of silently carrying it over.
+        setUrl(preset?.baseUrl ?? '');
     };
 
     const askDelete = (id: string) => {
@@ -421,11 +424,13 @@ export function CredentialsPage({
                 <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
             </div>
 
-            <div className="cred-form-provider" dir="ltr">
+            {/* Inherit the card's RTL: the hint is a Persian sentence and must
+                read right-to-left. Only the Latin brand name is isolated. */}
+            <div className="cred-form-provider">
                 <ProviderMark provider={selectedPreset} />
                 <div>
                     <strong dir="ltr">{presetLabel(selectedPreset)}</strong>
-                    <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
+                    <span dir="auto">{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
                 </div>
             </div>
 

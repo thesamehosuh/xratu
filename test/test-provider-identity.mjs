@@ -26,7 +26,7 @@ const PRESETS = [
     ['https://openrouter.ai/api/v1', 'openrouter'],
     ['https://kayaai.ir/api', 'kayaai'],
     ['https://api.avalai.ir/v1', 'avalai'],
-    ['https://api.metisai.ir/openai/v1', 'metis'],
+    ['https://api.metisai.ir/api/v1/wrapper/openai', 'metis'],
     ['https://ai.liara.ir/api/v1', 'liara'],
     ['https://api.arvancloud.ir/ai/v1', 'arvan'],
     ['https://api.navaan.ai/v1', 'navaan'],
