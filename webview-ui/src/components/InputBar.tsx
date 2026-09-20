@@ -22,8 +22,7 @@ import { applyMentionPick, detectMention, filterFiles, type MentionState } from 
 import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf } from '../i18n';
 
-/** Fallback when the backend hasn't served a window for this model yet
- *  (mirrors deps.DEFAULT_CONTEXT_WINDOW). */
+/** Fallback when no window is known for this model yet. */
 const DEFAULT_CONTEXT_LIMIT = 131_072;
 
 /** Preset windows offered in the pill dropdown (binary-nice values). */
@@ -42,8 +41,7 @@ const ATTACH_MAX_COUNT = 20;
 const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACH_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-/** Non text/* mimes accepted as inline text attachments (mirrors the backend's
- *  ATTACHMENT_TEXT_EXTRA_TYPES). */
+/** Non text/* mimes accepted as inline text attachments. */
 const ATTACH_TEXT_EXTRA_TYPES = new Set([
     'application/json',
     'application/xml',
@@ -134,9 +132,9 @@ function isTextMime(mime: string): boolean {
     return mime.startsWith('text/') || ATTACH_TEXT_EXTRA_TYPES.has(mime);
 }
 
-/** Magic-byte sniffing of a base64 image payload - mirrors the backend so a
- *  text file named .png is rejected in the COMPOSER (Persian, auto-dismissed)
- *  instead of failing the send with an English backend error. */
+/** Magic-byte sniffing of a base64 image payload, so a text file named .png
+ *  is rejected in the COMPOSER (Persian, auto-dismissed) instead of failing
+ *  the send later. */
 function sniffImageMime(dataBase64: string): string | null {
     let head: string;
     try {
@@ -204,7 +202,7 @@ function mimeForFile(file: File): string {
 /** WEBP is the one image format local vision runtimes (LM Studio, Ollama's
  *  llama.cpp backend) commonly reject even when the transport encoding is
  *  right - PNG is universally supported, so re-encode webp attachments
- *  client-side in the composer.  Cloud providers accept both, and PNG works
+ *  client-side in the composer. Most remote providers accept both, and PNG works
  *  everywhere, so this normalization is safe for the whole pipeline. */
 async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: string; size: number }> {
     const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0));
@@ -258,14 +256,14 @@ interface InputBarProps {
     sessionCost?: Cost | null;
     /** Server-provided window for the selected model (null until known). */
     contextWindow?: number | null;
-    /** Backend-resolved DEFAULT window for the model (without any user
-     *  override) - used to disable options that would shrink the window
-     *  below what the conversation already occupies. */
+    /** Host-resolved DEFAULT window for the model (without any user override)
+     *  - used to disable options that would shrink the window below what the
+     *  conversation already occupies. */
     defaultContextWindow?: number | null;
     planMode?: boolean;
     /** Heuristic vision support of the selected model (null = unknown). */
     modelVisionCapable?: boolean | null;
-    /** Backend rejected the last send - restore its value + attachments. */
+    /** The host rejected the last send - restore its value + attachments. */
     restoreDraft?: { value: string; attachments: ComposerAttachment[] } | null;
     onRestoreApplied?: () => void;
     /** Files the host read for attachment (picker/commands via attachUris). */
@@ -539,8 +537,8 @@ export function InputBar({
                 break;
             }
             const mimeType = mimeForFile(file);
-            // PDFs are accepted here and text-extracted host-side before
-            // anything reaches the backend.
+            // PDFs are accepted here and text-extracted host-side before the
+            // request is built.
             if (!isImageMime(mimeType) && !isTextMime(mimeType) && mimeType !== 'application/pdf') {
                 setAttachError(t('attachUnsupported').replace('{name}', file.name));
                 continue;

@@ -29,9 +29,9 @@ function patch(state: ChatState, id: string, p: Partial<ChatMessage>): ChatState
 }
 
 // All-zero usage is MEANINGLESS, never a real measurement: every turn has
-// prompt tokens > 0. Providers that ignore stream_options.include_usage make
-// the backend's run.usage() report {0, 0} on every round and the result -
-// treating that as a real value pinned the context meter at 0% (input bar
+// prompt tokens > 0. Providers that ignore stream_options.include_usage
+// report {0, 0} on every round and on the result - treating that as a real
+// value pinned the context meter at 0% (input bar
 // "resets to 0" every turn while the model kept its context). Zeros and
 // nulls are therefore the same: keep the last known fill instead.
 function meaningfulUsage(u: ChatMessage['usage']): ChatMessage['usage'] {
@@ -188,7 +188,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     if (m.id !== id) return m;
                     const now = Date.now();
                     const steps = [...m.steps];
-                    // Backend events are cumulative WITHIN one reasoning block
+                    // Thinking events are cumulative WITHIN one reasoning block
                     // and RESET when the model starts a fresh block. Extend the
                     // latest thinking pill while the text grows; otherwise open
                     // a NEW pill. A new pill after tool calls is what keeps the
@@ -401,7 +401,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
         }
 
         case 'error': {
-            // Host posts i18n KEYS (+ optional params); raw backend text
+            // Host posts i18n KEYS (+ optional params); raw provider text
             // passes through tOrRaw untouched.
             const value = msg.valueKey ? tf(msg.valueKey, msg.params) : tOrRaw(msg.value ?? '');
             if (state.streamingId) {

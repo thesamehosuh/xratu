@@ -930,8 +930,8 @@ export function App() {
     );
 }
 
-/** Resolve the model's context window using the backend-served table
- *  (longest substring match - mirrors deps.resolve_context_window). */
+/** Resolve the model's context window using the host-served table
+ *  (longest substring match). */
 function resolveWindow(
     table: Record<string, number> | undefined,
     model: string | null

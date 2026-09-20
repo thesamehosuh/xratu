@@ -112,8 +112,8 @@ export interface NotificationItem {
 /** Reasoning-effort levels (Default is encoded as null/absent, never a string). */
 export type ThinkingLevel = 'low' | 'medium' | 'high';
 
-/** A file attached to a chat message.  `id` is UI-local only (never sent to
- *  the backend); `dataBase64` travels with the request but is NOT persisted
+/** A file attached to a chat message.  `id` is UI-local only (never sent);
+ *  `dataBase64` travels with the request but is NOT persisted
  *  into history - only metadata survives for rendering past turns.
  *  WORKSPACE REFERENCES (`path` set): a pointer to a file in the workspace -
  *  `dataBase64` is empty and `size` is 0 until the HOST reads the file at
@@ -195,8 +195,8 @@ export type FromExtensionMessage =
     | { type: 'thinkingHtml'; value: string }
     | { type: 'toolCall'; tool: string; args: string; callId?: string }
     | { type: 'toolResult'; tool: string; output: string; callId?: string }
-    // Mid-run cumulative usage (backend emits after each model round; local
-    // agent per round too) - lets the context meter track tool/thinking
+    // Mid-run cumulative usage (emitted after each model round) - lets the
+    // context meter track tool/thinking
     // growth WHILE the response streams instead of only at fullResponse.
     | { type: 'usage'; usage: TokenUsage | null }
     | {
@@ -236,7 +236,7 @@ export type FromExtensionMessage =
     | { type: 'openSettings' }
     | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number }
     | { type: 'attempting' }
-    /** The backend rejected the request after the composer was cleared -
+    /** The host rejected the request after the composer was cleared -
      *  value/prompt/attachments are echoed back so the user can fix and
      *  retry without re-attaching everything. Host-side rejections arrive
      *  as valueKey, not raw text. */
@@ -338,7 +338,7 @@ export interface SkillView {
 export type StepKind = 'thinking' | 'toolCall' | 'toolResult' | 'text';
 
 /** One item of the session task list ("the list IS the plan"). Mirrors the
- *  host-side TaskListItem (extension/src/taskList.ts) and the backend schema. */
+ *  host-side TaskListItem (extension/src/taskList.ts). */
 export type TaskListStatus = 'pending' | 'in_progress' | 'completed';
 
 export interface TaskListItem {

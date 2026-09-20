@@ -2,8 +2,8 @@
  * Session task list ("the list IS the plan") - shared between the expansion
  * tool executor (xratu_mcp_tools.ts), the host (extension.ts) and the local
  * runtime. The list itself travels in the tool call ARGS (persisted, replayed
- * and parsed by both the webview and the backend); the tool's result is only
- * a short ack. Full-replacement protocol: every call replaces the whole list.
+ * and parsed by both the webview and the host); the tool's result is only a
+ * short ack. Full-replacement protocol: every call replaces the whole list.
  */
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
@@ -72,9 +72,8 @@ export function taskListProgress(items: TaskListItem[]): { done: number; total: 
     };
 }
 
-/** The per-turn reminder appended to the live prompt/system message -
- *  mirrors the backend's `_task_list_reminder` format exactly. Keeps the
- *  model on-track after context compaction and surfaces user edits. */
+/** The per-turn reminder appended to the live prompt/system message. Keeps
+ *  the model on-track after context compaction and surfaces user edits. */
 export function taskListReminderLine(items: TaskListItem[]): string {
     if (!items.length) return '';
     const { done, current } = taskListProgress(items);
