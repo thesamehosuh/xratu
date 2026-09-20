@@ -338,7 +338,8 @@ button {
 }
 
 /* Calendar date on a session row (Jalali in fa). Kept compact and muted so it
-   reads as metadata, and sits immediately after the title. */
+   reads as metadata. It trails the session name (and the workspace path when
+   "All workspaces" is active), i.e. it is the LAST element of the row. */
 .session-row-date {
     flex: 0 0 auto;
     font-size: 10px;
