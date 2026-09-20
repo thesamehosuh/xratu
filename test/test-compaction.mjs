@@ -32,6 +32,7 @@ const {
     estimateRunTokens,
     estimateToolTokens,
     clipForSummary,
+    boundCurrentTurnToolResults,
     HISTORY_TRUNCATION_MARKER,
 } = require('../out/local/localAgent.js');
 
@@ -246,6 +247,63 @@ checkTrue('middle clip keeps tail', clipped.endsWith('A'));
 checkTrue('middle clip marked', clipped.includes('[...clipped...]'));
 checkTrue('small allowance falls back to head clip', clipForSummary('B'.repeat(1000), 100) === 'B'.repeat(100) + '...');
 checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
+
+// --- boundCurrentTurnToolResults: a single huge tool result must be clipped
+// --- to a window-relative budget, since compactMessages cannot touch the
+// --- current turn (regression: one 200k-char terminal result overflowed an
+// --- 8k window and forced recovery had nothing left to drop).
+{
+    const huge = 'x'.repeat(200_000);
+    const msgs = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'run it' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'c1', function: { name: 'run', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'c1', content: huge },
+    ];
+    const changed = boundCurrentTurnToolResults(msgs, 8192, 0);
+    checkTrue('huge result clipped', changed);
+    // perResultCap = floor(8192*3*0.4) = 9830 chars
+    checkTrue('result within per-result cap', msgs[3].content.length <= 9830 + 40);
+    checkTrue('clip is marked', msgs[3].content.includes('[...clipped...]'));
+    checkTrue('clip keeps head', msgs[3].content.startsWith('x'));
+    checkTrue('clip keeps tail', msgs[3].content.endsWith('x'));
+    // History before the last user message is never touched.
+    check('history untouched', msgs[1].content, 'run it');
+}
+
+// --- No-op when everything fits; false + identical content ---
+{
+    const msgs = [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: '' },
+        { role: 'tool', tool_call_id: 'c1', content: 'small output' },
+    ];
+    const changed = boundCurrentTurnToolResults(msgs, 8192, 0);
+    check('small result not clipped (no change)', changed, false);
+    check('small result content intact', msgs[2].content, 'small output');
+}
+
+// --- Total budget: many results are trimmed, oldest first ---
+{
+    const mk = (i) => ({ role: 'tool', tool_call_id: `c${i}`, content: String(i).repeat(6000) });
+    const msgs = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '' },
+        mk(0), mk(1), mk(2), mk(3),
+    ];
+    boundCurrentTurnToolResults(msgs, 4096, 0);
+    // totalBudget = floor(4096*3*0.5) = 6144 chars.
+    const total = msgs.slice(2).reduce((n, m) => n + m.content.length, 0);
+    checkTrue('total under budget', total <= 6144 + 200);
+    // Newest result is preserved longer than the oldest.
+    checkTrue('oldest clipped at least as much as newest', msgs[2].content.length <= msgs[5].content.length);
+}
+
+// --- Tiny windows are left alone (guard) ---
+{
+    const msgs = [{ role: 'user', content: 'x' }, { role: 'tool', tool_call_id: 'c', content: 'y'.repeat(50_000) }];
+    check('sub-1k window is a no-op', boundCurrentTurnToolResults(msgs, 512, 0), false);
+}
 
 console.log(failed === 0 ? '\ncompaction tests: all passed' : `\ncompaction tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

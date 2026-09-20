@@ -653,6 +653,81 @@ export function compactMessages(
     return dropped;
 }
 
+/** ~chars per token used by every estimator in this file. */
+const TOOL_RESULT_CHARS_PER_TOKEN = 3;
+/** Per-result ceiling as a fraction of the window. */
+const TOOL_RESULT_MAX_RATIO = 0.4;
+/** Total current-turn tool-output budget as a fraction of the window. */
+const TOOL_RESULT_TOTAL_RATIO = 0.5;
+/** Never clip a result below this many chars - a clipped stub stays useful. */
+const TOOL_RESULT_MIN_CHARS = 800;
+
+/**
+ * Bound the CURRENT turn's tool results to a window-relative budget.
+ *
+ * `compactMessages` only drops COMPLETE turns before the last user message, so
+ * a single huge tool output (terminal results are capped at 200k chars,
+ * expansion tools at 120k) can overflow a small window on its own and make
+ * forced overflow recovery a no-op. Clip the current turn's tool results
+ * instead: a hard per-result cap first, then the oldest results down toward
+ * the floor until the total fits. The most recent results (the ones the model
+ * is about to reason over) are preserved longest.
+ *
+ * Mutates `messages`; returns true when anything was clipped.
+ */
+export function boundCurrentTurnToolResults(
+    messages: LocalAgentMessage[],
+    windowTokens?: number | null,
+    toolTokens = 0,
+): boolean {
+    if (!windowTokens || windowTokens < 1024) return false;
+
+    let lastUser = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') { lastUser = i; break; }
+    }
+    if (lastUser < 0) return false;
+
+    const idxs: number[] = [];
+    for (let i = lastUser + 1; i < messages.length; i++) {
+        if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
+    }
+    if (!idxs.length) return false;
+
+    const windowChars = windowTokens * TOOL_RESULT_CHARS_PER_TOKEN;
+    const perResultCap = Math.max(TOOL_RESULT_MIN_CHARS, Math.floor(windowChars * TOOL_RESULT_MAX_RATIO));
+    // Tool SCHEMAS also consume the window - subtract them from the budget.
+    const totalBudget = Math.max(
+        perResultCap,
+        Math.floor(windowChars * TOOL_RESULT_TOTAL_RATIO) - toolTokens * TOOL_RESULT_CHARS_PER_TOKEN,
+    );
+
+    let changed = false;
+    let total = 0;
+    for (const i of idxs) {
+        const text = messages[i].content as string;
+        if (text.length > perResultCap) {
+            messages[i] = { ...messages[i], content: clipForSummary(text, perResultCap) };
+            changed = true;
+        }
+        total += (messages[i].content as string).length;
+    }
+    if (total <= totalBudget) return changed;
+
+    // Still over budget: shrink the OLDEST results first.
+    for (const i of idxs) {
+        if (total <= totalBudget) break;
+        const text = messages[i].content as string;
+        if (text.length <= TOOL_RESULT_MIN_CHARS) continue;
+        const target = Math.max(TOOL_RESULT_MIN_CHARS, text.length - (total - totalBudget));
+        if (target >= text.length) continue;
+        messages[i] = { ...messages[i], content: clipForSummary(text, target) };
+        total -= text.length - target;
+        changed = true;
+    }
+    return changed;
+}
+
 // --- AI compaction for the local loop (mirrors the backend's summarizer) ---
 // Mechanical dropping alone discards everything the removed turns contained.
 // Before splicing, the dropped turns are summarized by the user's OWN local
@@ -1000,6 +1075,10 @@ export async function* runLocalAgent(
             };
         };
 
+        // A single huge tool result can exceed the window on its own, and
+        // compaction never touches the current turn - bound it before sending.
+        boundCurrentTurnToolResults(messages, windowTokens, toolTokens);
+
         const requestPromise = requestStreamingCompletion(
             request,
             messages,
@@ -1188,6 +1267,9 @@ export async function* runLocalAgent(
         { role: 'system', content: (messages[0]?.content ?? request.systemPrompt) + ROUND_LIMIT_WRAPUP_NUDGE },
         ...messages.slice(1),
     ];
+    // The wrap-up runs at peak context - bound the current turn's tool output
+    // too, or the nudge itself overflows a small window.
+    boundCurrentTurnToolResults(wrapMessages, windowTokens, toolTokens);
 
     // The wrap-up runs when the conversation is at its largest, so the same
     // one-shot overflow recovery as the main loop applies: on a server-side
