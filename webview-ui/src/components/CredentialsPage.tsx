@@ -540,7 +540,10 @@ export function CredentialsPage({
                                         <ProviderMark provider={preset} />
                                         <span className="saved-credential-copy">
                                             <span className="saved-credential-name" dir="ltr">
-                                                {credential.label || presetLabel(preset)}
+                                                {/* Preset label (localized for the generic
+                                                    "custom" preset); credential.label is a
+                                                    host-generated English fallback only. */}
+                                                {presetLabel(preset) || credential.label}
                                             </span>
                                             <span className="saved-credential-meta" dir="ltr">
                                                 {credential.baseUrl} · {credential.maskedKey}

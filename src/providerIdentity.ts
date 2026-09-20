@@ -14,6 +14,7 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
     ['api.deepseek.com', 'deepseek'],
     ['api.mistral.ai', 'mistral'],
     ['api.x.ai', 'xai'],
+    ['x.ai', 'xai'],
     ['api.perplexity.ai', 'perplexity'],
     ['api.cohere.com', 'cohere'],
     ['api.together.xyz', 'together'],
@@ -41,21 +42,40 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
     ['localhost:8000', 'vllm'],
 ];
 
+// Labels mirror the CredentialsPage presets exactly - a saved credential
+// shows its stored label, so a divergence surfaces as an inconsistent name.
 export const PROVIDER_LABELS: Record<string, string> = {
     openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq', kayaai: 'Kaya AI',
-    deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together',
-    fireworks: 'Fireworks', cerebras: 'Cerebras', anthropic: 'Anthropic',
-    google: 'Google', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
+    deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together AI',
+    fireworks: 'Fireworks AI', cerebras: 'Cerebras', anthropic: 'Anthropic',
+    google: 'Google Gemini', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
     opencode: 'OpenCode Zen', perplexity: 'Perplexity', cohere: 'Cohere',
     nvidia: 'NVIDIA NIM', huggingface: 'Hugging Face', sambanova: 'SambaNova',
     moonshot: 'Moonshot AI', zai: 'Z.AI', vllm: 'vLLM',
     custom: 'Custom',
 };
 
+/** @internal Exposed for tests. Returns the host (hostname[:port]) or null. */
+export function baseUrlHost(baseUrl: string): string | null {
+    const raw = baseUrl.trim().toLowerCase();
+    if (!raw) return null;
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+        return new URL(withScheme).host;
+    } catch {
+        return null;
+    }
+}
+
 export function providerIdForUrl(baseUrl: string): string {
-    const v = baseUrl.toLowerCase();
-    for (const [host, id] of PROVIDER_HOSTS) {
-        if (v.includes(host)) return id;
+    const host = baseUrlHost(baseUrl);
+    if (!host) return 'custom';
+    for (const [fragment, id] of PROVIDER_HOSTS) {
+        // Match the HOST only, on an exact or dot-boundary basis. Matching the
+        // whole URL with `includes` let a path, user-info or lookalike domain
+        // impersonate a provider (proxy.example/api.openai.com, notopenai.com),
+        // and a wrong id makes discovery skip a genuine custom endpoint.
+        if (host === fragment || host.endsWith(`.${fragment}`)) return id;
     }
     return 'custom';
 }

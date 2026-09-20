@@ -51,10 +51,26 @@ for (const [url, id] of PRESETS) {
     check(`${id} https+case`, providerIdForUrl(url.toUpperCase().replace('API.', 'api.')), id);
 }
 
-// --- Labels ---
+// --- Host boundary: a path, user-info or lookalike domain must NOT
+// --- impersonate a provider (a wrong id makes discovery skip a custom URL).
+check('path containing provider host -> custom', providerIdForUrl('https://proxy.example/api.openai.com/v1'), 'custom');
+check('lookalike host -> custom', providerIdForUrl('https://notopenai.com/v1'), 'custom');
+check('userinfo lookalike -> custom', providerIdForUrl('https://api.openai.com@evil.example/v1'), 'custom');
+check('dot-boundary subdomain -> provider', providerIdForUrl('https://foo.api.openai.com/v1'), 'openai');
+
+// --- Legacy generic xAI host still resolves ---
+check('legacy x.ai root -> xai', providerIdForUrl('https://x.ai/v1'), 'xai');
+check('legacy x.ai subdomain -> xai', providerIdForUrl('https://api2.x.ai/v1'), 'xai');
+check('z.ai not mistaken for x.ai', providerIdForUrl('https://api.z.ai/api/paas/v4'), 'zai');
+check('perplexity not mistaken for x.ai', providerIdForUrl('https://api.perplexity.ai'), 'perplexity');
+
+// --- Labels mirror the preset names exactly ---
 check('kaya label', providerLabelForUrl('https://kayaai.ir/api'), 'Kaya AI');
 check('zai label', providerLabelForUrl('https://api.z.ai/api/paas/v4'), 'Z.AI');
 check('nvidia label', providerLabelForUrl('https://integrate.api.nvidia.com/v1'), 'NVIDIA NIM');
+check('together label', providerLabelForUrl('https://api.together.xyz/v1'), 'Together AI');
+check('fireworks label', providerLabelForUrl('https://api.fireworks.ai/inference/v1'), 'Fireworks AI');
+check('google label', providerLabelForUrl('https://generativelanguage.googleapis.com/v1beta/openai/'), 'Google Gemini');
 
 // --- Unknown / custom ---
 check('unknown host -> custom id', providerIdForUrl('https://my-litellm.example.com/v1'), 'custom');
