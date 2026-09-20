@@ -159,18 +159,26 @@ export function App() {
 
     const send = useCallback((msg: ToExtensionMessage) => postMessage(msg), []);
 
-    /** Latest query, so a slow search response for an abandoned query is
-     *  dropped instead of flashing stale results. */
-    const sessionQueryRef = useRef('');
+    /** Monotonic search request id + the latest issued one, so a slow response
+     *  for an abandoned query OR scope is dropped instead of flashing stale
+     *  results (the query text alone can't distinguish a scope change). */
+    const sessionSearchSeq = useRef(0);
+    const sessionSearchLatest = useRef(0);
     // Debounced full-text session search while the picker is open.
     useEffect(() => {
-        sessionQueryRef.current = sessionQuery;
         if (!sessionsOpen || !sessionQuery.trim()) {
+            // Invalidate any in-flight search and drop the results view.
+            sessionSearchLatest.current = ++sessionSearchSeq.current;
             setSessionResults(null);
             return;
         }
+        // Show the searching state immediately; the previous query/scope's
+        // results must not linger during the debounce window.
+        setSessionResults(null);
+        const requestId = ++sessionSearchSeq.current;
+        sessionSearchLatest.current = requestId;
         const handle = setTimeout(() => {
-            send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all' });
+            send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all', requestId });
         }, 200);
         return () => clearTimeout(handle);
     }, [sessionQuery, sessionsOpen, sessionsScope, send]);
@@ -361,8 +369,8 @@ export function App() {
                     setSessionsLoading(false);
                     break;
                 case 'sessionSearchResults':
-                    // Drop stale responses (the query moved on).
-                    if (msg.query === sessionQueryRef.current) setSessionResults(msg.items);
+                    // Drop stale responses (query or scope moved on).
+                    if (msg.requestId === sessionSearchLatest.current) setSessionResults(msg.items);
                     break;
                 case 'yoloMode':
                     setYolo(msg.enabled);

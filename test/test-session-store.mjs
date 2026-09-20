@@ -230,6 +230,17 @@ try {
     check('search no match -> []', (await store.search('no-such-token-xyz')).length, 0);
     check('search scoped to another workspace -> []', (await store.search('login bug', '/somewhere-else')).length, 0);
     check('search within workspace', (await store.search('login bug', ws)).length, loginHits.length);
+    // Metadata fields (role/type/id) must NOT be searchable, or a query like
+    // "assistant" would match every session that has an assistant turn.
+    const meta8 = await store.create(ws);
+    await store.save(meta8.id, {
+        workspace: ws, model: null, summary: null, localHistory: [],
+        uiHistory: [{ role: 'assistant', type: 'chunk', id: 'evt-1', text: 'hello world' }],
+    });
+    check('search ignores metadata fields',
+        (await store.search('assistant')).some((m) => m.id === meta8.id), false);
+    check('search still finds visible text',
+        (await store.search('hello world')).some((m) => m.id === meta8.id), true);
 } finally {
     rmSync(root, { recursive: true, force: true });
 }

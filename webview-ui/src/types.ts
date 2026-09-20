@@ -16,8 +16,9 @@ export type ToExtensionMessage =
      *  confirm-gated webview-side). `all` widens the list beyond the
      *  current workspace. */
     | { type: 'listSessions'; all?: boolean }
-    /** Full-text search across stored sessions (title + transcript). */
-    | { type: 'searchSessions'; query: string; all?: boolean }
+    /** Full-text search across stored sessions (title + transcript).
+     *  `requestId` is echoed back so stale responses can be dropped. */
+    | { type: 'searchSessions'; query: string; all?: boolean; requestId?: number }
     | { type: 'openSession'; id: string }
     | { type: 'renameSession'; id: string; title: string }
     | { type: 'deleteSession'; id: string }
@@ -228,9 +229,9 @@ export type FromExtensionMessage =
     | { type: 'sessionState'; id: string | null; title: string | null }
     /** Response to listSessions - the session-picker panel's contents. */
     | { type: 'sessionList'; items: SessionMeta[]; currentId: string | null }
-    /** Response to searchSessions. `query` echoes the request so the webview
-     *  can drop results for a query the user has already changed. */
-    | { type: 'sessionSearchResults'; query: string; items: SessionMeta[] }
+    /** Response to searchSessions. `requestId` echoes the request so the
+     *  webview can drop results for a query/scope the user already changed. */
+    | { type: 'sessionSearchResults'; query: string; requestId?: number; items: SessionMeta[] }
     | { type: 'byokCredentialError'; value?: string; valueKey?: string; params?: Record<string, string> }
     /** Open the credentials page. `openCard` preselects the matching
      *  provider (echoed from openCredentials.target). */

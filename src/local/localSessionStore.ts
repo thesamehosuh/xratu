@@ -43,21 +43,31 @@ export interface LocalSessionMeta {
 /** Cap on the transcript text scanned per session during a search. */
 const SEARCH_SCAN_CHARS = 200_000;
 
+/** Event fields that carry visible transcript text. Deliberately EXCLUDES
+ *  metadata (`role`, `type`, `id`, `tool`, …) - otherwise searching for
+ *  "assistant" would match every session that has an assistant turn. */
+const SEARCH_TEXT_FIELDS = ['text', 'output', 'content', 'value'];
+
 /**
  * True when the session's visible transcript contains `needle` (lowercased).
- * Pulls only the string fields we know carry text instead of stringifying the
- * whole history, which can be large.
+ * Only the known text fields are examined, and each string is sliced to the
+ * remaining scan budget BEFORE lowercasing, so a single huge field cannot
+ * blow past the per-session cap.
  */
 function transcriptMatches(uiHistory: unknown, needle: string): boolean {
     if (!Array.isArray(uiHistory) || !uiHistory.length) return false;
     let scanned = 0;
     for (const event of uiHistory) {
         if (!event || typeof event !== 'object') continue;
-        for (const value of Object.values(event as Record<string, unknown>)) {
-            if (typeof value !== 'string') continue;
-            scanned += value.length;
-            if (value.toLowerCase().includes(needle)) return true;
-            if (scanned >= SEARCH_SCAN_CHARS) return false;
+        const record = event as Record<string, unknown>;
+        for (const field of SEARCH_TEXT_FIELDS) {
+            const value = record[field];
+            if (typeof value !== 'string' || !value) continue;
+            const remaining = SEARCH_SCAN_CHARS - scanned;
+            if (remaining <= 0) return false;
+            const chunk = value.length > remaining ? value.slice(0, remaining) : value;
+            scanned += chunk.length;
+            if (chunk.toLowerCase().includes(needle)) return true;
         }
     }
     return false;

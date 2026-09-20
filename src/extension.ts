@@ -2534,7 +2534,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             await this._listSessions(!!data.all);
                             break;
                         case 'searchSessions':
-                            await this._searchSessions(String(data.query ?? ''), !!data.all);
+                            await this._searchSessions(
+                                String(data.query ?? ''),
+                                !!data.all,
+                                typeof data.requestId === 'number' ? data.requestId : undefined,
+                            );
                             break;
                         case 'openSession':
                             await this._openSession(data.id);
@@ -3289,10 +3293,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Full-text search across stored sessions (session-picker search box). */
-    private async _searchSessions(query: string, all: boolean): Promise<void> {
+    private async _searchSessions(query: string, all: boolean, requestId?: number): Promise<void> {
         const metas = await this._localSessionStore.search(query, all ? undefined : this._localWorkspaceKey());
         const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt }));
-        this._view?.webview.postMessage({ type: 'sessionSearchResults', query, items });
+        this._view?.webview.postMessage({ type: 'sessionSearchResults', query, requestId, items });
     }
 
     /** Session transitions (switch/create) are dispatched concurrently by
