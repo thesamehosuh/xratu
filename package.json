@@ -117,7 +117,8 @@
 			},
 			{
 				"command": "xratu.attachFromExplorer",
-				"title": "%command.attachFromExplorer.title%"
+				"title": "%command.attachFromExplorer.title%",
+				"category": "%command.category%"
 			}
 		],
 		"menus": {

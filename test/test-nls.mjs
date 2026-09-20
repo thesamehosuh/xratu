@@ -12,8 +12,10 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { fileURLToPath } from 'url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+// fileURLToPath: `.pathname` yields `/D:/...` on Windows and double-drives.
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const read = (name) => JSON.parse(readFileSync(join(ROOT, name), 'utf8'));
 
 const pkg = read('package.json');

@@ -14,8 +14,10 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { fileURLToPath } from 'url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+// fileURLToPath: `.pathname` yields `/D:/...` on Windows and double-drives.
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SCAN_DIRS = ['src', 'webview-ui/src', 'assets', 'test'];
 const SCAN_ROOT_FILES = ['README.fa.md', 'package.nls.fa.json'];
 const EXTS = ['.ts', '.tsx', '.css', '.md', '.json', '.yml', '.mjs'];
