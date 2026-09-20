@@ -41,7 +41,7 @@ import {
 import type { ApprovalPayload, ChatMessage, ConnectionStatus, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { t, getLocale } from '../i18n';
-import { formatClockTime } from '../datetime';
+import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
 
 function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage['retryStatus']> }) {
@@ -1846,8 +1846,8 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                             {formatCost(message.usage.cost)}
                         </span>
                     )}
-                    <span className="msg-meta">
-                        {copied ? t('copiedMsg') : formatClockTime(message.createdAt)}
+                    <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>
+                        {copied ? t('copiedMsg') : formatMessageTimestamp(message.createdAt)}
                     </span>
                 </div>
             )}
@@ -1885,8 +1885,8 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                             <History size={13} />
                         </button>
                     )}
-                    <span className="msg-meta">
-                        {formatClockTime(message.createdAt)}
+                    <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>
+                        {formatMessageTimestamp(message.createdAt)}
                     </span>
                 </div>
             )}

@@ -323,6 +323,17 @@ button {
     color: var(--vscode-descriptionForeground);
 }
 
+/* Calendar date on a session row (Jalali in fa). Kept compact and muted so it
+   reads as metadata, not part of the title. */
+.session-row-date {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
 .session-row-action {
     opacity: 0;
     transition: opacity 0.12s ease, color 0.15s ease, background 0.15s ease;

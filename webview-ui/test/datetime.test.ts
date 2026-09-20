@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { formatClockTime } from '../src/datetime';
+import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp } from '../src/datetime';
 import { setLocale } from '../src/i18n';
 
 // A LOCAL 13:05 - deliberately past noon so a 12-hour clock would render a
@@ -25,6 +25,24 @@ const en = formatClockTime(ts);
 // The English branch delegates to the runtime locale - assert delegation, not
 // a digit script, so a non-Latin host locale doesn't fail the suite.
 assert.equal(en, date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+// Jalali (Solar Hijri) calendar for Persian: 20 Sep 2026 falls in 1405.
+setLocale('fa');
+const jalali = formatCalendarDate(new Date(2026, 8, 20, 12, 5).getTime());
+assert.ok(/[\u06F0-\u06F9]/.test(jalali), `Jalali date should use Persian digits, got ${jalali}`);
+assert.ok(jalali.includes('۱۴۰۵'), `expected the Jalali year 1405, got ${jalali}`);
+
+// Message timestamp: clock only for today, date + clock for older messages.
+const now = Date.now();
+assert.equal(formatMessageTimestamp(now), formatClockTime(now), 'today shows the clock only');
+const older = now - 30 * 86_400_000;
+const olderText = formatMessageTimestamp(older);
+assert.ok(olderText.includes(formatCalendarDate(older)), `older messages carry the date, got ${olderText}`);
+assert.ok(olderText.includes(formatClockTime(older)), `older messages carry the clock, got ${olderText}`);
+
+// Full timestamp (tooltip) always has both.
+assert.ok(formatFullTimestamp(older).includes(formatCalendarDate(older)));
+assert.ok(formatFullTimestamp(older).includes(formatClockTime(older)));
 
 // Restore the Persian-first default for any later test in the bundle.
 setLocale('fa');

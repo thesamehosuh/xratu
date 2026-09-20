@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { ConnectionStatus as ConnStatus, SessionMeta } from '../types';
 import { t } from '../i18n';
+import { formatCalendarDate, formatFullTimestamp } from '../datetime';
 
 export type SessionsScope = 'workspace' | 'all';
 
@@ -152,9 +153,13 @@ export function Toolbar({
                         className="session-row-main"
                         onClick={() => { if (item.id !== currentSessionId) onOpenSession(item.id); }}
                         disabled={item.id === currentSessionId}
+                        title={formatFullTimestamp(item.updatedAt)}
                     >
                         <span className="session-row-title" dir="auto">{item.title || t('sessionsUntitled')}</span>
                         {showWorkspace && <span className="session-row-ws" dir="auto">{item.workspace}</span>}
+                        {/* Jalali date in fa (locale calendar in en) - the group
+                            header only says "Today/Yesterday/…". */}
+                        <span className="session-row-date" dir="auto">{formatCalendarDate(item.updatedAt)}</span>
                     </button>
                     <button
                         type="button"

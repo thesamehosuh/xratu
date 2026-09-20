@@ -22,3 +22,39 @@ export function formatClockTime(ts: number): string {
     }
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
+/**
+ * Calendar date for a timestamp. Persian uses the **Jalali (Solar Hijri)**
+ * calendar via `fa-IR-u-ca-persian` (Persian digits included); English uses
+ * the runtime locale's calendar.
+ */
+export function formatCalendarDate(ts: number): string {
+    const date = new Date(ts);
+    if (getLocale() === 'fa') {
+        return new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+        }).format(date);
+    }
+    return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** Date + time, for tooltips (exact when a relative label is shown inline). */
+export function formatFullTimestamp(ts: number): string {
+    return `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
+}
+
+/**
+ * Message timestamp: just the clock for today, date + clock for older
+ * messages. Chat UIs avoid repeating today's date on every bubble, but an
+ * older message with only a time is ambiguous.
+ */
+export function formatMessageTimestamp(ts: number): string {
+    const date = new Date(ts);
+    const now = new Date();
+    const sameDay = date.getFullYear() === now.getFullYear()
+        && date.getMonth() === now.getMonth()
+        && date.getDate() === now.getDate();
+    return sameDay ? formatClockTime(ts) : `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
+}
