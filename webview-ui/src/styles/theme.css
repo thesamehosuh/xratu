@@ -4659,6 +4659,10 @@ pre.tool-cmd {
 
 .cred-search-wrap.combobox input {
     padding-inline-start: 27px;
+    /* The filter query is provider names/URLs (Latin); lock the value to LTR
+       while the Persian placeholder follows the page direction (see the RTL
+       placeholder rule at the end of this file). */
+    direction: ltr;
 }
 
 .cred-provider-menu {

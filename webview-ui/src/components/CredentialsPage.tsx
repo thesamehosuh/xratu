@@ -302,7 +302,6 @@ export function CredentialsPage({
                 <Search size={13} aria-hidden="true" />
                 <input
                     type="text"
-                    dir="ltr"
                     role="combobox"
                     aria-expanded={providerOpen}
                     aria-controls="cred-provider-listbox"
