@@ -23,6 +23,7 @@ import { BACKEND_SYSTEM_PROMPT } from './systemPrompt';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { MCP_REGISTRY } from './mcpRegistry';
+import { providerIdForUrl, providerLabelForUrl } from './providerIdentity';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** External MCP manager + config store - module-level so deactivate() can
@@ -1201,35 +1202,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** "on-machine runtime" heuristic - see _isLikelyLocalUrl. */
     private _providerIdForUrl(baseUrl: string): string {
-        const v = baseUrl.toLowerCase();
-        if (v.includes('openai.com')) return 'openai';
-        if (v.includes('openrouter.ai')) return 'openrouter';
-        if (v.includes('groq.com')) return 'groq';
-        if (v.includes('deepseek.com')) return 'deepseek';
-        if (v.includes('mistral.ai')) return 'mistral';
-        if (v.includes('together.xyz')) return 'together';
-        if (v.includes('fireworks.ai')) return 'fireworks';
-        if (v.includes('cerebras.ai')) return 'cerebras';
-        if (v.includes('anthropic.com')) return 'anthropic';
-        if (v.includes('googleapis.com')) return 'google';
-        if (v.includes('generativelanguage.googleapis.com')) return 'google';
-        if (v.includes('x.ai')) return 'xai';
-        if (v.includes('kayaai.ir')) return 'kayaai';
-        if (v.includes('api.groq.com')) return 'groq';
-        if (v.includes('localhost:11434')) return 'ollama';
-        if (v.includes('localhost:1234')) return 'lmstudio';
-        return 'custom';
+        return providerIdForUrl(baseUrl);
     }
 
     private _providerLabelForUrl(baseUrl: string): string {
-        const labels: Record<string, string> = {
-            openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq', kayaai: 'Kaya AI',
-            deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together',
-            fireworks: 'Fireworks', cerebras: 'Cerebras', anthropic: 'Anthropic',
-            google: 'Google', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
-            custom: 'Custom',
-        };
-        return labels[this._providerIdForUrl(baseUrl)] ?? 'Custom';
+        return providerLabelForUrl(baseUrl);
     }
 
     private _maskApiKey(apiKey: string): string {
