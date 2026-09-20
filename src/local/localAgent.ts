@@ -1066,6 +1066,15 @@ function makeGoogleHeaders(apiKey?: string | null): Headers {
     return headers;
 }
 
+/** Best-effort MIME type from a URL's extension (Google's fileData needs one). */
+function guessImageMime(url: string): string {
+    const path = url.split(/[?#]/)[0].toLowerCase();
+    if (path.endsWith('.png')) return 'image/png';
+    if (path.endsWith('.webp')) return 'image/webp';
+    if (path.endsWith('.gif')) return 'image/gif';
+    return 'image/jpeg';
+}
+
 function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
     if (typeof content === 'string') return content ? [{ text: content }] : [];
     if (!Array.isArray(content)) return [];
@@ -1075,7 +1084,13 @@ function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
             parts.push({ text: part.text });
         } else if (part.type === 'image_url' && part.image_url?.url) {
             const match = /^data:([^;]+);base64,(.+)$/i.exec(part.image_url.url);
-            if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            if (match) {
+                parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            } else if (/^https?:\/\//i.test(part.image_url.url)) {
+                // Remote images can't be inlined; hand Google the URI (it
+                // fetches/infer the type) instead of silently dropping it.
+                parts.push({ fileData: { fileUri: part.image_url.url, mimeType: guessImageMime(part.image_url.url) } });
+            }
         }
     }
     return parts;
