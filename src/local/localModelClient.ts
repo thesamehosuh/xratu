@@ -117,7 +117,16 @@ export async function probeLocalEndpoint(
     }
 
     // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    const openai = await fetchJson(`${normalizeBaseUrl(baseUrl)}/models`, signal, probeTimeoutMs, apiKey);
+    // A malformed base URL must keep probeLocalEndpoint's "unreachable -> null"
+    // contract - normalizeBaseUrl throws on invalid input, and one throw here
+    // would reject the whole discoverLocalRuntimes Promise.all.
+    let modelsUrl: string;
+    try {
+        modelsUrl = `${normalizeBaseUrl(baseUrl)}/models`;
+    } catch {
+        return null;
+    }
+    const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey);
     if (openai && Array.isArray(openai.data)) {
         return {
             models: openai.data.map((m: any) => ({

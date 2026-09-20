@@ -35,5 +35,11 @@ export function normalizeBaseUrl(value: string): string {
     if (ROOT_BASE_HOSTS.has(parsed.hostname.toLowerCase())) {
         return raw;
     }
+    // Append /v1 to the PATH, not the raw string, so a query string or
+    // fragment isn't pushed behind the suffix (e.g. `?tenant=foo`).
+    if (parsed.search || parsed.hash) {
+        parsed.pathname = '/v1';
+        return parsed.toString();
+    }
     return `${raw}/v1`;
 }

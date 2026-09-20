@@ -53,6 +53,10 @@ check('custom root + slash', normalizeBaseUrl('https://my-litellm.example.com/')
 // --- Trailing slashes are stripped from rooted paths ---
 check('rooted path + slash', normalizeBaseUrl('https://host/openai/v1/'), 'https://host/openai/v1');
 
+// --- Query strings are preserved, not pushed behind the suffix ---
+check('bare origin + query', normalizeBaseUrl('https://example.com?tenant=foo'), 'https://example.com/v1?tenant=foo');
+check('rooted path + query untouched', normalizeBaseUrl('https://host/openai/v1?x=1'), 'https://host/openai/v1?x=1');
+
 // --- Invalid input ---
 checkThrows('rejects non-http scheme', () => normalizeBaseUrl('ftp://example.com'));
 checkThrows('rejects malformed URL', () => normalizeBaseUrl('https://'));
