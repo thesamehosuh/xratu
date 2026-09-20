@@ -1354,9 +1354,15 @@ function escapeHtml(s: string): string {
  *  patterns the JS engine can't express - display-only highlighting. */
 const SHIKI_ENGINE = createJavaScriptRegexEngine({ forgiving: true });
 
-/** Catppuccin Mocha - soft pastel token palette (lavender keywords, blue
- *  functions, peach params) on a dark base; flashy but easy on the eyes. */
-const SHIKI_THEME = 'catppuccin-mocha';
+/** Match the host code blocks: same github pair, picked from the VS Code
+ *  theme the webview is rendered under (body carries vscode-light/-dark). */
+const SHIKI_DARK_THEME = 'github-dark';
+const SHIKI_LIGHT_THEME = 'github-light';
+
+function currentShikiTheme(): string {
+    if (typeof document === 'undefined') return SHIKI_DARK_THEME;
+    return document.body?.classList.contains('vscode-light') ? SHIKI_LIGHT_THEME : SHIKI_DARK_THEME;
+}
 
 function useHighlightedCode(code: string, lang: string): string[] {
     const [highlighted, setHighlighted] = useState<string[]>([]);
@@ -1365,14 +1371,15 @@ function useHighlightedCode(code: string, lang: string): string[] {
             setHighlighted([]);
             return;
         }
+        const theme = currentShikiTheme();
         let cancelled = false;
         getSingletonHighlighter({
-            themes: [SHIKI_THEME],
+            themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME],
             langs: [lang === 'text' ? 'plaintext' : lang],
             engine: SHIKI_ENGINE,
         }).then((h) => {
             if (cancelled) return;
-            const html = h.codeToHtml(code, { lang, theme: SHIKI_THEME });
+            const html = h.codeToHtml(code, { lang, theme });
             const match = html.match(/<code>([\s\S]*?)<\/code>/);
             if (!match) {
                 setHighlighted([]);
