@@ -3211,6 +3211,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Reset the per-session ledgers. Callers own cancel + epoch bump. */
     private _resetSessionLedgers(): void {
         this._sessionId = null;
+        // A new conversation gets a fresh OpenCode session id.
+        this._ephemeralSessionId = null;
         this._history = [];
         this._localHistory = [];
         this._sessionSummary = null;
@@ -3371,6 +3373,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const meta = await this._localSessionStore.findCurrent(this._localWorkspaceKey(), preferred);
         if (!meta) {
             this._sessionId = null;
+            this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
             this._sessionSummary = null;
@@ -3380,6 +3383,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const snapshot = await this._localSessionStore.load(meta.id);
         if (!snapshot) {
             this._sessionId = null;
+            this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
             this._sessionSummary = null;
