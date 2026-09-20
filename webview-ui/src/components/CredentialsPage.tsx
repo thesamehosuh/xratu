@@ -52,7 +52,7 @@ interface Preset {
     label: string;
     /** i18n key overriding `label` (resolved at render so locale flips apply). */
     labelKey?: StringKey;
-    group: 'popular' | 'other' | 'local';
+    group: 'popular' | 'iranian' | 'other' | 'local';
     baseUrl: string;
     hint?: string;
     /** i18n key overriding `hint`. */
@@ -63,11 +63,18 @@ interface Preset {
 const PRESETS: Preset[] = [
     { id: 'openai', label: 'OpenAI', group: 'popular', baseUrl: 'https://api.openai.com/v1' },
     { id: 'openrouter', label: 'OpenRouter', group: 'popular', baseUrl: 'https://openrouter.ai/api/v1' },
-    { id: 'kayaai', label: 'Kaya AI', group: 'popular', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
     { id: 'opencode', label: 'OpenCode Zen', group: 'popular', baseUrl: 'https://opencode.ai/zen/v1' },
     { id: 'groq', label: 'Groq', group: 'popular', baseUrl: 'https://api.groq.com/openai/v1' },
     { id: 'deepseek', label: 'DeepSeek', group: 'popular', baseUrl: 'https://api.deepseek.com' },
     { id: 'mistral', label: 'Mistral', group: 'popular', baseUrl: 'https://api.mistral.ai/v1' },
+    // Iranian providers - no VPN required, rial payment. Base URLs are
+    // editable in the form; verify against the provider's dashboard.
+    { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
+    { id: 'avalai', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
+    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: 'https://api.metisai.ir/openai/v1', hintKey: 'credIranianHint' },
+    { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: 'https://ai.liara.ir/api/v1', hintKey: 'credIranianHint' },
+    { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: 'https://api.arvancloud.ir/ai/v1', hintKey: 'credIranianHint' },
+    { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: 'https://api.navaan.ai/v1', hintKey: 'credIranianHint' },
     { id: 'xai', label: 'xAI', group: 'other', baseUrl: 'https://api.x.ai/v1' },
     { id: 'perplexity', label: 'Perplexity', group: 'other', baseUrl: 'https://api.perplexity.ai' },
     { id: 'cohere', label: 'Cohere', group: 'other', baseUrl: 'https://api.cohere.com/compatibility/v1' },
@@ -87,6 +94,7 @@ const PRESETS: Preset[] = [
 ];
 
 const POPULAR = PRESETS.filter((p) => p.group === 'popular');
+const IRANIAN = PRESETS.filter((p) => p.group === 'iranian');
 
 /** Display label/hint, honoring the i18n key overrides. */
 function presetLabel(p: Preset): string {
@@ -388,6 +396,25 @@ export function CredentialsPage({
                         <span className="prov-label">{presetLabel(p)}</span>
                     </button>
                 ))}
+            </div>
+
+            <div className="cred-provider-section">
+                <span className="cred-provider-section-label">{t('credIranian')}</span>
+                <div className="cred-providers-inline" role="radiogroup" aria-label={t('credIranian')}>
+                    {IRANIAN.map((p) => (
+                        <button
+                            key={p.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={presetId === p.id}
+                            className={`prov-card-inline${presetId === p.id ? ' selected' : ''}`}
+                            onClick={() => pick(p.id)}
+                        >
+                            <span className="prov-label">{presetLabel(p)}</span>
+                        </button>
+                    ))}
+                </div>
+                <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
             </div>
 
             <div className="cred-form-provider" dir="ltr">
