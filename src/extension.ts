@@ -3309,7 +3309,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // the pendingTurn below so it can never restore twice.
             const pt = snapshot.pendingTurn;
             const restoredEvents: any[] = [];
-            if (pt.thinking) restoredEvents.push({ type: 'thinking', content: pt.thinking });
+            // Legacy snapshots stored reasoning only on the side (pt.thinking);
+            // newer ones record it as an ordered event inside pt.events.
+            // Prepending the side copy when an event already exists would
+            // duplicate (and misorder) the reasoning pill.
+            const hasThinkingEvent = (pt.events ?? []).some((e: any) => e?.type === 'thinking');
+            if (pt.thinking && !hasThinkingEvent) {
+                restoredEvents.push({ type: 'thinking', content: pt.thinking });
+            }
             restoredEvents.push(...(pt.events ?? []).map(trimDisplayEvent));
             if (pt.text) restoredEvents.push({ type: 'result', persian_explanation: pt.text });
             this._history.push({
