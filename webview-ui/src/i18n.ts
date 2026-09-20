@@ -148,6 +148,8 @@ const fa = {
     editSave: 'ارسال دوباره',
     editCancel: 'لغو',
     editRewindHint: 'ورک اسپیس به قبل از همین پیام برمیگردد و پیام دوباره ارسال میشود.',
+    restoreCheckpoint: 'بازیابی فایل ها',
+    restoreCheckpointHint: 'فایل ها را به وضعیت قبل از همین پیام برگردان (فقط فایل ها یا فایل ها و گفتگو).',
     steeredBadge: 'فرستاده در حین اجرا (مدل این پیام را دریافت کرد)',
     regenerateAria: 'تولید دوباره پاسخ',
     thinkingActive: 'در حال فکر کردن…',
@@ -369,6 +371,9 @@ const fa = {
     credLocal: 'محلی',
     credOpenAICompatible: 'سازگار با OpenAI API',
     kayaHint: 'سرویس ایرانی؛ بدون نیاز به فیلترشکن، پرداخت ریالی',
+    credIranian: 'ارائه دهنده های ایرانی',
+    credIranianHint: 'بدون نیاز به فیلترشکن، پرداخت ریالی. آدرس سرویس را از پنل ارائه دهنده بررسی کنید.',
+    credIranianUrlHint: 'آدرس سرویس مخصوص حساب شماست؛ آن را از پنل ارائه دهنده کپی کنید.',
     credActive: 'فعال',
     credDelete: 'حذف اتصال',
     credDeleteConfirm: 'برای تایید دوباره بزنید',
@@ -454,6 +459,13 @@ const fa = {
     localUnreachableDetail: 'اتصال به سرور محلی برقرار نشد: {detail}',
     insecureEndpointHttp: 'کلید API هرگز از طریق HTTP رمزنگاری نشده ارسال نمیشود. برای سرویس های غیرمحلی از آدرس HTTPS استفاده کنید؛ سرویس های روی همین سیستم یا شبکه محلی میتوانند بدون کلید بمانند.',
     checkpointRestorePlaceholder: 'بازیابی فایل ها به این نقطه (وضعیت فعلی هم قبلش ذخیره میشود)',
+    // Mirrors src/uiStrings.ts - these resolve in the in-app notification
+    // banner (confirmBanner posts valueKey to the webview).
+    checkpointScopeConfirm: 'چه چیزی بازیابی شود؟ وضعیت فعلی اول ذخیره میشود.',
+    checkpointScopeFiles: 'فقط فایل ها',
+    checkpointScopeFilesAndChat: 'فایل ها و گفتگو',
+    checkpointEmptySeed: 'این نوبت با ورک اسپیس خالی شروع شده بود؛ فایلی برای بازیابی نیست.',
+    checkpointTurnGone: 'این نوبت دیگر در تاریخچه نیست؛ بازیابی انجام نشد.',
 
     // Runtime / free-mode labels
 
@@ -573,6 +585,8 @@ const en: Record<keyof typeof fa, string> = {
     editSave: 'Resend',
     editCancel: 'Cancel',
     editRewindHint: 'The workspace rewinds to before this message, then the message is sent again.',
+    restoreCheckpoint: 'Restore files',
+    restoreCheckpointHint: 'Restore files to before this message (files only, or files and the conversation).',
     steeredBadge: 'Sent while running - the model received this message',
     regenerateAria: 'Regenerate response',
     thinkingActive: 'Thinking…',
@@ -792,6 +806,9 @@ const en: Record<keyof typeof fa, string> = {
     credLocal: 'Local',
     credOpenAICompatible: 'OpenAI-compatible API',
     kayaHint: 'Iranian provider; no VPN needed, pay in rial',
+    credIranian: 'Iranian providers',
+    credIranianHint: 'No VPN needed, pay in rial. Verify the service URL in the provider dashboard.',
+    credIranianUrlHint: 'The service URL is specific to your account; copy it from the provider dashboard.',
     credActive: 'Active',
     credDelete: 'Delete connection',
     credDeleteConfirm: 'Click again to confirm',
@@ -871,6 +888,11 @@ const en: Record<keyof typeof fa, string> = {
     localUnreachableDetail: "Couldn't reach the local server: {detail}",
     insecureEndpointHttp: 'API keys are never sent over unencrypted HTTP. Use an HTTPS URL for remote providers; runtimes on this machine or your local network can stay on HTTP without a key.',
     checkpointRestorePlaceholder: 'Restore files to this checkpoint (current state is saved first)',
+    checkpointScopeConfirm: 'What should be restored? The current state is saved first.',
+    checkpointScopeFiles: 'Files only',
+    checkpointScopeFilesAndChat: 'Files and conversation',
+    checkpointEmptySeed: 'This turn started with an empty workspace; there are no files to restore.',
+    checkpointTurnGone: 'That turn is no longer in the history; nothing was restored.',
 
     // Runtime / free-mode labels
 

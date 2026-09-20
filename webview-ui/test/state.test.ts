@@ -310,5 +310,31 @@ const snap2 = JSON.stringify(s);
 s = reduceChat(s, M('taskListState', { tasks: [{ label: 'a', status: 'pending' }] }));
 ok(JSON.stringify(s) === snap2, 'taskListState does not mutate chat state');
 
+// 24. userCheckpoint attaches a sha to the userIndex-th user bubble; replay
+//     carries the sha via restoreUser.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'first' }));
+s = reduceChat(s, M('restoreUser', { value: 'second' }));
+s = reduceChat(s, M('userCheckpoint', { userIndex: 1, sha: 'abc123' }));
+ok(s.messages[0].cp === undefined, 'userCheckpoint leaves other turns untouched');
+ok(s.messages[1].cp === 'abc123', 'userCheckpoint attaches the sha to the right bubble');
+s = reduceChat(s, M('restoreUser', { value: 'third', cp: 'def456' }));
+ok(s.messages[2].cp === 'def456', 'restoreUser carries the checkpoint sha on replay');
+
+// 25. truncateFromUser rewinds to BEFORE the userIndex-th user message.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'a' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('fullResponse', { persian: 'A' }));
+s = reduceChat(s, M('restoreUser', { value: 'b' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('fullResponse', { persian: 'B' }));
+ok(s.messages.filter((m) => m.role === 'user').length === 2, 'two user turns before rewind');
+s = reduceChat(s, M('truncateFromUser', { userIndex: 1 }));
+ok(
+    s.messages.filter((m) => m.role === 'user').length === 1 && s.messages[0].text === 'a',
+    'rewind drops the target turn and everything after'
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

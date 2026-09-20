@@ -19,6 +19,8 @@ interface MessageListProps {
     /** Load a user message into the composer card for editing (sending
      *  from the composer rewinds + resends). */
     onEditMessage?: (userIndex: number, value: string) => void;
+    /** Restore workspace files to a turn's shadow checkpoint. */
+    onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** A run is in flight - footer actions hide while true. */
     busy?: boolean;
     /** Connection status - drives corner-bracket color on bubbles. */
@@ -48,7 +50,7 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; fileP
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, busy, conn, setupMode, onOpenCredentials, activeFile, taskList },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, busy, conn, setupMode, onOpenCredentials, activeFile, taskList },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -128,6 +130,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onApprovalDecision={onApprovalDecision}
                     onRegenerate={onRegenerate}
                     onEditMessage={onEditMessage}
+                    onRestoreCheckpoint={onRestoreCheckpoint}
                     userIndex={userIndexOf.get(m.id)}
                     isLastAssistant={m.id === lastAssistantId}
                     busy={busy}

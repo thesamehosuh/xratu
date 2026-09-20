@@ -25,6 +25,11 @@ const PRESETS = [
     ['https://api.openai.com/v1', 'openai'],
     ['https://openrouter.ai/api/v1', 'openrouter'],
     ['https://kayaai.ir/api', 'kayaai'],
+    ['https://api.avalai.ir/v1', 'avalai'],
+    ['https://api.metisai.ir/openai/v1', 'metis'],
+    ['https://ai.liara.ir/api/v1', 'liara'],
+    ['https://api.arvancloud.ir/ai/v1', 'arvan'],
+    ['https://api.navaan.ai/v1', 'navaan'],
     ['https://opencode.ai/zen/v1', 'opencode'],
     ['https://api.groq.com/openai/v1', 'groq'],
     ['https://api.deepseek.com', 'deepseek'],
@@ -66,6 +71,8 @@ check('perplexity not mistaken for x.ai', providerIdForUrl('https://api.perplexi
 
 // --- Labels mirror the preset names exactly ---
 check('kaya label', providerLabelForUrl('https://kayaai.ir/api'), 'Kaya AI');
+check('avalai label', providerLabelForUrl('https://api.avalai.ir/v1'), 'Avalai');
+check('navaan label', providerLabelForUrl('https://api.navaan.ai/v1'), 'Navaan');
 check('zai label', providerLabelForUrl('https://api.z.ai/api/paas/v4'), 'Z.AI');
 check('nvidia label', providerLabelForUrl('https://integrate.api.nvidia.com/v1'), 'NVIDIA NIM');
 check('together label', providerLabelForUrl('https://api.together.xyz/v1'), 'Together AI');

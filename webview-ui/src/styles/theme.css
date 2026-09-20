@@ -3877,6 +3877,24 @@ pre.tool-cmd {
     flex-wrap: wrap;
 }
 
+.cred-provider-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.cred-provider-section-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-provider-section-hint {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
+}
+
 .prov-card-inline {
     flex: 0 0 auto;
     min-width: 0;

@@ -37,6 +37,11 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
     ['cerebras.ai', 'cerebras'],
     ['anthropic.com', 'anthropic'],
     ['kayaai.ir', 'kayaai'],
+    ['api.avalai.ir', 'avalai'],
+    ['api.metisai.ir', 'metis'],
+    ['ai.liara.ir', 'liara'],
+    ['api.arvancloud.ir', 'arvan'],
+    ['api.navaan.ai', 'navaan'],
     ['localhost:11434', 'ollama'],
     ['localhost:1234', 'lmstudio'],
     ['localhost:8000', 'vllm'],
@@ -52,6 +57,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
     opencode: 'OpenCode Zen', perplexity: 'Perplexity', cohere: 'Cohere',
     nvidia: 'NVIDIA NIM', huggingface: 'Hugging Face', sambanova: 'SambaNova',
     moonshot: 'Moonshot AI', zai: 'Z.AI', vllm: 'vLLM',
+    avalai: 'Avalai', metis: 'Metis AI', liara: 'Liara AI',
+    arvan: 'ArvanCloud AI', navaan: 'Navaan',
     custom: 'Custom',
 };
 
