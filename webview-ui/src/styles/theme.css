@@ -6067,8 +6067,9 @@ button.mcp-row-main:hover strong {
     transform: scaleY(-1);
 }
 
-/* Directional glyphs (send arrow, reply corner) must mirror in RTL so they
-   point along the reading direction - lucide has no pre-mirrored variants. */
+/* Directional glyphs that must mirror in RTL so they point along the reading
+   direction (lucide has no pre-mirrored variants). The send arrow is
+   deliberately NOT in this set - it reads correctly unmirrored. */
 [dir='rtl'] .rtl-flip {
     transform: scaleX(-1);
 }
