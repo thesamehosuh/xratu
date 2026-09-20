@@ -177,6 +177,10 @@ const IMAGE_FORMAT_ERROR_RE = /must be a base64|base64 encoded image|unable to d
  *  deterministic overflow-recovery compaction + single retry. */
 export const CONTEXT_OVERFLOW_RE = /context length|context window|exceeds the available context|input length exceeds|maximum context length|prompt is too long|reduce the length of the messages|too many input tokens/i;
 
+/** A 400 that specifically rejects the non-standard `stream_options` field -
+ *  strict OpenAI-compatible servers do this; retry once without it. */
+export const STREAM_OPTIONS_REJECT_RE = /stream_options|include_usage|unrecognized|unknown (field|parameter|argument)|extra fields|not permitted|unsupported (field|parameter)/i;
+
 function toUserContent(request: LocalAgentRequest, imageFormat: ImageUrlFormat): LocalAgentMessage['content'] {
     if (!request.attachments?.length) return request.userText;
 
@@ -336,14 +340,30 @@ async function requestStreamingCompletion(
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
 
-    let response: Response;
-    try {
-        response = await fetch(url, withDispatcher({
+    const send = (payload: Record<string, unknown>): Promise<Response> =>
+        fetch(url, withDispatcher({
             method: 'POST',
             headers: makeHeaders(request.apiKey),
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
             signal: controller.signal,
         }, request.dispatcher));
+
+    let response: Response;
+    try {
+        response = await send(body);
+        // Strict OpenAI-compatible servers reject the non-standard
+        // `stream_options` field outright. Flip it off ONCE and retry rather
+        // than failing the whole turn; usage then comes from the final chunk
+        // if the server sends it anyway.
+        if (!response.ok && response.status === 400 && body.stream_options) {
+            const text = await response.text().catch(() => '');
+            if (STREAM_OPTIONS_REJECT_RE.test(text)) {
+                delete body.stream_options;
+                response = await send(body);
+            } else {
+                throw new Error(`Model request failed (400): ${text.slice(0, 600)}`);
+            }
+        }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
             throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);

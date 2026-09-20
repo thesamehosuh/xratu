@@ -164,6 +164,71 @@ async function testReasoningStreamsAsCumulativeThinking() {
     }
 }
 
+async function testStreamOptionsRejectedRetriesWithout() {
+    const requests: any[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        call++;
+        if (call === 1) {
+            // A strict OpenAI-compatible server rejects the non-standard field.
+            return {
+                ok: false,
+                status: 400,
+                text: async () => '{"error":"unknown field: stream_options"}',
+            } as MockResponse;
+        }
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest(), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(call, 2, 'must retry exactly once without stream_options');
+        assert.ok(requests[0].stream_options, 'first request asks for streamed usage');
+        assert.equal(requests[1].stream_options, undefined, 'retry omits stream_options');
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testNonStreamOptions400DoesNotRetry() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        return {
+            ok: false,
+            status: 400,
+            text: async () => '{"error":"model not found"}',
+        } as MockResponse;
+    }) as typeof fetch;
+
+    try {
+        await assert.rejects(
+            collect(
+                runLocalAgent(baseRequest(), {
+                    execute: async () => ({ output: '' }),
+                }, {
+                    requestApproval: async () => ({}),
+                })
+            ),
+            /400.*model not found/
+        );
+        assert.equal(call, 1, 'an unrelated 400 must not be retried');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testToolCallApprovalAndContinuation() {
     const responses = [
         sse(toolCallSse('run_terminal_command', JSON.stringify({ command: 'echo ok' }))),
@@ -1017,6 +1082,8 @@ async function testWrapupOverflowCompactsAndRetries() {
 
 async function main() {
     await testStreamingDeltas();
+    await testStreamOptionsRejectedRetriesWithout();
+    await testNonStreamOptions400DoesNotRetry();
     await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();
     await testDeniedToolProducesToolResultAndContinues();
