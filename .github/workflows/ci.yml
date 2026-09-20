@@ -70,6 +70,9 @@ jobs:
       - name: Provider identity tests
         run: npm run test:provider-identity
 
+      - name: Farsi orthography guard
+        run: npm run test:farsi-orthography
+
       - name: Compaction tests
         run: npm run test:compaction
 
