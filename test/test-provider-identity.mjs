@@ -66,6 +66,13 @@ check('lookalike host -> custom', providerIdForUrl('https://notopenai.com/v1'), 
 check('userinfo lookalike -> custom', providerIdForUrl('https://api.openai.com@evil.example/v1'), 'custom');
 check('dot-boundary subdomain -> provider', providerIdForUrl('https://foo.api.openai.com/v1'), 'openai');
 
+// --- OpenCode Zen vs Go share a host; the path decides (query/fragment too) ---
+check('opencode zen path', providerIdForUrl('https://opencode.ai/zen/v1'), 'opencode');
+check('opencode go path', providerIdForUrl('https://opencode.ai/zen/go/v1'), 'opencode-go');
+check('opencode go path + query', providerIdForUrl('https://opencode.ai/zen/go/v1?region=us'), 'opencode-go');
+check('opencode go bare path', providerIdForUrl('https://opencode.ai/zen/go'), 'opencode-go');
+check('opencode zen + query is not go', providerIdForUrl('https://opencode.ai/zen/v1?x=1'), 'opencode');
+
 // --- Legacy generic xAI host still resolves ---
 check('legacy x.ai root -> xai', providerIdForUrl('https://x.ai/v1'), 'xai');
 check('legacy x.ai subdomain -> xai', providerIdForUrl('https://api2.x.ai/v1'), 'xai');

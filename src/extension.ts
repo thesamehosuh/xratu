@@ -1243,13 +1243,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             typeof c.baseUrl === 'string' &&
                             typeof c.apiKey === 'string'
                         )
-                        .map((c) => ({
-                            id: c.id,
-                            providerId: typeof c.providerId === 'string' ? c.providerId : this._providerIdForUrl(c.baseUrl),
-                            baseUrl: c.baseUrl.trim(),
-                            apiKey: c.apiKey,
-                            label: typeof c.label === 'string' ? c.label : this._providerLabelForUrl(c.baseUrl),
-                        }));
+                        .map((c) => {
+                            const storedId = typeof c.providerId === 'string' ? c.providerId : '';
+                            const derivedId = this._providerIdForUrl(c.baseUrl);
+                            // A stored id can be stale: an opencode.ai/zen/go URL
+                            // saved before the Go preset existed carries
+                            // 'opencode'. Trust the more specific derived id.
+                            const providerId = storedId === 'opencode' && derivedId === 'opencode-go'
+                                ? derivedId
+                                : (storedId || derivedId);
+                            return {
+                                id: c.id,
+                                providerId,
+                                baseUrl: c.baseUrl.trim(),
+                                apiKey: c.apiKey,
+                                label: typeof c.label === 'string' ? c.label : this._providerLabelForUrl(c.baseUrl),
+                            };
+                        });
                 }
             } catch { /* fall through to legacy migration */ }
         }
