@@ -1138,6 +1138,7 @@ async function testMessagesApiTextThinkingAndUsage() {
                 model: 'claude-sonnet-5',
                 apiKey: 'sk-test',
                 maxTokens: 1024,
+                sessionId: 'sess-1',
             }), {
                 execute: async () => ({ output: '' }),
             }, {
@@ -1152,6 +1153,8 @@ async function testMessagesApiTextThinkingAndUsage() {
         const headers = calls[0].headers as Headers;
         assert.equal(headers.get('x-api-key'), 'sk-test');
         assert.equal(headers.get('anthropic-version'), '2023-06-01');
+        // OpenCode Go requires the stable session id header.
+        assert.equal(headers.get('x-opencode-session'), 'sess-1');
 
         const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
         assert.deepEqual(thinking, ['weighing ', 'weighing options'], 'thinking is cumulative');

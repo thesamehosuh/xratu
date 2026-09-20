@@ -652,6 +652,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'xratu-chat-view';
     private _view?: vscode.WebviewView;
     private _sessionId: string | null = null;
+    /** Stable OpenCode session id for a not-yet-persisted conversation, so
+     *  every round of a run sends the same `x-opencode-session`. */
+    private _ephemeralSessionId: string | null = null;
     private _history: HistoryMessage[] = [];
     private _sessionSummary: string | null = null;
     /** Display title of the CURRENT session (toolbar button + picker).
@@ -2012,6 +2015,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // or /responses on the same base URL; everything else is
                     // OpenAI chat/completions.
                     apiStyle: resolveApiStyle(active.baseUrl, model),
+                    // OpenCode Go requires a stable per-conversation session id
+                    // (MissingSessionID otherwise). Prefer the persisted
+                    // session id; fall back to one stable id per live chat.
+                    ...(isOpenCodeHost(active.baseUrl)
+                        ? { sessionId: this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`) }
+                        : {}),
                 },
                 executor,
                 {

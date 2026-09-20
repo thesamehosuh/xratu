@@ -117,6 +117,9 @@ export interface LocalAgentRequest {
     /** Wire API to use. Resolved by the host via `resolveApiStyle`; defaults
      *  to OpenAI chat/completions. */
     apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
+    /** Stable per-conversation id, sent as `x-opencode-session`. OpenCode Go
+     *  rejects requests without it (MissingSessionID). */
+    sessionId?: string;
 }
 
 export interface LocalToolExecutor {
@@ -274,12 +277,15 @@ function extractSseData(buffer: string): { events: string[]; remainder: string }
     return { events, remainder };
 }
 
-function makeHeaders(apiKey?: string | null): Headers {
+function makeHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
     const headers = new Headers({
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
     });
     if (apiKey) headers.set('Authorization', `Bearer ${apiKey}`);
+    // OpenCode Go rejects requests without a stable per-conversation session
+    // id (MissingSessionID); harmless for other providers.
+    if (sessionId) headers.set('x-opencode-session', sessionId);
     return headers;
 }
 
@@ -393,7 +399,7 @@ async function requestChatCompletion(
     const send = (payload: Record<string, unknown>): Promise<Response> =>
         fetch(url, withDispatcher({
             method: 'POST',
-            headers: makeHeaders(request.apiKey),
+            headers: makeHeaders(request.apiKey, request.sessionId),
             body: JSON.stringify(payload),
             signal: controller.signal,
         }, request.dispatcher));
@@ -538,8 +544,8 @@ async function requestChatCompletion(
 // a block array, tool calls are `tool_use` blocks and tool results are
 // `tool_result` blocks inside a USER message.
 
-function makeMessagesHeaders(apiKey?: string | null): Headers {
-    const headers = makeHeaders(apiKey);
+function makeMessagesHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
+    const headers = makeHeaders(apiKey, sessionId);
     // Anthropic uses x-api-key; OpenAI-compatible gateways use Bearer. Send
     // both so either front end works (the extra header is ignored).
     if (apiKey) headers.set('x-api-key', apiKey);
@@ -692,7 +698,7 @@ async function requestMessagesCompletion(
     try {
         response = await fetch(url, withDispatcher({
             method: 'POST',
-            headers: makeMessagesHeaders(request.apiKey),
+            headers: makeMessagesHeaders(request.apiKey, request.sessionId),
             body: JSON.stringify(body),
             signal: controller.signal,
         }, request.dispatcher));
@@ -942,7 +948,7 @@ async function requestResponsesCompletion(
     try {
         response = await fetch(url, withDispatcher({
             method: 'POST',
-            headers: makeHeaders(request.apiKey),
+            headers: makeHeaders(request.apiKey, request.sessionId),
             body: JSON.stringify(body),
             signal: controller.signal,
         }, request.dispatcher));
@@ -1060,8 +1066,8 @@ async function requestResponsesCompletion(
 // Used by OpenCode Zen for gemini-* models. Different again: contents/parts,
 // functionCall/functionResponse (by NAME, not id), and thought parts.
 
-function makeGoogleHeaders(apiKey?: string | null): Headers {
-    const headers = makeHeaders(apiKey);
+function makeGoogleHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
+    const headers = makeHeaders(apiKey, sessionId);
     if (apiKey) headers.set('x-goog-api-key', apiKey);
     return headers;
 }
@@ -1209,7 +1215,7 @@ async function requestGoogleCompletion(
     try {
         response = await fetch(url, withDispatcher({
             method: 'POST',
-            headers: makeGoogleHeaders(request.apiKey),
+            headers: makeGoogleHeaders(request.apiKey, request.sessionId),
             body: JSON.stringify(body),
             signal: controller.signal,
         }, request.dispatcher));

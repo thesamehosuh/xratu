@@ -434,7 +434,10 @@ export function CredentialsPage({
             <div className="cred-form-provider">
                 <ProviderMark provider={selectedPreset} />
                 <div>
-                    <strong dir="ltr">{presetLabel(selectedPreset)}</strong>
+                    {/* No dir="ltr": it would make text-align:start resolve
+                        LEFT. Inheriting RTL keeps the label right-aligned
+                        while bidi still renders the Latin brand name LTR. */}
+                    <strong>{presetLabel(selectedPreset)}</strong>
                     <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
                 </div>
             </div>
