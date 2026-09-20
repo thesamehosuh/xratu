@@ -349,34 +349,42 @@ interface CompletionResult {
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
+/** Volatile context-awareness note appended as the LAST item of each request.
+ *  It is deliberately NOT part of `messages` and NOT in the system prompt:
+ *  keeping the prefix byte-stable across rounds is what makes prompt caching
+ *  work (Anthropic cache_control, OpenAI/Google automatic prefix caching). */
 function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
+    tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
     if (request.apiStyle === 'messages') {
-        return requestMessagesCompletion(request, messages, onDelta, onThinking);
+        return requestMessagesCompletion(request, messages, tailNote, onDelta, onThinking);
     }
     if (request.apiStyle === 'responses') {
-        return requestResponsesCompletion(request, messages, onDelta, onThinking);
+        return requestResponsesCompletion(request, messages, tailNote, onDelta, onThinking);
     }
     if (request.apiStyle === 'google') {
-        return requestGoogleCompletion(request, messages, onDelta, onThinking);
+        return requestGoogleCompletion(request, messages, tailNote, onDelta, onThinking);
     }
-    return requestChatCompletion(request, messages, onDelta, onThinking);
+    return requestChatCompletion(request, messages, tailNote, onDelta, onThinking);
 }
 
 async function requestChatCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
+    tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'chat/completions');
     const body: Record<string, unknown> = {
         model: request.model,
-        messages,
+        // Trailing system message: read by OpenAI-compatible servers while
+        // leaving every earlier message untouched (cacheable prefix).
+        messages: tailNote ? [...messages, { role: 'system', content: tailNote }] : messages,
         stream: true,
         stream_options: { include_usage: true },
     };
@@ -574,7 +582,11 @@ function messagesContentBlocks(content: LocalAgentMessage['content']): any[] {
     return blocks;
 }
 
-function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+function toMessagesBody(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    tailNote = '',
+): Record<string, unknown> {
     const systemParts: string[] = [];
     const out: any[] = [];
 
@@ -647,6 +659,15 @@ function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[
         }
     }
 
+    // Volatile note rides the tail: merged into a trailing user turn so the
+    // cached prefix (tools + system + history) is untouched. tool_result
+    // blocks must stay first, which the sort below already guarantees.
+    if (tailNote) {
+        const last = out[out.length - 1];
+        if (last && last.role === 'user') last.content.push({ type: 'text', text: tailNote });
+        else out.push({ role: 'user', content: [{ type: 'text', text: tailNote }] });
+    }
+
     const body: Record<string, unknown> = {
         model: request.model,
         // max_tokens is REQUIRED by the Messages API. With no explicit cap,
@@ -658,7 +679,10 @@ function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[
         stream: true,
     };
     const system = systemParts.filter(Boolean).join('\n\n');
-    if (system) body.system = system;
+    // The system prompt is the stable, cacheable prefix: mark its end as an
+    // ephemeral cache breakpoint so Anthropic caches tools + system. The
+    // volatile status/hint deliberately lives in the trailing note instead.
+    if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
     if (request.tools.length) {
         body.tools = request.tools.map((tool) => ({
             name: tool.name,
@@ -680,11 +704,12 @@ function mergeMessagesUsage(raw: any, previous: LocalUsage | null): LocalUsage {
 async function requestMessagesCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
+    tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'messages');
-    const body = toMessagesBody(request, messages);
+    const body = toMessagesBody(request, messages, tailNote);
 
     const outerSignal = request.signal ?? new AbortController().signal;
     const controller = new AbortController();
@@ -693,15 +718,31 @@ async function requestMessagesCompletion(
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
 
+    const send = (payload: Record<string, unknown>): Promise<Response> =>
+        fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeMessagesHeaders(request.apiKey, request.sessionId),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        }, request.dispatcher));
+
     try {
     let response: Response;
     try {
-        response = await fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeMessagesHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        }, request.dispatcher));
+        response = await send(body);
+        // Some Messages-compatible gateways reject `cache_control`. Drop the
+        // breakpoint ONCE and retry rather than failing the turn (caching is
+        // an optimization, not a requirement).
+        const systemBlocks = body.system as Array<Record<string, unknown>> | undefined;
+        if (!response.ok && response.status === 400 && systemBlocks?.[0]?.cache_control) {
+            const text = await response.text().catch(() => '');
+            if (/cache_control/i.test(text)) {
+                delete systemBlocks[0].cache_control;
+                response = await send(body);
+            } else {
+                throw new Error(`Model request failed (400): ${text.slice(0, 600)}`);
+            }
+        }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
             throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
@@ -847,7 +888,11 @@ function responsesUserContent(content: LocalAgentMessage['content']): any[] {
     return out;
 }
 
-function toResponsesBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+function toResponsesBody(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    tailNote = '',
+): Record<string, unknown> {
     const instructions: string[] = [];
     const input: any[] = [];
 
@@ -898,6 +943,12 @@ function toResponsesBody(request: LocalAgentRequest, messages: LocalAgentMessage
         }
     }
 
+    // Volatile note as a trailing developer item - the Responses equivalent of
+    // a system note, placed after the stable instructions prefix.
+    if (tailNote) {
+        input.push({ role: 'developer', content: [{ type: 'input_text', text: tailNote }] });
+    }
+
     const body: Record<string, unknown> = { model: request.model, input, stream: true };
     const sys = instructions.filter(Boolean).join('\n\n');
     if (sys) body.instructions = sys;
@@ -930,11 +981,12 @@ function responsesUsage(raw: any): LocalUsage {
 async function requestResponsesCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
+    tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'responses');
-    const body = toResponsesBody(request, messages);
+    const body = toResponsesBody(request, messages, tailNote);
 
     const outerSignal = request.signal ?? new AbortController().signal;
     const controller = new AbortController();
@@ -1102,7 +1154,11 @@ function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
     return parts;
 }
 
-function toGoogleBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+function toGoogleBody(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    tailNote = '',
+): Record<string, unknown> {
     const systemParts: string[] = [];
     const contents: any[] = [];
     const toolNameById = new Map<string, string>();
@@ -1161,6 +1217,15 @@ function toGoogleBody(request: LocalAgentRequest, messages: LocalAgentMessage[])
         }
     }
 
+    // Volatile note: Google has no mid-conversation system role, so it rides
+    // the last user content (or a fresh one) - the stable systemInstruction
+    // prefix stays byte-identical for implicit caching.
+    if (tailNote) {
+        const last = contents[contents.length - 1];
+        if (last && last.role === 'user') last.parts.push({ text: tailNote });
+        else contents.push({ role: 'user', parts: [{ text: tailNote }] });
+    }
+
     const body: Record<string, unknown> = { contents };
     const system = systemParts.filter(Boolean).join('\n\n');
     if (system) body.systemInstruction = { parts: [{ text: system }] };
@@ -1193,6 +1258,7 @@ function googleUsage(raw: any): LocalUsage {
 async function requestGoogleCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
+    tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
@@ -1201,7 +1267,7 @@ async function requestGoogleCompletion(
         `models/${encodeURIComponent(request.model)}:streamGenerateContent`,
     );
     const url = `${base}${base.includes('?') ? '&' : '?'}alt=sse`;
-    const body = toGoogleBody(request, messages);
+    const body = toGoogleBody(request, messages, tailNote);
 
     const outerSignal = request.signal ?? new AbortController().signal;
     const controller = new AbortController();
@@ -1854,25 +1920,22 @@ export async function* runLocalAgent(
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
     const toolTokens = estimateToolTokens(request.tools);
-    // Best occupancy estimate we can show the model: the ASSEMBLED system
-    // message (messages[0] carries the systemFor() output - status line,
-    // hints, task-list reminder - not the bare request.systemPrompt), the
-    // body messages (history + live prompt), and the tool schemas. Still
-    // under-counts code density and chat-template tokens (no client-side
-    // tokenizer), so the model should treat the free headroom as optimistic.
+    // Best occupancy estimate: the stable system prompt, the body messages
+    // (history + live prompt), and the tool schemas. Still under-counts code
+    // density and chat-template tokens (no client-side tokenizer), so the
+    // model should treat the free headroom as optimistic.
     const estimateUsed = (): number => {
-        const system = messages[0]?.content;
-        const systemChars = typeof system === 'string' ? system.length : 0;
+        const systemChars = request.systemPrompt.length;
         return Math.ceil(systemChars / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
     };
 
-    // Context awareness: the system message always carries the current fill
-    // level + progressive hints, refreshed from server-reported usage each
-    // round (promptTokens is ground truth - message estimates miss tool
-    // schemas and server-side formatting).
-    const systemFor = (usedTokens: number): string =>
-        request.systemPrompt
-        + taskListReminderLine(request.taskList ?? [])
+    // Context awareness (fill level + progressive hints + task-list reminder)
+    // is VOLATILE: it changes every round. It is sent as a TRAILING note, never
+    // stored in `messages` and never in the system message - the system prompt
+    // must stay byte-stable across rounds or prompt caching (Anthropic
+    // cache_control, OpenAI/Google automatic prefix caching) can never hit.
+    const tailNoteFor = (usedTokens: number): string =>
+        taskListReminderLine(request.taskList ?? [])
         + contextStatusLine(usedTokens, windowTokens)
         + contextHint(usedTokens, windowTokens);
 
@@ -1895,14 +1958,15 @@ export async function* runLocalAgent(
     // the next one and reported to the host so it survives across requests.
     let sessionSummary: string | null = null;
 
-    // Proactive auto-compact BEFORE the first request, then paint the
-    // system message with the post-compaction occupancy numbers.
+    // Proactive auto-compact BEFORE the first request.
     const preSummary = await compactWithSummary(messages, request, windowTokens, undefined, null, toolTokens);
     if (preSummary) {
         sessionSummary = preSummary;
         yield { type: 'compactionSummary', value: preSummary };
     }
-    messages[0] = { role: 'system', content: systemFor(estimateUsed()) };
+    // Occupancy shown to the model in the trailing note. Seeded from the
+    // estimate, then replaced with server-reported ground truth each round.
+    let noteUsed = estimateUsed();
 
     yield { type: 'status', value: 'connecting' };
 
@@ -1944,6 +2008,7 @@ export async function* runLocalAgent(
         const requestPromise = requestStreamingCompletion(
             request,
             messages,
+            tailNoteFor(noteUsed),
             (delta) => queue.push({ kind: 'text', value: delta }),
             (thinking) => queue.push({ kind: 'thinking', value: thinking }),
         )
@@ -1987,7 +2052,6 @@ export async function* runLocalAgent(
                 imageFormatSwapped = true;
                 imageFormat = 'base64';
                 messages = buildMessages();
-                messages[0] = { role: 'system', content: systemFor(estimateUsed()) };
                 requestError = null;
                 round--;
                 continue;
@@ -2008,7 +2072,7 @@ export async function* runLocalAgent(
             ) {
                 overflowRecovered = true;
                 if (compactMessages(messages, windowTokens, undefined, toolTokens, true).length) {
-                    messages[0] = { role: 'system', content: systemFor(estimateUsed()) };
+                    noteUsed = estimateUsed();
                     requestError = null;
                     round--;
                     continue;
@@ -2037,10 +2101,10 @@ export async function* runLocalAgent(
                 }
                 used = Math.min(used, estimateUsed());
             }
-            const nextSystem = systemFor(used);
-            if (messages[0]?.content !== nextSystem) {
-                messages[0] = { role: 'system', content: nextSystem };
-            }
+            // Update the trailing note's occupancy for the NEXT round; the
+            // system message itself is left untouched so the prompt prefix
+            // stays cacheable.
+            noteUsed = used;
         }
 
         if (!finalResult.toolCalls.length) {
@@ -2152,6 +2216,7 @@ export async function* runLocalAgent(
         const wrapPromise = requestStreamingCompletion(
             { ...request, tools: [] },
             wrapMessages,
+            tailNoteFor(noteUsed),
             (delta) => wrapQueue.push({ kind: 'text', value: delta }),
             (thinking) => wrapQueue.push({ kind: 'thinking', value: thinking }),
         )

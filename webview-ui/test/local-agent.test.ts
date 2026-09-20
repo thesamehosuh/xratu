@@ -592,7 +592,7 @@ async function testImageFormatRetryOnLmStudioStyle400() {
 }
 
 
-async function testContextStatusLineInSystemPrompt() {
+async function testContextStatusRidesTheTailNotTheSystemPrompt() {
     const requests: any[] = [];
     const originalFetch = globalThis.fetch;
 
@@ -610,16 +610,76 @@ async function testContextStatusLineInSystemPrompt() {
             })
         );
 
+        // The system prompt is the STABLE cacheable prefix: it must not carry
+        // the volatile fill-level line (that would break the prefix cache every
+        // round). The status rides a trailing message instead.
         const system: string = requests[0].messages[0].content;
-        // The model always sees how full its window is.
-        assert.ok(system.startsWith('You are Xratu.'));
-        assert.ok(system.includes('[Context status:'), `missing status line: ${system}`);
-        assert.ok(system.includes('of the 8192-token context window'), system);
+        assert.equal(system, 'You are Xratu.', 'system prompt stays byte-stable');
+        assert.ok(!system.includes('[Context status:'), 'status line must not be in the system prompt');
+
+        const tail = requests[0].messages[requests[0].messages.length - 1];
+        assert.equal(tail.role, 'system', 'the volatile note is a trailing message');
+        assert.ok(tail.content.includes('[Context status:'), `missing status line: ${tail.content}`);
+        assert.ok(tail.content.includes('of the 8192-token context window'), tail.content);
     } finally {
         globalThis.fetch = originalFetch;
     }
 }
 
+
+async function testSystemPromptStaysStableAcrossRounds() {
+    // Prompt caching is a PREFIX cache: the system prompt must be byte-identical
+    // on every round of a turn, or nothing downstream can ever be reused.
+    const requests: any[] = [];
+    const responses = [
+        sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1')),
+        sse(textSse(['done'])),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return responses[index++];
+    }) as typeof fetch;
+
+    try {
+        await collect(
+            runLocalAgent(baseRequest({
+                contextWindow: 8192,
+                systemPrompt: 'You are an AI coding assistant.',
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(requests.length, 2, 'expected two model rounds');
+        // Byte-identical system prompt across rounds.
+        assert.equal(
+            requests[0].messages[0].content,
+            requests[1].messages[0].content,
+            'system prompt must not change between rounds',
+        );
+        assert.ok(!requests[0].messages[0].content.includes('[Context status:'));
+        // The volatile note trails each request exactly once, and is NOT stored
+        // in the history (round 2 must not carry round 1's note mid-array).
+        for (const body of requests) {
+            const msgs = body.messages;
+            const notes = msgs.filter((m: any) => m.role === 'system' && String(m.content).includes('[Context status:'));
+            assert.equal(notes.length, 1, 'exactly one trailing note per request');
+            assert.equal(msgs[msgs.length - 1].role, 'system', 'note is the last message');
+        }
+        assert.ok(!JSON.stringify(requests[1].messages.slice(1, -1)).includes('[Context status:'), 'note must not be stored in history');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
 
 async function testProactiveCompactDropsOldTurnsAtStart() {
     const requests: any[] = [];
@@ -673,15 +733,19 @@ async function testProactiveCompactDropsOldTurnsAtStart() {
         assert.ok(messages[1].content.includes('Earlier messages in this conversation were removed'));
         assert.ok(messages[1].content.includes('[Summary of the removed turns'));
         assert.ok(messages[1].content.includes('Compacted summary: early turns asked about setup.'));
-        // …newest turns survive, and the current turn is last.
+        // …newest turns survive, and the current turn is last - followed only
+        // by the trailing volatile note (which is not part of the history).
         assert.ok(messages.length < 2 + history.length + 1);
-        assert.equal(messages.at(-1)!.role, 'user');
+        assert.equal(messages.at(-1)!.role, 'system');
+        assert.ok(String(messages.at(-1)!.content).includes('[Context status:'));
+        assert.equal(messages.at(-2)!.role, 'user');
         assert.ok(serialized.includes('turn7') && serialized.includes('reply7'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1'));
         // The host is told about the summary so it can roll it forward.
         assert.ok(events.some((e: any) => e.type === 'compactionSummary'));
-        // The system prompt carries the post-compaction occupancy.
-        assert.ok(messages[0].content.includes('[Context status:'));
+        // Post-compaction occupancy rides the trailing note, not the system
+        // prompt (which must stay cache-stable).
+        assert.ok(String(messages.at(-1)!.content).includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -758,9 +822,13 @@ async function testMidRunCompactionFromServerUsage() {
         assert.ok(round2[1].content.includes('Mid-run summary: earlier turns read configs.'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1') && !serialized.includes('turn2'));
         assert.ok(serialized.includes('turn3') && serialized.includes('contents'));
-        assert.equal(round2.at(-1)!.role, 'tool');
-        // System prompt repainted with the post-compaction fill level.
-        assert.ok(round2[0].content.includes('[Context status:'));
+        // Assistant→tool pair of the current turn sits at the tail, followed
+        // only by the trailing volatile note.
+        assert.equal(round2.at(-1)!.role, 'system');
+        assert.ok(String(round2.at(-1)!.content).includes('[Context status:'));
+        assert.equal(round2.at(-2)!.role, 'tool');
+        // The system prompt itself stays byte-stable (cacheable prefix).
+        assert.ok(!round2[0].content.includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1148,7 +1216,11 @@ async function testMessagesApiTextThinkingAndUsage() {
 
         assert.equal(calls[0].url, 'http://127.0.0.1:11434/v1/messages');
         assert.equal(calls[0].body.max_tokens, 1024, 'max_tokens is required by Messages');
-        assert.equal(calls[0].body.system, 'You are Xratu.', 'system is a top-level param');
+        // System is a top-level BLOCK with an Anthropic cache breakpoint; the
+        // volatile status/hint must NOT be in it (that would invalidate the
+        // cache every round).
+        assert.equal(calls[0].body.system[0].text, 'You are Xratu.', 'system is a top-level block');
+        assert.equal(calls[0].body.system[0].cache_control.type, 'ephemeral', 'system is a cache breakpoint');
         assert.equal(calls[0].body.stream, true);
         const headers = calls[0].headers as Headers;
         assert.equal(headers.get('x-api-key'), 'sk-test');
@@ -1396,7 +1468,8 @@ async function main() {
     await testNon2xxFailsClearly();
     await testFinalAnswerIsEmittedForHistory();
     await testHistoryKeepsRawTurnStructure();
-    await testContextStatusLineInSystemPrompt();
+    await testContextStatusRidesTheTailNotTheSystemPrompt();
+    await testSystemPromptStaysStableAcrossRounds();
     await testProactiveCompactDropsOldTurnsAtStart();
     await testMidRunCompactionFromServerUsage();
     await testSteerJoinsBeforeNextRound();
