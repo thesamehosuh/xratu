@@ -39,20 +39,27 @@ export function pickProxyUrl(sources: ProxySources): string | null {
 export interface NoProxySources {
     /** `xratu.noProxy` setting - highest priority. */
     explicit?: string | null;
-    /** VS Code's `http.noProxy` setting. */
-    vscodeHttpNoProxy?: string | null;
+    /** VS Code's `http.noProxy` setting. NOTE: VS Code defines this as a
+     *  LIST of hosts, so it can arrive as string[]. */
+    vscodeHttpNoProxy?: string | string[] | null;
     /** Process environment (upper/lower case accepted). */
     env?: Record<string, string | undefined>;
+}
+
+/** Normalize a no_proxy source (string, list, or unset) to a comma list. */
+function normalizeNoProxyValue(value: string | string[] | null | undefined): string {
+    if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean).join(',');
+    return (value ?? '').trim();
 }
 
 const NO_PROXY_ENV_KEYS = ['NO_PROXY', 'no_proxy'];
 
 /** Resolve the no_proxy list (comma separated), or '' when none is set. */
 export function pickNoProxy(sources: NoProxySources): string {
-    const explicit = (sources.explicit ?? '').trim();
+    const explicit = normalizeNoProxyValue(sources.explicit);
     if (explicit) return explicit;
 
-    const vscode = (sources.vscodeHttpNoProxy ?? '').trim();
+    const vscode = normalizeNoProxyValue(sources.vscodeHttpNoProxy);
     if (vscode) return vscode;
 
     const env = sources.env ?? {};
@@ -95,7 +102,9 @@ export function hostMatchesNoProxy(host: string, patterns: string[]): boolean {
         if (raw === '*') return true;
         const pattern = raw.startsWith('*') ? raw.slice(1) : raw;
         const [pname, pport] = splitHostPort(pattern);
-        if (pport && hport && pport !== hport) continue;
+        // A port-scoped pattern matches ONLY a target with that explicit port;
+        // otherwise `internal.corp:443` would bypass `http://internal.corp`.
+        if (pport && hport !== pport) continue;
         if (!pname) continue;
         const bare = pname.startsWith('.') ? pname.slice(1) : pname;
         if (hname === bare || hname.endsWith(`.${bare}`)) return true;

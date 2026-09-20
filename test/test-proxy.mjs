@@ -57,6 +57,8 @@ check('secret absent after redaction', redactProxyUrl('http://user:s3cret@proxy.
 check('noProxy explicit wins', pickNoProxy({ explicit: 'a.example', vscodeHttpNoProxy: 'b.example', env: { NO_PROXY: 'c.example' } }), 'a.example');
 check('noProxy http setting beats env', pickNoProxy({ explicit: '', vscodeHttpNoProxy: 'b.example', env: { NO_PROXY: 'c.example' } }), 'b.example');
 check('noProxy env fallback', pickNoProxy({ env: { no_proxy: 'c.example' } }), 'c.example');
+// VS Code's http.noProxy is an array; it must not throw on .trim().
+check('noProxy accepts an array', pickNoProxy({ vscodeHttpNoProxy: ['a.example', 'b.example'] }), 'a.example,b.example');
 check('noProxy none -> empty', pickNoProxy({ env: {} }), '');
 check('parseNoProxy splits/trims/lowercases', parseNoProxy(' Localhost, .Internal ,, ').join('|'), 'localhost|.internal');
 
@@ -71,6 +73,9 @@ check('noProxy dot-prefix matches subdomain', hostMatchesNoProxy('api.openai.com
 check('noProxy lookalike does not match', hostMatchesNoProxy('notopenai.com', ['openai.com']), false);
 check('noProxy port must match', hostMatchesNoProxy('proxy.example:8080', ['proxy.example:9090']), false);
 check('noProxy port match', hostMatchesNoProxy('proxy.example:8080', ['proxy.example:8080']), true);
+// A port-scoped pattern must NOT bypass a target with no explicit port.
+check('noProxy port pattern skips default-port host', hostMatchesNoProxy('example.com', ['example.com:8080']), false);
+check('noProxy port pattern skips other port', hostMatchesNoProxy('example.com:443', ['example.com:8080']), false);
 check('noProxy localhost', hostMatchesNoProxy('localhost:11434', ['localhost']), true);
 check('noProxy empty list no match', hostMatchesNoProxy('api.openai.com', []), false);
 

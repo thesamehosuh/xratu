@@ -27,7 +27,8 @@ export function getProxyUrl(): string | null {
 export function getNoProxy(): string {
     return pickNoProxy({
         explicit: vscode.workspace.getConfiguration('xratu').get<string>('noProxy'),
-        vscodeHttpNoProxy: vscode.workspace.getConfiguration('http').get<string>('noProxy'),
+        // http.noProxy is a LIST in VS Code - it can come back as string[].
+        vscodeHttpNoProxy: vscode.workspace.getConfiguration('http').get<string | string[]>('noProxy'),
         env: process.env,
     });
 }
