@@ -27,6 +27,9 @@ export interface LocalSessionSnapshot {
     localHistory: LocalSessionHistoryMessage[];
     uiHistory: any[];
     pendingTurn?: LocalPendingTurn | null;
+    /** Cumulative spend for this session in USD. Monotonic: rewinding the
+     *  conversation or restoring a checkpoint does NOT refund spent tokens. */
+    totalCostUsd?: number;
 }
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
@@ -410,6 +413,7 @@ export class LocalSessionStore {
                 localHistory: parsed?.localHistory ?? [],
                 uiHistory: parsed?.uiHistory ?? [],
                 pendingTurn: parsed?.pendingTurn ?? null,
+                totalCostUsd: typeof parsed?.totalCostUsd === 'number' ? parsed.totalCostUsd : 0,
             };
         } catch {
             return null;

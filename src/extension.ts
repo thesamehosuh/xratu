@@ -747,6 +747,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Sum of every non-estimated round's usage across the CURRENT turn (a
      *  tool-calling turn makes several requests) - the basis for turn cost. */
     private _localTurnUsage: LocalUsage | null = null;
+    /** Cumulative USD spend for the session (persisted). Monotonic: a rewind
+     *  or checkpoint restore does not refund already-spent tokens. */
+    private _sessionCostUsd = 0;
     /** The in-flight local turn, held so a throttled snapshot can persist it
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
      *  turn (local mode has no server copy). Cleared in _runLocalAgent's
@@ -1317,20 +1320,39 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         };
     }
 
-    /** Estimated cost of one usage record, or null when the model's price is
-     *  unknown (the UI then shows nothing rather than a wrong number). */
-    private _localCostFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
+    /** Raw USD cost of one usage record, or null when the price is unknown. */
+    private _usageCostUsd(usage: LocalUsage | null): number | null {
         if (!usage) return null;
         const overrides = vscode.workspace.getConfiguration('xratu')
             .get<Record<string, PriceOverride>>('modelPricing') ?? null;
         const price = priceForModel(this._selectedModel ?? '', overrides);
         if (!price) return null;
         const usd = costForUsage(price, usage, 'USD');
-        if (!usd) return null;
+        return usd ? usd.amount : null;
+    }
+
+    /** Convert a USD amount to the run's display currency. */
+    private _displayCost(usd: number | null): { amount: number; currency: 'USD' | 'IRT' } | null {
+        if (usd == null || !Number.isFinite(usd) || usd <= 0) return null;
         if (this._runCostCurrency === 'IRT' && this._runTomanPerUsd > 0) {
-            return { amount: usd.amount * this._runTomanPerUsd, currency: 'IRT' };
+            return { amount: usd * this._runTomanPerUsd, currency: 'IRT' };
         }
-        return usd;
+        return { amount: usd, currency: 'USD' };
+    }
+
+    /** Estimated cost of one usage record, or null when the model's price is
+     *  unknown (the UI then shows nothing rather than a wrong number). */
+    private _localCostFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
+        return this._displayCost(this._usageCostUsd(usage));
+    }
+
+    /** Post the session's cumulative cost (monotonic - never reduced by a
+     *  rewind or a checkpoint restore: the tokens were already spent). */
+    private _postSessionCost(): void {
+        this._view?.webview.postMessage({
+            type: 'sessionCost',
+            cost: this._displayCost(this._sessionCostUsd > 0 ? this._sessionCostUsd : null),
+        });
     }
 
     private _maskApiKey(apiKey: string): string {
@@ -2226,6 +2248,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // A turn can span several model rounds (tool calls); the
                     // turn's COST is the sum across rounds, not just the last.
                     this._localTurnUsage = this._addUsage(this._localTurnUsage, event.usage);
+                    // Session spend accumulates per round and is never reduced
+                    // by a rewind/checkpoint restore.
+                    const roundUsd = this._usageCostUsd(event.usage);
+                    if (roundUsd != null && roundUsd > 0) {
+                        this._sessionCostUsd += roundUsd;
+                        this._postSessionCost();
+                    }
                 }
                 // Mirror cloud behavior: the webview's context meter tracks
                 // each round's cumulative usage while the turn streams.
@@ -3281,6 +3310,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // The checklist + progress chip are per-session: every session
         // switch re-echoes the merged task list for the NEW session.
         this._pushTaskListState();
+        // Cumulative session spend is per-session too (and monotonic).
+        this._postSessionCost();
     }
 
     /** Reset the per-session ledgers. Callers own cancel + epoch bump. */
@@ -3292,6 +3323,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._localHistory = [];
         this._sessionSummary = null;
         this._sessionTitle = null;
+        // A brand-new session starts its own spend counter.
+        this._sessionCostUsd = 0;
         this._approvalCloseItems = {};
         this._sessionApprovedKinds.clear();
         this._virtualDocuments.clear();
@@ -3460,6 +3493,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._localHistory = [];
             this._sessionSummary = null;
             this._sessionTitle = null;
+            this._sessionCostUsd = 0;
             return;
         }
         const snapshot = await this._localSessionStore.load(meta.id);
@@ -3470,11 +3504,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._localHistory = [];
             this._sessionSummary = null;
             this._sessionTitle = null;
+            this._sessionCostUsd = 0;
             return;
         }
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._sessionId = snapshot.sessionId;
+        // Cumulative spend survives a rewind (tokens were already spent).
+        this._sessionCostUsd = snapshot.totalCostUsd ?? 0;
         this._sessionSummary = snapshot.summary ?? null;
         // Same placeholder rule as _openSessionNow - see resolveSessionTitle.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
@@ -3588,6 +3625,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 summary: this._sessionSummary,
                 localHistory: this._localHistory,
                 uiHistory: this._history,
+                totalCostUsd: this._sessionCostUsd,
                 pendingTurn: this._localPendingTurn ? {
                     prompt: this._localPendingTurn.prompt,
                     events: this._localPendingTurn.events,

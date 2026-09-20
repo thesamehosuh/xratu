@@ -351,5 +351,20 @@ ok(
     'the final toolResult still lands on the same row'
 );
 
+// 27. Session cost is host-owned and must NOT shrink when the conversation is
+//     rewound - the tokens were already spent.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'a' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('fullResponse', { persian: 'A' }));
+s = reduceChat(s, M('sessionCost', { cost: { amount: 0.5, currency: 'USD' } }));
+s = reduceChat(s, M('restoreUser', { value: 'b' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('fullResponse', { persian: 'B' }));
+s = reduceChat(s, M('sessionCost', { cost: { amount: 0.9, currency: 'USD' } }));
+s = reduceChat(s, M('truncateFromUser', { userIndex: 1 }));
+ok(s.messages.filter((m) => m.role === 'user').length === 1, 'rewind dropped the second turn');
+ok(s.sessionCost?.amount === 0.9, 'session cost survives the rewind');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

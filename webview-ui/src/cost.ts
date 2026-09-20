@@ -21,20 +21,6 @@ export function formatCost(cost: Cost | null | undefined): string | null {
     return `$${usd.toFixed(2)}`;
 }
 
-/**
- * Sum per-message costs in ONE currency - the currency of the most recent
- * cost. Amounts in another currency are skipped rather than added blindly
- * (USD + Toman would be meaningless, and the webview has no exchange rate).
- * A session normally runs against a single provider, so this only matters if
- * the user switches between an Iranian and a non-Iranian provider mid-chat.
- */
-export function sumCosts(costs: Array<Cost | null | undefined>): Cost | null {
-    const valid = costs.filter((c): c is Cost => !!c && Number.isFinite(c.amount));
-    if (!valid.length) return null;
-    const currency = valid[valid.length - 1].currency;
-    let amount = 0;
-    for (const cost of valid) {
-        if (cost.currency === currency) amount += cost.amount;
-    }
-    return { amount, currency };
-}
+// NOTE: the session total is NOT summed here from message costs - it is
+// host-owned and monotonic (a rewind/checkpoint restore must not refund
+// already-spent tokens). See the `sessionCost` message.
