@@ -67,15 +67,17 @@ const PRESETS: Preset[] = [
     { id: 'groq', label: 'Groq', group: 'popular', baseUrl: 'https://api.groq.com/openai/v1' },
     { id: 'deepseek', label: 'DeepSeek', group: 'popular', baseUrl: 'https://api.deepseek.com' },
     { id: 'mistral', label: 'Mistral', group: 'popular', baseUrl: 'https://api.mistral.ai/v1' },
-    // Iranian providers - no VPN required, rial payment. Base URLs are
-    // editable in the form; verify against the provider's dashboard.
+    // Iranian providers - no VPN required, rial payment.
+    // Kaya and Avalai expose a shared, documented OpenAI-compatible base URL.
     { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
     { id: 'avalai', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
-    // These providers have no shared OpenAI-compatible base URL: Metis serves a
-    // per-API wrapper route and Liara/Arvan/Navaan hand out a URL containing an
-    // account/workspace id. Leave the URL empty so the user pastes the one from
-    // their dashboard instead of shipping a route that would 404.
-    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: 'https://api.metisai.ir/api/v1/wrapper/openai', hintKey: 'credIranianHint' },
+    // Metis, Liara, ArvanCloud and Navaan do NOT expose a shared base URL:
+    // Metis routes through per-provider wrappers (no stable OpenAI base we can
+    // verify), and Liara hands each AI service its own `baseUrl` containing an
+    // account id (see docs.liara.ir/ai). Leave the URL EMPTY so the user pastes
+    // the one from their dashboard instead of shipping a route that would 404.
+    // Selecting these clears the previous endpoint (see `pick`).
+    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
@@ -232,11 +234,13 @@ export function CredentialsPage({
     const canSave = url.trim().length > 0 && (apiKey.trim().length > 0 || keyOptional);
 
     const pick = (id: string) => {
+        // Switching provider: take the preset's URL - including EMPTY, so a
+        // user-specific provider (no shared base URL) clears the previous
+        // endpoint instead of silently carrying it over. Re-clicking the
+        // ALREADY selected provider must not wipe a URL the user typed.
+        if (id === presetId) return;
         setPresetId(id);
         const preset = PRESETS.find((p) => p.id === id);
-        // Always take the preset's URL - including EMPTY, so a user-specific
-        // provider (no shared base URL) clears the previous endpoint instead
-        // of silently carrying it over.
         setUrl(preset?.baseUrl ?? '');
     };
 
@@ -430,7 +434,7 @@ export function CredentialsPage({
                 <ProviderMark provider={selectedPreset} />
                 <div>
                     <strong dir="ltr">{presetLabel(selectedPreset)}</strong>
-                    <span dir="auto">{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
+                    <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
                 </div>
             </div>
 

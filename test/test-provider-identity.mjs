@@ -20,7 +20,9 @@ const check = (name, actual, expected) => {
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : ` (got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)})`}`);
 };
 
-// --- Every preset base URL resolves to its id (mirrors CredentialsPage) ---
+// --- Host detection: every provider's host resolves to its id. These are the
+// --- hosts a saved credential would contain, NOT necessarily a preset default
+// --- (Metis/Liara/ArvanCloud/Navaan ship no default URL; the user pastes one).
 const PRESETS = [
     ['https://api.openai.com/v1', 'openai'],
     ['https://openrouter.ai/api/v1', 'openrouter'],
