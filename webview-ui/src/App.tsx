@@ -29,6 +29,7 @@ import { CapabilitiesPage } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
+import { sumCosts } from './cost';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities';
 
@@ -539,6 +540,12 @@ export function App() {
     );
 
     // The newest update_task_list step is the interactive checklist; older
+    // Summed cost of every turn that reported one (null when none did).
+    const sessionCost = useMemo(
+        () => sumCosts(chat.messages.map((m) => m.usage?.cost)),
+        [chat.messages]
+    );
+
     // ones render read-only from their own args (stepId no longer matches).
     const taskListView = useMemo(() => {
         for (let i = chat.messages.length - 1; i >= 0; i--) {
@@ -866,6 +873,7 @@ export function App() {
             <InputBar
                 busy={chat.busy}
                 usage={chat.lastUsage}
+                sessionCost={sessionCost}
                 contextWindow={
                     (selectedModel ? ctxOverrides[selectedModel] : undefined) ??
                     resolveWindow(modelInfo?.contextWindows, selectedModel)

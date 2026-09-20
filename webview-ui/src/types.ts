@@ -392,6 +392,8 @@ export interface TokenUsage {
     output_tokens: number | null;
     /** Prompt tokens served from the provider's cache, when reported. */
     cached_tokens?: number | null;
+    /** Estimated cost of this turn, when a price is known. */
+    cost?: { amount: number; currency: 'USD' | 'IRT' } | null;
 }
 
 export interface ChatMessage {

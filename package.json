@@ -71,6 +71,16 @@
 					"type": "string",
 					"default": "",
 					"description": "Comma-separated hosts that bypass the proxy (e.g. localhost,127.0.0.1,.internal). Overrides VS Code's http.noProxy setting and the NO_PROXY environment variable. Supports * and host:port entries; CIDR ranges are not supported."
+				},
+				"xratu.modelPricing": {
+					"type": "object",
+					"default": {},
+					"description": "Per-model price overrides in USD per 1M tokens, keyed by model id, e.g. { \"my-model\": { \"input\": 0.5, \"output\": 1.5, \"cachedInput\": 0.05 } }. Wins over the built-in price table."
+				},
+				"xratu.tomanPerUsd": {
+					"type": "number",
+					"default": 0,
+					"description": "Toman per USD. When set (> 0), cost for Iranian providers is shown in Toman instead of USD. 0 disables the conversion."
 				}
 			},
 			"restrictedConfigurations": [
@@ -158,6 +168,7 @@
 		"test:proxy": "node test/test-proxy.mjs",
 		"test:provider-identity": "node test/test-provider-identity.mjs",
 		"test:api-style": "node test/test-api-style.mjs",
+		"test:pricing": "node test/test-pricing.mjs",
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
 		"test:compaction": "node test/test-compaction.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",

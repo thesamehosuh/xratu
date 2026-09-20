@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { ComposerAttachment, ThinkingLevel, TokenUsage } from '../types';
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
+import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf } from '../i18n';
 
 /** Fallback when the backend hasn't served a window for this model yet
@@ -253,6 +254,8 @@ interface InputBarProps {
     /** Persist (or clear with null) a thinking level for the selected model. */
     onSetThinkingLevel?: (level: ThinkingLevel | null) => void;
     usage?: TokenUsage | null;
+    /** Summed cost of the conversation so far (null when unknown). */
+    sessionCost?: Cost | null;
     /** Server-provided window for the selected model (null until known). */
     contextWindow?: number | null;
     /** Backend-resolved DEFAULT window for the model (without any user
@@ -301,6 +304,7 @@ export function InputBar({
     thinkingLevel,
     onSetThinkingLevel,
     usage,
+    sessionCost,
     contextWindow,
     defaultContextWindow,
     planMode,
@@ -1054,6 +1058,11 @@ export function InputBar({
                             </span>
                             <ChevronUp size={12} />
                         </button>
+                        {formatCost(sessionCost) && (
+                            <span className="session-cost" dir="auto" title={t('sessionCostTitle')}>
+                                {formatCost(sessionCost)}
+                            </span>
+                        )}
                         {ctxOpen && (
                             <div className="ctx-menu" role="menu" aria-label={t('ctxAria')}>
                                 <button

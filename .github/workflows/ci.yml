@@ -73,6 +73,9 @@ jobs:
       - name: API style routing tests
         run: npm run test:api-style
 
+      - name: Pricing tests
+        run: npm run test:pricing
+
       - name: Farsi orthography guard
         run: npm run test:farsi-orthography
 

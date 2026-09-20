@@ -3456,6 +3456,14 @@ pre.tool-cmd {
     line-height: 1;
 }
 
+/* Session cost chip, beside the context meter. */
+.session-cost {
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+}
+
 /* Context-window preset menu (anchored above the pill) */
 .ctx-wrap {
     position: relative;

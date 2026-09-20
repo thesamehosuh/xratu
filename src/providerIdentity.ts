@@ -102,3 +102,10 @@ export function providerIdForUrl(baseUrl: string): string {
 export function providerLabelForUrl(baseUrl: string): string {
     return PROVIDER_LABELS[providerIdForUrl(baseUrl)] ?? 'Custom';
 }
+
+/** Iranian providers (no VPN, rial billing) - used for Toman cost display. */
+const IRANIAN_PROVIDER_IDS = new Set(['kayaai', 'avalai', 'metis', 'liara', 'arvan', 'navaan']);
+
+export function isIranianProvider(providerId: string): boolean {
+    return IRANIAN_PROVIDER_IDS.has(providerId);
+}

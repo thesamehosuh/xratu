@@ -203,6 +203,8 @@ const fa = {
     copyMsg: 'کپی پاسخ',
     copiedMsg: 'کپی شد',
     tokensTitle: 'مصرف توکن این پاسخ',
+    costTitle: 'هزینه تخمینی این پاسخ',
+    sessionCostTitle: 'هزینه تخمینی این گفتگو',
     retrying: 'در حال تلاش دوباره',
 
     // Approval card
@@ -641,6 +643,8 @@ const en: Record<keyof typeof fa, string> = {
     copyMsg: 'Copy answer',
     copiedMsg: 'Copied',
     tokensTitle: 'Token usage for this answer',
+    costTitle: 'Estimated cost of this answer',
+    sessionCostTitle: 'Estimated cost of this conversation',
     retrying: 'Retrying',
 
     approvalHead: 'Tool execution request',

@@ -42,6 +42,7 @@ import type { ApprovalPayload, ChatMessage, ConnectionStatus, Step, TaskListItem
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { t, getLocale } from '../i18n';
 import { formatClockTime } from '../datetime';
+import { formatCost } from '../cost';
 
 function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage['retryStatus']> }) {
     const [seconds, setSeconds] = useState(Math.ceil(retryStatus.nextRetryInMs / 1000));
@@ -1830,6 +1831,11 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                     {message.usage && (
                         <span className="msg-meta" dir="ltr" title={t('tokensTitle')}>
                             ↑ {fmtTok(message.usage.input_tokens)} ↓ {fmtTok(message.usage.output_tokens)}
+                        </span>
+                    )}
+                    {message.usage?.cost && (
+                        <span className="msg-meta" dir="auto" title={t('costTitle')}>
+                            {formatCost(message.usage.cost)}
                         </span>
                     )}
                     <span className="msg-meta">
