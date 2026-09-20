@@ -66,11 +66,17 @@
 					"type": "string",
 					"default": "",
 					"description": "HTTP/HTTPS proxy URL for model and web requests, e.g. http://127.0.0.1:7890. Overrides VS Code's http.proxy setting and the HTTPS_PROXY/HTTP_PROXY environment variables. SOCKS proxies are not supported yet."
+				},
+				"xratu.noProxy": {
+					"type": "string",
+					"default": "",
+					"description": "Comma-separated hosts that bypass the proxy (e.g. localhost,127.0.0.1,.internal). Overrides VS Code's http.noProxy setting and the NO_PROXY environment variable. Supports * and host:port entries; CIDR ranges are not supported."
 				}
 			},
 			"restrictedConfigurations": [
 				"xratu.mcpServers",
-				"xratu.proxyUrl"
+				"xratu.proxyUrl",
+				"xratu.noProxy"
 			]
 		},
 		"commands": [

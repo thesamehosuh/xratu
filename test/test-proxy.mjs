@@ -10,7 +10,10 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { pickProxyUrl, isSocksProxy, isHttpProxy, redactProxyUrl } = require('../out/proxy.js');
+const {
+    pickProxyUrl, isSocksProxy, isHttpProxy, redactProxyUrl,
+    pickNoProxy, parseNoProxy, hostFromUrl, hostMatchesNoProxy,
+} = require('../out/proxy.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -49,6 +52,27 @@ check('redacts user only', redactProxyUrl('http://user@proxy.example:8080'), 'ht
 check('no credentials unchanged', redactProxyUrl('http://proxy.example:8080'), 'http://proxy.example:8080/');
 check('unparseable -> placeholder', redactProxyUrl('not a url'), 'invalid URL');
 check('secret absent after redaction', redactProxyUrl('http://user:s3cret@proxy.example:8080').includes('s3cret'), false);
+
+// --- no_proxy resolution + matching ---
+check('noProxy explicit wins', pickNoProxy({ explicit: 'a.example', vscodeHttpNoProxy: 'b.example', env: { NO_PROXY: 'c.example' } }), 'a.example');
+check('noProxy http setting beats env', pickNoProxy({ explicit: '', vscodeHttpNoProxy: 'b.example', env: { NO_PROXY: 'c.example' } }), 'b.example');
+check('noProxy env fallback', pickNoProxy({ env: { no_proxy: 'c.example' } }), 'c.example');
+check('noProxy none -> empty', pickNoProxy({ env: {} }), '');
+check('parseNoProxy splits/trims/lowercases', parseNoProxy(' Localhost, .Internal ,, ').join('|'), 'localhost|.internal');
+
+check('hostFromUrl keeps port', hostFromUrl('https://API.OpenAI.com:8443/v1'), 'api.openai.com:8443');
+check('hostFromUrl tolerates no scheme', hostFromUrl('localhost:11434/v1'), 'localhost:11434');
+check('hostFromUrl invalid -> null', hostFromUrl('::::'), null);
+
+check('noProxy * matches all', hostMatchesNoProxy('anything.example', ['*']), true);
+check('noProxy exact host', hostMatchesNoProxy('api.openai.com', ['api.openai.com']), true);
+check('noProxy bare domain matches subdomain', hostMatchesNoProxy('api.openai.com', ['openai.com']), true);
+check('noProxy dot-prefix matches subdomain', hostMatchesNoProxy('api.openai.com', ['.openai.com']), true);
+check('noProxy lookalike does not match', hostMatchesNoProxy('notopenai.com', ['openai.com']), false);
+check('noProxy port must match', hostMatchesNoProxy('proxy.example:8080', ['proxy.example:9090']), false);
+check('noProxy port match', hostMatchesNoProxy('proxy.example:8080', ['proxy.example:8080']), true);
+check('noProxy localhost', hostMatchesNoProxy('localhost:11434', ['localhost']), true);
+check('noProxy empty list no match', hostMatchesNoProxy('api.openai.com', []), false);
 
 console.log(failed === 0 ? '\nproxy: all tests passed' : `\nproxy: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
