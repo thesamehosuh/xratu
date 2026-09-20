@@ -12,11 +12,11 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-session-store.mjs
  */
 import { createRequire } from 'module';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 const require = createRequire(import.meta.url);
-const { LocalSessionStore, resolveSessionTitle } = require('../out/local/localSessionStore.js');
+const { LocalSessionStore, resolveSessionTitle, renameWithRetry } = require('../out/local/localSessionStore.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -183,6 +183,41 @@ try {
     let loaded7 = await store.load(meta7.id);
     check('content-shaped first message survives restore',
         resolveSessionTitle(loaded7.title, loaded7.renamed, loaded7.workspace, loaded7.uiHistory), 'fix the login bug');
+
+    // 12. renameWithRetry: transient Windows locks are retried, non-transient
+    //     errors fail fast, and a persistent lock falls back to copy+unlink.
+    {
+        let calls = 0;
+        const flaky = async () => {
+            calls++;
+            if (calls < 3) { const e = new Error('locked'); e.code = 'EPERM'; throw e; }
+        };
+        await renameWithRetry('a', 'b', flaky);
+        check('renameWithRetry retries transient EPERM', calls, 3);
+    }
+    {
+        let calls = 0;
+        const fatal = async () => { calls++; const e = new Error('missing'); e.code = 'ENOENT'; throw e; };
+        let threw = false;
+        try { await renameWithRetry('a', 'b', fatal); } catch { threw = true; }
+        check('renameWithRetry rethrows non-transient immediately', threw && calls === 1, true);
+    }
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'xratu-rename-'));
+        const from = join(dir, 'snapshot.json.tmp');
+        const to = join(dir, 'snapshot.json');
+        writeFileSync(from, 'new data');
+        writeFileSync(to, 'old data');
+        let attempts = 0;
+        const alwaysLocked = async () => { attempts++; const e = new Error('locked'); e.code = 'EBUSY'; throw e; };
+        let threw = false;
+        try { await renameWithRetry(from, to, alwaysLocked); } catch { threw = true; }
+        // No in-place copy fallback: atomicity must survive a persistent lock.
+        check('persistent lock throws instead of overwriting', threw, true);
+        check('destination untouched on failure', readFileSync(to, 'utf8'), 'old data');
+        check('retries every attempt before throwing', attempts, 6);
+        rmSync(dir, { recursive: true, force: true });
+    }
 } finally {
     rmSync(root, { recursive: true, force: true });
 }

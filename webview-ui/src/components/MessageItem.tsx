@@ -40,6 +40,7 @@ import {
 import type { ApprovalPayload, ChatMessage, ConnectionStatus, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { t, getLocale } from '../i18n';
+import { formatClockTime } from '../datetime';
 
 function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage['retryStatus']> }) {
     const [seconds, setSeconds] = useState(Math.ceil(retryStatus.nextRetryInMs / 1000));
@@ -1827,7 +1828,7 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                         </span>
                     )}
                     <span className="msg-meta">
-                        {copied ? t('copiedMsg') : new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {copied ? t('copiedMsg') : formatClockTime(message.createdAt)}
                     </span>
                 </div>
             )}
@@ -1855,7 +1856,7 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                         </button>
                     )}
                     <span className="msg-meta">
-                        {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatClockTime(message.createdAt)}
                     </span>
                 </div>
             )}
