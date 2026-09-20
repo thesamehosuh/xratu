@@ -521,6 +521,12 @@ export function App() {
         (userIndex: number, value: string) => setEditDraft({ userIndex, value }),
         []
     );
+    // Restore icon on a user bubble: the host confirms the scope (files only,
+    // or files + rewind the conversation) before touching anything.
+    const handleRestoreCheckpoint = useCallback(
+        (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
+        [send]
+    );
 
     // Task-list edit: optimistic local update + host persistence (the host
     // stores the per-session override and echoes taskListState back).
@@ -815,6 +821,7 @@ export function App() {
                     onApprovalDecision={handleApprovalDecision}
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
+                    onRestoreCheckpoint={handleRestoreCheckpoint}
                     taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
                 />
                 {showJump && (

@@ -984,6 +984,78 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /** Restore to a specific turn's checkpoint (the restore icon on a user
+     *  bubble). Confirms the scope first - files only, or files plus a
+     *  conversation rewind to before that turn - then reuses the same shadow
+     *  restore + ledger truncation as edit/resend. */
+    private async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
+        if (!this._view) return;
+        if (this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchBusy');
+            return;
+        }
+        const folder = vscode.workspace.workspaceFolders?.[0];
+        if (!folder) {
+            this.notifyBanner('error', 'notifNoFolder');
+            return;
+        }
+
+        const choice = await this.confirmBanner(
+            'checkpointScopeConfirm',
+            ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
+        );
+        if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
+        const rewindChat = choice === 'checkpointScopeFilesAndChat';
+
+        // The confirm is non-blocking: a run may have started (or the history
+        // changed) while it was open. Re-check before mutating anything.
+        if (this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchBusy');
+            return;
+        }
+
+        let emptySeed = false;
+        try {
+            const result = await this._checkpoints.restoreCheckpoint(folder.uri.fsPath, sha);
+            if (result.changed) {
+                this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
+            }
+        } catch (e) {
+            // Empty seed = the workspace was empty at that turn's start.
+            // Restoring TO the seed would wipe files created since, so skip
+            // the file restore - but never silently.
+            if (e instanceof EmptySeedError) {
+                emptySeed = true;
+            } else {
+                this.notifyBanner('error', 'notifCpRestoreFailed', {
+                    error: e instanceof Error ? e.message : String(e),
+                });
+                return;
+            }
+        }
+
+        if (!rewindChat) {
+            if (emptySeed) this.notifyBanner('info', 'checkpointEmptySeed');
+            return;
+        }
+
+        // Re-resolve the turn: the index may be stale after the confirm.
+        const targetIdx = this._findUserEntry(userIndex);
+        if (targetIdx < 0) {
+            this.notifyBanner('warning', 'checkpointTurnGone');
+            return;
+        }
+        // Match _rewindAndResend: discard approval bookkeeping for the turns
+        // being removed, or it can later close timeline items that are gone.
+        this._approvalCloseItems = {};
+        this._history = this._history.slice(0, targetIdx);
+        const localIdx = this._findLocalUserEntry(userIndex);
+        if (localIdx >= 0) this._localHistory = this._localHistory.slice(0, localIdx);
+        this._dropOrphanedTaskListEdit();
+        this._view.webview.postMessage({ type: 'truncateFromUser', userIndex });
+        await this._persistLocalSession();
+    }
+
     /** Read files via vscode.workspace.fs and hand them to the webview
      *  composer (explorer context menu + palette file dialog paths - the
      *  sidebar webview view cannot receive drag-and-drop, by VS Code design). */
@@ -2360,7 +2432,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             this._cancelActiveRequests();
                             break;
                         case 'restoreCheckpoint':
-                            void this.restoreCheckpointFlow();
+                            if (typeof data.sha === 'string' && data.sha) {
+                                void this._restoreCheckpointAt(
+                                    typeof data.userIndex === 'number' ? data.userIndex : -1,
+                                    data.sha,
+                                );
+                            } else {
+                                void this.restoreCheckpointFlow();
+                            }
                             break;
                         case 'clearHistory':
                             // Legacy sender - same semantics as a new session
@@ -3007,7 +3086,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._resetLiveSegments();
         for (const msg of this._history) {
             if (msg.role === 'user') {
-                this._view.webview.postMessage({ type: 'restoreUser', value: msg.content, attachments: msg.attachments });
+                this._view.webview.postMessage({ type: 'restoreUser', value: msg.content, attachments: msg.attachments, cp: msg.cp });
             } else if (msg.role === 'assistant') {
                 if (Array.isArray(msg.events) && msg.events.length > 0) {
                     this._view.webview.postMessage({ type: 'startResponse' });
@@ -3925,6 +4004,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         this._view?.webview.postMessage({ type: 'error', valueKey: 'requestCancelled' });
                     }
                     return;
+                }
+
+                // Tell the webview which bubble owns this checkpoint so its
+                // restore action has a target. Posted only AFTER both preflight
+                // abort checks: a cancelled turn never commits its user row, so
+                // attaching a sha then would point at a missing turn. steerCarry
+                // turns re-enter with their user row ALREADY ledgered, so their
+                // index is one less than the user count.
+                if (prePromptSha) {
+                    const userCount = this._history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+                    const promptUserIndex = userCount - (opts?.steerCarry ? 1 : 0);
+                    if (promptUserIndex >= 0) {
+                        this._view?.webview.postMessage({ type: 'userCheckpoint', userIndex: promptUserIndex, sha: prePromptSha });
+                    }
                 }
 
                 // The chat cancel controller was registered right after
