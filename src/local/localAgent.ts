@@ -302,6 +302,9 @@ async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>):
     }
 }
 
+/** Tagged stream delta so text and cumulative thinking keep their order. */
+type StreamDelta = { kind: 'text' | 'thinking'; value: string };
+
 async function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -951,7 +954,6 @@ export async function* runLocalAgent(
     for (let round = 0; round < rounds; round++) {
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
-        type StreamDelta = { kind: 'text' | 'thinking'; value: string };
         const queue = new AsyncPushQueue<StreamDelta>();
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
@@ -1180,11 +1182,12 @@ export async function* runLocalAgent(
     for (let wrapAttempt = 0; wrapAttempt < 2; wrapAttempt++) {
         wrapResult = null;
         wrapError = null;
-        const wrapQueue = new AsyncPushQueue<string>();
+        const wrapQueue = new AsyncPushQueue<StreamDelta>();
         const wrapPromise = requestStreamingCompletion(
             { ...request, tools: [] },
             wrapMessages,
-            (delta) => wrapQueue.push(delta),
+            (delta) => wrapQueue.push({ kind: 'text', value: delta }),
+            (thinking) => wrapQueue.push({ kind: 'thinking', value: thinking }),
         )
             .then((value) => { wrapResult = value; return value; })
             // null (not void) on failure: keeps the promise CompletionResult |
@@ -1194,12 +1197,22 @@ export async function* runLocalAgent(
 
         while (wrapResult === null && wrapError === null) {
             const delta = await wrapQueue.pop();
-            if (delta !== null) yield { type: 'chunk', value: delta };
+            if (delta !== null) {
+                if (delta.kind === 'thinking') {
+                    yield { type: 'thinking', value: delta.value };
+                    continue;
+                }
+                yield { type: 'chunk', value: delta.value };
+            }
         }
         while (true) {
             const delta = await wrapQueue.pop();
             if (delta === null) break;
-            yield { type: 'chunk', value: delta };
+            if (delta.kind === 'thinking') {
+                yield { type: 'thinking', value: delta.value };
+                continue;
+            }
+            yield { type: 'chunk', value: delta.value };
         }
         await wrapPromise;
         if (!wrapError) {

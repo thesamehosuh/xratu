@@ -147,6 +147,13 @@ async function testReasoningStreamsAsCumulativeThinking() {
         const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
         assert.deepEqual(thinking, ['step one ', 'step one step two']);
 
+        // Ordering: reasoning must arrive BEFORE the answer content, not be
+        // reordered behind it.
+        const kinds = events
+            .filter((e: any) => e.type === 'thinking' || e.type === 'chunk')
+            .map((e: any) => e.type);
+        assert.deepEqual(kinds, ['thinking', 'thinking', 'chunk']);
+
         // Reasoning must never leak into the assistant's answer text.
         const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
         assert.deepEqual(chunks, ['answer']);
@@ -903,6 +910,44 @@ async function testWrapupWithoutTextEmitsFallback() {
 }
 
 
+async function testWrapupReasoningIsForwarded() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        // Wrap-up round offers no tools and streams reasoning + final text.
+        return sse(reasoningSse(['wrap reasoning'], ['final answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // The wrap-up path must forward thinking too - it used to parse
+        // reasoning and drop it.
+        const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
+        assert.deepEqual(thinking, ['wrap reasoning']);
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'final answer'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testWrapupOverflowCompactsAndRetries() {
     const requests: any[] = [];
     const originalFetch = globalThis.fetch;
@@ -989,6 +1034,7 @@ async function main() {
     await testWrapupToolCallIsIgnored();
     await testWrapupRequestFailureStillErrors();
     await testWrapupWithoutTextEmitsFallback();
+    await testWrapupReasoningIsForwarded();
     await testWrapupOverflowCompactsAndRetries();
 
     console.log('local-agent.test.ts: all tests passed');
