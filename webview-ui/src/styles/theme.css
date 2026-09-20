@@ -1396,7 +1396,12 @@ button {
     border-inline-start: 2px solid var(--xratu-accent);
     background: var(--xratu-accent-faint);
     color: var(--vscode-descriptionForeground);
-    border-radius: 0 var(--xratu-radius-xs) var(--xratu-radius-xs) 0;
+    /* Logical corners so the rounded side always faces away from the accent
+       edge: flat on the inline-start (accent) corners, rounded on inline-end. */
+    border-start-start-radius: 0;
+    border-start-end-radius: var(--xratu-radius-xs);
+    border-end-start-radius: 0;
+    border-end-end-radius: var(--xratu-radius-xs);
 }
 
 .msg-content blockquote > :first-child {
@@ -4670,6 +4675,10 @@ pre.tool-cmd {
 
 .cred-search-wrap.combobox input {
     padding-inline-start: 27px;
+    /* The filter query is provider names/URLs (Latin); lock the value to LTR
+       while the Persian placeholder follows the page direction (see the RTL
+       placeholder rule at the end of this file). */
+    direction: ltr;
 }
 
 .cred-provider-menu {
@@ -5943,6 +5952,12 @@ button.mcp-row-main:hover strong {
     transform: scaleY(-1);
 }
 
+/* Directional glyphs (send arrow, reply corner) must mirror in RTL so they
+   point along the reading direction - lucide has no pre-mirrored variants. */
+[dir='rtl'] .rtl-flip {
+    transform: scaleX(-1);
+}
+
 /* ---------------------------------------------------------------------------
  * RTL (fa) fixes - inputs stay LTR-locked for their VALUES, but Persian
  * placeholders and start-alignment must follow the page direction.
@@ -5953,6 +5968,7 @@ button.mcp-row-main:hover strong {
    (typed values remain LTR: keys, URLs). */
 [dir='rtl'] .cred-secret input::placeholder,
 [dir='rtl'] .saved-edit-row input::placeholder,
+[dir='rtl'] .cred-search-wrap input::placeholder,
 [dir='rtl'] .task-list-edit-input::placeholder {
     direction: rtl;
 }

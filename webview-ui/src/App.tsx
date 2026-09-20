@@ -815,6 +815,7 @@ export function App() {
                     onApprovalDecision={handleApprovalDecision}
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
+                    taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
                 />
                 {showJump && (
                     <button
