@@ -1331,6 +1331,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return usd ? usd.amount : null;
     }
 
+    /** Cache the cost-display currency for a provider base URL. Called when a
+     *  run starts AND when the active provider is resolved (model fetch), so a
+     *  reopened Iranian session is not shown in USD after an extension
+     *  reload. */
+    private _setCostCurrencyFor(baseUrl: string): void {
+        const rate = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
+        this._runTomanPerUsd = rate > 0 ? rate : 0;
+        this._runCostCurrency = isIranianProvider(this._providerIdForUrl(baseUrl)) && this._runTomanPerUsd > 0
+            ? 'IRT'
+            : 'USD';
+    }
+
     /** Convert a USD amount to the run's display currency. */
     private _displayCost(usd: number | null): { amount: number; currency: 'USD' | 'IRT' } | null {
         if (usd == null || !Number.isFinite(usd) || usd <= 0) return null;
@@ -2032,11 +2044,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
-        const tomanRate = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
-        this._runTomanPerUsd = tomanRate > 0 ? tomanRate : 0;
-        this._runCostCurrency = isIranianProvider(this._providerIdForUrl(active.baseUrl)) && this._runTomanPerUsd > 0
-            ? 'IRT'
-            : 'USD';
+        this._setCostCurrencyFor(active.baseUrl);
 
         try {
             const agent = runLocalAgent(
@@ -2254,6 +2262,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     if (roundUsd != null && roundUsd > 0) {
                         this._sessionCostUsd += roundUsd;
                         this._postSessionCost();
+                        // Persist soon (throttled): a crash between the round
+                        // and the turn-level save must not lose the spend.
+                        this._scheduleLocalPartialPersist();
                     }
                 }
                 // Mirror cloud behavior: the webview's context meter tracks
@@ -2421,6 +2432,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 visionCapable: this.isLocalModelVisionCapable(),
                 capabilities,
             });
+            // The active provider is known here (even before any run), so the
+            // cost currency is correct for a reopened session - and re-post the
+            // total in case it was shown in the wrong currency.
+            this._setCostCurrencyFor(baseUrl);
+            this._postSessionCost();
             return true;
         } catch (e) {
             this._view.webview.postMessage({
@@ -3402,6 +3418,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._sessionId = snapshot.sessionId;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
+        // Restore the session's cumulative spend (reset by _resetSessionLedgers
+        // above) - switching sessions must not zero an existing total.
+        this._sessionCostUsd = snapshot.totalCostUsd ?? 0;
         this._sessionSummary = snapshot.summary ?? null;
         // A stored title that is still the workspace placeholder reads as
         // untitled - otherwise the placeholder blocks first-message seeding
