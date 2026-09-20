@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -1354,12 +1354,51 @@ function escapeHtml(s: string): string {
  *  patterns the JS engine can't express - display-only highlighting. */
 const SHIKI_ENGINE = createJavaScriptRegexEngine({ forgiving: true });
 
-/** Catppuccin Mocha - soft pastel token palette (lavender keywords, blue
- *  functions, peach params) on a dark base; flashy but easy on the eyes. */
-const SHIKI_THEME = 'catppuccin-mocha';
+/** Match the host code blocks: same github pair, picked from the VS Code
+ *  theme the webview is rendered under (body carries vscode-light/-dark). */
+const SHIKI_DARK_THEME = 'github-dark';
+const SHIKI_LIGHT_THEME = 'github-light';
+
+function currentShikiTheme(): string {
+    if (typeof document === 'undefined') return SHIKI_DARK_THEME;
+    return document.body?.classList.contains('vscode-light') ? SHIKI_LIGHT_THEME : SHIKI_DARK_THEME;
+}
+
+// One shared observer watches the body theme class and notifies every mounted
+// code block, so switching VS Code themes re-highlights already-rendered pills
+// instead of leaving stale token colors until the webview is recreated.
+const themeListeners = new Set<() => void>();
+let themeObserver: MutationObserver | null = null;
+
+function onBodyClassMutation(): void {
+    const next = currentShikiTheme();
+    if (next === lastTheme) return;
+    lastTheme = next;
+    for (const listener of themeListeners) listener();
+}
+let lastTheme = currentShikiTheme();
+
+function subscribeTheme(callback: () => void): () => void {
+    if (typeof document !== 'undefined') {
+        if (!themeObserver) {
+            themeObserver = new MutationObserver(onBodyClassMutation);
+            themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        }
+        themeListeners.add(callback);
+    }
+    return () => {
+        themeListeners.delete(callback);
+    };
+}
+
+/** Reactive VS Code code-block theme for the webview. */
+function useShikiTheme(): string {
+    return useSyncExternalStore(subscribeTheme, currentShikiTheme, currentShikiTheme);
+}
 
 function useHighlightedCode(code: string, lang: string): string[] {
     const [highlighted, setHighlighted] = useState<string[]>([]);
+    const theme = useShikiTheme();
     useEffect(() => {
         if (!code || lang === 'text') {
             setHighlighted([]);
@@ -1367,12 +1406,12 @@ function useHighlightedCode(code: string, lang: string): string[] {
         }
         let cancelled = false;
         getSingletonHighlighter({
-            themes: [SHIKI_THEME],
+            themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME],
             langs: [lang === 'text' ? 'plaintext' : lang],
             engine: SHIKI_ENGINE,
         }).then((h) => {
             if (cancelled) return;
-            const html = h.codeToHtml(code, { lang, theme: SHIKI_THEME });
+            const html = h.codeToHtml(code, { lang, theme });
             const match = html.match(/<code>([\s\S]*?)<\/code>/);
             if (!match) {
                 setHighlighted([]);
@@ -1386,7 +1425,7 @@ function useHighlightedCode(code: string, lang: string): string[] {
             if (!cancelled) setHighlighted([]);
         });
         return () => { cancelled = true; };
-    }, [code, lang]);
+    }, [code, lang, theme]);
     return highlighted;
 }
 
@@ -1682,7 +1721,7 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
 
             {role === 'user' && message.steered && (
                 <div className="msg-steered-badge" title={t('steeredBadge')}>
-                    <CornerDownRight size={11} aria-hidden="true" />
+                    <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
                     <span>{t('steeredBadge')}</span>
                 </div>
             )}

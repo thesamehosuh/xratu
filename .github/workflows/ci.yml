@@ -61,6 +61,9 @@ jobs:
       - name: Endpoint guard tests
         run: npm run test:endpoint-guard
 
+      - name: Base URL normalization tests
+        run: npm run test:base-url
+
       - name: Compaction tests
         run: npm run test:compaction
 
