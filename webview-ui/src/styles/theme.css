@@ -1382,7 +1382,12 @@ button {
     border-inline-start: 2px solid var(--xratu-accent);
     background: var(--xratu-accent-faint);
     color: var(--vscode-descriptionForeground);
-    border-radius: 0 var(--xratu-radius-xs) var(--xratu-radius-xs) 0;
+    /* Logical corners so the rounded side always faces away from the accent
+       edge: flat on the inline-start (accent) corners, rounded on inline-end. */
+    border-start-start-radius: 0;
+    border-start-end-radius: var(--xratu-radius-xs);
+    border-end-start-radius: 0;
+    border-end-end-radius: var(--xratu-radius-xs);
 }
 
 .msg-content blockquote > :first-child {
@@ -5937,6 +5942,7 @@ button.mcp-row-main:hover strong {
    (typed values remain LTR: keys, URLs). */
 [dir='rtl'] .cred-secret input::placeholder,
 [dir='rtl'] .saved-edit-row input::placeholder,
+[dir='rtl'] .cred-search-wrap input::placeholder,
 [dir='rtl'] .task-list-edit-input::placeholder {
     direction: rtl;
 }
