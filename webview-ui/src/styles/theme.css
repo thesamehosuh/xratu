@@ -304,6 +304,10 @@ button {
 }
 
 .session-row-title {
+    /* The title keeps its width (bounded) and the long, repetitive workspace
+       path absorbs the truncation instead. */
+    flex: 0 0 auto;
+    max-width: 65%;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -314,8 +318,10 @@ button {
 }
 
 .session-row-ws {
-    flex: 0 0 auto;
-    max-width: 40%;
+    /* Takes the remaining space and truncates only when it must - a hard 40%
+       cap clipped ordinary paths far too early. */
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -324,10 +330,9 @@ button {
 }
 
 /* Calendar date on a session row (Jalali in fa). Kept compact and muted so it
-   reads as metadata, not part of the title. */
+   reads as metadata, and sits immediately after the title. */
 .session-row-date {
     flex: 0 0 auto;
-    margin-inline-start: auto;
     font-size: 10px;
     color: var(--vscode-descriptionForeground);
     opacity: 0.85;
@@ -335,6 +340,8 @@ button {
 }
 
 .session-row-action {
+    /* Never shrink: the long, truncating text should give way first. */
+    flex: 0 0 auto;
     opacity: 0;
     transition: opacity 0.12s ease, color 0.15s ease, background 0.15s ease;
 }
