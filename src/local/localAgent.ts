@@ -85,6 +85,9 @@ export interface LocalAgentMessage {
     /** True when a tool message carries a failure (denied/executor error).
      *  The Messages transport maps it to Anthropic's `is_error`. */
     isError?: boolean;
+    /** Provider-native assistant content to replay verbatim (see
+     *  CompletionResult.providerBlocks). Only set on assistant messages. */
+    providerBlocks?: unknown;
 }
 
 export interface LocalAgentRequest {
@@ -332,6 +335,11 @@ interface CompletionResult {
     text: string;
     toolCalls: LocalToolCall[];
     usage: LocalUsage | null;
+    /** Provider-native assistant content to replay verbatim on the next request
+     *  (Anthropic thinking blocks with signatures, Responses reasoning items).
+     *  Required when a thinking/reasoning turn also calls a tool - without it
+     *  the continuation is rejected or loses reasoning state. */
+    providerBlocks?: unknown[];
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
@@ -575,6 +583,14 @@ function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[
             continue;
         }
         if (msg.role === 'assistant') {
+            // Prefer the provider-native blocks captured while streaming
+            // (thinking + signature + tool_use). Reconstructing from text and
+            // tool_calls would drop the thinking state the API requires when a
+            // thinking turn is continued.
+            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+                out.push({ role: 'assistant', content: msg.providerBlocks });
+                continue;
+            }
             const blocks: any[] = [];
             if (typeof msg.content === 'string' && msg.content) {
                 blocks.push({ type: 'text', text: msg.content });
@@ -699,6 +715,11 @@ async function requestMessagesCompletion(
     let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
+    // Provider-native content blocks, in emission order, so a thinking +
+    // tool_use turn can be replayed verbatim on the continuation request.
+    const blockOrder: number[] = [];
+    const blocks = new Map<number, any>();
+    const partialJson = new Map<number, string>();
 
     const consume = (payload: string) => {
         let json: any;
@@ -716,26 +737,60 @@ async function requestMessagesCompletion(
                 const index = Number(json.index ?? 0);
                 if (block?.type === 'tool_use') {
                     toolDeltas.set(index, { id: String(block.id ?? ''), name: String(block.name ?? ''), arguments: '' });
-                } else if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
-                    reasoning += block.thinking;
-                    onThinking?.(reasoning);
-                } else if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
-                    text += block.text;
-                    onDelta(block.text);
+                    blocks.set(index, { type: 'tool_use', id: String(block.id ?? ''), name: String(block.name ?? ''), input: {} });
+                } else if (block?.type === 'thinking') {
+                    const initial = typeof block.thinking === 'string' ? block.thinking : '';
+                    if (initial) {
+                        reasoning += initial;
+                        onThinking?.(reasoning);
+                    }
+                    blocks.set(index, {
+                        type: 'thinking',
+                        thinking: initial,
+                        signature: typeof block.signature === 'string' ? block.signature : '',
+                    });
+                } else if (block?.type === 'redacted_thinking') {
+                    blocks.set(index, { type: 'redacted_thinking', data: block.data });
+                } else if (block?.type === 'text') {
+                    const initial = typeof block.text === 'string' ? block.text : '';
+                    if (initial) {
+                        text += initial;
+                        onDelta(initial);
+                    }
+                    blocks.set(index, { type: 'text', text: initial });
+                } else if (block?.type) {
+                    blocks.set(index, { ...block });
                 }
+                if (blocks.has(index) && !blockOrder.includes(index)) blockOrder.push(index);
                 break;
             }
             case 'content_block_delta': {
                 const delta = json.delta;
+                const index = Number(json.index ?? 0);
+                const block = blocks.get(index);
                 if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
                     text += delta.text;
                     onDelta(delta.text);
+                    if (block) block.text = (block.text ?? '') + delta.text;
                 } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
                     reasoning += delta.thinking;
                     onThinking?.(reasoning);
+                    if (block) block.thinking = (block.thinking ?? '') + delta.thinking;
+                } else if (delta?.type === 'signature_delta' && typeof delta.signature === 'string') {
+                    if (block) block.signature = (block.signature ?? '') + delta.signature;
                 } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
-                    const current = toolDeltas.get(Number(json.index ?? 0));
+                    const current = toolDeltas.get(index);
                     if (current) current.arguments += delta.partial_json;
+                    partialJson.set(index, (partialJson.get(index) ?? '') + delta.partial_json);
+                }
+                break;
+            }
+            case 'content_block_stop': {
+                const index = Number(json.index ?? 0);
+                const block = blocks.get(index);
+                if (block?.type === 'tool_use') {
+                    const raw = partialJson.get(index) ?? '';
+                    if (raw) block.input = parseArguments(raw);
                 }
                 break;
             }
@@ -755,7 +810,8 @@ async function requestMessagesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
-    return finalizeCompletion(text, toolDeltas, usage);
+    const providerBlocks = blockOrder.map((index) => blocks.get(index)).filter(Boolean);
+    return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal.
@@ -797,6 +853,13 @@ function toResponsesBody(request: LocalAgentRequest, messages: LocalAgentMessage
             continue;
         }
         if (msg.role === 'assistant') {
+            // Prefer the provider-native output items (reasoning + message +
+            // function_call) captured while streaming; the Responses API wants
+            // them replayed verbatim so reasoning state survives a tool turn.
+            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+                for (const item of msg.providerBlocks) input.push(item);
+                continue;
+            }
             const content: any[] = [];
             if (typeof msg.content === 'string' && msg.content) {
                 content.push({ type: 'output_text', text: msg.content });
@@ -902,6 +965,10 @@ async function requestResponsesCompletion(
     let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
+    // Output items (reasoning, message, function_call) in order, so a reasoning
+    // + tool-call turn can be replayed verbatim on the continuation request.
+    const itemsByIndex = new Map<number, any>();
+    let completedItems: any[] | null = null;
 
     const consume = (payload: string) => {
         let json: any;
@@ -926,6 +993,7 @@ async function requestResponsesCompletion(
                 break;
             case 'response.output_item.added': {
                 const item = json.item;
+                if (item) itemsByIndex.set(Number(json.output_index ?? 0), item);
                 if (item?.type === 'function_call') {
                     // Key by the ITEM id: arguments deltas reference it.
                     toolDeltas.set(String(item.id ?? item.call_id ?? ''), {
@@ -936,6 +1004,12 @@ async function requestResponsesCompletion(
                 }
                 break;
             }
+            case 'response.output_item.done': {
+                // The done event carries the COMPLETE item (with arguments and
+                // any reasoning payload) - the best thing to replay.
+                if (json.item) itemsByIndex.set(Number(json.output_index ?? 0), json.item);
+                break;
+            }
             case 'response.function_call_arguments.delta': {
                 const current = toolDeltas.get(String(json.item_id ?? ''));
                 if (current && typeof json.delta === 'string') current.arguments += json.delta;
@@ -943,6 +1017,7 @@ async function requestResponsesCompletion(
             }
             case 'response.completed':
                 if (json.response?.usage) usage = responsesUsage(json.response.usage);
+                if (Array.isArray(json.response?.output)) completedItems = json.response.output;
                 break;
             case 'response.failed':
                 throw new Error(`Model response failed: ${json.response?.error?.message ?? 'unknown error'}`);
@@ -959,7 +1034,9 @@ async function requestResponsesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
-    return finalizeCompletion(text, toolDeltas, usage);
+    const providerBlocks = completedItems
+        ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal.
@@ -1016,6 +1093,11 @@ interface CompletionResult {
     text: string;
     toolCalls: LocalToolCall[];
     usage: LocalUsage | null;
+    /** Provider-native assistant content to replay verbatim on the next request
+     *  (Anthropic thinking blocks with signatures, Responses reasoning items).
+     *  Required when a thinking/reasoning turn also calls a tool - without it
+     *  the continuation is rejected or loses reasoning state. */
+    providerBlocks?: unknown[];
 }
 
 function toolRequiresApproval(name: string, definitions: LocalToolDefinition[]): boolean {
@@ -1730,6 +1812,9 @@ export async function* runLocalAgent(
                 type: 'function',
                 function: { name: call.name, arguments: call.argumentsJson },
             })),
+            // Replay provider-native reasoning/thinking blocks on the next
+            // request (required when a thinking turn also calls a tool).
+            ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
         });
 
         const approvalCalls = finalResult.toolCalls.filter((call) => toolRequiresApproval(call.name, request.tools));

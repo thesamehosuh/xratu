@@ -1171,10 +1171,14 @@ async function testMessagesApiToolUse() {
     const responses = [
         sse([
             `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 10 } } })}\n\n`,
-            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } })}\n\n`,
-            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":' } })}\n\n`,
-            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'weighing' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-123' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_stop', index: 1 })}\n\n`,
             `data: ${JSON.stringify({ type: 'message_delta', usage: { output_tokens: 5 } })}\n\n`,
         ]),
         sse([
@@ -1217,6 +1221,14 @@ async function testMessagesApiToolUse() {
         const toolResult = secondInput.flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
             .find((b: any) => b.type === 'tool_result');
         assert.equal(toolResult.tool_use_id, 'toolu_1');
+        // The thinking block (with its signature) must be replayed verbatim on
+        // the continuation - Anthropic rejects a continued thinking turn that
+        // drops it.
+        const assistantTurn = secondInput.find((m: any) => m.role === 'assistant');
+        const thinkingBlock = assistantTurn.content.find((b: any) => b.type === 'thinking');
+        assert.equal(thinkingBlock.thinking, 'weighing');
+        assert.equal(thinkingBlock.signature, 'sig-123');
+        assert.ok(assistantTurn.content.some((b: any) => b.type === 'tool_use' && b.name === 'read_file'));
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1226,9 +1238,12 @@ async function testResponsesApiTextToolAndUsage() {
     const calls: Array<{ url: string; body: any }> = [];
     const responses = [
         sse([
-            `data: ${JSON.stringify({ type: 'response.output_item.added', item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [] } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'weighing' }], encrypted_content: 'enc-1' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"path":"' })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: 'a.txt"}' })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' } })}\n\n`,
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'done' })}\n\n`,
@@ -1272,6 +1287,12 @@ async function testResponsesApiTextToolAndUsage() {
         // The tool result goes back as a function_call_output item.
         const output = calls[1].body.input.find((item: any) => item.type === 'function_call_output');
         assert.equal(output.call_id, 'call_abc');
+        // The reasoning item (with its encrypted payload) is replayed so the
+        // continuation keeps its reasoning state.
+        const reasoningItem = calls[1].body.input.find((item: any) => item.type === 'reasoning');
+        assert.equal(reasoningItem.id, 'rs_1');
+        assert.equal(reasoningItem.encrypted_content, 'enc-1');
+        assert.ok(calls[1].body.input.some((item: any) => item.type === 'function_call' && item.call_id === 'call_abc'));
 
         const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
         assert.deepEqual(chunks, ['done']);
