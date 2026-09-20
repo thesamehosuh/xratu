@@ -114,8 +114,12 @@ export async function probeLocalEndpoint(
                             m.max_context_length,
                             m.context_length,
                         ),
-                        supportsVision: m.capabilities?.vision === true,
-                        supportsTools: m.capabilities?.trained_for_tool_use === true,
+                        // `|| undefined`: absent metadata means UNKNOWN, not
+                        // false - a hard false would stop the caller's
+                        // heuristic fallback and badge every model as
+                        // "no tools".
+                        supportsVision: m.capabilities?.vision === true || undefined,
+                        supportsTools: m.capabilities?.trained_for_tool_use === true || undefined,
                     }))
                     .filter((m: LocalModelInfo) => !!m.id),
             };

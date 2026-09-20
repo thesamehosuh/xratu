@@ -1165,7 +1165,7 @@ export function InputBar({
                                     <span dir="ltr" className="model-item-name">{m}</span>
                                     <span className="model-badges">
                                         {modelWindows?.[m] ? (
-                                            <span className="model-badge" dir="ltr" title={t('modelWindowTitle')}>
+                                            <span className="model-badge" dir="ltr" title={t('modelWindowTitle')} aria-label={t('modelWindowTitle')}>
                                                 {fmtWindow(modelWindows[m])}
                                             </span>
                                         ) : null}

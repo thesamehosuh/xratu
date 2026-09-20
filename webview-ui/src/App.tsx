@@ -580,6 +580,13 @@ export function App() {
         [chat.messages]
     );
 
+    // Per-model windows for the picker badges: the served table with the
+    // user's explicit overrides applied, so a badge reflects what the user set.
+    const modelWindowsMerged = useMemo(
+        () => ({ ...(modelInfo?.contextWindows ?? {}), ...ctxOverrides }),
+        [modelInfo, ctxOverrides]
+    );
+
     // ones render read-only from their own args (stepId no longer matches).
     const taskListView = useMemo(() => {
         for (let i = chat.messages.length - 1; i >= 0; i--) {
@@ -929,7 +936,7 @@ export function App() {
                 onInjectedApplied={() => setInjectedText(null)}
                 models={modelInfo?.models ?? []}
                 modelCapabilities={modelInfo?.capabilities}
-                modelWindows={modelInfo?.contextWindows}
+                modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}
                 onSelectModel={(m) => {
                     setSelectedModel(m);
