@@ -1102,7 +1102,7 @@ export function InputBar({
                             aria-label={stopping ? t('stopAria') : editDraft ? t('editSave') : t('sendAria')}
                             title={stopping ? t('stopTitle') : editDraft ? t('editSave') : t('sendTitle')}
                         >
-                            {stopping ? <Square size={14} /> : editDraft ? <RefreshCw size={14} /> : <Send size={15} />}
+                            {stopping ? <Square size={14} /> : editDraft ? <RefreshCw size={14} /> : <Send size={15} className="rtl-flip" />}
                         </button>
                     </div>
                 </div>
