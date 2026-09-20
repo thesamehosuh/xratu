@@ -4468,7 +4468,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             `style-src ${cspSource} 'unsafe-inline'`,
             `script-src 'nonce-${nonce}'`,
             `img-src ${cspSource} data:`,
-            `font-src ${cspSource}`,
+            // data: is required for the inlined Vazirmatn woff2 (Vite inlines
+            // every asset into the single-file webview; see vite.config.ts).
+            `font-src ${cspSource} data:`,
             "connect-src 'none'",
             "frame-src 'none'",
             "form-action 'none'",
