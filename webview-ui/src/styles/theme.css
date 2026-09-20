@@ -318,11 +318,11 @@ button {
 }
 
 .session-row-ws {
-    /* Takes the remaining space and truncates only when it must - a hard 40%
-       cap clipped ordinary paths far too early. The element is dir-locked to
-       LTR (the `dir` attribute) so the ellipsis lands at the END of the path
-       rather than the start. */
-    flex: 1 1 auto;
+    /* Shrinks when it must but does NOT grow: growing pushed the date to the
+       trailing edge, right next to the edit/delete buttons. The element is
+       dir-locked to LTR (the `dir` attribute) so the ellipsis lands at the END
+       of the path rather than the start. */
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
