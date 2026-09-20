@@ -64,9 +64,10 @@ const PRESETS: Preset[] = [
     { id: 'openai', label: 'OpenAI', group: 'popular', baseUrl: 'https://api.openai.com/v1' },
     { id: 'openrouter', label: 'OpenRouter', group: 'popular', baseUrl: 'https://openrouter.ai/api/v1' },
     { id: 'opencode', label: 'OpenCode Zen', group: 'popular', baseUrl: 'https://opencode.ai/zen/v1' },
-    { id: 'groq', label: 'Groq', group: 'popular', baseUrl: 'https://api.groq.com/openai/v1' },
+    { id: 'opencode-go', label: 'OpenCode Go', group: 'popular', baseUrl: 'https://opencode.ai/zen/go/v1', hintKey: 'opencodeGoHint' },
     { id: 'deepseek', label: 'DeepSeek', group: 'popular', baseUrl: 'https://api.deepseek.com' },
     { id: 'mistral', label: 'Mistral', group: 'popular', baseUrl: 'https://api.mistral.ai/v1' },
+    { id: 'groq', label: 'Groq', group: 'other', baseUrl: 'https://api.groq.com/openai/v1' },
     // Iranian providers - no VPN required, rial payment.
     // Kaya and Avalai expose a shared, documented OpenAI-compatible base URL.
     { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },

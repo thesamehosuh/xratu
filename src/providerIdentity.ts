@@ -54,7 +54,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
     deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together AI',
     fireworks: 'Fireworks AI', cerebras: 'Cerebras', anthropic: 'Anthropic',
     google: 'Google Gemini', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
-    opencode: 'OpenCode Zen', perplexity: 'Perplexity', cohere: 'Cohere',
+    opencode: 'OpenCode Zen', 'opencode-go': 'OpenCode Go',
+    perplexity: 'Perplexity', cohere: 'Cohere',
     nvidia: 'NVIDIA NIM', huggingface: 'Hugging Face', sambanova: 'SambaNova',
     moonshot: 'Moonshot AI', zai: 'Z.AI', vllm: 'vLLM',
     avalai: 'Avalai', metis: 'Metis AI', liara: 'Liara AI',
@@ -77,6 +78,11 @@ export function baseUrlHost(baseUrl: string): string | null {
 export function providerIdForUrl(baseUrl: string): string {
     const host = baseUrlHost(baseUrl);
     if (!host) return 'custom';
+    // OpenCode Zen and Go share the opencode.ai host - the PATH tells them
+    // apart (Go lives under /zen/go/v1).
+    if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
+        return /\/zen\/go(\/|$)/i.test(baseUrl) ? 'opencode-go' : 'opencode';
+    }
     for (const [fragment, id] of PROVIDER_HOSTS) {
         // Match the HOST only, on an exact or dot-boundary basis. Matching the
         // whole URL with `includes` let a path, user-info or lookalike domain
