@@ -1534,7 +1534,9 @@ button {
     border-radius: 4px;
     background: transparent;
     color: var(--vscode-descriptionForeground);
-    font-family: var(--vscode-font-family, inherit);
+    /* inherit (not --vscode-font-family): the label is localized ("کپی" in fa)
+       and must pick up the bundled Persian face from body. */
+    font-family: inherit;
     font-size: 10.5px;
     font-weight: 500;
     cursor: pointer;
