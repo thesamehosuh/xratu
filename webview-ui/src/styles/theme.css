@@ -3007,7 +3007,9 @@ pre.tool-cmd {
 .model-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    /* flex-start (not space-between): badges sit right after the name, and the
+       checkmark is pushed to the trailing edge by its own auto margin. */
+    justify-content: flex-start;
     gap: 8px;
     padding: 6px 9px;
     font-size: var(--xratu-fs-md);
@@ -3028,12 +3030,16 @@ pre.tool-cmd {
 }
 
 .model-check {
+    /* Push the checkmark to the trailing edge so the badges stay beside the
+       model name instead of hugging the check. */
+    margin-inline-start: auto;
     flex-shrink: 0;
 }
 
-/* Model-picker capability badges (context window / vision / no tools). */
+/* Model-picker capability badges (context window / vision / no tools).
+   Plain monochrome marks - no chip chrome - sitting right after the name. */
 .model-item-name {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3043,27 +3049,23 @@ pre.tool-cmd {
 .model-badges {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     flex: none;
+    margin-inline-start: 6px;
+    color: var(--vscode-descriptionForeground);
 }
 
 .model-badge {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 15px;
-    padding: 0 4px;
-    border: 1px solid var(--vscode-widget-border, transparent);
-    border-radius: 4px;
-    background: var(--xratu-accent-faint);
-    color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    border: none;
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: 10px;
     line-height: 1;
     white-space: nowrap;
-}
-
-.model-badge.warn {
-    color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .model-empty {

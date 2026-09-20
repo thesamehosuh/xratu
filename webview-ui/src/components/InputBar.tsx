@@ -1175,7 +1175,7 @@ export function InputBar({
                                             </span>
                                         )}
                                         {modelCapabilities?.[m]?.noTools && (
-                                            <span className="model-badge warn" title={t('modelNoToolsBadge')} aria-label={t('modelNoToolsBadge')}>
+                                            <span className="model-badge" title={t('modelNoToolsBadge')} aria-label={t('modelNoToolsBadge')}>
                                                 <Wrench size={11} />
                                             </span>
                                         )}
