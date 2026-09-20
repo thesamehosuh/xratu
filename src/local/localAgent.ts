@@ -10,6 +10,7 @@
  */
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
+import { normalizeBaseUrl } from './baseUrl';
 
 export type LocalChatTextContent = string;
 
@@ -140,17 +141,6 @@ type OpenAITool = {
         parameters: Record<string, unknown>;
     };
 };
-
-function normalizeBaseUrl(value: string): string {
-    const raw = value.trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(raw)) {
-        throw new Error('Model URL must start with http:// or https://');
-    }
-    // Bases already rooted at a version segment (/v1) or an /api root
-    // (e.g. Kaya AI's https://kayaai.ir/api) are used as-is; everything
-    // else gets the standard OpenAI /v1 suffix.
-    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
-}
 
 function toOpenAITools(tools: LocalToolDefinition[]): OpenAITool[] {
     return tools.map((tool) => ({

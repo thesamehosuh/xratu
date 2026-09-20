@@ -8,6 +8,7 @@
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
 import { isLikelyLocalUrl } from '../endpointGuard';
+import { normalizeBaseUrl } from './baseUrl';
 
 export interface DiscoveredLocalModel {
     connection: LocalModelConnection;
@@ -116,7 +117,7 @@ export async function probeLocalEndpoint(
     }
 
     // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    const openai = await fetchJson(`${normalizeForProbe(baseUrl)}/models`, signal, probeTimeoutMs, apiKey);
+    const openai = await fetchJson(`${normalizeBaseUrl(baseUrl)}/models`, signal, probeTimeoutMs, apiKey);
     if (openai && Array.isArray(openai.data)) {
         return {
             models: openai.data.map((m: any) => ({
@@ -162,11 +163,6 @@ export async function probeLocalEndpoint(
     }
 
     return null;
-}
-
-function normalizeForProbe(value: string): string {
-    const raw = value.trim().replace(/\/+$/, '');
-    return /\/(v1|api)$/.test(raw) ? raw : `${raw}/v1`;
 }
 
 /**
