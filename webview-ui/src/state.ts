@@ -1,6 +1,11 @@
 import type { ChatMessage, FromExtensionMessage, Step } from './types';
 import { t, tf, tOrRaw } from './i18n';
 
+/** Cap on stored live tool output (tail kept). A chatty command (`yes`, a huge
+ *  build log) must not grow webview state without bound - the render cap alone
+ *  is not enough. */
+const LIVE_OUTPUT_MAX = 20_000;
+
 export interface ChatState {
     messages: ChatMessage[];
     busy: boolean;
@@ -327,7 +332,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         // Pair by id when present; else the newest open call.
                         if (msg.callId ? st.callId !== msg.callId : !st.open) return st;
                         seen = true;
-                        return { ...st, live: (st.live ?? '') + msg.value };
+                        return { ...st, live: ((st.live ?? '') + msg.value).slice(-LIVE_OUTPUT_MAX) };
                     });
                     return { ...m, steps };
                 }),
