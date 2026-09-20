@@ -4,10 +4,10 @@
  * Users attach their own MCP servers - stdio commands, WebSocket URLs, or
  * remote streamable-HTTP/SSE endpoints (with optional auth headers) - via
  * the dedicated config files managed by McpConfigStore. Their tools are
- * aggregated into the outbound bridge with a namespaced prefix, so the
- * backend agent sees and calls them like built-in tools - while still
- * executing locally, inside the user's machine, gated by the backend's
- * approval system (unless the user opted a tool into auto-approval).
+ * aggregated into the tool set with a namespaced prefix, so the agent sees
+ * and calls them like built-in tools - while still executing locally, inside
+ * the user's machine, gated by the approval system (unless the user opted a
+ * tool into auto-approval).
  *
  * Naming convention follows the wider MCP ecosystem:
  *   mcp__<server>__<tool>
@@ -23,8 +23,8 @@ import { mcpCleartextHeadersError } from './endpointGuard';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
 // The MCP SDK's websocket client transport needs a WebSocket global under
-// Node - polyfill it here (the only websocket user since the backend tool
-// relay was removed). The `ws` dependency stays for this.
+// Node - polyfill it here (the only websocket user). The `ws` dependency
+// stays for this.
 if (typeof global.WebSocket === 'undefined') {
     (global as any).WebSocket = require('ws');
 }

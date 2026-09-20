@@ -1364,9 +1364,8 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
     // their tokens count too - otherwise a reasoning-heavy turn is
     // under-counted and the continuation overflows without compaction.
     const provider = message.providerBlocks ? JSON.stringify(message.providerBlocks) : '';
-    // Mirror the backend's estimate_tokens fallback (src/deps.py): ~3
-    // chars/token. This errs HIGH (over-budget) - the safe direction, so the
-    // model sees slightly more usage than reality and never overruns.
+    // ~3 chars/token. This errs HIGH (over-budget) - the safe direction, so
+    // the model sees slightly more usage than reality and never overruns.
     return Math.ceil((content.length + calls.length + provider.length) / 3);
 }
 
@@ -1385,11 +1384,11 @@ export function estimateToolTokens(tools: LocalToolDefinition[]): number {
             + (tool.description?.length ?? 0)
             + JSON.stringify(tool.inputSchema).length;
     }
-    // Same ~3 chars/token as estimateMessageTokens (mirrors backend fallback).
+    // Same ~3 chars/token as estimateMessageTokens.
     return Math.ceil(chars / 3);
 }
 
-// --- Context-window auto-compaction (mirrors the backend's thresholds) ---
+// --- Context-window auto-compaction ---
 // The overflow guard in boundHistory only caps history at ~72% of the window.
 // Local models often run 4k–16k windows, so compaction must trigger
 // PROACTIVELY: once a request would fill >= 90% of the window, oldest turns
@@ -1591,7 +1590,7 @@ export function boundToolResults(
     return changed;
 }
 
-// --- AI compaction for the local loop (mirrors the backend's summarizer) ---
+// --- AI compaction for the local loop ---
 // Mechanical dropping alone discards everything the removed turns contained.
 // Before splicing, the dropped turns are summarized by the user's OWN local
 // model (one blocking non-streaming call) and the summary replaces the bare

@@ -2,8 +2,7 @@
  * Local model discovery + capability probing.
  *
  * Probes Ollama, LM Studio, llama.cpp, vLLM, and custom OpenAI-compatible
- * servers. Runs entirely in the extension - the remote backend is never
- * responsible for discovering local models.
+ * servers. Runs entirely in the extension host.
  */
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';

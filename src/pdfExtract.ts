@@ -1,11 +1,10 @@
 // PDF text extraction for composer attachments (host-side, Node runtime).
 //
-// WHY HOST-SIDE: the local agent runtime never touches the cloud backend, so
-// extraction must live in the extension for BOTH paths to benefit. Extracted
-// text is re-packaged as a text/plain attachment and flows through the exact
-// same fenced-block pipeline as text files - cloud and local, one code path.
-// The backend keeps rejecting application/pdf (fail-closed) so a client that
-// bypasses the host can never ship raw PDF bytes to a model.
+// WHY HOST-SIDE: the composer accepts application/pdf and converts it to text
+// before the request is built, so extraction lives in the extension host.
+// Extracted text is re-packaged as a text/plain attachment and flows through
+// the exact same fenced-block pipeline as text files. This is the only path
+// that turns a PDF into prompt content; the host never sends raw PDF bytes.
 //
 // Engine: pdfjs-dist legacy build (pinned 4.x - v5/v6 hard-require DOMMatrix
 // at module load, which does not exist in the Node extension host). Only the
@@ -15,8 +14,8 @@
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
-/** Aligned with the backend's ATTACHMENT_TEXT_MAX_CHARS so an extracted PDF
- *  passes backend re-validation without a second truncation marker. */
+/** Attachment text cap - matches ATTACH_TEXT_MAX_CHARS in extension.ts (the
+ *  user-text builder applies the same cap again; both are idempotent). */
 const PDF_TEXT_MAX_CHARS = 24_000;
 /** Hard page cap: a 1000-page PDF must not freeze the extension host. */
 const PDF_MAX_PAGES = 60;
@@ -139,7 +138,7 @@ export async function extractPdfAttachments(
             id: a.id,
             name: a.name,
             // Re-labeled text/plain: flows through the standard text-attachment
-            // pipeline (backend fenced block / local userText block).
+            // pipeline (fenced block in the user prompt).
             mimeType: 'text/plain',
             size: Buffer.byteLength(block, 'utf8'),
             dataBase64: Buffer.from(block, 'utf8').toString('base64'),

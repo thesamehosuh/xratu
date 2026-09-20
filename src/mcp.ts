@@ -106,7 +106,7 @@ function readLines(fullPath: string): string[] {
 // execution logic. These exports let it call the same code paths the MCP
 // bridge uses. External MCP tools (mcp__*) ARE exposed to the local runtime
 // via the manager (fetched by the host before the run); in plan mode they are
-// dropped entirely, mirroring the backend's unconditional plan-mode denial.
+// dropped entirely: plan mode denies mutating tools unconditionally.
 // ---------------------------------------------------------------------------
 
 const BUILTIN_TOOL_DEFINITIONS: Array<{
@@ -242,9 +242,8 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
 ];
 
 /**
- * Web tools for the LOCAL agent runtime only. The cloud backend implements
- * web_search/fetch_url server-side (src/web_tools.py) and registers its own
- * copies - these must NOT ride the MCP bridge or the names would collide.
+ * Web tools for the LOCAL agent runtime only. They must NOT ride the MCP
+ * bridge or the names would collide with user-configured MCP tools.
  * Execution lives in webTools.ts (extension host, Node fetch).
  */
 const WEB_TOOL_DEFINITIONS: Array<{
@@ -410,9 +409,9 @@ async function dispatchTool(
             return { content: [{ type: 'text', text: 'Error: Empty command' }], isError: true };
         }
         // Only irreversible system-destruction patterns are hard-denied
-        // client-side (everything else is gated by the backend approval
-        // flow). The list covers BOTH shells the tool can use: /bin/bash
-        // and, on Windows, cmd.exe.
+        // client-side (everything else is gated by the approval flow). The
+        // list covers BOTH shells the tool can use: /bin/bash and, on
+        // Windows, cmd.exe.
         const CATASTROPHIC = new RegExp([
             String.raw`\bmkfs(\.\w+)?\b`,
             String.raw`\bdd\b[^|]*\bof=\/dev\/(?:sd|nvme|hd|r?disk\d)`,

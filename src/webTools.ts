@@ -1,10 +1,9 @@
 /**
  * Extension-host web tools for the LOCAL agent runtime.
  *
- * Cloud mode never touches this file: the backend implements web_search /
- * fetch_url server-side (src/web_tools.py). These are mirror implementations
- * so local mode gets the same tools without a backend round-trip. Behavior,
- * limits, and error strings intentionally match the backend.
+ * These tools execute in the extension host (Node fetch) for the local agent
+ * runtime. Behavior, limits, and error strings are part of the contract the
+ * model sees.
  */
 import * as vscode from 'vscode';
 import * as dns from 'dns';
@@ -83,13 +82,12 @@ function embeddedIpv4(groups: number[]): string | null {
 }
 
 /**
- * 198.18.0.0/15 (RFC 2544 benchmark range) is DELIBERATELY not forbidden,
- * unlike the backend's copy of this guard. It is not routable on the public
- * internet; its only real-world appearance is fake-IP DNS from proxy-tunnel
- * clients (Clash Verge, sing-box TUN mode) - common on the censored networks
- * this product targets. There the fetch is transparently intercepted by the
- * tunnel and succeeds; refusing it (the backend's behavior unless PROXY_URL
- * is set) breaks every major site in local mode. Cloud mode is unchanged.
+ * 198.18.0.0/15 (RFC 2544 benchmark range) is DELIBERATELY not forbidden. It
+ * is not routable on the public internet; its only real-world appearance is
+ * fake-IP DNS from proxy-tunnel clients (Clash Verge, sing-box TUN mode) -
+ * common on the censored networks this product targets. There the fetch is
+ * transparently intercepted by the tunnel and succeeds; refusing it would
+ * break every major site.
  */
 function isForbiddenAddress(ip: string): boolean {
     const addr = ip.includes('/') ? ip.split('/')[0] : ip;
@@ -303,8 +301,8 @@ async function webSearchLocal(query: string, maxResults: number, domains: string
         : config.provider;
 
     if (provider === 'parallel') {
-        // Mirrors the backend's parallel branch: mode "fast" keeps the
-        // agent-loop latency low; domain filters ride the source policy.
+        // mode "fast" keeps the agent-loop latency low; domain filters ride
+        // the source policy.
         if (!config.searchApiKey) return 'Error: no web-search provider is configured.';
         const advanced: Record<string, unknown> = { max_results: maxResults };
         if (domainList.length) {
@@ -396,7 +394,7 @@ async function webSearchLocal(query: string, maxResults: number, domains: string
 
 /** Execute one local web tool. Returns the same { output, isError } shape as
  *  the workspace tool executor. Errors are returned as strings (never
- *  thrown) so the model can read them - same contract as the backend. */
+ *  thrown) so the model can read them. */
 export async function executeWebTool(
     name: string,
     args: Record<string, unknown>,

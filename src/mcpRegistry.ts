@@ -1,7 +1,7 @@
 /**
  * Curated registry of vetted MCP servers - the one-click "Add" list in the
- * MCP page. Vendored, offline, no marketplace backend (a mini Cline
- * marketplace). Display strings ride i18n via nameKey/descKey; only servers
+ * MCP page. Vendored and offline (a mini Cline marketplace). Display
+ * strings ride i18n via nameKey/descKey; only servers
  * the maintainer trusts go in here.
  *
  * `server.autoApprove` prefills tool names that are READ-ONLY by design AND

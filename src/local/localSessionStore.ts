@@ -29,8 +29,7 @@ export interface LocalSessionSnapshot {
     pendingTurn?: LocalPendingTurn | null;
 }
 
-/** Slim list entry for the session picker - mirrors the backend's
- *  SessionSummaryItem: metadata only, never transcripts. */
+/** Slim list entry for the session picker: metadata only, never transcripts. */
 export interface LocalSessionMeta {
     id: string;
     title: string;

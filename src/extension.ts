@@ -60,15 +60,14 @@ interface AttachmentMeta {
     path?: string;
 }
 
-/** Reasoning effort levels (backend accepts exactly these; null/absent = Default). */
+/** Reasoning effort levels (null/absent = Default). */
  type ThinkingLevel = 'low' | 'medium' | 'high';
 
 
 
 // ---------------------------------------------------------------------------
-// Attachment validation (host-side re-check - the webview is a UX convenience
-// only and the backend re-validates again; this is the middle layer of the
-// Cline-style three-layer limit contract).
+// Attachment validation (host-side check - the webview's checks are a UX
+// convenience; this is the layer that actually guards the send).
 // ---------------------------------------------------------------------------
 
 const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -79,7 +78,7 @@ const ATTACH_TEXT_EXTRA_TYPES = new Set([
 const ATTACH_MAX_COUNT = 20;
 const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACH_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
-/** Mirrors the backend's ATTACHMENT_TEXT_MAX_CHARS. */
+/** Cap on attachment text (the webview mirrors this value). */
 const ATTACH_TEXT_MAX_CHARS = 24_000;
 
 // Cap for the approval diff's O(m·n) LCS table. 2000×2000 ≈ 4M cells; beyond
@@ -97,9 +96,8 @@ function isTextAttachment(mime: string): boolean {
     return mime.startsWith('text/') || ATTACH_TEXT_EXTRA_TYPES.has(mime);
 }
 
-/** PDFs are allowed IN and are text-extracted host-side (pdfExtract.ts)
- *  before anything reaches the backend - which keeps rejecting raw
- *  application/pdf as fail-closed bypass protection. */
+/** PDFs are allowed IN and are text-extracted host-side (pdfExtract.ts); raw
+ *  application/pdf is never sent to a model. */
 function isPdfAttachment(mime: string): boolean {
     return mime === 'application/pdf';
 }
@@ -562,8 +560,8 @@ interface HistoryMessage {
 }
 
 /** Prompt text for the local loop: text attachments ride as fenced blocks
- *  (no vision needed); caps mirror the backend's ATTACHMENT_TEXT_MAX_CHARS.
- *  Shared by the opening prompt AND steered messages. */
+ *  (no vision needed); caps match ATTACH_TEXT_MAX_CHARS. Shared by the
+ *  opening prompt AND steered messages. */
 function buildLocalUserText(prompt: string, attachments?: ComposerAttachment[]): string {
     const textBlocks: string[] = [];
     for (const a of attachments ?? []) {
@@ -604,8 +602,7 @@ interface StreamOutcome {
  *  than reality overflows the prompt and makes small models degenerate. */
 const LOCAL_DEFAULT_CONTEXT_WINDOW = 8192;
 
-/** Display-event payload caps - mirrors the backend's `_trim_event_payloads`
- *  (chat.py) so the host carries the same bounds the server persists.
+/** Display-event payload caps - bounds what the host persists per event.
  *  Non-mutating: returns a clipped copy only when something was trimmed. */
 const DISPLAY_ARG_LIMIT = 300;
 /** Edit-family payloads: the patch IS the rendered diff body on reload -
@@ -802,11 +799,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    /** Last-served context-window table (provider metadata + backend tables),
+    /** Last-served context-window table (provider metadata + known windows),
      *  persisted so a mid-session extension reload does NOT silently drop the
-     *  real window: without it _contextWindowHint() returns undefined, the
-     *  request carries no llm_context_window, and the backend falls back to
-     *  its 128k default - compacting a 1.3M-window conversation at ~80k. */
+     *  real window: without it _contextWindowHint() returns undefined and the
+     *  run falls back to LOCAL_DEFAULT_CONTEXT_WINDOW (8192) - compacting a
+     *  1.3M-window conversation at ~8k. */
     private _loadContextWindows(): Record<string, number> {
         try {
             const raw = this._globalState.get<string>('xratu.contextWindows');
@@ -1212,7 +1209,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         // No checkpoint for this turn - only chat history rewinds; silent.
 
-        // Rewind BOTH ledgers in place (no backend, no JWT).
+        // Rewind BOTH ledgers in place.
         this._approvalCloseItems = {};
         if (targetIdx >= 0) {
             this._history = this._history.slice(0, targetIdx);
@@ -1571,10 +1568,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return this._credentialModelMap()[credId] ?? null;
     }
 
-    // --- Cloud runtime selection (free vs BYOK) ---------------------------
-    // Free = the hosted runtime: the backend injects its own upstream
-    // credentials and the client sends NONE. BYOK = the user's own key.
-    // The choice persists in globalState, never in the secret store.
+    // --- Runtime selection (free vs BYOK) --------------------------------
+    // Free = the free tier: the client sends NO key. BYOK = the user's own
+    // key. The choice persists in globalState, never in the secret store.
 
     /** Per-runtime model memory: the free runtime remembers its own selection
      *  (a single opaque id) separately from every BYOK credential's map. */
@@ -1587,9 +1583,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // --- Context-window knowledge (BYOK) --------------------------------
-    // Layered like the backend's resolver: the user's explicit per-model
-    // override wins, then provider-reported/snapshot entries from the served
-    // table. The winning value is echoed per request so the stateless relay
+    // Layered resolver: the user's explicit per-model override wins, then
+    // provider-reported/snapshot entries from the served table. The winning
+    // value is echoed per request so the run uses a known window.
     // budgets with exactly what the pill shows.
 
     private _contextWindowOverrides(): Record<string, number> {
@@ -1616,8 +1612,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Best-known window for the selected model: explicit override, else the
      *  longest matching entry of the served table (mirrors resolveWindow in
-     *  the webview). Undefined when nothing is known - the backend then uses
-     *  its own chain. */
+     *  the webview). Undefined when nothing is known. */
     private _contextWindowHint(): number | undefined {
         const model = this._selectedModel;
         if (!model) return undefined;
@@ -1634,9 +1629,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // --- Thinking-level (reasoning effort) selection ----------------------
-    // Per-model, client-held like the context-window overrides: the stateless
-    // relay receives the level echoed per request.  Null/absent = Default -
-    // the backend's Thinking() capability default applies unchanged.
+    // Per-model, client-held like the context-window overrides: the level is
+    // echoed per request. Null/absent = Default - the runtime's own default
+    // applies unchanged.
 
     private _thinkingLevels(): Record<string, ThinkingLevel> {
         try {
@@ -3214,8 +3209,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     // ------------------------------------------------------------------
     // Session management (multi-session: create / list / switch / rename
-    // / delete) - cloud sessions live in the backend, local sessions in
-    // the LocalSessionStore. The toolbar's centered title button drives
+    // / delete) - sessions live in the LocalSessionStore. The toolbar's
+    // centered title button drives
     // all of it through the webview protocol.
     // ------------------------------------------------------------------
 
@@ -3861,7 +3856,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  the workspace files NOW - content is always current at send time, and
      *  the resolved text/image bytes flow through the exact same downstream
      *  pipeline as picker attachments (host validation, PDF extraction,
-     *  local fenced blocks, backend fenced blocks). Mutates entries in place.
+     *  fenced blocks in the user prompt). Mutates entries in place.
      *  Fail-closed: any unresolvable ref aborts the send with a composer
      *  error, never a silently dropped reference. */
     private async _resolveReferenceAttachments(

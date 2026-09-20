@@ -452,8 +452,8 @@ const fa = {
     clearHistoryIncomplete: 'پاکسازی تاریخچه کامل نشد؛ {count} گفتگو حذف نشد.',
     clearHistoryBusy: 'پاکسازی تاریخچه انجام نشد؛ گفتگوی در حال اجرا هنوز بسته نشده. کمی بعد دوباره تلاش کنید.',
     errInternal: 'خطای داخلی: {detail}',
-    // Backend stream errors (routers/chat.py emits the KEY; the provider's
-    // own message rides as the {detail} param)
+    // Stream errors (the host emits the KEY; the provider's own message
+    // rides as the {detail} param)
     attachIsFolder: '«{name}» یک پوشه است؛ فقط فایل قابل پیوست است.',
     localNoResponse: 'پاسخی از سرویس دهنده دریافت نشد.',
     pdfExtractFailed: 'استخراج متن از «{name}» ناموفق بود. فایل ممکن است خراب یا رمزگذاری شده باشد.',
@@ -884,8 +884,8 @@ const en: Record<keyof typeof fa, string> = {
     clearHistoryIncomplete: 'History clear incomplete; {count} conversation(s) could not be deleted.',
     clearHistoryBusy: 'Could not clear history; the running conversation has not settled yet. Try again shortly.',
     errInternal: 'Internal error: {detail}',
-    // Backend stream errors (routers/chat.py emits the KEY; the provider's
-    // own message rides as the {detail} param)
+    // Stream errors (the host emits the KEY; the provider's own message
+    // rides as the {detail} param)
     attachIsFolder: '"{name}" is a folder; only files can be attached.',
     localNoResponse: 'The provider returned no response.',
     pdfExtractFailed: 'Failed to extract text from "{name}". The file may be corrupted or encrypted.',
