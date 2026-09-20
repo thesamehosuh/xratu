@@ -164,6 +164,14 @@ export interface SavedCredential {
 }
 
 /** Slim session list entry (metadata only - never transcripts). */
+/** Per-model capability signals shown as badges in the model picker. Only
+ *  informative signals are present: `vision` when supported, `noTools` when
+ *  the model cannot drive the agent loop. */
+export interface ModelCapability {
+    vision?: boolean;
+    noTools?: boolean;
+}
+
 export interface SessionMeta {
     id: string;
     title: string;
@@ -220,7 +228,7 @@ export type FromExtensionMessage =
     | { type: 'approvalResolved'; approval_id: string; resolution: ApprovalResolution }
     | { type: 'yoloMode'; enabled: boolean }
     | { type: 'planMode'; enabled: boolean }
-    | { type: 'modelInfo'; defaultModel: string; models: string[]; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean }
+    | { type: 'modelInfo'; defaultModel: string; models: string[]; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
     | { type: 'modelsRefreshing'; active: boolean }
     /** History was rewound to before the userIndex-th user message. */
     | { type: 'truncateFromUser'; userIndex: number }

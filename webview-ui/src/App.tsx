@@ -10,6 +10,7 @@ import type {
     McpSaveTarget,
     McpServerPayload,
     McpServerView,
+    ModelCapability,
     NotificationItem,
     SessionMeta,
     SkillView,
@@ -85,6 +86,7 @@ export function App() {
         defaultModel: string;
         models: string[];
         contextWindows: Record<string, number>;
+        capabilities: Record<string, ModelCapability>;
     } | null>(null);
     const [selectedModel, setSelectedModel] = useState<string | null>(null);
     // User's explicit per-model context-window overrides (mirrored from the
@@ -386,6 +388,7 @@ export function App() {
                         defaultModel: msg.defaultModel,
                         models: msg.models,
                         contextWindows: msg.contextWindows ?? {},
+                        capabilities: msg.capabilities ?? {},
                     });
                     setSelectedModel((c) => msg.selectedModel ?? c ?? (msg.defaultModel || null));
                     setVisionCapable(msg.visionCapable ?? null);
@@ -925,6 +928,8 @@ export function App() {
                 injectedText={injectedText}
                 onInjectedApplied={() => setInjectedText(null)}
                 models={modelInfo?.models ?? []}
+                modelCapabilities={modelInfo?.capabilities}
+                modelWindows={modelInfo?.contextWindows}
                 selectedModel={selectedModel}
                 onSelectModel={(m) => {
                     setSelectedModel(m);

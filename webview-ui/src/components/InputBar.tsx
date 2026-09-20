@@ -5,9 +5,11 @@ import {
     Check,
     ChevronUp,
     Cpu,
+    Eye,
     File,
     Link,
     Paperclip,
+    Wrench,
     PencilLine,
     Plus,
     RefreshCw,
@@ -17,7 +19,7 @@ import {
     TriangleAlert,
     X,
 } from 'lucide-react';
-import type { ComposerAttachment, ThinkingLevel, TokenUsage } from '../types';
+import type { ComposerAttachment, ModelCapability, ThinkingLevel, TokenUsage } from '../types';
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
 import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf } from '../i18n';
@@ -237,6 +239,10 @@ interface InputBarProps {
     injectedText?: { id: number; text: string } | null;
     onInjectedApplied?: () => void;
     models?: string[];
+    /** Per-model capability badges (vision / no tools). */
+    modelCapabilities?: Record<string, ModelCapability>;
+    /** Per-model context windows, shown as a compact badge. */
+    modelWindows?: Record<string, number>;
     selectedModel?: string | null;
     onSelectModel?: (model: string) => void;
     onRefreshModels?: () => void;
@@ -293,6 +299,8 @@ export function InputBar({
     injectedText,
     onInjectedApplied,
     models = [],
+    modelCapabilities,
+    modelWindows,
     selectedModel,
     onSelectModel,
     onRefreshModels,
@@ -1154,7 +1162,24 @@ export function InputBar({
                                     className={`model-item${m === selectedModel ? ' selected' : ''}`}
                                     onClick={() => pickModel(m)}
                                 >
-                                    <span dir="ltr">{m}</span>
+                                    <span dir="ltr" className="model-item-name">{m}</span>
+                                    <span className="model-badges">
+                                        {modelWindows?.[m] ? (
+                                            <span className="model-badge" dir="ltr" title={t('modelWindowTitle')}>
+                                                {fmtWindow(modelWindows[m])}
+                                            </span>
+                                        ) : null}
+                                        {modelCapabilities?.[m]?.vision && (
+                                            <span className="model-badge" title={t('modelVisionBadge')} aria-label={t('modelVisionBadge')}>
+                                                <Eye size={11} />
+                                            </span>
+                                        )}
+                                        {modelCapabilities?.[m]?.noTools && (
+                                            <span className="model-badge warn" title={t('modelNoToolsBadge')} aria-label={t('modelNoToolsBadge')}>
+                                                <Wrench size={11} />
+                                            </span>
+                                        )}
+                                    </span>
                                     {m === selectedModel && (
                                         <Check size={13} className="model-check" />
                                     )}

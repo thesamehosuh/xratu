@@ -2348,6 +2348,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             for (const m of probed.models) {
                 if (m.id && m.contextWindow) localWindows[m.id] = m.contextWindow;
             }
+            // Per-model capability badges. Only informative signals are sent:
+            // vision when supported, and "no tools" when the model cannot drive
+            // the agent loop - a tools badge on every model would be noise.
+            const capabilities: Record<string, { vision?: boolean; noTools?: boolean }> = {};
+            for (const m of probed.models) {
+                if (!m.id) continue;
+                const vision = m.supportsVision ?? modelIsLikelyVision(m.id);
+                const tools = m.supportsTools ?? modelLikelySupportsTools(m.id);
+                const entry: { vision?: boolean; noTools?: boolean } = {};
+                if (vision) entry.vision = true;
+                if (!tools) entry.noTools = true;
+                if (entry.vision || entry.noTools) capabilities[m.id] = entry;
+            }
             // Prefer the model remembered for this credential, then the
             // in-memory selection; fall back to the provider's first model.
             const remembered = await this._modelForActiveCredential();
@@ -2368,6 +2381,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 thinkingLevels: this._thinkingLevels(),
                 selectedModel: this._selectedModel ?? undefined,
                 visionCapable: this.isLocalModelVisionCapable(),
+                capabilities,
             });
             return true;
         } catch (e) {
