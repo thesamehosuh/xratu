@@ -40,6 +40,29 @@ export interface LocalSessionMeta {
     renamed?: boolean;
 }
 
+/** Cap on the transcript text scanned per session during a search. */
+const SEARCH_SCAN_CHARS = 200_000;
+
+/**
+ * True when the session's visible transcript contains `needle` (lowercased).
+ * Pulls only the string fields we know carry text instead of stringifying the
+ * whole history, which can be large.
+ */
+function transcriptMatches(uiHistory: unknown, needle: string): boolean {
+    if (!Array.isArray(uiHistory) || !uiHistory.length) return false;
+    let scanned = 0;
+    for (const event of uiHistory) {
+        if (!event || typeof event !== 'object') continue;
+        for (const value of Object.values(event as Record<string, unknown>)) {
+            if (typeof value !== 'string') continue;
+            scanned += value.length;
+            if (value.toLowerCase().includes(needle)) return true;
+            if (scanned >= SEARCH_SCAN_CHARS) return false;
+        }
+    }
+    return false;
+}
+
 const MAX_STORED_CONTENT = 20_000;
 const MAX_STORED_HISTORY = 120;
 const TITLE_MAX_LEN = 48;
@@ -317,6 +340,28 @@ export class LocalSessionStore {
         index.sort((a, b) => b.updatedAt - a.updatedAt);
         if (workspaceRoot == null) return index;
         return index.filter((m) => m.workspace === workspaceRoot);
+    }
+
+    /**
+     * Full-text search across stored sessions: title, workspace, and the
+     * visible transcript. Scans at most `limit` most-recent sessions and caps
+     * the text examined per session so a large history stays responsive.
+     */
+    async search(query: string, workspaceRoot?: string, limit = 200): Promise<LocalSessionMeta[]> {
+        const needle = query.trim().toLowerCase();
+        if (!needle) return [];
+        const candidates = (await this.list(workspaceRoot)).slice(0, limit);
+        const hits: LocalSessionMeta[] = [];
+        for (const meta of candidates) {
+            if (meta.title.toLowerCase().includes(needle)
+                || meta.workspace.toLowerCase().includes(needle)) {
+                hits.push(meta);
+                continue;
+            }
+            const snapshot = await this.load(meta.id);
+            if (snapshot && transcriptMatches(snapshot.uiHistory, needle)) hits.push(meta);
+        }
+        return hits;
     }
 
     /** Session to reopen for a workspace: the preferred id when it still

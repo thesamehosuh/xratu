@@ -128,6 +128,9 @@ export function App() {
     const [sessions, setSessions] = useState<SessionMeta[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(false);
     const [sessionsScope, setSessionsScope] = useState<SessionsScope>('workspace');
+    /** Session-picker search: query text + host results (null = not returned). */
+    const [sessionQuery, setSessionQuery] = useState('');
+    const [sessionResults, setSessionResults] = useState<SessionMeta[] | null>(null);
     /** MCP page state - host-owned; pushed on mcpGetState / mcpSave /
      *  mcpRestart responses. */
     const [mcpServers, setMcpServers] = useState<McpServerView[]>([]);
@@ -155,6 +158,22 @@ export function App() {
     }, []);
 
     const send = useCallback((msg: ToExtensionMessage) => postMessage(msg), []);
+
+    /** Latest query, so a slow search response for an abandoned query is
+     *  dropped instead of flashing stale results. */
+    const sessionQueryRef = useRef('');
+    // Debounced full-text session search while the picker is open.
+    useEffect(() => {
+        sessionQueryRef.current = sessionQuery;
+        if (!sessionsOpen || !sessionQuery.trim()) {
+            setSessionResults(null);
+            return;
+        }
+        const handle = setTimeout(() => {
+            send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all' });
+        }, 200);
+        return () => clearTimeout(handle);
+    }, [sessionQuery, sessionsOpen, sessionsScope, send]);
 
     /** Kick off local-runtime discovery (welcome screen + credentials page).
      *  Probing can finish near-instantly - the ≥1s spinner floor lives in
@@ -340,6 +359,10 @@ export function App() {
                     setSessions(msg.items);
                     setCurrentSessionId(msg.currentId);
                     setSessionsLoading(false);
+                    break;
+                case 'sessionSearchResults':
+                    // Drop stale responses (the query moved on).
+                    if (msg.query === sessionQueryRef.current) setSessionResults(msg.items);
                     break;
                 case 'yoloMode':
                     setYolo(msg.enabled);
@@ -732,6 +755,9 @@ export function App() {
                 sessionsLoading={sessionsLoading}
                 currentSessionId={currentSessionId}
                 sessionsScope={sessionsScope}
+                sessionQuery={sessionQuery}
+                searchResults={sessionResults}
+                onSessionQuery={setSessionQuery}
                 onNewSession={() => {
                     setEditDraft(null);
                     send({ type: 'newSession' });
@@ -741,7 +767,12 @@ export function App() {
                         if (!open) {
                             setSessionsLoading(true);
                             setSessions([]);
+                            setSessionQuery('');
+                            setSessionResults(null);
                             send({ type: 'listSessions', all: sessionsScope === 'all' });
+                        } else {
+                            setSessionQuery('');
+                            setSessionResults(null);
                         }
                         return !open;
                     });

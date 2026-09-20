@@ -8,6 +8,7 @@ import {
     MessagesSquare,
     Pencil,
     Blocks,
+    Search,
     Settings,
     Trash2,
     X,
@@ -28,6 +29,11 @@ interface ToolbarProps {
     sessionsLoading: boolean;
     currentSessionId: string | null;
     sessionsScope: SessionsScope;
+    /** Session-picker search text (host does the full-text search). */
+    sessionQuery: string;
+    /** Search hits for `sessionQuery` (null while idle / not yet returned). */
+    searchResults: SessionMeta[] | null;
+    onSessionQuery: (query: string) => void;
     onNewSession: () => void;
     onToggleSessions: () => void;
     onSessionsScope: (scope: SessionsScope) => void;
@@ -58,6 +64,7 @@ const GROUP_KEYS = { today: 'sessionsToday', yesterday: 'sessionsYesterday', wee
 export function Toolbar({
     conn, yolo, plan,
     sessionTitle, sessionsOpen, sessions, sessionsLoading, currentSessionId, sessionsScope,
+    sessionQuery, searchResults, onSessionQuery,
     onNewSession, onToggleSessions, onSessionsScope, onOpenSession, onRenameSession, onDeleteSession,
     onToggleYolo, onTogglePlan, onEditCredentials, onOpenCapabilities, onOpenSettings,
 }: ToolbarProps) {
@@ -91,6 +98,86 @@ export function Toolbar({
         grouped.get(g)!.push(item);
     }
     const showWorkspace = sessionsScope === 'all';
+    const searching = sessionQuery.trim().length > 0;
+
+    /** One session row (shared by the grouped list and search results). */
+    const renderRow = (item: SessionMeta) => (
+        <div
+            key={item.id}
+            className={`session-row${item.id === currentSessionId ? ' current' : ''}`}
+        >
+            {editingId === item.id ? (
+                <form
+                    className="session-row-edit"
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        const clean = editValue.trim();
+                        if (clean) onRenameSession(item.id, clean);
+                        setEditingId(null);
+                    }}
+                >
+                    <input
+                        className="session-edit-input"
+                        value={editValue}
+                        autoFocus
+                        dir="auto"
+                        maxLength={128}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') setEditingId(null);
+                            e.stopPropagation();
+                        }}
+                    />
+                    <button type="submit" className="ghost-btn small" aria-label={t('sessionsRename')} title={t('sessionsRename')}>
+                        <Check size={13} />
+                    </button>
+                    <button type="button" className="ghost-btn small" onClick={() => setEditingId(null)} aria-label={t('editCancel')} title={t('editCancel')}>
+                        <X size={13} />
+                    </button>
+                </form>
+            ) : confirmId === item.id ? (
+                <div className="session-row-confirm">
+                    <span className="session-row-confirm-text">{t('sessionsDeleteConfirm')}</span>
+                    <button type="button" className="session-danger" onClick={() => { onDeleteSession(item.id); setConfirmId(null); }}>
+                        {t('sessionsDelete')}
+                    </button>
+                    <button type="button" className="ghost-btn small" onClick={() => setConfirmId(null)} aria-label={t('editCancel')} title={t('editCancel')}>
+                        <X size={13} />
+                    </button>
+                </div>
+            ) : (
+                <>
+                    <button
+                        type="button"
+                        className="session-row-main"
+                        onClick={() => { if (item.id !== currentSessionId) onOpenSession(item.id); }}
+                        disabled={item.id === currentSessionId}
+                    >
+                        <span className="session-row-title" dir="auto">{item.title || t('sessionsUntitled')}</span>
+                        {showWorkspace && <span className="session-row-ws" dir="auto">{item.workspace}</span>}
+                    </button>
+                    <button
+                        type="button"
+                        className="ghost-btn small session-row-action"
+                        onClick={() => { setEditingId(item.id); setEditValue(item.title); }}
+                        aria-label={t('sessionsRename')}
+                        title={t('sessionsRename')}
+                    >
+                        <Pencil size={12} />
+                    </button>
+                    <button
+                        type="button"
+                        className="ghost-btn small session-row-action session-row-delete"
+                        onClick={() => setConfirmId(item.id)}
+                        aria-label={t('sessionsDelete')}
+                        title={t('sessionsDelete')}
+                    >
+                        <Trash2 size={12} />
+                    </button>
+                </>
+            )}
+        </div>
+    );
 
     return (
         <header className="toolbar" ref={rootRef}>
@@ -199,99 +286,48 @@ export function Toolbar({
                             <X size={13} />
                         </button>
                     </div>
+                    <div className="session-search">
+                        <Search size={13} />
+                        <input
+                            type="text"
+                            dir="auto"
+                            value={sessionQuery}
+                            onChange={(e) => onSessionQuery(e.target.value)}
+                            placeholder={t('sessionsSearch')}
+                            aria-label={t('sessionsSearch')}
+                        />
+                    </div>
                     <div className="session-pop-list">
-                        {sessionsLoading && sessions.length === 0 && (
-                            <div className="session-empty">{t('sessionsLoading')}</div>
-                        )}
-                        {!sessionsLoading && sessions.length === 0 && (
-                            <div className="session-empty">{t('sessionsEmpty')}</div>
-                        )}
-                        {GROUP_ORDER.map((g) => {
-                            const items = grouped.get(g);
-                            if (!items || items.length === 0) return null;
-                            return (
-                                <div key={g}>
-                                    <div className="session-group-label">{t(GROUP_KEYS[g])}</div>
-                                    {items.map((item) => (
-                                        <div
-                                            key={item.id}
-                                            className={`session-row${item.id === currentSessionId ? ' current' : ''}`}
-                                        >
-                                            {editingId === item.id ? (
-                                                <form
-                                                    className="session-row-edit"
-                                                    onSubmit={(e) => {
-                                                        e.preventDefault();
-                                                        const clean = editValue.trim();
-                                                        if (clean) onRenameSession(item.id, clean);
-                                                        setEditingId(null);
-                                                    }}
-                                                >
-                                                    <input
-                                                        className="session-edit-input"
-                                                        value={editValue}
-                                                        autoFocus
-                                                        dir="auto"
-                                                        maxLength={128}
-                                                        onChange={(e) => setEditValue(e.target.value)}
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Escape') setEditingId(null);
-                                                            e.stopPropagation();
-                                                        }}
-                                                    />
-                                                    <button type="submit" className="ghost-btn small" aria-label={t('sessionsRename')} title={t('sessionsRename')}>
-                                                        <Check size={13} />
-                                                    </button>
-                                                    <button type="button" className="ghost-btn small" onClick={() => setEditingId(null)} aria-label={t('editCancel')} title={t('editCancel')}>
-                                                        <X size={13} />
-                                                    </button>
-                                                </form>
-                                            ) : confirmId === item.id ? (
-                                                <div className="session-row-confirm">
-                                                    <span className="session-row-confirm-text">{t('sessionsDeleteConfirm')}</span>
-                                                    <button type="button" className="session-danger" onClick={() => { onDeleteSession(item.id); setConfirmId(null); }}>
-                                                        {t('sessionsDelete')}
-                                                    </button>
-                                                    <button type="button" className="ghost-btn small" onClick={() => setConfirmId(null)} aria-label={t('editCancel')} title={t('editCancel')}>
-                                                        <X size={13} />
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <button
-                                                        type="button"
-                                                        className="session-row-main"
-                                                        onClick={() => { if (item.id !== currentSessionId) onOpenSession(item.id); }}
-                                                        disabled={item.id === currentSessionId}
-                                                    >
-                                                        <span className="session-row-title" dir="auto">{item.title || t('sessionsUntitled')}</span>
-                                                        {showWorkspace && <span className="session-row-ws" dir="auto">{item.workspace}</span>}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="ghost-btn small session-row-action"
-                                                        onClick={() => { setEditingId(item.id); setEditValue(item.title); }}
-                                                        aria-label={t('sessionsRename')}
-                                                        title={t('sessionsRename')}
-                                                    >
-                                                        <Pencil size={12} />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="ghost-btn small session-row-action session-row-delete"
-                                                        onClick={() => setConfirmId(item.id)}
-                                                        aria-label={t('sessionsDelete')}
-                                                        title={t('sessionsDelete')}
-                                                    >
-                                                        <Trash2 size={12} />
-                                                    </button>
-                                                </>
-                                            )}
+                        {searching ? (
+                            <>
+                                {searchResults === null && (
+                                    <div className="session-empty">{t('sessionsSearching')}</div>
+                                )}
+                                {searchResults !== null && searchResults.length === 0 && (
+                                    <div className="session-empty">{t('sessionsNoMatch')}</div>
+                                )}
+                                {searchResults?.map((item) => renderRow(item))}
+                            </>
+                        ) : (
+                            <>
+                                {sessionsLoading && sessions.length === 0 && (
+                                    <div className="session-empty">{t('sessionsLoading')}</div>
+                                )}
+                                {!sessionsLoading && sessions.length === 0 && (
+                                    <div className="session-empty">{t('sessionsEmpty')}</div>
+                                )}
+                                {GROUP_ORDER.map((g) => {
+                                    const items = grouped.get(g);
+                                    if (!items || items.length === 0) return null;
+                                    return (
+                                        <div key={g}>
+                                            <div className="session-group-label">{t(GROUP_KEYS[g])}</div>
+                                            {items.map((item) => renderRow(item))}
                                         </div>
-                                    ))}
-                                </div>
-                            );
-                        })}
+                                    );
+                                })}
+                            </>
+                        )}
                     </div>
                 </div>
             )}
