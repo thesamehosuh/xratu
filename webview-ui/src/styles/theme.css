@@ -5936,6 +5936,12 @@ button.mcp-row-main:hover strong {
     transform: scaleY(-1);
 }
 
+/* Directional glyphs (send arrow, reply corner) must mirror in RTL so they
+   point along the reading direction - lucide has no pre-mirrored variants. */
+[dir='rtl'] .rtl-flip {
+    transform: scaleX(-1);
+}
+
 /* ---------------------------------------------------------------------------
  * RTL (fa) fixes - inputs stay LTR-locked for their VALUES, but Persian
  * placeholders and start-alignment must follow the page direction.
