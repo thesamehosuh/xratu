@@ -3007,7 +3007,9 @@ pre.tool-cmd {
 .model-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    /* flex-start (not space-between): badges sit right after the name, and the
+       checkmark is pushed to the trailing edge by its own auto margin. */
+    justify-content: flex-start;
     gap: 8px;
     padding: 6px 9px;
     font-size: var(--xratu-fs-md);
