@@ -51,9 +51,14 @@ const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'EEXIST', 'E
 const RENAME_RETRY_DELAYS_MS = [0, 20, 50, 120, 250, 500];
 
 /**
- * `fs.rename` with a short backoff for transient Windows failures, then a
- * copy+unlink fallback. Without this a momentary lock could reject the write
- * and silently drop a turn (the caller only console.errors the save failure).
+ * `fs.rename` with a short backoff for transient Windows failures. Without
+ * this a momentary lock could reject the write and silently drop a turn (the
+ * caller only console.errors the save failure).
+ *
+ * If the destination stays locked through every retry, the error is rethrown.
+ * There is deliberately NO in-place copy fallback: overwriting the live file
+ * would break the temp+rename atomicity and let a concurrent reader parse a
+ * half-written snapshot - worse than a clean, visible save failure.
  *
  * `renameFn` is injectable for tests.
  */
@@ -74,13 +79,7 @@ export async function renameWithRetry(
             if (!code || !TRANSIENT_RENAME_CODES.has(code)) throw e;
         }
     }
-    // The destination stayed locked - overwrite in place, then drop the temp.
-    try {
-        await fs.copyFile(from, to);
-        await fs.unlink(from).catch(() => undefined);
-    } catch {
-        throw lastError;
-    }
+    throw lastError;
 }
 
 /** Fallback title: just the folder name - never the full path. */

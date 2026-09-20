@@ -12,7 +12,7 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-session-store.mjs
  */
 import { createRequire } from 'module';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 const require = createRequire(import.meta.url);
@@ -208,10 +208,14 @@ try {
         const to = join(dir, 'snapshot.json');
         writeFileSync(from, 'new data');
         writeFileSync(to, 'old data');
-        const alwaysLocked = async () => { const e = new Error('locked'); e.code = 'EBUSY'; throw e; };
-        await renameWithRetry(from, to, alwaysLocked);
-        check('persistent lock falls back to overwrite', readFileSync(to, 'utf8'), 'new data');
-        check('fallback removes the temp file', existsSync(from), false);
+        let attempts = 0;
+        const alwaysLocked = async () => { attempts++; const e = new Error('locked'); e.code = 'EBUSY'; throw e; };
+        let threw = false;
+        try { await renameWithRetry(from, to, alwaysLocked); } catch { threw = true; }
+        // No in-place copy fallback: atomicity must survive a persistent lock.
+        check('persistent lock throws instead of overwriting', threw, true);
+        check('destination untouched on failure', readFileSync(to, 'utf8'), 'old data');
+        check('retries every attempt before throwing', attempts, 6);
         rmSync(dir, { recursive: true, force: true });
     }
 } finally {
