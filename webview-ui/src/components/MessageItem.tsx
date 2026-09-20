@@ -1682,7 +1682,7 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
 
             {role === 'user' && message.steered && (
                 <div className="msg-steered-badge" title={t('steeredBadge')}>
-                    <CornerDownRight size={11} aria-hidden="true" />
+                    <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
                     <span>{t('steeredBadge')}</span>
                 </div>
             )}
