@@ -1229,6 +1229,9 @@ async function testMessagesApiToolUse() {
         assert.equal(thinkingBlock.thinking, 'weighing');
         assert.equal(thinkingBlock.signature, 'sig-123');
         assert.ok(assistantTurn.content.some((b: any) => b.type === 'tool_use' && b.name === 'read_file'));
+        // Order is load-bearing: the thinking block must precede the tool_use.
+        const blockTypes = assistantTurn.content.map((b: any) => b.type);
+        assert.ok(blockTypes.indexOf('thinking') < blockTypes.indexOf('tool_use'), 'thinking must precede tool_use');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1293,6 +1296,9 @@ async function testResponsesApiTextToolAndUsage() {
         assert.equal(reasoningItem.id, 'rs_1');
         assert.equal(reasoningItem.encrypted_content, 'enc-1');
         assert.ok(calls[1].body.input.some((item: any) => item.type === 'function_call' && item.call_id === 'call_abc'));
+        // Order is load-bearing: the reasoning item must precede the function call.
+        const inputTypes = calls[1].body.input.map((item: any) => item.type);
+        assert.ok(inputTypes.indexOf('reasoning') < inputTypes.indexOf('function_call'), 'reasoning must precede function_call');
 
         const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
         assert.deepEqual(chunks, ['done']);

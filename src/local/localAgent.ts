@@ -1034,6 +1034,15 @@ async function requestResponsesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
+    // If the stream omitted output_item.done / completed.output, the stored
+    // function_call item still has empty arguments - backfill from the
+    // accumulated deltas so the continuation isn't sent with an empty call.
+    for (const item of itemsByIndex.values()) {
+        if (item?.type === 'function_call' && !item.arguments) {
+            const call = toolDeltas.get(String(item.id ?? item.call_id ?? ''));
+            if (call?.arguments) item.arguments = call.arguments;
+        }
+    }
     const providerBlocks = completedItems
         ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
@@ -1111,10 +1120,14 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
             ? JSON.stringify(message.content)
             : '';
     const calls = message.tool_calls ? JSON.stringify(message.tool_calls) : '';
+    // Provider-native reasoning blocks are RESENT on the continuation, so
+    // their tokens count too - otherwise a reasoning-heavy turn is
+    // under-counted and the continuation overflows without compaction.
+    const provider = message.providerBlocks ? JSON.stringify(message.providerBlocks) : '';
     // Mirror the backend's estimate_tokens fallback (src/deps.py): ~3
     // chars/token. This errs HIGH (over-budget) - the safe direction, so the
     // model sees slightly more usage than reality and never overruns.
-    return Math.ceil((content.length + calls.length) / 3);
+    return Math.ceil((content.length + calls.length + provider.length) / 3);
 }
 
 export function estimateRunTokens(messages: LocalAgentMessage[]): number {
