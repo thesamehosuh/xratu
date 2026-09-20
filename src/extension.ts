@@ -25,6 +25,7 @@ import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './tas
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl } from './providerIdentity';
+import { resolveApiStyle } from './local/apiStyle';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** External MCP manager + config store - module-level so deactivate() can
@@ -2007,6 +2008,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // Route model traffic through the configured proxy. The
                     // dispatcher is cached and undefined when no proxy is set.
                     dispatcher: getProxyDispatcher(active.baseUrl),
+                    // OpenCode Zen/Go route some model families to /messages
+                    // or /responses on the same base URL; everything else is
+                    // OpenAI chat/completions.
+                    apiStyle: resolveApiStyle(active.baseUrl, model),
                 },
                 executor,
                 {

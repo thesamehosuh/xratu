@@ -108,6 +108,9 @@ export interface LocalAgentRequest {
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
+    /** Wire API to use. Resolved by the host via `resolveApiStyle`; defaults
+     *  to OpenAI chat/completions. */
+    apiStyle?: 'chat' | 'messages' | 'responses';
 }
 
 export interface LocalToolExecutor {
@@ -309,16 +312,34 @@ function withDispatcher(init: RequestInit, dispatcher: unknown): RequestInit {
 /** Tagged stream delta so text and cumulative thinking keep their order. */
 type StreamDelta = { kind: 'text' | 'thinking'; value: string };
 
-async function requestStreamingCompletion(
+interface CompletionResult {
+    text: string;
+    toolCalls: LocalToolCall[];
+    usage: LocalUsage | null;
+}
+
+/** Dispatch to the transport the resolved API style calls for. */
+function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
-): Promise<{
-    text: string;
-    toolCalls: LocalToolCall[];
-    usage: LocalUsage | null;
-}> {
+): Promise<CompletionResult> {
+    if (request.apiStyle === 'messages') {
+        return requestMessagesCompletion(request, messages, onDelta, onThinking);
+    }
+    if (request.apiStyle === 'responses') {
+        return requestResponsesCompletion(request, messages, onDelta, onThinking);
+    }
+    return requestChatCompletion(request, messages, onDelta, onThinking);
+}
+
+async function requestChatCompletion(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    onDelta: (textDelta: string) => void,
+    onThinking?: (thinking: string) => void,
+): Promise<CompletionResult> {
     const url = `${normalizeBaseUrl(request.baseUrl)}/chat/completions`;
     const body: Record<string, unknown> = {
         model: request.model,
@@ -481,6 +502,453 @@ async function requestStreamingCompletion(
         });
     }
 
+    return { text, toolCalls, usage };
+}
+
+// --- Anthropic Messages API (/messages) -------------------------------------
+// Used by OpenCode Zen/Go for claude-*, qwen* and minimax-* models. The wire
+// shape differs from chat/completions: system is a top-level param, content is
+// a block array, tool calls are `tool_use` blocks and tool results are
+// `tool_result` blocks inside a USER message.
+
+function makeMessagesHeaders(apiKey?: string | null): Headers {
+    const headers = makeHeaders(apiKey);
+    // Anthropic uses x-api-key; OpenAI-compatible gateways use Bearer. Send
+    // both so either front end works (the extra header is ignored).
+    if (apiKey) headers.set('x-api-key', apiKey);
+    headers.set('anthropic-version', '2023-06-01');
+    return headers;
+}
+
+function imageBlockFromDataUrl(url: string): Record<string, unknown> | null {
+    const match = /^data:([^;]+);base64,(.+)$/i.exec(url);
+    if (!match) return null;
+    return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+}
+
+function messagesContentBlocks(content: LocalAgentMessage['content']): any[] {
+    if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : [];
+    if (!Array.isArray(content)) return [];
+    const blocks: any[] = [];
+    for (const part of content) {
+        if (part.type === 'text' && typeof part.text === 'string' && part.text) {
+            blocks.push({ type: 'text', text: part.text });
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+            const image = imageBlockFromDataUrl(part.image_url.url);
+            blocks.push(image ?? { type: 'image', source: { type: 'url', url: part.image_url.url } });
+        }
+    }
+    return blocks;
+}
+
+function toMessagesBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+    const systemParts: string[] = [];
+    const out: any[] = [];
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            if (typeof msg.content === 'string' && msg.content) systemParts.push(msg.content);
+            continue;
+        }
+        if (msg.role === 'user') {
+            const blocks = messagesContentBlocks(msg.content);
+            if (!blocks.length) continue;
+            const last = out[out.length - 1];
+            if (last && last.role === 'user') last.content.push(...blocks);
+            else out.push({ role: 'user', content: blocks });
+            continue;
+        }
+        if (msg.role === 'assistant') {
+            const blocks: any[] = [];
+            if (typeof msg.content === 'string' && msg.content) {
+                blocks.push({ type: 'text', text: msg.content });
+            } else if (Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'text' && part.text) blocks.push({ type: 'text', text: part.text });
+                }
+            }
+            for (const call of msg.tool_calls ?? []) {
+                blocks.push({
+                    type: 'tool_use',
+                    id: call.id,
+                    name: call.function.name,
+                    input: parseArguments(call.function.arguments),
+                });
+            }
+            if (blocks.length) out.push({ role: 'assistant', content: blocks });
+            continue;
+        }
+        if (msg.role === 'tool') {
+            const block = {
+                type: 'tool_result',
+                tool_use_id: msg.tool_call_id,
+                content: typeof msg.content === 'string' ? msg.content : '',
+            };
+            const last = out[out.length - 1];
+            if (last && last.role === 'user' && Array.isArray(last.content)
+                && last.content.every((b: any) => b.type === 'tool_result')) {
+                last.content.push(block);
+            } else {
+                out.push({ role: 'user', content: [block] });
+            }
+            continue;
+        }
+    }
+
+    // Anthropic requires tool_result blocks to come FIRST in a user turn.
+    for (const turn of out) {
+        if (turn.role === 'user' && Array.isArray(turn.content)
+            && turn.content.some((b: any) => b.type === 'tool_result')) {
+            turn.content.sort((a: any, b: any) => (a.type === 'tool_result' ? 0 : 1) - (b.type === 'tool_result' ? 0 : 1));
+        }
+    }
+
+    const body: Record<string, unknown> = {
+        model: request.model,
+        // max_tokens is REQUIRED by the Messages API.
+        max_tokens: request.maxTokens ?? 4096,
+        messages: out,
+        stream: true,
+    };
+    const system = systemParts.filter(Boolean).join('\n\n');
+    if (system) body.system = system;
+    if (request.tools.length) {
+        body.tools = request.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.inputSchema,
+        }));
+    }
+    if (request.temperature != null) body.temperature = request.temperature;
+    return body;
+}
+
+function mergeMessagesUsage(raw: any, previous: LocalUsage | null): LocalUsage {
+    const input = Number.isFinite(raw?.input_tokens) ? raw.input_tokens : previous?.promptTokens ?? null;
+    const output = Number.isFinite(raw?.output_tokens) ? raw.output_tokens : previous?.completionTokens ?? null;
+    const cached = Number.isFinite(raw?.cache_read_input_tokens) ? raw.cache_read_input_tokens : previous?.cachedTokens ?? null;
+    return { promptTokens: input, completionTokens: output, totalTokens: null, cachedTokens: cached };
+}
+
+async function requestMessagesCompletion(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    onDelta: (textDelta: string) => void,
+    onThinking?: (thinking: string) => void,
+): Promise<CompletionResult> {
+    const url = `${normalizeBaseUrl(request.baseUrl)}/messages`;
+    const body = toMessagesBody(request, messages);
+
+    const outerSignal = request.signal ?? new AbortController().signal;
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort();
+    if (outerSignal.aborted) onOuterAbort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+        response = await fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeMessagesHeaders(request.apiKey),
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        }, request.dispatcher));
+    } catch (e) {
+        if (controller.signal.aborted && !outerSignal.aborted) {
+            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+        }
+        throw e;
+    } finally {
+        clearTimeout(headersTimer);
+    }
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+    }
+    if (!response.body) throw new Error('Model returned no response body.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let reasoning = '';
+    let usage: LocalUsage | null = null;
+    const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
+
+    const consume = (payload: string) => {
+        let json: any;
+        try {
+            json = JSON.parse(payload);
+        } catch {
+            return;
+        }
+        switch (json?.type) {
+            case 'message_start':
+                if (json.message?.usage) usage = mergeMessagesUsage(json.message.usage, usage);
+                break;
+            case 'content_block_start': {
+                const block = json.content_block;
+                const index = Number(json.index ?? 0);
+                if (block?.type === 'tool_use') {
+                    toolDeltas.set(index, { id: String(block.id ?? ''), name: String(block.name ?? ''), arguments: '' });
+                } else if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
+                    reasoning += block.thinking;
+                    onThinking?.(reasoning);
+                } else if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+                    text += block.text;
+                    onDelta(block.text);
+                }
+                break;
+            }
+            case 'content_block_delta': {
+                const delta = json.delta;
+                if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+                    text += delta.text;
+                    onDelta(delta.text);
+                } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+                    reasoning += delta.thinking;
+                    onThinking?.(reasoning);
+                } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+                    const current = toolDeltas.get(Number(json.index ?? 0));
+                    if (current) current.arguments += delta.partial_json;
+                }
+                break;
+            }
+            case 'message_delta':
+                if (json.usage) usage = mergeMessagesUsage(json.usage, usage);
+                break;
+            case 'error':
+                throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
+        }
+    };
+
+    while (true) {
+        const { value, done } = await readStreamChunk(reader);
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const parsed = extractSseData(buffer);
+        buffer = parsed.remainder;
+        for (const payload of parsed.events) consume(payload);
+        if (done) break;
+    }
+    outerSignal.removeEventListener('abort', onOuterAbort);
+
+    return finalizeCompletion(text, toolDeltas, usage);
+}
+
+// --- OpenAI Responses API (/responses) --------------------------------------
+// Used by OpenCode Zen/Go for gpt-*, grok-* and muse-spark-* models. Streams
+// typed events (`response.output_text.delta`, `response.function_call_arguments
+// .delta`, `response.completed`) instead of chat-completion chunks.
+
+function responsesUserContent(content: LocalAgentMessage['content']): any[] {
+    if (typeof content === 'string') return content ? [{ type: 'input_text', text: content }] : [];
+    if (!Array.isArray(content)) return [];
+    const out: any[] = [];
+    for (const part of content) {
+        if (part.type === 'text' && typeof part.text === 'string' && part.text) {
+            out.push({ type: 'input_text', text: part.text });
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+            out.push({ type: 'input_image', image_url: part.image_url.url });
+        }
+    }
+    return out;
+}
+
+function toResponsesBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+    const instructions: string[] = [];
+    const input: any[] = [];
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            if (typeof msg.content === 'string' && msg.content) instructions.push(msg.content);
+            continue;
+        }
+        if (msg.role === 'user') {
+            const content = responsesUserContent(msg.content);
+            if (content.length) input.push({ role: 'user', content });
+            continue;
+        }
+        if (msg.role === 'assistant') {
+            const content: any[] = [];
+            if (typeof msg.content === 'string' && msg.content) {
+                content.push({ type: 'output_text', text: msg.content });
+            } else if (Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'text' && part.text) content.push({ type: 'output_text', text: part.text });
+                }
+            }
+            if (content.length) input.push({ role: 'assistant', content });
+            for (const call of msg.tool_calls ?? []) {
+                input.push({
+                    type: 'function_call',
+                    call_id: call.id,
+                    name: call.function.name,
+                    arguments: call.function.arguments || '{}',
+                });
+            }
+            continue;
+        }
+        if (msg.role === 'tool') {
+            input.push({
+                type: 'function_call_output',
+                call_id: msg.tool_call_id,
+                output: typeof msg.content === 'string' ? msg.content : '',
+            });
+            continue;
+        }
+    }
+
+    const body: Record<string, unknown> = { model: request.model, input, stream: true };
+    const sys = instructions.filter(Boolean).join('\n\n');
+    if (sys) body.instructions = sys;
+    if (request.tools.length) {
+        body.tools = request.tools.map((tool) => ({
+            type: 'function',
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema,
+        }));
+    }
+    if (request.maxTokens != null) body.max_output_tokens = request.maxTokens;
+    if (request.temperature != null) body.temperature = request.temperature;
+    return body;
+}
+
+function responsesUsage(raw: any): LocalUsage {
+    const cached = raw?.input_tokens_details?.cached_tokens;
+    return {
+        promptTokens: Number.isFinite(raw?.input_tokens) ? raw.input_tokens : null,
+        completionTokens: Number.isFinite(raw?.output_tokens) ? raw.output_tokens : null,
+        totalTokens: Number.isFinite(raw?.total_tokens) ? raw.total_tokens : null,
+        cachedTokens: Number.isFinite(cached) ? cached : null,
+    };
+}
+
+async function requestResponsesCompletion(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    onDelta: (textDelta: string) => void,
+    onThinking?: (thinking: string) => void,
+): Promise<CompletionResult> {
+    const url = `${normalizeBaseUrl(request.baseUrl)}/responses`;
+    const body = toResponsesBody(request, messages);
+
+    const outerSignal = request.signal ?? new AbortController().signal;
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort();
+    if (outerSignal.aborted) onOuterAbort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+        response = await fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeHeaders(request.apiKey),
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        }, request.dispatcher));
+    } catch (e) {
+        if (controller.signal.aborted && !outerSignal.aborted) {
+            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+        }
+        throw e;
+    } finally {
+        clearTimeout(headersTimer);
+    }
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+    }
+    if (!response.body) throw new Error('Model returned no response body.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let reasoning = '';
+    let usage: LocalUsage | null = null;
+    const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
+
+    const consume = (payload: string) => {
+        let json: any;
+        try {
+            json = JSON.parse(payload);
+        } catch {
+            return;
+        }
+        switch (json?.type) {
+            case 'response.output_text.delta':
+                if (typeof json.delta === 'string' && json.delta) {
+                    text += json.delta;
+                    onDelta(json.delta);
+                }
+                break;
+            case 'response.reasoning_summary_text.delta':
+            case 'response.reasoning_text.delta':
+                if (typeof json.delta === 'string' && json.delta) {
+                    reasoning += json.delta;
+                    onThinking?.(reasoning);
+                }
+                break;
+            case 'response.output_item.added': {
+                const item = json.item;
+                if (item?.type === 'function_call') {
+                    // Key by the ITEM id: arguments deltas reference it.
+                    toolDeltas.set(String(item.id ?? item.call_id ?? ''), {
+                        id: String(item.call_id ?? item.id ?? ''),
+                        name: String(item.name ?? ''),
+                        arguments: '',
+                    });
+                }
+                break;
+            }
+            case 'response.function_call_arguments.delta': {
+                const current = toolDeltas.get(String(json.item_id ?? ''));
+                if (current && typeof json.delta === 'string') current.arguments += json.delta;
+                break;
+            }
+            case 'response.completed':
+                if (json.response?.usage) usage = responsesUsage(json.response.usage);
+                break;
+            case 'response.failed':
+                throw new Error(`Model response failed: ${json.response?.error?.message ?? 'unknown error'}`);
+            case 'error':
+                throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
+        }
+    };
+
+    while (true) {
+        const { value, done } = await readStreamChunk(reader);
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const parsed = extractSseData(buffer);
+        buffer = parsed.remainder;
+        for (const payload of parsed.events) consume(payload);
+        if (done) break;
+    }
+    outerSignal.removeEventListener('abort', onOuterAbort);
+
+    return finalizeCompletion(text, toolDeltas, usage);
+}
+
+function finalizeCompletion(
+    text: string,
+    toolDeltas: Map<number | string, { id: string; name: string; arguments: string }>,
+    usage: LocalUsage | null,
+): CompletionResult {
+    const toolCalls: LocalToolCall[] = [];
+    for (const call of toolDeltas.values()) {
+        if (!call.id || !call.name) continue;
+        toolCalls.push({
+            id: call.id,
+            name: call.name,
+            argumentsJson: call.arguments,
+            arguments: parseArguments(call.arguments),
+        });
+    }
     return { text, toolCalls, usage };
 }
 

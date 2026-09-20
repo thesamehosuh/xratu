@@ -157,6 +157,7 @@
 		"test:base-url": "node test/test-base-url.mjs",
 		"test:proxy": "node test/test-proxy.mjs",
 		"test:provider-identity": "node test/test-provider-identity.mjs",
+		"test:api-style": "node test/test-api-style.mjs",
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
 		"test:compaction": "node test/test-compaction.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",

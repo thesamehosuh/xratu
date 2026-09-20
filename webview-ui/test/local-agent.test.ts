@@ -1112,7 +1112,182 @@ async function testWrapupOverflowCompactsAndRetries() {
 }
 
 
+async function testMessagesApiTextThinkingAndUsage() {
+    const calls: Array<{ url: string; body: any; headers: any }> = [];
+    const originalFetch = globalThis.fetch;
+    const frames = [
+        `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 120, output_tokens: 0, cache_read_input_tokens: 40 } } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'weighing ' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'options' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_start', index: 1, content_block: { type: 'text' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'hel' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'lo' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_delta', usage: { output_tokens: 2 } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+    ];
+    globalThis.fetch = (async (input, init) => {
+        calls.push({ url: String(input), body: JSON.parse(String(init?.body)), headers: init?.headers });
+        return sse(frames);
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                apiStyle: 'messages',
+                model: 'claude-sonnet-5',
+                apiKey: 'sk-test',
+                maxTokens: 1024,
+            }), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(calls[0].url, 'http://127.0.0.1:11434/v1/messages');
+        assert.equal(calls[0].body.max_tokens, 1024, 'max_tokens is required by Messages');
+        assert.equal(calls[0].body.system, 'You are Xratu.', 'system is a top-level param');
+        assert.equal(calls[0].body.stream, true);
+        const headers = calls[0].headers as Headers;
+        assert.equal(headers.get('x-api-key'), 'sk-test');
+        assert.equal(headers.get('anthropic-version'), '2023-06-01');
+
+        const thinking = events.filter((e: any) => e.type === 'thinking').map((e: any) => e.value);
+        assert.deepEqual(thinking, ['weighing ', 'weighing options'], 'thinking is cumulative');
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['hel', 'lo']);
+        const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
+        assert.equal(usageEvent.usage.promptTokens, 120);
+        assert.equal(usageEvent.usage.completionTokens, 2);
+        assert.equal(usageEvent.usage.cachedTokens, 40);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testMessagesApiToolUse() {
+    const calls: Array<{ url: string; body: any }> = [];
+    const responses = [
+        sse([
+            `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 10 } } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
+            `data: ${JSON.stringify({ type: 'message_delta', usage: { output_tokens: 5 } })}\n\n`,
+        ]),
+        sse([
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } })}\n\n`,
+        ]),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+        calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+        return responses[index++];
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                apiStyle: 'messages',
+                model: 'claude-sonnet-5',
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        // Tools are serialized in the Anthropic shape (input_schema).
+        assert.equal(calls[0].body.tools[0].name, 'read_file');
+        assert.ok(calls[0].body.tools[0].input_schema);
+        const call = events.find((e: any) => e.type === 'toolCall');
+        assert.equal(call.tool, 'read_file');
+        assert.deepEqual(call.args, { path: 'a.txt' });
+        // The tool result rides back as a tool_result block in a USER message.
+        const secondInput = calls[1].body.messages;
+        const toolResult = secondInput.flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
+            .find((b: any) => b.type === 'tool_result');
+        assert.equal(toolResult.tool_use_id, 'toolu_1');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testResponsesApiTextToolAndUsage() {
+    const calls: Array<{ url: string; body: any }> = [];
+    const responses = [
+        sse([
+            `data: ${JSON.stringify({ type: 'response.output_item.added', item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"path":"' })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: 'a.txt"}' })}\n\n`,
+        ]),
+        sse([
+            `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'done' })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.completed', response: { usage: { input_tokens: 50, output_tokens: 7, total_tokens: 57, input_tokens_details: { cached_tokens: 20 } } } })}\n\n`,
+        ]),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+        calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+        return responses[index++];
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                apiStyle: 'responses',
+                model: 'gpt-5.6-luna',
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(calls[0].url, 'http://127.0.0.1:11434/v1/responses');
+        assert.equal(calls[0].body.instructions, 'You are Xratu.');
+        assert.ok(Array.isArray(calls[0].body.input));
+        assert.equal(calls[0].body.tools[0].type, 'function');
+        assert.equal(calls[0].body.tools[0].name, 'read_file');
+
+        const call = events.find((e: any) => e.type === 'toolCall');
+        assert.equal(call.tool, 'read_file');
+        assert.deepEqual(call.args, { path: 'a.txt' });
+
+        // The tool result goes back as a function_call_output item.
+        const output = calls[1].body.input.find((item: any) => item.type === 'function_call_output');
+        assert.equal(output.call_id, 'call_abc');
+
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['done']);
+        const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
+        assert.equal(usageEvent.usage.promptTokens, 50);
+        assert.equal(usageEvent.usage.completionTokens, 7);
+        assert.equal(usageEvent.usage.cachedTokens, 20);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function main() {
+    await testMessagesApiTextThinkingAndUsage();
+    await testMessagesApiToolUse();
+    await testResponsesApiTextToolAndUsage();
     await testStreamingDeltas();
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();
