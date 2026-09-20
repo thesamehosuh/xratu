@@ -14,13 +14,22 @@
  * Pure and dependency-free so it can be unit-tested.
  */
 
-export type ApiStyle = 'chat' | 'messages' | 'responses';
+export type ApiStyle = 'chat' | 'messages' | 'responses' | 'google';
 
 /** OpenCode Zen/Go model families documented under `/messages`. */
 const OPENCODE_MESSAGES_PREFIXES = ['claude-', 'qwen', 'minimax-'];
 
 /** OpenCode Zen/Go model families documented under `/responses`. */
 const OPENCODE_RESPONSES_PREFIXES = ['gpt-', 'grok-', 'muse-spark-'];
+
+/** OpenCode Zen model families served by the Google Generative Language API
+ *  (`/models/{model}:streamGenerateContent`). */
+const OPENCODE_GOOGLE_PREFIXES = ['gemini-'];
+
+/** OpenCode models that are NOT chat models and cannot drive the agent loop:
+ *  Jev is a structured-decision endpoint (`/systemone`), and the image /
+ *  embedding / audio ids are not text generation. Kept out of the picker. */
+const OPENCODE_NON_CHAT_RE = /^jev-|image|embedding|embed-|tts-|whisper|dall-e|moderation|rerank/i;
 
 function hostOf(baseUrl: string): string | null {
     const raw = baseUrl.trim();
@@ -49,5 +58,12 @@ export function resolveApiStyle(baseUrl: string, model: string): ApiStyle {
     const m = model.trim().toLowerCase();
     if (OPENCODE_MESSAGES_PREFIXES.some((prefix) => m.startsWith(prefix))) return 'messages';
     if (OPENCODE_RESPONSES_PREFIXES.some((prefix) => m.startsWith(prefix))) return 'responses';
+    if (OPENCODE_GOOGLE_PREFIXES.some((prefix) => m.startsWith(prefix))) return 'google';
     return 'chat';
+}
+
+/** True for OpenCode model ids that are not chat models (Jev, image,
+ *  embedding, audio) and must not be offered as agent models. */
+export function isNonChatModel(model: string): boolean {
+    return OPENCODE_NON_CHAT_RE.test(model.trim());
 }

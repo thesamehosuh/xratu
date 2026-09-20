@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { resolveApiStyle, isOpenCodeHost } = require('../out/local/apiStyle.js');
+const { resolveApiStyle, isOpenCodeHost, isNonChatModel } = require('../out/local/apiStyle.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -39,6 +39,19 @@ for (const model of ['claude-sonnet-5', 'claude-opus-4-8', 'qwen3.8-flash', 'qwe
 // Responses families
 for (const model of ['gpt-5.6-luna', 'gpt-6-astra', 'grok-4.6', 'muse-spark-1.3-contributor']) {
     check(`responses: ${model}`, resolveApiStyle(GO, model), 'responses');
+}
+
+// Google Generative Language families
+for (const model of ['gemini-3.8-flash', 'gemini-3.1-pro', 'gemini-3-flash']) {
+    check(`google: ${model}`, resolveApiStyle(ZEN, model), 'google');
+}
+
+// Non-chat models are excluded from the OpenCode picker
+for (const model of ['jev-1.13', 'jev-1.13-free', 'openai/gpt-image-2', 'text-embedding-3-large', 'openai/tts-1', 'openai/whisper-large-v3']) {
+    check(`non-chat: ${model}`, isNonChatModel(model), true);
+}
+for (const model of ['glm-5.3', 'claude-sonnet-5', 'gemini-3.8-flash', 'deepseek-v4-flash', 'gpt-5.6-luna']) {
+    check(`chat-capable: ${model}`, isNonChatModel(model), false);
 }
 
 // chat/completions families

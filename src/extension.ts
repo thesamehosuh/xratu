@@ -25,7 +25,7 @@ import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './tas
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl } from './providerIdentity';
-import { resolveApiStyle } from './local/apiStyle';
+import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** External MCP manager + config store - module-level so deactivate() can
@@ -2282,7 +2282,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 return false;
             }
 
-            const models = probed.models.map((m) => m.id).filter(Boolean);
+            // OpenCode also lists non-chat models (Jev structured-decision,
+            // image, embedding, audio). They cannot drive the agent loop, so
+            // keep them out of the picker instead of letting the user select a
+            // model that always fails.
+            const models = probed.models
+                .map((m) => m.id)
+                .filter(Boolean)
+                .filter((id) => !(isOpenCodeHost(baseUrl) && isNonChatModel(id)));
             const localWindows: Record<string, number> = {};
             for (const m of probed.models) {
                 if (m.id && m.contextWindow) localWindows[m.id] = m.contextWindow;

@@ -1284,10 +1284,75 @@ async function testResponsesApiTextToolAndUsage() {
     }
 }
 
+async function testGoogleApiTextToolAndUsage() {
+    const calls: Array<{ url: string; body: any; headers: any }> = [];
+    const responses = [
+        sse([
+            `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'read_file', args: { path: 'a.txt' } } }] } }] })}\n\n`,
+            `data: ${JSON.stringify({ usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 4, totalTokenCount: 34, cachedContentTokenCount: 12 } })}\n\n`,
+        ]),
+        sse([
+            `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'done' }] } }] })}\n\n`,
+        ]),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+        calls.push({ url: String(input), body: JSON.parse(String(init?.body)), headers: init?.headers });
+        return responses[index++];
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                apiStyle: 'google',
+                model: 'gemini-3.8-flash',
+                apiKey: 'g-key',
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(
+            calls[0].url,
+            'http://127.0.0.1:11434/v1/models/gemini-3.8-flash:streamGenerateContent?alt=sse',
+        );
+        assert.equal(calls[0].body.systemInstruction.parts[0].text, 'You are Xratu.');
+        assert.equal(calls[0].body.tools[0].functionDeclarations[0].name, 'read_file');
+        assert.equal((calls[0].headers as Headers).get('x-goog-api-key'), 'g-key');
+
+        const call = events.find((e: any) => e.type === 'toolCall');
+        assert.equal(call.tool, 'read_file');
+        assert.deepEqual(call.args, { path: 'a.txt' });
+
+        // The tool result comes back as a functionResponse matched by NAME.
+        const responsePart = calls[1].body.contents
+            .flatMap((c: any) => c.parts)
+            .find((p: any) => p.functionResponse);
+        assert.equal(responsePart.functionResponse.name, 'read_file');
+
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['done']);
+        const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
+        assert.equal(usageEvent.usage.promptTokens, 30);
+        assert.equal(usageEvent.usage.cachedTokens, 12);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function main() {
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
     await testResponsesApiTextToolAndUsage();
+    await testGoogleApiTextToolAndUsage();
     await testStreamingDeltas();
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();

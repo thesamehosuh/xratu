@@ -113,7 +113,7 @@ export interface LocalAgentRequest {
     dispatcher?: unknown;
     /** Wire API to use. Resolved by the host via `resolveApiStyle`; defaults
      *  to OpenAI chat/completions. */
-    apiStyle?: 'chat' | 'messages' | 'responses';
+    apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
 }
 
 export interface LocalToolExecutor {
@@ -346,6 +346,9 @@ function requestStreamingCompletion(
     }
     if (request.apiStyle === 'responses') {
         return requestResponsesCompletion(request, messages, onDelta, onThinking);
+    }
+    if (request.apiStyle === 'google') {
+        return requestGoogleCompletion(request, messages, onDelta, onThinking);
     }
     return requestChatCompletion(request, messages, onDelta, onThinking);
 }
@@ -963,6 +966,222 @@ async function requestResponsesCompletion(
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal.
+        outerSignal.removeEventListener('abort', onOuterAbort);
+    }
+}
+
+// --- Google Generative Language API (:streamGenerateContent) ----------------
+// Used by OpenCode Zen for gemini-* models. Different again: contents/parts,
+// functionCall/functionResponse (by NAME, not id), and thought parts.
+
+function makeGoogleHeaders(apiKey?: string | null): Headers {
+    const headers = makeHeaders(apiKey);
+    if (apiKey) headers.set('x-goog-api-key', apiKey);
+    return headers;
+}
+
+function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
+    if (typeof content === 'string') return content ? [{ text: content }] : [];
+    if (!Array.isArray(content)) return [];
+    const parts: any[] = [];
+    for (const part of content) {
+        if (part.type === 'text' && typeof part.text === 'string' && part.text) {
+            parts.push({ text: part.text });
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+            const match = /^data:([^;]+);base64,(.+)$/i.exec(part.image_url.url);
+            if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+        }
+    }
+    return parts;
+}
+
+function toGoogleBody(request: LocalAgentRequest, messages: LocalAgentMessage[]): Record<string, unknown> {
+    const systemParts: string[] = [];
+    const contents: any[] = [];
+    const toolNameById = new Map<string, string>();
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            if (typeof msg.content === 'string' && msg.content) systemParts.push(msg.content);
+            continue;
+        }
+        if (msg.role === 'user') {
+            const parts = googlePartsFromContent(msg.content);
+            if (!parts.length) continue;
+            const last = contents[contents.length - 1];
+            if (last && last.role === 'user') last.parts.push(...parts);
+            else contents.push({ role: 'user', parts });
+            continue;
+        }
+        if (msg.role === 'assistant') {
+            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+                // Replay Google's own model parts (functionCall + thoughtSignature).
+                const parts = msg.providerBlocks as any[];
+                const last = contents[contents.length - 1];
+                if (last && last.role === 'model') last.parts.push(...parts);
+                else contents.push({ role: 'model', parts: [...parts] });
+                for (const call of msg.tool_calls ?? []) toolNameById.set(call.id, call.function.name);
+                continue;
+            }
+            const parts: any[] = [];
+            if (typeof msg.content === 'string' && msg.content) {
+                parts.push({ text: msg.content });
+            } else if (Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'text' && part.text) parts.push({ text: part.text });
+                }
+            }
+            for (const call of msg.tool_calls ?? []) {
+                toolNameById.set(call.id, call.function.name);
+                parts.push({ functionCall: { name: call.function.name, args: parseArguments(call.function.arguments) } });
+            }
+            if (parts.length) contents.push({ role: 'model', parts });
+            continue;
+        }
+        if (msg.role === 'tool') {
+            // Google matches a function response by NAME, not by call id.
+            const name = toolNameById.get(msg.tool_call_id ?? '') ?? 'tool';
+            const part = {
+                functionResponse: { name, response: { result: typeof msg.content === 'string' ? msg.content : '' } },
+            };
+            const last = contents[contents.length - 1];
+            if (last && last.role === 'user' && last.parts.every((p: any) => p.functionResponse)) {
+                last.parts.push(part);
+            } else {
+                contents.push({ role: 'user', parts: [part] });
+            }
+            continue;
+        }
+    }
+
+    const body: Record<string, unknown> = { contents };
+    const system = systemParts.filter(Boolean).join('\n\n');
+    if (system) body.systemInstruction = { parts: [{ text: system }] };
+    if (request.tools.length) {
+        body.tools = [{
+            functionDeclarations: request.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.inputSchema,
+            })),
+        }];
+    }
+    const generationConfig: Record<string, unknown> = {};
+    if (request.maxTokens != null) generationConfig.maxOutputTokens = request.maxTokens;
+    if (request.temperature != null) generationConfig.temperature = request.temperature;
+    if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
+    return body;
+}
+
+function googleUsage(raw: any): LocalUsage {
+    const cached = raw?.cachedContentTokenCount;
+    return {
+        promptTokens: Number.isFinite(raw?.promptTokenCount) ? raw.promptTokenCount : null,
+        completionTokens: Number.isFinite(raw?.candidatesTokenCount) ? raw.candidatesTokenCount : null,
+        totalTokens: Number.isFinite(raw?.totalTokenCount) ? raw.totalTokenCount : null,
+        cachedTokens: Number.isFinite(cached) ? cached : null,
+    };
+}
+
+async function requestGoogleCompletion(
+    request: LocalAgentRequest,
+    messages: LocalAgentMessage[],
+    onDelta: (textDelta: string) => void,
+    onThinking?: (thinking: string) => void,
+): Promise<CompletionResult> {
+    const base = endpointUrl(
+        request.baseUrl,
+        `models/${encodeURIComponent(request.model)}:streamGenerateContent`,
+    );
+    const url = `${base}${base.includes('?') ? '&' : '?'}alt=sse`;
+    const body = toGoogleBody(request, messages);
+
+    const outerSignal = request.signal ?? new AbortController().signal;
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort();
+    if (outerSignal.aborted) onOuterAbort();
+    else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+
+    try {
+    let response: Response;
+    try {
+        response = await fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeGoogleHeaders(request.apiKey),
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        }, request.dispatcher));
+    } catch (e) {
+        if (controller.signal.aborted && !outerSignal.aborted) {
+            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+        }
+        throw e;
+    } finally {
+        clearTimeout(headersTimer);
+    }
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+    }
+    if (!response.body) throw new Error('Model returned no response body.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let reasoning = '';
+    let usage: LocalUsage | null = null;
+    const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
+    const modelParts: any[] = [];
+
+    const consume = (payload: string) => {
+        let json: any;
+        try {
+            json = JSON.parse(payload);
+        } catch {
+            return;
+        }
+        if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
+        if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
+        const parts = json?.candidates?.[0]?.content?.parts;
+        if (!Array.isArray(parts)) return;
+        for (const part of parts) {
+            if (typeof part?.text === 'string' && part.text) {
+                // `thought: true` marks the model's internal reasoning.
+                if (part.thought === true) {
+                    reasoning += part.text;
+                    onThinking?.(reasoning);
+                } else {
+                    text += part.text;
+                    onDelta(part.text);
+                }
+                modelParts.push(part);
+            } else if (part?.functionCall) {
+                const id = `google-call-${toolDeltas.size}`;
+                toolDeltas.set(id, {
+                    id,
+                    name: String(part.functionCall.name ?? ''),
+                    arguments: JSON.stringify(part.functionCall.args ?? {}),
+                });
+                modelParts.push(part);
+            } else if (part) {
+                modelParts.push(part);
+            }
+        }
+    };
+
+    while (true) {
+        const { value, done } = await readStreamChunk(reader);
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const parsed = extractSseData(buffer);
+        buffer = parsed.remainder;
+        for (const payload of parsed.events) consume(payload);
+        if (done) break;
+    }
+    return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks: modelParts };
+    } finally {
         outerSignal.removeEventListener('abort', onOuterAbort);
     }
 }
