@@ -801,9 +801,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Last-served context-window table (provider metadata + known windows),
      *  persisted so a mid-session extension reload does NOT silently drop the
-     *  real window: without it _contextWindowHint() returns undefined and
-     *  compaction falls back to the 128k default - compacting a 1.3M-window
-     *  conversation at ~80k. */
+     *  real window: without it _contextWindowHint() returns undefined and the
+     *  run falls back to LOCAL_DEFAULT_CONTEXT_WINDOW (8192) - compacting a
+     *  1.3M-window conversation at ~8k. */
     private _loadContextWindows(): Record<string, number> {
         try {
             const raw = this._globalState.get<string>('xratu.contextWindows');

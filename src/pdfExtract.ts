@@ -1,10 +1,10 @@
 // PDF text extraction for composer attachments (host-side, Node runtime).
 //
-// WHY HOST-SIDE: extraction lives in the extension host so the text travels
-// with the request. Extracted text is re-packaged as a text/plain attachment
-// and flows through the exact same fenced-block pipeline as text files. Raw
-// application/pdf is never sent to a model - a client that bypasses the host
-// cannot ship raw PDF bytes.
+// WHY HOST-SIDE: the composer accepts application/pdf and converts it to text
+// before the request is built, so extraction lives in the extension host.
+// Extracted text is re-packaged as a text/plain attachment and flows through
+// the exact same fenced-block pipeline as text files. This is the only path
+// that turns a PDF into prompt content; the host never sends raw PDF bytes.
 //
 // Engine: pdfjs-dist legacy build (pinned 4.x - v5/v6 hard-require DOMMatrix
 // at module load, which does not exist in the Node extension host). Only the
@@ -14,8 +14,8 @@
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
-/** Attachment text cap (matches ATTACH_TEXT_MAX_CHARS in extension.ts) so an
- *  extracted PDF is truncated exactly once. */
+/** Attachment text cap - matches ATTACH_TEXT_MAX_CHARS in extension.ts (the
+ *  user-text builder applies the same cap again; both are idempotent). */
 const PDF_TEXT_MAX_CHARS = 24_000;
 /** Hard page cap: a 1000-page PDF must not freeze the extension host. */
 const PDF_MAX_PAGES = 60;
