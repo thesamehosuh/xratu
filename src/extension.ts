@@ -730,6 +730,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Accumulated local text for the current assistant turn - mirrors the cloud "result" event. */
     private _localAccumulatedText: string = '';
     private _localAccumulatedThinking: string = '';
+    /** Timeline event for the CURRENT reasoning block: the first delta pushes
+     *  it into outcome.events (so reasoning survives reload in the right place
+     *  relative to tool/text steps), later cumulative deltas extend it in
+     *  place. Null between blocks. */
+    private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
     /** The in-flight local turn, held so a throttled snapshot can persist it
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
@@ -1855,6 +1860,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         this._localAccumulatedText = '';
         this._localAccumulatedThinking = '';
+        this._localThinkingBlockEvent = null;
         this._localCurrentUsage = null;
         // `events` is held by reference and grows as the run streams - the
         // throttled snapshot below always captures the current tail.
@@ -2013,10 +2019,24 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._localAccumulatedThinking = event.value;
                 this._flushLiveSegment();
                 this._noteThinking(event.value);
+                // Record the reasoning in the turn's event timeline so it keeps
+                // its position relative to tool/text steps and survives reload
+                // (_restoreChatUI replays thinking events in order). The first
+                // delta of a block pushes the event; later cumulative deltas
+                // extend it in place instead of growing the array.
+                if (this._localThinkingBlockEvent && event.value.startsWith(this._localThinkingBlockEvent.content)) {
+                    this._localThinkingBlockEvent.content = event.value;
+                } else {
+                    this._localThinkingBlockEvent = { type: 'thinking', content: event.value };
+                    outcome.events.push(this._localThinkingBlockEvent);
+                }
                 this._scheduleLocalPartialPersist();
                 break;
             case 'toolCall':
                 this._flushLiveSegment();
+                // A tool call closes the current reasoning block - reasoning
+                // after it belongs to a fresh block and needs its own pill.
+                this._localThinkingBlockEvent = null;
                 outcome.events.push({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args });
                 this._scheduleLocalPartialPersist();
                 if (event.tool === TASK_LIST_TOOL_NAME) {
@@ -2031,6 +2051,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'toolResult':
                 this._flushLiveSegment();
+                this._localThinkingBlockEvent = null;
                 outcome.events.push({ type: 'tool_result', id: event.id, tool: event.tool, output: event.output });
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({
@@ -3010,6 +3031,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     for (const parsed of msg.events) {
                         if (parsed.type === 'thinking') {
                             this._view.webview.postMessage({ type: 'thinking', value: parsed.content });
+                            this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.content, true) });
                         } else if (parsed.type === 'tool_call') {
                             this._view.webview.postMessage({
                                 type: 'toolCall',
@@ -3563,6 +3585,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             ? this._liveSegments.map((seg) => this._renderMarkdown(seg))
             : undefined;
         this._resetLiveSegments();
+
+        // Legacy turns (persisted before reasoning entered the event timeline)
+        // carry thinking only on the result event - restore it so the pill
+        // isn't lost. Newer turns replay it as an ordered timeline event, and
+        // re-posting the same cumulative text here is idempotent for live runs.
+        if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) {
+            this._view.webview.postMessage({ type: 'thinking', value: parsed.thinking });
+            this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.thinking, true) });
+        }
 
         this._view.webview.postMessage({
             type: 'fullResponse',
