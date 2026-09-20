@@ -73,7 +73,10 @@ export type ToExtensionMessage =
     | { type: 'requestFileList' }
     /** User edit of the session task list (interactive checklist). The host
      *  stores it as the session override and echoes taskListState. */
-    | { type: 'taskListEdit'; tasks: TaskListItem[] };;;
+    | { type: 'taskListEdit'; tasks: TaskListItem[] }
+    /** Copy a code block to the OS clipboard via the host (webview clipboard
+     *  permissions are unreliable). */
+    | { type: 'copyToClipboard'; value: string };
 
 export type DiscoveredLocalRuntime = {
     id: string;
