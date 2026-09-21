@@ -26,7 +26,13 @@ function localChromiumExecutable(): string | undefined {
         : process.platform === 'darwin'
             ? [['chrome-mac', 'Chromium.app/Contents/MacOS/Chromium']]
             : [['chrome-linux64', 'chrome']];
-    for (const dir of readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort().reverse()) {
+    // Build ids are numbers, not strings: a string sort would rank
+    // `chromium-999` above `chromium-1246` and pick the older build.
+    const builds = readdirSync(cache)
+        .map((dir) => ({ dir, build: Number(dir.replace(/^chromium-/, '')) }))
+        .filter((c) => Number.isInteger(c.build))
+        .sort((a, b) => b.build - a.build);
+    for (const { dir } of builds) {
         for (const [sub, exe] of layouts) {
             const candidate = join(cache, dir, sub, exe);
             if (existsSync(candidate)) return candidate;

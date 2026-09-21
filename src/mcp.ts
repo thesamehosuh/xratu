@@ -48,15 +48,15 @@ function findRipgrep(): string | null {
     }
     // A TIMED-OUT probe is transient (slow disk, AV scan, loaded machine) and
     // must NOT be cached as "no ripgrep" - that would permanently disable
-    // rg-backed search for the session. Only a definite absence is cached.
-    if (probe.error && (probe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-        return null;
-    }
+    // rg-backed search for the session. It still falls through to the bundled
+    // copy below; only a definite absence is cached.
+    const timedOut = !!probe.error && (probe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
     const bundled = process.env.VSCODE_RIPGREP_PATH;
     if (bundled && fs.existsSync(bundled)) {
         _rgPath = bundled;
         return _rgPath;
     }
+    if (timedOut) return null;
     _rgPath = null;
     return null;
 }

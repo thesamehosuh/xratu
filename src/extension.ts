@@ -27,6 +27,7 @@ import {
     totalsByHost,
     USAGE_CHART_DAYS,
     type UsageEntry,
+    type UsageTotals,
 } from './local/usageLedger';
 import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
@@ -831,6 +832,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._checkpoints = checkpoints;
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
         this._usageLedger = new UsageLedgerStore(localStorageUri.fsPath);
+        // Prune once per host session: the append counter resets with the
+        // process, so an install whose windows each append fewer than
+        // COMPACT_EVERY rounds would never drop entries past retention.
+        void this._usageLedger.compact().catch(() => undefined);
         setUiLocale(this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa');
         this._contextWindows = this._loadContextWindows();
         this._loadTaskListEdits();
@@ -1564,11 +1569,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  done when the ledger actually holds this session's rounds: a session
      *  that predates the ledger keeps its snapshot totals (recomputing from an
      *  empty set would zero a real total). */
-    private async _syncSessionFromLedger(entries: readonly UsageEntry[]): Promise<void> {
+    /** Adopt the ledger's totals for this session. `before` is the same
+     *  session's totals from the PRE-reprice ledger: when retention pruned
+     *  older rounds, the retained sum is smaller than what the session already
+     *  reported, and replacing the totals would silently shrink them. In that
+     *  case only the reprice delta is applied and the snapshot's tokens, cost
+     *  and per-host breakdown stay - the ledger can no longer reproduce them. */
+    private async _syncSessionFromLedger(entries: readonly UsageEntry[], before?: UsageTotals): Promise<void> {
         if (!this._sessionId) return;
         const mine = entriesForSession(entries, this._sessionId);
         if (!mine.length) return;
         const totals = sumUsage(mine);
+        const retained = totals.input + totals.output + totals.cached;
+        const reported = this._sessionUsage.input + this._sessionUsage.output + this._sessionUsage.cached;
+        if (before && retained < reported) {
+            this._sessionCost = {
+                USD: this._sessionCost.USD + (totals.USD - before.USD),
+                IRT: this._sessionCost.IRT + (totals.IRT - before.IRT),
+            };
+            await this._persistLocalSession();
+            this._postSessionCost();
+            return;
+        }
         this._sessionCost = { USD: totals.USD, IRT: totals.IRT };
         this._sessionUsage = { input: totals.input, output: totals.output, cached: totals.cached };
         const byHost: Record<string, { input: number; output: number; cached: number }> = {};
@@ -1591,11 +1613,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  would drop a round appended in between. */
     private async _repriceLedger(onlyModel?: string): Promise<void> {
         const resolve = await this._ledgerCostResolver();
-        const { entries, changed } = await this._usageLedger.update(
-            (current) => recomputeCosts(current, resolve, onlyModel),
-        );
+        const sessionId = this._sessionId;
+        let before: UsageTotals | null = null;
+        const { entries, changed } = await this._usageLedger.update((current) => {
+            // Captured in the same critical section as the reprice, so the
+            // delta below is measured against the entries actually replaced.
+            before = sessionId ? sumUsage(entriesForSession(current, sessionId)) : null;
+            return recomputeCosts(current, resolve, onlyModel);
+        });
         if (!changed) return;
-        await this._syncSessionFromLedger(entries);
+        await this._syncSessionFromLedger(entries, before ?? undefined);
     }
 
     /** Base URL of the active credential, or '' when none is selected. */
@@ -1741,13 +1768,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const inputValue = Number(input);
         const outputValue = Number(output);
         if (!Number.isFinite(inputValue) || !Number.isFinite(outputValue) || inputValue < 0 || outputValue < 0) return;
-        const cachedValue = Number(cachedInput);
+        // A blank cached field means "not specified", NOT "free": coercing it
+        // to 0 would bill every cached token at zero. `null` has to survive
+        // until the override is built, so the rate falls back to `input`.
+        const cachedValue = cachedInput == null ? null : Number(cachedInput);
         await this._queuePricingWrite(async () => {
             const overrides: Record<string, PriceOverride> = { ...this._modelPriceOverrides() };
             overrides[key] = {
                 input: inputValue,
                 output: outputValue,
-                ...(Number.isFinite(cachedValue) && cachedValue >= 0 ? { cachedInput: cachedValue } : {}),
+                ...(cachedValue != null && Number.isFinite(cachedValue) && cachedValue >= 0 ? { cachedInput: cachedValue } : {}),
                 ...(currency === 'IRT' ? { currency: 'IRT' as const } : {}),
             };
             await vscode.workspace.getConfiguration('xratu')

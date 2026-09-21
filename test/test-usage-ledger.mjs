@@ -98,10 +98,13 @@ check('dayKey is the LOCAL calendar day', dayKey(new Date(2026, 8, 21, 0, 30).ge
     check('drops entries past retention', pruneEntries([old, fresh], NOW).length, 1);
     check('keeps entries inside retention', pruneEntries([fresh], NOW).length, 1);
 
-    const many = Array.from({ length: 12 }, (_, i) => entry({ ts: NOW - i * 1000, input: i }));
+    // Built in append order (oldest first, as the real ledger is written) so
+    // the tail really is the newest - a newest-first fixture would pass the
+    // assertion below while keeping the OLDEST entries.
+    const many = Array.from({ length: 12 }, (_, i) => entry({ ts: NOW - (11 - i) * 1000, input: i }));
     const capped = pruneEntries(many, NOW, 3650, 5);
     check('caps to maxEntries', capped.length, 5);
-    check('cap keeps the NEWEST entries', capped[0].input, 7);
+    check('cap keeps the NEWEST entries', capped.map((e) => e.input), [7, 8, 9, 10, 11]);
 }
 
 // --- parse / serialize -------------------------------------------------------

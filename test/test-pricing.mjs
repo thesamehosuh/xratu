@@ -137,5 +137,14 @@ check(
 // priceForModel stays the thin wrapper it always was.
 check('priceForModel matches resolvePrice', priceForModel('claude-sonnet-5')?.input, resolvePrice('claude-sonnet-5')?.price.input);
 
+// --- Cached-rate fallback: an omitted rate is NOT a free rate ---
+const noCached = priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 2, output: 10 } });
+check('omitted cachedInput falls back to input', costForUsage(noCached, { promptTokens: 1_000_000, completionTokens: 0, cachedTokens: 1_000_000 }).amount, 2);
+const zeroCached = priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 2, output: 10, cachedInput: 0 } });
+// A free cached rate makes an all-cached round cost nothing, which the cost
+// helper reports as "no cost" rather than 0 - the point is that it is NOT the
+// same as the fallback above.
+check('explicit zero cached rate costs nothing', costForUsage(zeroCached, { promptTokens: 1_000_000, completionTokens: 0, cachedTokens: 1_000_000 }), null);
+
 console.log(failed === 0 ? '\npricing: all tests passed' : `\npricing: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

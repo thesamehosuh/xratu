@@ -628,15 +628,23 @@ async function requestChatCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
-
-    const send = (payload: Record<string, unknown>): Promise<Response> =>
-        fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        }, request.dispatcher));
+    // One first-byte deadline PER attempt: a slow first 400 must not eat the
+    // retry's own deadline, nor replace a tagged provider HTTP error with a
+    // timeout while its body is being read. The body phase has its own idle
+    // deadline (readStreamChunk).
+    const send = async (payload: Record<string, unknown>): Promise<Response> => {
+        const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+        try {
+            return await fetch(url, withDispatcher({
+                method: 'POST',
+                headers: makeHeaders(request.apiKey, request.sessionId),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            }, request.dispatcher));
+        } finally {
+            clearTimeout(headersTimer);
+        }
+    };
 
     try {
     let response: Response;
@@ -664,8 +672,6 @@ async function requestChatCompletion(
             throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
-    } finally {
-        clearTimeout(headersTimer);
     }
 
     if (!response.ok) {
@@ -989,15 +995,23 @@ async function requestMessagesCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
-
-    const send = (payload: Record<string, unknown>): Promise<Response> =>
-        fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeMessagesHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        }, request.dispatcher));
+    // One first-byte deadline PER attempt: a slow first 400 must not eat the
+    // retry's own deadline, nor replace a tagged provider HTTP error with a
+    // timeout while its body is being read. The body phase has its own idle
+    // deadline (readStreamChunk).
+    const send = async (payload: Record<string, unknown>): Promise<Response> => {
+        const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+        try {
+            return await fetch(url, withDispatcher({
+                method: 'POST',
+                headers: makeMessagesHeaders(request.apiKey, request.sessionId),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            }, request.dispatcher));
+        } finally {
+            clearTimeout(headersTimer);
+        }
+    };
 
     try {
     let response: Response;
@@ -1019,8 +1033,6 @@ async function requestMessagesCompletion(
             throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
-    } finally {
-        clearTimeout(headersTimer);
     }
 
     if (!response.ok) {
@@ -1264,15 +1276,23 @@ async function requestResponsesCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
-
-    const send = (payload: Record<string, unknown>): Promise<Response> =>
-        fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        }, request.dispatcher));
+    // One first-byte deadline PER attempt: a slow first 400 must not eat the
+    // retry's own deadline, nor replace a tagged provider HTTP error with a
+    // timeout while its body is being read. The body phase has its own idle
+    // deadline (readStreamChunk).
+    const send = async (payload: Record<string, unknown>): Promise<Response> => {
+        const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+        try {
+            return await fetch(url, withDispatcher({
+                method: 'POST',
+                headers: makeHeaders(request.apiKey, request.sessionId),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            }, request.dispatcher));
+        } finally {
+            clearTimeout(headersTimer);
+        }
+    };
 
     try {
     let response: Response;
@@ -1295,8 +1315,6 @@ async function requestResponsesCompletion(
             throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
-    } finally {
-        clearTimeout(headersTimer);
     }
 
     if (!response.ok) {
@@ -1560,15 +1578,23 @@ async function requestGoogleCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
-
-    const send = (payload: Record<string, unknown>): Promise<Response> =>
-        fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeGoogleHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        }, request.dispatcher));
+    // One first-byte deadline PER attempt: a slow first 400 must not eat the
+    // retry's own deadline, nor replace a tagged provider HTTP error with a
+    // timeout while its body is being read. The body phase has its own idle
+    // deadline (readStreamChunk).
+    const send = async (payload: Record<string, unknown>): Promise<Response> => {
+        const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+        try {
+            return await fetch(url, withDispatcher({
+                method: 'POST',
+                headers: makeGoogleHeaders(request.apiKey, request.sessionId),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            }, request.dispatcher));
+        } finally {
+            clearTimeout(headersTimer);
+        }
+    };
 
     try {
     let response: Response;
@@ -1593,8 +1619,6 @@ async function requestGoogleCompletion(
             throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
-    } finally {
-        clearTimeout(headersTimer);
     }
 
     if (!response.ok) {

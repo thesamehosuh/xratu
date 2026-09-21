@@ -382,7 +382,11 @@ export class UsageLedgerStore {
     }
 
     private async compactLocked(): Promise<void> {
-        const pruned = pruneEntries(await this.read());
+        const entries = await this.read();
+        const pruned = pruneEntries(entries);
+        // Nothing to drop: skip the rewrite (activation calls this once, and a
+        // bounded ledger should not be rewritten for nothing).
+        if (pruned.length === entries.length) return;
         await this.writeLocked(pruned);
     }
 

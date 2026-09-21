@@ -1277,7 +1277,9 @@ function TextSegmentRow({ steps, streaming }: { steps: Step[]; streaming: boolea
         >
             {steps.map((step) =>
                 step.html ? (
-                    <RenderedMarkdown key={step.id} html={step.html} streaming={streaming} live={streaming} />
+                    // The wrapper is already the polite live region for this
+                    // row: a nested one would announce the HTML twice.
+                    <RenderedMarkdown key={step.id} html={step.html} streaming={streaming} />
                 ) : (
                     <span key={step.id}>{step.text}</span>
                 )
