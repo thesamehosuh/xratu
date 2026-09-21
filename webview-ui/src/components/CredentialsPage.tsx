@@ -323,6 +323,7 @@ export function CredentialsPage({
                 <input
                     type="text"
                     role="combobox"
+                    dir="ltr"
                     aria-expanded={providerOpen}
                     aria-controls="cred-provider-listbox"
                     aria-autocomplete="list"

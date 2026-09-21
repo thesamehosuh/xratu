@@ -5371,6 +5371,102 @@ pre.tool-cmd {
     background: var(--xratu-accent-faint);
 }
 
+/* Pricing / billing page rows */
+.pricing-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0;
+    border-block-end: 1px solid var(--vscode-widget-border);
+}
+
+.pricing-row:last-child {
+    border-block-end: 0;
+}
+
+.pricing-row.compact {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.pricing-row-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.pricing-row-label {
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.pricing-row-host {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    overflow-wrap: anywhere;
+}
+
+.pricing-badge {
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-size: 9px;
+    font-weight: 650;
+}
+
+.pricing-row-fields,
+.pricing-add {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pricing-row-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.pricing-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 96px;
+}
+
+.pricing-field.grow {
+    flex: 1 1 160px;
+}
+
+.pricing-field > span {
+    font-size: 9px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.pricing-field input,
+.pricing-field select {
+    min-height: 27px;
+    padding: 4px 7px;
+    border-radius: var(--xratu-radius-sm);
+    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font: inherit;
+    font-size: 11px;
+}
+
+.pricing-empty {
+    margin: 4px 0;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
 /* Language flip (Settings → گفتگو) - fa/en choice chips inside a
    settings-nav-row; sizing mirrors the neighboring rows' svg slots */
 .lang-choice {

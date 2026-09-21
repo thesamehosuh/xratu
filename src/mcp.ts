@@ -42,7 +42,7 @@ let _rgPath: string | null | undefined;
 function findRipgrep(): string | null {
     if (_rgPath !== undefined) return _rgPath;
     _rgPath = 'rg';
-    const probe = cp.spawnSync(_rgPath, ['--version'], { timeout: 5000, encoding: 'utf-8', windowsHide: true });
+    const probe = cp.spawnSync(_rgPath, ['--version'], { timeout: 1500, encoding: 'utf-8', windowsHide: true });
     if (!probe.error && probe.status === 0) return _rgPath;
     const bundled = process.env.VSCODE_RIPGREP_PATH;
     if (bundled && fs.existsSync(bundled)) {
@@ -61,11 +61,14 @@ function findRipgrep(): string | null {
  *  stop early once the server has published something interesting. */
 async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
     try {
-        let diags: readonly vscode.Diagnostic[] = [];
-        for (const waitMs of [400, 800]) {
+        // Check immediately, then poll briefly. The old 400+800ms wait added
+        // ~1.2s to EVERY edit; three quick reads catch the same asynchronous
+        // publish while keeping the host responsive.
+        let diags: readonly vscode.Diagnostic[] = vscode.languages.getDiagnostics(uri);
+        for (const waitMs of [150, 350]) {
+            if (diags.some((d) => d.severity <= vscode.DiagnosticSeverity.Warning)) break;
             await new Promise((resolve) => setTimeout(resolve, waitMs));
             diags = vscode.languages.getDiagnostics(uri);
-            if (diags.some((d) => d.severity <= vscode.DiagnosticSeverity.Warning)) break;
         }
         const interesting = diags.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
         if (interesting.length === 0) return '';

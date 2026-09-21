@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "%ext.displayName%",
 	"description": "%ext.description%",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
@@ -76,6 +76,11 @@
 					"type": "object",
 					"default": {},
 					"description": "%config.modelPricing.desc%"
+				},
+				"xratu.providerPricing": {
+					"type": "object",
+					"default": {},
+					"description": "%config.providerPricing.desc%"
 				},
 				"xratu.tomanPerUsd": {
 					"type": "number",
@@ -170,6 +175,7 @@
 		"test:provider-identity": "node test/test-provider-identity.mjs",
 		"test:api-style": "node test/test-api-style.mjs",
 		"test:pricing": "node test/test-pricing.mjs",
+		"test:provider-errors": "node test/test-provider-errors.mjs",
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
 		"test:nls": "node test/test-nls.mjs",
 		"test:compaction": "node test/test-compaction.mjs",

@@ -1,28 +1,57 @@
 /**
  * Per-model token pricing and cost estimation.
  *
- * Prices are USD per 1M tokens, curated from each provider's published list.
- * They drift - the table is a convenience default, and `overrides` (from the
- * `xratu.modelPricing` setting) always win. An unknown model returns null so
- * the UI shows nothing rather than a wrong number.
+ * International prices are USD per 1M tokens, curated from each provider's
+ * published list. Iranian providers bill in Toman: their prices come either
+ * from a curated Toman entry, or from a per-host "gateway rate" (Toman per
+ * USD) applied to the USD table. A price carries its own currency and the
+ * session total is kept PER CURRENCY - nothing is converted between ledgers,
+ * so a stale exchange rate can never corrupt a number.
+ *
+ * `overrides` (from the `xratu.modelPricing` setting) always win; an unknown
+ * model returns null so the UI shows nothing rather than a wrong number.
  *
  * Pure and dependency-free so it can be unit-tested.
  */
 
 export interface ModelPrice {
-    /** USD per 1M input tokens. */
+    /** Rate per 1M tokens, in `currency`. */
     input: number;
-    /** USD per 1M output tokens. */
+    /** Rate per 1M tokens, in `currency`. */
     output: number;
-    /** USD per 1M cached-input tokens (falls back to `input`). */
+    /** Cached-input rate per 1M tokens (falls back to `input`). */
     cachedInput?: number;
+    /** Currency of these rates. Absent = USD. */
+    currency?: 'USD' | 'IRT';
 }
 
-/** Partial price the user can set in `xratu.pricing[model]`. */
+/** Partial price the user can set in `xratu.modelPricing[model]`. */
 export interface PriceOverride {
     input?: number;
     output?: number;
     cachedInput?: number;
+    /** Currency for this override. Absent = USD. */
+    currency?: 'USD' | 'IRT';
+}
+
+/** A gateway's own Toman-per-USD rate (plus optional markup), keyed by host. */
+export interface GatewayRate {
+    /** Toman charged per 1 USD. */
+    tomanPerUsd: number;
+    /** Markup percentage applied on top (10 = +10%). */
+    markupPercent?: number;
+}
+
+/** Context for resolving provider-specific pricing. */
+export interface PriceLookup {
+    /** Base-URL host of the active provider (`providerIdentity.baseUrlHost`). */
+    host?: string | null;
+    /** True when the provider is a known Iranian (Toman-billed) one. */
+    iranian?: boolean;
+    /** Per-host gateway rate from `xratu.providerPricing`. */
+    gatewayRate?: GatewayRate | null;
+    /** Global fallback rate from `xratu.tomanPerUsd`. */
+    fallbackRate?: number | null;
 }
 
 export interface CostEstimate {
@@ -111,6 +140,29 @@ const PRICE_TABLE: ReadonlyArray<readonly [RegExp, ModelPrice]> = [
     [/mistral-small/, { input: 0.2, output: 0.6 }],
 ];
 
+/**
+ * Curated Toman prices for Iranian providers' OWN model ids, in Toman per 1M
+ * tokens (`currency: 'IRT'`). Keyed by host pattern + model pattern.
+ *
+ * DELIBERATELY EMPTY for now: published Iranian prices drift and are not
+ * independently verifiable, so we do not ship numbers that look authoritative.
+ * Toman costs come from a per-host gateway rate (or the fallback rate) applied
+ * to the USD table, or from a user override. Add rows here only with a citable
+ * source and a last-updated note.
+ */
+const IRANIAN_PRICE_TABLE: ReadonlyArray<readonly [RegExp, RegExp, ModelPrice]> = [
+];
+
+function applyGatewayRate(price: ModelPrice, tomanPerUsd: number, markupPercent?: number): ModelPrice {
+    const factor = tomanPerUsd * (1 + (Number.isFinite(markupPercent) ? (markupPercent as number) : 0) / 100);
+    return {
+        input: price.input * factor,
+        output: price.output * factor,
+        ...(price.cachedInput != null ? { cachedInput: price.cachedInput * factor } : {}),
+        currency: 'IRT',
+    };
+}
+
 function sanitizeOverride(override: PriceOverride | undefined): ModelPrice | null {
     if (!override) return null;
     const input = Number.isFinite(override.input) ? (override.input as number) : NaN;
@@ -119,13 +171,36 @@ function sanitizeOverride(override: PriceOverride | undefined): ModelPrice | nul
     if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) return null;
     const cachedInput = Number.isFinite(override.cachedInput) ? (override.cachedInput as number) : undefined;
     if (cachedInput != null && cachedInput < 0) return null;
-    return { input, output, cachedInput };
+    return {
+        input,
+        output,
+        ...(cachedInput != null ? { cachedInput } : {}),
+        ...(override.currency === 'IRT' ? { currency: 'IRT' as const } : {}),
+    };
 }
 
-/** Resolve a model's price: an exact override wins, else the curated table. */
+/** The curated USD table only (no overrides, no provider context). */
+function usdPriceForModel(id: string): ModelPrice | null {
+    for (const [pattern, price] of PRICE_TABLE) {
+        if (pattern.test(id)) return price;
+    }
+    return null;
+}
+
+/**
+ * Resolve a model's price. Order (first hit wins):
+ *  1. an exact user override (may carry `currency`);
+ *  2. a curated Toman entry for this host + model;
+ *  3. for a Toman-billed provider: per-host gateway rate (else the fallback
+ *     rate) applied to the USD table;
+ *  4. the curated USD table for everyone else.
+ * A Toman-billed provider with no Toman data resolves to null - never a USD
+ * list price dressed up as Toman.
+ */
 export function priceForModel(
     model: string,
     overrides?: Record<string, PriceOverride> | null,
+    lookup?: PriceLookup | null,
 ): ModelPrice | null {
     const id = model.trim().toLowerCase();
     if (!id) return null;
@@ -138,15 +213,45 @@ export function priceForModel(
             }
         }
     }
-    for (const [pattern, price] of PRICE_TABLE) {
-        if (pattern.test(id)) return price;
+
+    const host = (lookup?.host ?? '').trim().toLowerCase();
+    if (host) {
+        for (const [hostRe, modelRe, price] of IRANIAN_PRICE_TABLE) {
+            if (hostRe.test(host) && modelRe.test(id)) return price;
+        }
     }
-    return null;
+
+    const gatewayRate = lookup?.gatewayRate;
+    const gatewayRateValue = gatewayRate && Number.isFinite(gatewayRate.tomanPerUsd) && gatewayRate.tomanPerUsd > 0
+        ? gatewayRate
+        : null;
+
+    if (lookup?.iranian) {
+        const usd = usdPriceForModel(id);
+        if (usd) {
+            if (gatewayRateValue) return applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent);
+            const fallback = Number(lookup.fallbackRate);
+            if (Number.isFinite(fallback) && fallback > 0) return applyGatewayRate(usd, fallback);
+        }
+        return null;
+    }
+
+    // A non-Iranian host with an explicit gateway rate is a self-configured
+    // gateway: bill it in Toman too.
+    if (gatewayRateValue) {
+        const usd = usdPriceForModel(id);
+        if (usd) return applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent);
+        return null;
+    }
+
+    return usdPriceForModel(id);
 }
 
 /**
  * Cost of one usage record. Cached input is priced at `cachedInput` when
- * provided (the uncached remainder at `input`); output at `output`.
+ * provided (the uncached remainder at `input`); output at `output`. The
+ * price's own currency wins; `currency` is only the fallback for prices that
+ * do not carry one.
  */
 export function costForUsage(
     price: ModelPrice,
@@ -164,7 +269,7 @@ export function costForUsage(
     const uncached = prompt - cached;
     const cachedRate = price.cachedInput ?? price.input;
 
-    const usd = (uncached * price.input + cached * cachedRate + completion * price.output) / 1_000_000;
-    if (!Number.isFinite(usd) || usd <= 0) return null;
-    return { amount: usd, currency };
+    const amount = (uncached * price.input + cached * cachedRate + completion * price.output) / 1_000_000;
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    return { amount, currency: price.currency ?? currency };
 }

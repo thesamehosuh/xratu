@@ -28,10 +28,12 @@ import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
 import { CapabilitiesPage } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
+import { PricingPage } from './components/PricingPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
+import type { ModelPricingView, ProviderPricingView } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities';
+type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'pricing';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -75,6 +77,13 @@ export function App() {
     const [credReturnTo, setCredReturnTo] = useState<'chat' | 'settings'>('chat');
     /** Same return-tracking for the capabilities page's Back button. */
     const [capReturnTo, setCapReturnTo] = useState<'chat' | 'settings'>('chat');
+    /** Pricing page data (host-owned settings) + its Back target. */
+    const [pricing, setPricing] = useState<{
+        providers: ProviderPricingView[];
+        models: ModelPricingView[];
+        fallbackRate: number;
+    } | null>(null);
+    const [pricingReturnTo, setPricingReturnTo] = useState<'chat' | 'settings'>('settings');
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
     const [injectedText, setInjectedText] = useState<{ id: number; text: string } | null>(null);
     // Workspace-relative path of the file open in the active editor - the
@@ -381,6 +390,9 @@ export function App() {
                     break;
                 case 'taskListState':
                     setTaskList(msg.tasks);
+                    break;
+                case 'pricingState':
+                    setPricing({ providers: msg.providers, models: msg.models, fallbackRate: msg.fallbackRate });
                     break;
                 case 'modelInfo':
                     setModelInfo({
@@ -690,6 +702,25 @@ export function App() {
         );
     }
 
+    if (screen === 'pricing') {
+        return (
+            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+                <PricingPage
+                    state={pricing}
+                    onBack={() => setScreen(pricingReturnTo)}
+                    onSaveProvider={(host, tomanPerUsd, markupPercent) =>
+                        send({ type: 'pricingSaveProvider', host, tomanPerUsd, markupPercent })}
+                    onRemoveProvider={(host) => send({ type: 'pricingRemoveProvider', host })}
+                    onSaveModel={(id, input, output, cachedInput, currency) =>
+                        send({ type: 'pricingSaveModel', id, input, output, cachedInput, currency })}
+                    onRemoveModel={(id) => send({ type: 'pricingRemoveModel', id })}
+                    onSetFallback={(tomanPerUsd) => send({ type: 'pricingSetFallback', tomanPerUsd })}
+                />
+                {banner}
+            </div>
+        );
+    }
+
     if (screen === 'settings') {
         return (
             <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
@@ -712,6 +743,11 @@ export function App() {
                         setScreen('capabilities');
                         send({ type: 'mcpGetState' });
                         send({ type: 'skillsGetState' });
+                    }}
+                    onOpenPricing={() => {
+                        setPricingReturnTo('settings');
+                        setScreen('pricing');
+                        send({ type: 'pricingGetState' });
                     }}
                     onClearHistory={() => {
                         // "Clear history" really clears: every stored session

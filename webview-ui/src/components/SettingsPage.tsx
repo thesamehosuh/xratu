@@ -20,6 +20,8 @@ interface SettingsPageProps {
     onOpenCredentials?: () => void;
     /** Open the merged capabilities page (MCP servers + Agent Skills). */
     onOpenCapabilities?: () => void;
+    /** Open the dedicated billing/pricing page. */
+    onOpenPricing?: () => void;
     onClearHistory?: () => void;
 }
 
@@ -31,6 +33,7 @@ export function SettingsPage({
     onSetLocale,
     onOpenCredentials,
     onOpenCapabilities,
+    onOpenPricing,
     onClearHistory,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
@@ -83,6 +86,14 @@ export function SettingsPage({
                         <div className="settings-nav-main">
                             <strong>{t('capTitle')}</strong>
                             <span>{t('settingsCapabilitiesDesc')}</span>
+                        </div>
+                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+                    </button>
+
+                    <button type="button" className="settings-nav-row" onClick={onOpenPricing}>
+                        <div className="settings-nav-main">
+                            <strong>{t('settingsPricing')}</strong>
+                            <span>{t('settingsPricingDesc')}</span>
                         </div>
                         {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                     </button>

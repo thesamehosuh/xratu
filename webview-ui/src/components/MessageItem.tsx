@@ -1706,10 +1706,10 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
     return (
         <article
             className={`${bubbleClass}${approvalPending ? ' approval-paused' : ''}`}
-            /* dir="auto" resolves to LTR while only the typing dots render
-               (no text for the first-strong heuristic) - pin to the app
-               locale direction so the indicator follows Farsi bubbles. */
-            dir={isTyping ? (getLocale() === 'fa' ? 'rtl' : 'ltr') : 'auto'}
+            /* Chat bubbles follow the APP LOCALE, not dir="auto": first-strong
+               detection would flip a Persian message that begins with Latin
+               ("npm رو اجرا کن"). Code/paths/URLs force their own direction. */
+            dir={getLocale() === 'fa' ? 'rtl' : 'ltr'}
             aria-busy={status === 'streaming' && !approvalPending}
         >
             {!isSystem && hasPills && (
@@ -1791,7 +1791,13 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
             ) : message.retryStatus ? (
                 <RetryCountdown retryStatus={message.retryStatus} />
             ) : text ? (
-                <div className={`msg-content msg-text${streamingContent ? ' streaming' : ''}`}>
+                <div
+                    className={`msg-content msg-text${streamingContent ? ' streaming' : ''}`}
+                    /* Live region scoped to THIS message so screen readers hear
+                       the response as it streams, not the whole log. */
+                    aria-live={streamingContent ? 'polite' : undefined}
+                    aria-atomic="false"
+                >
                     {text}
                 </div>
             ) : null}

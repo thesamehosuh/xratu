@@ -61,5 +61,45 @@ check('zero usage -> null', costForUsage(sonnet, { promptTokens: 0, completionTo
 check('null tokens -> null', costForUsage(sonnet, { promptTokens: null, completionTokens: null }), null);
 check('IRT currency passthrough', costForUsage(sonnet, { promptTokens: 1_000_000, completionTokens: 0 }, 'IRT').currency, 'IRT');
 
+// --- Currency + provider-aware (Toman) resolution ---
+const irtOverride = priceForModel('my-model', { 'my-model': { input: 1000, output: 2000, currency: 'IRT' } });
+check('override currency IRT', irtOverride?.currency, 'IRT');
+check('override IRT input untouched', irtOverride?.input, 1000);
+
+const gw = priceForModel('claude-sonnet-5', null, {
+    host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100 },
+});
+check('gateway rate -> IRT', gw?.currency, 'IRT');
+check('gateway rate scales input', gw?.input, 200);
+
+const gwMarkup = priceForModel('claude-sonnet-5', null, {
+    host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100, markupPercent: 10 },
+});
+near('gateway markup applied', gwMarkup?.input, 220, 1e-9);
+
+check(
+    'Iranian provider with no Toman data -> null',
+    priceForModel('claude-sonnet-5', null, { host: 'api.avalai.ir', iranian: true }),
+    null,
+);
+
+const fb = priceForModel('claude-sonnet-5', null, { host: 'x.ir', iranian: true, fallbackRate: 50 });
+check('fallback rate -> IRT', fb?.currency, 'IRT');
+check('fallback rate scales input', fb?.input, 100);
+
+const custom = priceForModel('claude-sonnet-5', null, { host: 'gw.example', gatewayRate: { tomanPerUsd: 10 } });
+check('custom gateway -> IRT', custom?.currency, 'IRT');
+check('custom gateway scales input', custom?.input, 20);
+
+check('non-Iranian host stays USD', priceForModel('claude-sonnet-5', null, { host: 'api.openai.com' })?.currency, undefined);
+check('non-Iranian host keeps USD rate', priceForModel('claude-sonnet-5', null, { host: 'api.openai.com' })?.input, 2);
+
+const irtCost = costForUsage(
+    { input: 1000, output: 2000, currency: 'IRT' },
+    { promptTokens: 1_000_000, completionTokens: 0 },
+);
+check('cost uses the price currency', irtCost.currency, 'IRT');
+near('cost amount in IRT', irtCost.amount, 1000, 1e-9);
+
 console.log(failed === 0 ? '\npricing: all tests passed' : `\npricing: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

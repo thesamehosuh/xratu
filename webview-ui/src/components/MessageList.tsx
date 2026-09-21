@@ -68,8 +68,10 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
             ref={ref}
             onScroll={onScroll}
             role="log"
-            aria-live="polite"
-            aria-relevant="additions text"
+            /* role="log" implies aria-live="polite"; the whole log would then
+               re-announce on every streamed chunk. Live announcements are
+               scoped to the streaming message instead (MessageItem). */
+            aria-live="off"
             aria-label={t('historyAria')}
         >
             <div className="messages-inner" ref={contentRef}>

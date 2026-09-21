@@ -11,6 +11,7 @@
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
 import { normalizeBaseUrl } from './baseUrl';
+import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 
 export type LocalChatTextContent = string;
 
@@ -306,6 +307,16 @@ function makeHeaders(apiKey?: string | null, sessionId?: string | null): Headers
  *  instead of stalling the agent loop indefinitely. */
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
+/** Deadline for the wait until response headers / the first byte. Slow local
+ *  reasoning models can spend minutes on prefill before emitting anything, so
+ *  this is deliberately longer than the mid-stream idle deadline. A server
+ *  that never answers still fails eventually. */
+const FIRST_BYTE_TIMEOUT_MS = 300_000;
+
+/** A 400 that rejects the output cap. Gateways differ on the field name and on
+ *  whether they accept a cap at all; retry once without it. */
+export const MAX_TOKENS_REJECT_RE = /max_tokens|max_completion_tokens|max_output_tokens|maxOutputTokens/i;
+
 /** Marks a deadline XRATU itself imposed (no headers, or no chunk for
  *  STREAM_IDLE_TIMEOUT_MS) rather than a provider rejection. The retry layer
  *  treats it as a transient transport failure - but only before any output
@@ -328,6 +339,27 @@ function transportTimeoutError(message: string, cause?: unknown): Error {
     (error as Error & { code?: string }).code = TRANSPORT_TIMEOUT_CODE;
     if (cause !== undefined) setErrorCause(error, cause);
     return error;
+}
+
+/** A non-OK provider response. Carries the numeric status and the raw body
+ *  excerpt so callers can classify without re-reading the response. */
+export function providerHttpError(status: number, text: string): Error {
+    const error = new Error(`Model request failed (${status}): ${text.slice(0, 600)}`);
+    error.name = 'XratuProviderHttpError';
+    const tagged = error as Error & { code?: string; status?: number; body?: string };
+    tagged.code = PROVIDER_HTTP_STATUS_CODE;
+    tagged.status = status;
+    tagged.body = text;
+    return error;
+}
+
+/** Generous output cap derived from the context window (4k floor, 16k
+ *  ceiling). The Messages API REQUIRES max_tokens; the chat, Responses and
+ *  Google transports get the same derived cap so a full-window prompt plus a
+ *  provider's default output maximum cannot overrun the context. An explicit
+ *  `request.maxTokens` always wins. */
+function derivedMaxTokens(windowTokens?: number | null): number {
+    return Math.min(16384, Math.max(4096, Math.floor((windowTokens ?? 8192) / 4)));
 }
 
 // --- Transient-network retry (flaky-connection hardening) -------------------
@@ -409,8 +441,10 @@ export const NETWORK_RETRY_MAX_DELAY_MS = 15_000;
 const NETWORK_RETRY_JITTER = 0.25;
 /** Hard ceiling on WALL-CLOCK spent retrying one round (attempt time included),
  *  so a provider that is down cannot make the agent wait forever. Sized above
- *  the 120s stream deadline / headers deadline so a single stalled attempt
- *  still earns one retry, but a second stall ends the round. */
+ *  the 120s stream idle deadline so a single stalled attempt still earns one
+ *  retry, but deliberately BELOW FIRST_BYTE_TIMEOUT_MS: a server that takes
+ *  minutes to produce headers is treated as unrecoverable within the round
+ *  rather than retried, which keeps a dead provider's total wait bounded. */
 export const NETWORK_RETRY_MAX_TOTAL_MS = 180_000;
 
 /** Backoff before retry `attempt` (1-based). Jitter spreads retries so a
@@ -581,7 +615,7 @@ async function requestChatCompletion(
         stream_options: { include_usage: true },
     };
     if (request.tools.length) body.tools = toOpenAITools(request.tools);
-    if (request.maxTokens != null) body.max_tokens = request.maxTokens;
+    body.max_tokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
     if (request.temperature != null) body.temperature = request.temperature;
     if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
 
@@ -594,7 +628,7 @@ async function requestChatCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
 
     const send = (payload: Record<string, unknown>): Promise<Response> =>
         fetch(url, withDispatcher({
@@ -608,22 +642,25 @@ async function requestChatCompletion(
     let response: Response;
     try {
         response = await send(body);
-        // Strict OpenAI-compatible servers reject the non-standard
-        // `stream_options` field outright. Flip it off ONCE and retry rather
-        // than failing the whole turn; usage then comes from the final chunk
-        // if the server sends it anyway.
-        if (!response.ok && response.status === 400 && body.stream_options) {
+        // Strict OpenAI-compatible servers reject non-standard or unsupported
+        // fields with a 400. Drop them one at a time - `stream_options` first
+        // (usage then comes from the final chunk if the server sends it), then
+        // the derived `max_tokens`, which not every gateway accepts - and
+        // retry rather than failing the whole turn.
+        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
-            if (STREAM_OPTIONS_REJECT_RE.test(text)) {
+            if (body.stream_options && STREAM_OPTIONS_REJECT_RE.test(text)) {
                 delete body.stream_options;
-                response = await send(body);
+            } else if (body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+                delete body.max_tokens;
             } else {
-                throw new Error(`Model request failed (400): ${text.slice(0, 600)}`);
+                throw providerHttpError(400, text);
             }
+            response = await send(body);
         }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -632,7 +669,7 @@ async function requestChatCompletion(
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+        throw providerHttpError(response.status, text);
     }
 
     if (!response.body) {
@@ -878,10 +915,9 @@ function toMessagesBody(
     const body: Record<string, unknown> = {
         model: request.model,
         // max_tokens is REQUIRED by the Messages API. With no explicit cap,
-        // derive a generous one from the context window (4k floor, 16k
-        // ceiling) rather than a silent 4096 that truncates long outputs.
-        max_tokens: request.maxTokens
-            ?? Math.min(16384, Math.max(4096, Math.floor((request.contextWindow ?? 8192) / 4))),
+        // derive a generous one from the context window rather than a silent
+        // 4096 that truncates long outputs.
+        max_tokens: request.maxTokens ?? derivedMaxTokens(request.contextWindow),
         messages: out,
         stream: true,
     };
@@ -952,7 +988,7 @@ async function requestMessagesCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
 
     const send = (payload: Record<string, unknown>): Promise<Response> =>
         fetch(url, withDispatcher({
@@ -974,12 +1010,12 @@ async function requestMessagesCompletion(
             if (/cache_control/i.test(text) && stripCacheControl(body)) {
                 response = await send(body);
             } else {
-                throw new Error(`Model request failed (400): ${text.slice(0, 600)}`);
+                throw providerHttpError(400, text);
             }
         }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -988,7 +1024,7 @@ async function requestMessagesCompletion(
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+        throw providerHttpError(response.status, text);
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
@@ -1194,7 +1230,7 @@ function toResponsesBody(
             parameters: tool.inputSchema,
         }));
     }
-    if (request.maxTokens != null) body.max_output_tokens = request.maxTokens;
+    body.max_output_tokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
     if (request.temperature != null) body.temperature = request.temperature;
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
@@ -1227,20 +1263,34 @@ async function requestResponsesCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+
+    const send = (payload: Record<string, unknown>): Promise<Response> =>
+        fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeHeaders(request.apiKey, request.sessionId),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        }, request.dispatcher));
 
     try {
     let response: Response;
     try {
-        response = await fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        }, request.dispatcher));
+        response = await send(body);
+        // Not every Responses-compatible gateway accepts a derived
+        // `max_output_tokens`; drop it once and retry rather than fail the turn.
+        if (!response.ok && response.status === 400) {
+            const text = await response.text().catch(() => '');
+            if (body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+                delete body.max_output_tokens;
+                response = await send(body);
+            } else {
+                throw providerHttpError(400, text);
+            }
+        }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -1249,7 +1299,7 @@ async function requestResponsesCompletion(
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+        throw providerHttpError(response.status, text);
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
@@ -1473,7 +1523,7 @@ function toGoogleBody(
         }];
     }
     const generationConfig: Record<string, unknown> = {};
-    if (request.maxTokens != null) generationConfig.maxOutputTokens = request.maxTokens;
+    generationConfig.maxOutputTokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
     if (request.temperature != null) generationConfig.temperature = request.temperature;
     if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
     return body;
@@ -1508,20 +1558,36 @@ async function requestGoogleCompletion(
     const onOuterAbort = () => controller.abort();
     if (outerSignal.aborted) onOuterAbort();
     else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
-    const headersTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+    const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
+
+    const send = (payload: Record<string, unknown>): Promise<Response> =>
+        fetch(url, withDispatcher({
+            method: 'POST',
+            headers: makeGoogleHeaders(request.apiKey, request.sessionId),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        }, request.dispatcher));
 
     try {
     let response: Response;
     try {
-        response = await fetch(url, withDispatcher({
-            method: 'POST',
-            headers: makeGoogleHeaders(request.apiKey, request.sessionId),
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        }, request.dispatcher));
+        response = await send(body);
+        // Some Google-compatible gateways reject `generationConfig`
+        // fields they do not support; drop the derived output cap once.
+        if (!response.ok && response.status === 400) {
+            const text = await response.text().catch(() => '');
+            const config = body.generationConfig as Record<string, unknown> | undefined;
+            if (config?.maxOutputTokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+                delete config.maxOutputTokens;
+                if (!Object.keys(config).length) delete body.generationConfig;
+                response = await send(body);
+            } else {
+                throw providerHttpError(400, text);
+            }
+        }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${FIRST_BYTE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -1530,7 +1596,7 @@ async function requestGoogleCompletion(
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Model request failed (${response.status}): ${text.slice(0, 600)}`);
+        throw providerHttpError(response.status, text);
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
@@ -2037,6 +2103,8 @@ async function summarizeDroppedTurns(
     windowTokens?: number | null,
 ): Promise<string | null> {
     if (!dropped.length) return null;
+    // Compaction is an optimization: a cancel must not wait out the summarizer.
+    if (request.signal?.aborted) return null;
     const overheadChars = SUMMARY_PROMPT_TEMPLATE.length + (existingSummary?.length ?? 0);
     const budget = summaryInputCharBudget(dropped.length, windowTokens, overheadChars);
     // No room for ANY serialized input on this window (instructions + rolling
@@ -2060,6 +2128,14 @@ async function summarizeDroppedTurns(
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
+    // Cancel the summarizer the moment the run is cancelled - without this the
+    // caller's await blocks for up to SUMMARY_TIMEOUT_MS after a user cancel.
+    const outerSignal = request.signal;
+    const onOuterAbort = () => controller.abort();
+    if (outerSignal) {
+        if (outerSignal.aborted) onOuterAbort();
+        else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+    }
     try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (request.apiKey) headers['Authorization'] = `Bearer ${request.apiKey}`;
@@ -2086,6 +2162,7 @@ async function summarizeDroppedTurns(
         return null;
     } finally {
         clearTimeout(timer);
+        outerSignal?.removeEventListener('abort', onOuterAbort);
     }
 }
 

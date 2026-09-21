@@ -30,6 +30,9 @@ export interface LocalSessionSnapshot {
     /** Cumulative spend for this session in USD. Monotonic: rewinding the
      *  conversation or restoring a checkpoint does NOT refund spent tokens. */
     totalCostUsd?: number;
+    /** Cumulative Toman spend (Iranian/gateway providers), tracked separately
+     *  from USD - currencies are never converted into one another. */
+    totalCostIrt?: number;
 }
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
@@ -417,6 +420,9 @@ export class LocalSessionStore {
                 // violate the ledger invariant (spend is finite and >= 0).
                 totalCostUsd: Number.isFinite(parsed?.totalCostUsd) && parsed.totalCostUsd > 0
                     ? parsed.totalCostUsd
+                    : 0,
+                totalCostIrt: Number.isFinite(parsed?.totalCostIrt) && parsed.totalCostIrt > 0
+                    ? parsed.totalCostIrt
                     : 0,
             };
         } catch {

@@ -124,3 +124,42 @@ test('stream follow survives shrink-clamps and a large edit pill', async ({ page
     });
     expect(dist).toBeLessThan(80);
 });
+
+test('pricing page renders gateway rates + model overrides at sidebar width (fa/RTL)', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+
+    // Settings → Cost & pricing
+    await page.getByTitle('تنظیمات').first().click();
+    await page.locator('.settings-nav-row', { hasText: 'هزینه و قیمت گذاری' }).click();
+
+    // The page asks the host for its state on open.
+    const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(asked).toContainEqual({ type: 'pricingGetState' });
+
+    await hostMessage(page, {
+        type: 'pricingState',
+        providers: [{ host: 'api.avalai.ir', label: 'Avalai', iranian: true, tomanPerUsd: 90000, markupPercent: null }],
+        models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
+        fallbackRate: 0,
+    });
+
+    await expect(page.locator('.pricing-row').first()).toContainText('Avalai');
+    await expect(page.locator('.pricing-badge').first()).toContainText('ایرانی');
+    await expect(page.locator('.pricing-row.compact')).toContainText('gpt-4o');
+
+    // Editing a gateway rate sends the save message with the host key.
+    const rate = page.locator('.pricing-row').first().locator('input[type="number"]').first();
+    await rate.fill('95000');
+    await page.locator('.pricing-row').first().locator('button', { hasText: 'ذخیره' }).click();
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(sent).toContainEqual({ type: 'pricingSaveProvider', host: 'api.avalai.ir', tomanPerUsd: 95000, markupPercent: null });
+
+    // RTL sidebar layout must not overflow horizontally.
+    const overflow = await page.evaluate(() => {
+        const el = document.querySelector('.settings-scroll')!;
+        return el.scrollWidth - el.clientWidth;
+    });
+    expect(overflow).toBeLessThanOrEqual(1);
+});

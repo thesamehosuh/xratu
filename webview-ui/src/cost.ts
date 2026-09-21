@@ -1,7 +1,7 @@
 /**
  * Cost formatting for the webview. Prices come from the host already resolved
- * (USD normally, Toman for Iranian providers when a rate is configured), so
- * this only formats and sums.
+ * in their own currency (USD normally, Toman for Iranian/gateway providers),
+ * so this only formats and sums. Currencies are never converted.
  */
 
 export interface Cost {

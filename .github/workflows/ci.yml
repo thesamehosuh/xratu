@@ -73,6 +73,9 @@ jobs:
       - name: API style routing tests
         run: npm run test:api-style
 
+      - name: Provider HTTP error classification tests
+        run: npm run test:provider-errors
+
       - name: Pricing tests
         run: npm run test:pricing
 
