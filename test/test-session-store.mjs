@@ -351,6 +351,25 @@ try {
         check('model ledger repaired to the display boundary', localTurns, uiTurns);
         check('derived offset is zero when aligned', uiTurns - localTurns, 0);
     }
+    // 19. pendingTurn nested tool-call args are bounded and stay valid JSON
+    // (a top-level-only clip let nested strings bypass the persisted limit).
+    {
+        const pt = await store.create(ws);
+        await store.save(pt.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [],
+            pendingTurn: {
+                prompt: 'p', text: '', thinking: '',
+                events: [{
+                    type: 'tool_call', id: 'c1', tool: 'edit_file',
+                    args: { patch: 'P'.repeat(30_000), nested: { deep: 'D'.repeat(30_000) } },
+                }],
+            },
+        });
+        const loaded = await store.load(pt.id);
+        const serialized = JSON.stringify(loaded.pendingTurn.events[0].args);
+        check('pendingTurn args bounded', serialized.length <= 20_000, true);
+        check('pendingTurn args valid JSON', (() => { try { JSON.parse(serialized); return true; } catch { return false; } })(), true);
+    }
 } finally {
     rmSync(root, { recursive: true, force: true });
 }

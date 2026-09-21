@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
-import { MAX_STORED_TURNS, clipHistoryContent, countUserRows, keepLastUserTurns } from './historyBounds';
+import { MAX_STORED_TURNS, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
     role: string;
@@ -235,13 +235,30 @@ function sanitizePendingTurn(pt: LocalPendingTurn): LocalPendingTurn {
         if (event?.type === 'tool_result' && typeof event.output === 'string') {
             return { ...event, output: clipHistoryContent(event.output, MAX_STORED_CONTENT) };
         }
-        if (event?.type === 'tool_call' && event.args && typeof event.args === 'object') {
+        if (event?.type === 'assistant_message' && Array.isArray(event.tool_calls)) {
             return {
                 ...event,
-                args: Object.fromEntries(
-                    Object.entries(event.args).map(([k, v]) =>
-                        [k, typeof v === 'string' ? clipHistoryContent(v, MAX_STORED_CONTENT) : v])
-                ),
+                content: typeof event.content === 'string'
+                    ? clipHistoryContent(event.content, MAX_STORED_CONTENT)
+                    : event.content,
+                tool_calls: event.tool_calls.map((tc: any) => {
+                    const args = tc?.function?.arguments;
+                    return typeof args === 'string' && args.length > MAX_STORED_CONTENT
+                        ? { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args, MAX_STORED_CONTENT) } }
+                        : tc;
+                }),
+            };
+        }
+        if (event?.type === 'tool_call' && event.args && typeof event.args === 'object') {
+            // Clip NESTED string leaves (a top-level-only pass let nested
+            // arguments bypass the persisted limit), then enforce a total-size
+            // ceiling on the re-serialized payload.
+            const clipped = clipJsonValue(event.args, MAX_STORED_CONTENT);
+            let serialized = '';
+            try { serialized = JSON.stringify(clipped); } catch { serialized = ''; }
+            return {
+                ...event,
+                args: serialized.length <= MAX_STORED_CONTENT ? clipped : { _truncated: true },
             };
         }
         return event;

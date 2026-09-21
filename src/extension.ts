@@ -44,7 +44,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, countUserRows, evictOldestTurns } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { MCP_REGISTRY } from './mcpRegistry';
@@ -2361,15 +2361,27 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Append to the model ledger with the in-memory content cap applied.
      *  Every write to `_localHistory` goes through here so a huge tool result
-     *  (terminal output is capped at 200k chars, expansion at 120k) cannot sit
-     *  in memory at full size for the life of the session. */
+     *  (terminal output is capped at 200k chars, expansion at 120k) or a huge
+     *  tool-call argument (an edit patch) cannot sit in memory at full size for
+     *  the life of the session. */
     private _pushLocalHistory(row: { role: string; content?: string; tool_calls?: any[]; tool_call_id?: string }): void {
         this._localHistory.push({
             ...row,
             ...(typeof row.content === 'string' && row.content.length > IN_MEMORY_CONTENT_CAP
                 ? { content: clipHistoryContent(row.content) }
                 : {}),
+            ...(Array.isArray(row.tool_calls) && row.tool_calls.length
+                ? { tool_calls: row.tool_calls.map((tc) => this._clipToolCall(tc)) }
+                : {}),
         });
+    }
+
+    /** Clip one tool call's `function.arguments` string. Kept valid JSON - the
+     *  ledger is replayed to the provider, which rejects malformed arguments. */
+    private _clipToolCall(tc: any): any {
+        const args = tc?.function?.arguments;
+        if (typeof args !== 'string' || args.length <= IN_MEMORY_CONTENT_CAP) return tc;
+        return { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args) } };
     }
 
     /** Drop the oldest complete turns from the model ledger past the cap.
@@ -2871,7 +2883,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         // other key here corrupts the REPLAYED history - strict
                         // local servers (LM Studio) 400 with "Invalid 'content'"
                         // / missing-arguments errors on the NEXT request.
-                        function: { name: call.name, arguments: call.argumentsJson },
+                        // Bounded as valid JSON: a large edit patch must not
+                        // sit in the per-turn array at full size.
+                        function: { name: call.name, arguments: clipToolCallArguments(call.argumentsJson) },
                     })),
                 });
                 this._scheduleLocalPartialPersist();

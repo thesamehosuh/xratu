@@ -20,6 +20,8 @@ const {
     MAX_IN_MEMORY_TURNS,
     MAX_STORED_TURNS,
     clipHistoryContent,
+    clipJsonValue,
+    clipToolCallArguments,
     countUserRows,
     keepLastUserTurns,
     evictOldestTurns,
@@ -91,6 +93,35 @@ const zero = evictOldestTurns(rows, 0);
 check('zero cap evicts nothing (guarded)', zero.evicted, 0);
 
 check('eviction does not mutate the source array', rows.length, 9);
+
+// --- clipToolCallArguments: bounded, and always valid JSON (the model ledger
+// is replayed to a provider that rejects malformed `function.arguments`) ---
+const parseOk = (s) => { try { JSON.parse(s); return true; } catch { return false; } };
+
+check('small args untouched', clipToolCallArguments('{"path":"a.ts"}', 100), '{"path":"a.ts"}');
+const bigArgs = JSON.stringify({ path: 'a.ts', new_content: 'X'.repeat(2000) });
+const clippedArgs = clipToolCallArguments(bigArgs, 400);
+checkTrue('big args stay valid JSON', parseOk(clippedArgs));
+checkTrue('big args are bounded', clippedArgs.length <= 400);
+checkTrue('big args keep the shape', typeof JSON.parse(clippedArgs).path === 'string');
+checkTrue('big args clip the large leaf', JSON.parse(clippedArgs).new_content.length < 2000);
+checkTrue('big args keep a marker', clippedArgs.includes('clipped'));
+
+const nestedArgs = JSON.stringify({ outer: { inner: 'Y'.repeat(1000) }, list: ['Z'.repeat(1000)] });
+const clippedNested = clipToolCallArguments(nestedArgs, 400);
+checkTrue('nested args stay valid JSON', parseOk(clippedNested));
+checkTrue('nested args are bounded', clippedNested.length <= 400);
+checkTrue('nested object shape preserved', typeof JSON.parse(clippedNested).outer === 'object');
+checkTrue('nested array shape preserved', Array.isArray(JSON.parse(clippedNested).list));
+
+check('malformed oversized args -> placeholder', clipToolCallArguments('{not json', 5), '{"_truncated":"arguments omitted to bound memory"}');
+checkTrue('placeholder is valid JSON', parseOk(clipToolCallArguments('{not json', 5)));
+
+// --- clipJsonValue: recursive, shape-preserving ---
+const shape = clipJsonValue({ a: 'x'.repeat(1000), b: [1, 2, { c: 'y'.repeat(1000) }] }, 300);
+checkTrue('clipJsonValue keeps the object shape', typeof shape.a === 'string' && Array.isArray(shape.b));
+checkTrue('clipJsonValue clips nested leaves', shape.b[2].c.length < 1000);
+check('clipJsonValue leaves non-strings alone', clipJsonValue({ n: 5, t: true, z: null }, 300).n, 5);
 
 if (failed) {
     console.error(`\n${failed} check(s) failed`);

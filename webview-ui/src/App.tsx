@@ -385,6 +385,8 @@ export function App() {
         lastScrollHeight.current = el.scrollHeight;
     }, [firstVisible]);
 
+    /** Reveal the next older page of the transcript window. A no-op when
+     *  nothing is hidden (so it cannot arm a stale scroll adjustment). */
     const showEarlier = useCallback(() => {
         // No-op when nothing is hidden - otherwise a stale scroll adjustment
         // would be applied to the NEXT window change.

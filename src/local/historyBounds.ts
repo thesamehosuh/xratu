@@ -60,6 +60,70 @@ export function countUserRows(rows: ReadonlyArray<HistoryRow>): number {
     return n;
 }
 
+/** Depth ceiling for the recursive JSON clip - beyond it a subtree is replaced
+ *  outright rather than walked (pathological nesting must not blow the stack). */
+const JSON_CLIP_MAX_DEPTH = 8;
+
+/**
+ * Recursively clip the STRING LEAVES of a parsed JSON value, preserving the
+ * object/array shape. Used for tool-call arguments: the model ledger is
+ * replayed to the provider, which rejects malformed `function.arguments`, so
+ * the value must stay valid JSON.
+ */
+export function clipJsonValue(value: unknown, cap: number, depth = 0): unknown {
+    if (typeof value === 'string') return clipHistoryContent(value, cap);
+    if (Array.isArray(value)) {
+        if (depth >= JSON_CLIP_MAX_DEPTH) return '[truncated]';
+        return value.map((item) => clipJsonValue(item, cap, depth + 1));
+    }
+    if (value && typeof value === 'object') {
+        if (depth >= JSON_CLIP_MAX_DEPTH) return '[truncated]';
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value)) out[key] = clipJsonValue(item, cap, depth + 1);
+        return out;
+    }
+    return value;
+}
+
+/** Valid-JSON placeholder used when a payload cannot be bounded by clipping. */
+const TRUNCATED_ARGS_JSON = '{"_truncated":"arguments omitted to bound memory"}';
+/** Room for JSON punctuation/key overhead when sizing the per-leaf budget. */
+const ARGS_JSON_OVERHEAD = 64;
+
+/** Count string leaves so the budget can be divided between them. */
+function countStringLeaves(value: unknown, depth = 0): number {
+    if (typeof value === 'string') return 1;
+    if (depth >= JSON_CLIP_MAX_DEPTH) return 0;
+    if (Array.isArray(value)) return value.reduce((n, item) => n + countStringLeaves(item, depth + 1), 0);
+    if (value && typeof value === 'object') {
+        return Object.values(value).reduce((n: number, item) => n + countStringLeaves(item, depth + 1), 0);
+    }
+    return 0;
+}
+
+/**
+ * Bound a tool-call `function.arguments` JSON string. Oversized string leaves
+ * are clipped (head+tail) with the budget divided between them so the shape
+ * survives; if the re-serialized payload is STILL over `cap` (many leaves), it
+ * degrades to a small valid placeholder. Malformed input also degrades to the
+ * placeholder - a provider would reject it anyway, and the alternative is an
+ * unbounded string in memory.
+ */
+export function clipToolCallArguments(argsJson: string, cap: number = IN_MEMORY_CONTENT_CAP): string {
+    if (argsJson.length <= cap) return argsJson;
+    try {
+        const parsed = JSON.parse(argsJson);
+        const leaves = Math.max(1, countStringLeaves(parsed));
+        // Split the budget between leaves; the floor keeps a clipped leaf
+        // useful even when the total budget is small.
+        const perLeaf = Math.max(64, Math.floor((cap - ARGS_JSON_OVERHEAD) / leaves));
+        const clipped = JSON.stringify(clipJsonValue(parsed, perLeaf));
+        return clipped.length <= cap ? clipped : TRUNCATED_ARGS_JSON;
+    } catch {
+        return TRUNCATED_ARGS_JSON;
+    }
+}
+
 /**
  * Keep only the last `k` complete turns. Returns the tail starting at the
  * k-th-from-last user row (so the ledger never begins mid-turn). `k <= 0`
