@@ -46,6 +46,14 @@ interface MonthGroup {
     days: LedgerDay[];
 }
 
+/** A chart axis: a label plus the local day keys it spans. */
+interface AxisGroup {
+    label: string;
+    days: string[];
+}
+
+type Granularity = 'week' | 'month';
+
 function calendarName(): string {
     return getLocale() === 'fa' ? 'fa-IR-u-ca-persian' : 'en-US';
 }
@@ -95,6 +103,27 @@ function expandMonth(group: MonthGroup): string[] {
     const days: string[] = [];
     for (let day = first; day <= last; day = shiftLocalDay(day, 1)) days.push(day);
     return days;
+}
+
+/** Trailing 7-day windows over the recorded days, oldest first. */
+function buildWeeks(history: LedgerDay[]): AxisGroup[] {
+    if (!history.length) return [];
+    const first = history[0].day;
+    const groups: AxisGroup[] = [];
+    let end = history[history.length - 1].day;
+    // Bounded loop: the ledger holds at most ~120 days, so ~18 windows.
+    for (let guard = 0; guard < 60; guard++) {
+        const start = shiftLocalDay(end, -6);
+        const days: string[] = [];
+        for (let day = start; day <= end; day = shiftLocalDay(day, 1)) days.push(day);
+        groups.push({
+            label: `${formatCalendarDate(localDayTimestamp(start))} – ${formatCalendarDate(localDayTimestamp(end))}`,
+            days,
+        });
+        if (start <= first) break;
+        end = shiftLocalDay(start, -1);
+    }
+    return groups.reverse();
 }
 
 /** Round an axis maximum up to a readable 1/2/2.5/5 x 10^n step. */
@@ -219,17 +248,25 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
     const providers = state?.providers ?? [];
     const allTime = state?.allTime;
 
-    // -1 means "latest month" so the initial view is correct even though the
+    // -1 means "latest period" so the initial view is correct even though the
     // data arrives after mount (no effect needed).
-    const [monthIdx, setMonthIdx] = useState(-1);
+    const [granularity, setGranularity] = useState<Granularity>('month');
+    const [groupIdx, setGroupIdx] = useState(-1);
     const [modelFilter, setModelFilter] = useState('all');
     const [hostFilter, setHostFilter] = useState('all');
     const [currencyChoice, setCurrencyChoice] = useState<'auto' | Currency>('auto');
     const [activeDay, setActiveDay] = useState<string | null>(null);
 
     const months = useMemo(() => buildMonths(history), [history, locale]);
-    const idx = months.length ? (monthIdx < 0 ? months.length - 1 : Math.min(monthIdx, months.length - 1)) : -1;
-    const month = idx >= 0 ? months[idx] : null;
+    const weeks = useMemo(() => buildWeeks(history), [history, locale]);
+    const axisGroups = useMemo<AxisGroup[]>(
+        () => (granularity === 'week' ? weeks : months.map((m) => ({ label: m.label, days: expandMonth(m) }))),
+        [granularity, weeks, months, locale],
+    );
+    const idx = axisGroups.length
+        ? (groupIdx < 0 ? axisGroups.length - 1 : Math.min(groupIdx, axisGroups.length - 1))
+        : -1;
+    const axis = idx >= 0 ? axisGroups[idx] : null;
 
     // Filter options come from the WHOLE ledger, not just the visible month.
     const allModels = useMemo(() => {
@@ -248,12 +285,12 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
         return map;
     }, [history]);
 
-    const monthDays = useMemo(() => (month ? expandMonth(month) : []), [month, locale]);
+    const axisDays = useMemo(() => axis?.days ?? [], [axis]);
 
     /** Cells of the selected month that pass the model/provider filters. */
     const filteredCells = useMemo(() => {
         const out: Array<{ day: string; cell: LedgerDay['cells'][number] }> = [];
-        for (const day of monthDays) {
+        for (const day of axisDays) {
             for (const cell of dayCells.get(day)?.cells ?? []) {
                 if (modelFilter !== 'all' && cell.model !== modelFilter) continue;
                 if (hostFilter !== 'all' && cell.host !== hostFilter) continue;
@@ -261,7 +298,7 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
             }
         }
         return out;
-    }, [monthDays, dayCells, modelFilter, hostFilter]);
+    }, [axisDays, dayCells, modelFilter, hostFilter]);
 
     const monthTotals = useMemo(() => {
         const totals = { USD: 0, IRT: 0, tokens: 0 };
@@ -286,7 +323,7 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
 
     /** One stacked column per day of the month, in the active currency. */
     const series = useMemo(() => {
-        return monthDays.map((day) => {
+        return axisDays.map((day) => {
             const byModel = new Map<string, number>();
             let total = 0;
             let tokens = 0;
@@ -301,7 +338,7 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
             }
             return { day, byModel, total, tokens };
         });
-    }, [monthDays, dayCells, modelFilter, hostFilter, currency]);
+    }, [axisDays, dayCells, modelFilter, hostFilter, currency]);
 
     const max = useMemo(() => niceMax(Math.max(0, ...series.map((d) => d.total))), [series]);
 
@@ -349,25 +386,43 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
 
                     <div className="settings-card-body">
                         <div className="cost-toolbar">
-                            <div className="cost-month">
+                            <div className="cost-granularity" role="group" aria-label={t('costGranularity')}>
+                                <button
+                                    type="button"
+                                    className={`usage-range${granularity === 'week' ? ' active' : ''}`}
+                                    aria-pressed={granularity === 'week'}
+                                    onClick={() => { setGranularity('week'); setGroupIdx(-1); setActiveDay(null); }}
+                                >
+                                    {t('costGranularityWeek')}
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`usage-range${granularity === 'month' ? ' active' : ''}`}
+                                    aria-pressed={granularity === 'month'}
+                                    onClick={() => { setGranularity('month'); setGroupIdx(-1); setActiveDay(null); }}
+                                >
+                                    {t('costGranularityMonth')}
+                                </button>
+                            </div>
+                            <div className="cost-period">
                                 <button
                                     type="button"
                                     className="icon-btn"
-                                    aria-label={t('costPrevMonth')}
-                                    title={t('costPrevMonth')}
+                                    aria-label={granularity === 'week' ? t('costPrevWeek') : t('costPrevMonth')}
+                                    title={granularity === 'week' ? t('costPrevWeek') : t('costPrevMonth')}
                                     disabled={idx <= 0}
-                                    onClick={() => setMonthIdx(Math.max(0, idx - 1))}
+                                    onClick={() => setGroupIdx(Math.max(0, idx - 1))}
                                 >
                                     {getLocale() === 'fa' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
                                 </button>
-                                <span className="cost-month-label">{month?.label ?? '—'}</span>
+                                <span className="cost-period-label">{axis?.label ?? '—'}</span>
                                 <button
                                     type="button"
                                     className="icon-btn"
-                                    aria-label={t('costNextMonth')}
-                                    title={t('costNextMonth')}
-                                    disabled={idx < 0 || idx >= months.length - 1}
-                                    onClick={() => setMonthIdx(Math.min(months.length - 1, idx + 1))}
+                                    aria-label={granularity === 'week' ? t('costNextWeek') : t('costNextMonth')}
+                                    title={granularity === 'week' ? t('costNextWeek') : t('costNextMonth')}
+                                    disabled={idx < 0 || idx >= axisGroups.length - 1}
+                                    onClick={() => setGroupIdx(Math.min(axisGroups.length - 1, idx + 1))}
                                 >
                                     {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                                 </button>

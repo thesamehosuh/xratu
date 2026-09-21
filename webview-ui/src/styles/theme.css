@@ -5410,7 +5410,18 @@ pre.tool-cmd {
     margin-bottom: 8px;
 }
 
-.cost-month {
+.cost-granularity {
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.cost-granularity .usage-range {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+}
+
+.cost-period {
     display: flex;
     align-items: center;
     gap: 2px;
@@ -5418,7 +5429,7 @@ pre.tool-cmd {
     min-width: 0;
 }
 
-.cost-month-label {
+.cost-period-label {
     font-size: 10.5px;
     font-weight: 650;
     color: var(--vscode-foreground);

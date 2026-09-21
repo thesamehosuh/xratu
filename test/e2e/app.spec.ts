@@ -207,6 +207,23 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
 
+    // Week mode: a 7-day axis with a range label, stepping by week.
+    await page.getByLabel('همه مدل ها').selectOption('all');
+    await page.locator('.cost-granularity .usage-range', { hasText: 'هفته' }).click();
+    await expect(page.locator('.cost-col')).toHaveCount(7);
+    await expect(page.locator('.cost-granularity .usage-range.active')).toContainText('هفته');
+    await expect(page.locator('.cost-period-label')).toContainText('–');
+    await page.getByLabel('هفته قبل').click();
+    // The previous week really has no usage, so the empty state is correct.
+    await expect(page.locator('.usage-empty')).toBeVisible();
+    // Two more weeks back is the window that holds the July usage.
+    await page.getByLabel('هفته قبل').click();
+    await page.getByLabel('هفته قبل').click();
+    await expect(page.locator('.cost-col')).toHaveCount(7);
+    // Back to the month axis.
+    await page.locator('.cost-granularity .usage-range', { hasText: 'ماه' }).click();
+    await expect(page.locator('.cost-col')).toHaveCount(31);
+
     // Provider usage list: both providers, with the Iranian badge and a cost.
     await expect(page.locator('.prov-row')).toHaveCount(2);
     await expect(page.locator('.prov-row').first()).toContainText('Avalai');
