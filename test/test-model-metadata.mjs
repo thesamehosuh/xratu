@@ -93,6 +93,14 @@ near('kaya: cached per-1k -> per 1M', kaya[0].pricing.cachedInput, 0.25, 1e-9);
 const kayaFree = parseModelList({ models: [{ id: 'free/model', maxTokens: 8192, inputPricePer1k: 0, outputPricePer1k: 0, isFree: true }] });
 check('kaya: free flag', kayaFree[0].pricing.free, true);
 
+// null / '' prices are UNKNOWN, not a free 0.
+const kayaNullPrice = parseModelList({ models: [{ id: 'x/model', maxTokens: 8192, inputPricePer1k: null, outputPricePer1k: null }] });
+check('kaya: null price -> no pricing', kayaNullPrice[0].pricing, undefined);
+const orBlankPrice = parseModelList({ data: [{ id: 'y/model', pricing: { prompt: '', completion: '   ' } }] });
+check('openrouter: blank price -> no pricing', orBlankPrice[0].pricing, undefined);
+const orNullPrice = parseModelList({ data: [{ id: 'z/model', pricing: { prompt: null, completion: null } }] });
+check('openrouter: null price -> no pricing', orNullPrice[0].pricing, undefined);
+
 // --- Google Generative Language ------------------------------------------
 const google = parseModelList({ models: [{
     name: 'models/gemini-3.5-flash',
@@ -104,6 +112,19 @@ const google = parseModelList({ models: [{
 check('google: models/ prefix stripped', google[0].id, 'gemini-3.5-flash');
 check('google: inputTokenLimit -> contextWindow', google[0].contextWindow, 1048576);
 check('google: outputTokenLimit -> maxOutput', google[0].maxOutputTokens, 65536);
+
+// The native list mixes chat with embedding/image entries; only generateContent
+// models can drive the agent loop.
+const googleMixed = parseModelList({ models: [
+    { name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+    { name: 'models/imagen-3', supportedGenerationMethods: ['predict'] },
+] });
+check('google: non-generateContent entries dropped', googleMixed.length, 1);
+check('google: keeps the chat model', googleMixed[0].id, 'gemini-3.5-flash');
+// An older shape without the method list must not be emptied out.
+const googleNoMethods = parseModelList({ models: [{ name: 'models/gemini-legacy', inputTokenLimit: 32768 }] });
+check('google: missing method list kept', googleNoMethods[0].id, 'gemini-legacy');
 
 // --- Ollama /api/tags -----------------------------------------------------
 const ollama = parseModelList({ models: [{ name: 'llama3:latest', size: 1, digest: 'abc', modified_at: 'x', details: {} }] });

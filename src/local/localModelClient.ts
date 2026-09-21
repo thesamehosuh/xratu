@@ -190,16 +190,19 @@ export async function probeLocalEndpoint(
         const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey, proxy);
         const parsed = parseModelList(native);
         if (parsed) {
-            // `type` distinguishes chat models from embedding/reranker entries;
-            // keep only llm (or entries with no type at all). Only the native
-            // shape carries `models`; anything else is returned as parsed.
+            // `type` distinguishes chat models from embedding/reranker entries.
+            // Only the native shape carries `models`; anything else is returned
+            // as parsed. When the native list has NO chat model, fall through
+            // to the OpenAI-compatible probe instead of surfacing models that
+            // cannot drive the agent loop.
             if (Array.isArray(native?.models)) {
                 const llms = native.models.filter((m: any) => !m?.type || m.type === 'llm');
                 const ids = new Set(llms.map((m: any) => m?.key ?? m?.id));
                 const chatOnly = parsed.filter((m) => ids.has(m.id));
-                return { models: applyModelKnowledge(chatOnly.length ? chatOnly : parsed) };
+                if (chatOnly.length) return { models: applyModelKnowledge(chatOnly) };
+            } else {
+                return { models: applyModelKnowledge(parsed) };
             }
-            return { models: applyModelKnowledge(parsed) };
         }
     }
 

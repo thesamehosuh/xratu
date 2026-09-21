@@ -109,6 +109,11 @@ export interface LocalAgentRequest {
     tools: LocalToolDefinition[];
     signal?: AbortSignal;
     maxTokens?: number;
+    /** Provider/curated maximum output for the model. Used only to LOWER the
+     *  derived cap (never to raise it), so a provider with a smaller output
+     *  limit does not get a context-derived cap it will reject. Ignored when
+     *  `maxTokens` is set - an explicit caller cap always wins. */
+    maxOutputLimit?: number;
     temperature?: number;
     /** Reasoning effort (OpenAI-style); undefined = omit from the body so
      *  runtimes keep their default behavior. */
@@ -374,6 +379,15 @@ function derivedMaxTokens(windowTokens?: number | null): number {
     return Math.min(16384, Math.max(4096, Math.floor((windowTokens ?? 8192) / 4)));
 }
 
+/** The output cap actually sent: an explicit caller cap wins outright, else
+ *  the context-derived cap lowered to the provider's reported maximum. */
+function outputCapFor(request: LocalAgentRequest): number {
+    if (request.maxTokens != null) return request.maxTokens;
+    const derived = derivedMaxTokens(request.contextWindow);
+    const limit = request.maxOutputLimit;
+    return Number.isFinite(limit) && (limit as number) > 0 ? Math.min(derived, limit as number) : derived;
+}
+
 // --- Transient-network retry (flaky-connection hardening) -------------------
 // Iranian / mobile links drop mid-stream constantly. Node's fetch surfaces a
 // dead connection as `TypeError: terminated` (body cut) or `TypeError: fetch
@@ -627,7 +641,7 @@ async function requestChatCompletion(
         stream_options: { include_usage: true },
     };
     if (request.tools.length) body.tools = toOpenAITools(request.tools);
-    body.max_tokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
+    body.max_tokens = outputCapFor(request);
     if (request.temperature != null) body.temperature = request.temperature;
     if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
 
@@ -940,7 +954,7 @@ function toMessagesBody(
         // max_tokens is REQUIRED by the Messages API. With no explicit cap,
         // derive a generous one from the context window rather than a silent
         // 4096 that truncates long outputs.
-        max_tokens: request.maxTokens ?? derivedMaxTokens(request.contextWindow),
+        max_tokens: outputCapFor(request),
         messages: out,
         stream: true,
     };
@@ -1042,17 +1056,20 @@ async function requestMessagesCompletion(
     let response: Response;
     try {
         response = await send(body);
-        // Some Messages-compatible gateways reject `cache_control`. Strip every
-        // breakpoint ONCE and retry rather than failing the turn (caching is an
-        // optimization, not a requirement).
-        if (!response.ok && response.status === 400) {
+        // Some Messages-compatible gateways reject `cache_control` and others
+        // reject extended thinking. Strip them one at a time (bounded) rather
+        // than failing the turn - caching and thinking are optimizations.
+        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
             if (/cache_control/i.test(text) && stripCacheControl(body)) {
                 response = await send(body);
             } else if (body.thinking && REASONING_REJECT_RE.test(text)) {
-                // Gateway/model refuses extended thinking - drop it and let the
-                // runtime's own default apply rather than failing the turn.
+                // Gateway/model refuses extended thinking - drop it, restore
+                // the temperature and output cap we suppressed for thinking,
+                // and let the runtime's own default apply.
                 delete body.thinking;
+                if (request.temperature != null) body.temperature = request.temperature;
+                body.max_tokens = outputCapFor(request);
                 response = await send(body);
             } else {
                 throw providerHttpError(400, text);
@@ -1273,7 +1290,7 @@ function toResponsesBody(
             parameters: tool.inputSchema,
         }));
     }
-    body.max_output_tokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
+    body.max_output_tokens = outputCapFor(request);
     if (request.temperature != null) body.temperature = request.temperature;
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
@@ -1329,9 +1346,10 @@ async function requestResponsesCompletion(
     try {
         response = await send(body);
         // Not every Responses-compatible gateway accepts a derived
-        // `max_output_tokens`; drop it once and retry rather than fail the
-        // turn. An explicitly requested cap is never dropped.
-        if (!response.ok && response.status === 400) {
+        // `max_output_tokens` or the reasoning effort object; drop them one at
+        // a time (bounded) rather than fail the turn. An explicitly requested
+        // cap is never dropped.
+        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
             if (request.maxTokens == null && body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_output_tokens;
@@ -1578,7 +1596,7 @@ function toGoogleBody(
         }];
     }
     const generationConfig: Record<string, unknown> = {};
-    let outputCap = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
+    let outputCap = outputCapFor(request);
     // Gemini's thinking budget is drawn from maxOutputTokens, so the cap must
     // clear the budget or the answer is starved of output room. includeThoughts
     // makes the model stream its reasoning parts (parsed as `thinking`).
@@ -1645,9 +1663,9 @@ async function requestGoogleCompletion(
     try {
         response = await send(body);
         // Some Google-compatible gateways reject `generationConfig` fields
-        // they do not support; drop the derived output cap once. An explicitly
-        // requested cap is never dropped.
-        if (!response.ok && response.status === 400) {
+        // they do not support; drop them one at a time (bounded). An
+        // explicitly requested cap is never dropped.
+        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
             const config = body.generationConfig as Record<string, unknown> | undefined;
             if (request.maxTokens == null && config?.maxOutputTokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
@@ -1655,9 +1673,11 @@ async function requestGoogleCompletion(
                 if (!Object.keys(config).length) delete body.generationConfig;
                 response = await send(body);
             } else if (config?.thinkingConfig && REASONING_REJECT_RE.test(text)) {
-                // Gateway rejects thinkingConfig - drop it (keeping the output
-                // cap) rather than failing the turn.
+                // Gateway rejects thinkingConfig - drop it and restore the
+                // output cap the thinking budget had raised, rather than
+                // failing the turn.
                 delete config.thinkingConfig;
+                if (config.maxOutputTokens != null) config.maxOutputTokens = outputCapFor(request);
                 if (!Object.keys(config).length) delete body.generationConfig;
                 response = await send(body);
             } else {

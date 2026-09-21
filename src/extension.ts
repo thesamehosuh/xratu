@@ -40,7 +40,7 @@ import {
     setCatalogEntry,
     type ModelCatalog,
 } from './local/modelMetadata';
-import { knownContextWindow } from './modelKnowledge';
+import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
@@ -909,7 +909,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return key ? (this._contextWindows[key] ?? {}) : {};
     }
 
-    /** Merge a probe's provider-reported windows into the host's table. */
+    /** Replace a host's provider-reported windows with the latest probe's
+     *  snapshot. Replacing (not merging) is deliberate: a model the provider
+     *  no longer reports - or one whose window it withdrew - must not linger
+     *  and keep overriding the curated fallback. */
     private _rememberContextWindows(host: string | null | undefined, models: LocalModelInfo[]): void {
         const key = (host ?? '').trim().toLowerCase();
         if (!key) return;
@@ -917,8 +920,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         for (const m of models) {
             if (m.id && m.contextWindowReported && m.contextWindow) reported[m.id] = m.contextWindow;
         }
-        if (!Object.keys(reported).length) return;
-        this._contextWindows = { ...this._contextWindows, [key]: { ...(this._contextWindows[key] ?? {}), ...reported } };
+        const next = { ...this._contextWindows };
+        if (Object.keys(reported).length) next[key] = reported;
+        else delete next[key];
+        this._contextWindows = next;
         void this._saveContextWindows();
     }
 
@@ -2213,6 +2218,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return meta?.supportsReasoning === false ? undefined : level;
     }
 
+    /** Provider/curated max output for the model, when known. The runtime
+     *  lowers its context-derived cap to this so a provider with a smaller
+     *  output limit is not sent a cap it will reject. */
+    private _maxOutputLimitFor(model: string, baseUrl: string): number | undefined {
+        const meta = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model);
+        const limit = meta?.maxOutputTokens ?? knownMaxOutputTokens(model);
+        return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
+    }
+
     private async _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void> {
         if (!model) return;
         const map = this._thinkingLevels();
@@ -2600,6 +2614,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // degenerate (repetition loops). Over-estimating small
                     // only costs extra history compaction, which is functional.
                     contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
+                    maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
                     reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
                     // Route model traffic through the configured proxy. The
                     // dispatcher is cached and undefined when no proxy is set.

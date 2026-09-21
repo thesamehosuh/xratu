@@ -45,7 +45,13 @@ function windowFrom(...values: unknown[]): number | undefined {
  * `unit` is how many tokens the number covers (1 or 1000).
  */
 function toPerMillion(value: unknown, unit: 1 | 1000): number | undefined {
-    const n = Number(value);
+    // null / '' / whitespace must be UNKNOWN, not a free 0 - `Number(null)` and
+    // `Number('')` both coerce to 0, which would mark the model free.
+    const n = typeof value === 'number'
+        ? value
+        : typeof value === 'string' && value.trim() !== ''
+            ? Number(value)
+            : Number.NaN;
     if (!Number.isFinite(n) || n < 0) return undefined;
     const perMillion = n * (1_000_000 / unit);
     // Guard against NaN from weird exponents while keeping tiny real rates.
@@ -202,6 +208,13 @@ function parseOllamaItem(m: any): LocalModelInfo | null {
 function parseGoogleItem(m: any): LocalModelInfo | null {
     const raw = typeof m?.name === 'string' ? m.name : undefined;
     if (!raw) return null;
+    // The native list mixes chat models with embedding / image / AQA entries.
+    // Only a model that advertises generateContent can drive the agent loop;
+    // keep unknown (no method list) so an older shape is not emptied out.
+    if (Array.isArray(m.supportedGenerationMethods)) {
+        const methods = m.supportedGenerationMethods.map((v: unknown) => String(v));
+        if (!methods.includes('generateContent')) return null;
+    }
     const id = raw.replace(/^models\//, '');
     if (!id) return null;
     const model: LocalModelInfo = { id, object: 'model', ownedBy: 'google' };
