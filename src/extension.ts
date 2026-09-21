@@ -1563,14 +1563,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Re-price recorded usage after a price change, so PAST usage follows the
-     *  new rate instead of being frozen at the old one. */
+     *  new rate instead of being frozen at the old one. The read-modify-write
+     *  runs inside the ledger's queue: reading here and replacing afterwards
+     *  would drop a round appended in between. */
     private async _repriceLedger(onlyModel?: string): Promise<void> {
-        const before = await this._usageLedger.read();
-        if (!before.length) return;
         const resolve = await this._ledgerCostResolver();
-        const { entries, changed } = recomputeCosts(before, resolve, onlyModel);
+        const { entries, changed } = await this._usageLedger.update(
+            (current) => recomputeCosts(current, resolve, onlyModel),
+        );
         if (!changed) return;
-        await this._usageLedger.replace(entries);
         await this._syncSessionFromLedger(entries);
     }
 

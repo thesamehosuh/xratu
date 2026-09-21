@@ -158,6 +158,22 @@ check('normalize drops a ts-less row', normalizeEntry({ input: 1 }), null);
 
         await store.append(entry({ input: 55 }));
         check('append after compact still works', (await store.read()).length, 2);
+
+        // update() is a read-modify-write INSIDE the write queue: a plain
+        // read()+replace() would drop a round appended in between.
+        const updated = await store.update((list) => ({
+            entries: list.map((e) => ({ ...e, amount: 7, currency: 'USD' })),
+            changed: true,
+        }));
+        check('update reports a change', updated.changed, true);
+        check('update persists the transform', (await store.read()).every((e) => e.amount === 7), true);
+
+        const noop = await store.update((list) => ({ entries: list, changed: false }));
+        check('update reports no change', noop.changed, false);
+        check('no-change update keeps the ledger', (await store.read()).length, 2);
+
+        await store.update((list) => ({ entries: [...list, entry({ input: 77 })], changed: true }));
+        check('update can append atomically', (await store.read()).some((e) => e.input === 77), true);
     } finally {
         rmSync(root, { recursive: true, force: true });
     }

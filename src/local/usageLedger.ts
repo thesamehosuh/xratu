@@ -254,6 +254,22 @@ export class UsageLedgerStore {
         });
     }
 
+    /**
+     * Atomic read-modify-write inside the write queue. A plain `read()` then
+     * `replace()` is racy: a round appended between the two would be written
+     * away, losing real usage. Also compacts in the same critical section.
+     */
+    async update(
+        transform: (entries: UsageEntry[]) => { entries: UsageEntry[]; changed: boolean },
+    ): Promise<{ entries: UsageEntry[]; changed: boolean }> {
+        return this.enqueue(async () => {
+            const result = transform(await this.read());
+            const pruned = pruneEntries(result.entries);
+            if (result.changed) await this.writeLocked(pruned);
+            return { entries: pruned, changed: result.changed };
+        });
+    }
+
     /** Rewrite the ledger with old/overflowing entries dropped. */
     async compact(): Promise<void> {
         await this.enqueue(() => this.compactLocked());

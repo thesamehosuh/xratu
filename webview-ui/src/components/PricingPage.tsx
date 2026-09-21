@@ -328,6 +328,18 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
                     </div>
 
                     <div className="settings-card-body">
+                        <div className="usage-stats">
+                            <UsageStat label={t('usageInput')} value={formatTokens(usage.input)} />
+                            <UsageStat label={t('usageOutput')} value={formatTokens(usage.output)} />
+                            <UsageStat label={t('usageCached')} value={formatTokens(usage.cached)} />
+                            <UsageStat
+                                label={t('usageCost')}
+                                value={costs.length
+                                    ? costs.map((c) => formatCost(c) ?? '—').join(' · ')
+                                    : '—'}
+                            />
+                        </div>
+
                         {providers.length > 0 && (
                             <div className="usage-providers">
                                 {providers.map((p) => (
