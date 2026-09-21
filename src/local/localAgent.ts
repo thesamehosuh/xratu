@@ -138,6 +138,10 @@ export interface LocalAgentRequest {
     /** Stable per-conversation id, sent as `x-opencode-session`. OpenCode Go
      *  rejects requests without it (MissingSessionID). */
     sessionId?: string;
+    /** Stable per-conversation identity for provider-side cache ROUTING
+     *  (OpenAI `prompt_cache_key`), independent of the OpenCode session header:
+     *  direct OpenAI hosts need it too. Only sent on hosts that accept it. */
+    cacheKey?: string;
     /** `'none'` disables tool CALLS while keeping the tool DEFINITIONS in the
      *  request. Used by the round-limit wrap-up: dropping the definitions would
      *  change the cached prefix and force a full cache miss on the largest
@@ -668,8 +672,8 @@ async function requestChatCompletion(
     // OpenAI prompt caching: a stable per-conversation key helps route requests
     // that share a prefix to the same cache machine. Only sent to hosts known
     // to accept it (see supportsPromptCacheKey); dropped on a 400 below.
-    if (request.sessionId && supportsPromptCacheKey(request.baseUrl)) {
-        body.prompt_cache_key = request.sessionId;
+    if (request.cacheKey && supportsPromptCacheKey(request.baseUrl)) {
+        body.prompt_cache_key = request.cacheKey;
     }
     // Keep the tool definitions (cacheable prefix) and only forbid CALLS.
     if (request.tools.length && request.toolChoice === 'none') body.tool_choice = 'none';
@@ -1355,8 +1359,8 @@ function toResponsesBody(
     // `reasoning_effort`); forward the user's thinking level.
     if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort };
     // OpenAI prompt caching routing hint (see requestChatCompletion).
-    if (request.sessionId && supportsPromptCacheKey(request.baseUrl)) {
-        body.prompt_cache_key = request.sessionId;
+    if (request.cacheKey && supportsPromptCacheKey(request.baseUrl)) {
+        body.prompt_cache_key = request.cacheKey;
     }
     // Keep the tool definitions (cacheable prefix) and only forbid CALLS.
     if (request.tools.length && request.toolChoice === 'none') body.tool_choice = 'none';

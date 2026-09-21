@@ -2584,6 +2584,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // when the user set a rate (never guess an exchange rate).
         this._setCostCurrencyFor(active.baseUrl);
 
+        // Stable per-conversation identity, used for two provider needs: OpenCode
+        // Go REQUIRES it as `x-opencode-session` (MissingSessionID otherwise),
+        // and OpenAI-family hosts use it as `prompt_cache_key` to route a
+        // conversation's requests to the same prompt cache. Prefer the persisted
+        // session id; fall back to one stable id per live chat.
+        const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
+
         try {
             const agent = runLocalAgent(
                 {
@@ -2623,11 +2630,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // OpenAI chat/completions.
                     apiStyle: resolveApiStyle(active.baseUrl, model),
                     // OpenCode Go requires a stable per-conversation session id
-                    // (MissingSessionID otherwise). Prefer the persisted
-                    // session id; fall back to one stable id per live chat.
-                    ...(isOpenCodeHost(active.baseUrl)
-                        ? { sessionId: this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`) }
-                        : {}),
+                    // (MissingSessionID otherwise). Other hosts only need the
+                    // cache-key identity below.
+                    ...(isOpenCodeHost(active.baseUrl) ? { sessionId: conversationId } : {}),
+                    // Sent as `prompt_cache_key` on hosts that accept it; the
+                    // transport decides (see supportsPromptCacheKey).
+                    cacheKey: conversationId,
                 },
                 executor,
                 {

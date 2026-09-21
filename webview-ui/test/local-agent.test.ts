@@ -1958,7 +1958,7 @@ async function testPromptCacheKeyRoutesOpenAiHosts() {
         await collect(runLocalAgent(baseRequest({
             baseUrl: 'https://opencode.ai/zen/v1',
             model: 'glm-5',
-            sessionId: 'sess-42',
+            cacheKey: 'sess-42',
         }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
         assert.equal(calls[0].prompt_cache_key, 'sess-42', 'stable per-session cache key is sent on an OpenAI-family host');
     } finally {
@@ -1971,10 +1971,28 @@ async function testPromptCacheKeyRoutesOpenAiHosts() {
         return sse(textSse(['ok']));
     }) as typeof fetch;
     try {
-        await collect(runLocalAgent(baseRequest({ sessionId: 'sess-42' }), {
+        await collect(runLocalAgent(baseRequest({ cacheKey: 'sess-42' }), {
             execute: async () => ({ output: '' }),
         }, { requestApproval: async () => ({}) }));
         assert.equal(localCalls[0].prompt_cache_key, undefined, 'no cache key for a generic local runtime');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+
+    // The OpenCode session header identity must not double as the cache key:
+    // the two are separate request fields on purpose.
+    const headerCalls: any[] = [];
+    globalThis.fetch = (async (_input, init) => {
+        headerCalls.push(JSON.parse(String(init?.body)));
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+    try {
+        await collect(runLocalAgent(baseRequest({
+            baseUrl: 'https://opencode.ai/zen/v1',
+            model: 'glm-5',
+            sessionId: 'sess-42',
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+        assert.equal(headerCalls[0].prompt_cache_key, undefined, 'sessionId alone does not set the cache key');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1999,7 +2017,7 @@ async function testPromptCacheKeyRejectedIsDropped() {
         const events = await collect(runLocalAgent(baseRequest({
             baseUrl: 'https://opencode.ai/zen/v1',
             model: 'glm-5',
-            sessionId: 'sess-42',
+            cacheKey: 'sess-42',
         }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
 
         assert.equal(calls.length, 2, 'exactly one retry without the key');
