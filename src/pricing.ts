@@ -154,7 +154,10 @@ const IRANIAN_PRICE_TABLE: ReadonlyArray<readonly [RegExp, RegExp, ModelPrice]> 
 ];
 
 function applyGatewayRate(price: ModelPrice, tomanPerUsd: number, markupPercent?: number): ModelPrice {
-    const factor = tomanPerUsd * (1 + (Number.isFinite(markupPercent) ? (markupPercent as number) : 0) / 100);
+    // Only a positive, finite markup is applied - a negative one would discount
+    // below the gateway's own rate and understate the cost.
+    const markup = Number.isFinite(markupPercent) && (markupPercent as number) > 0 ? (markupPercent as number) : 0;
+    const factor = tomanPerUsd * (1 + markup / 100);
     return {
         input: price.input * factor,
         output: price.output * factor,

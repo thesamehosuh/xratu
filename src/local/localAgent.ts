@@ -645,13 +645,14 @@ async function requestChatCompletion(
         // Strict OpenAI-compatible servers reject non-standard or unsupported
         // fields with a 400. Drop them one at a time - `stream_options` first
         // (usage then comes from the final chunk if the server sends it), then
-        // the derived `max_tokens`, which not every gateway accepts - and
-        // retry rather than failing the whole turn.
+        // the DERIVED `max_tokens`, which not every gateway accepts - and
+        // retry rather than failing the whole turn. An explicitly requested
+        // cap is never dropped: that is the caller's intent, so the 400 stands.
         for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
             if (body.stream_options && STREAM_OPTIONS_REJECT_RE.test(text)) {
                 delete body.stream_options;
-            } else if (body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+            } else if (request.maxTokens == null && body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_tokens;
             } else {
                 throw providerHttpError(400, text);
@@ -1278,10 +1279,11 @@ async function requestResponsesCompletion(
     try {
         response = await send(body);
         // Not every Responses-compatible gateway accepts a derived
-        // `max_output_tokens`; drop it once and retry rather than fail the turn.
+        // `max_output_tokens`; drop it once and retry rather than fail the
+        // turn. An explicitly requested cap is never dropped.
         if (!response.ok && response.status === 400) {
             const text = await response.text().catch(() => '');
-            if (body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+            if (request.maxTokens == null && body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_output_tokens;
                 response = await send(body);
             } else {
@@ -1572,12 +1574,13 @@ async function requestGoogleCompletion(
     let response: Response;
     try {
         response = await send(body);
-        // Some Google-compatible gateways reject `generationConfig`
-        // fields they do not support; drop the derived output cap once.
+        // Some Google-compatible gateways reject `generationConfig` fields
+        // they do not support; drop the derived output cap once. An explicitly
+        // requested cap is never dropped.
         if (!response.ok && response.status === 400) {
             const text = await response.text().catch(() => '');
             const config = body.generationConfig as Record<string, unknown> | undefined;
-            if (config?.maxOutputTokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+            if (request.maxTokens == null && config?.maxOutputTokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete config.maxOutputTokens;
                 if (!Object.keys(config).length) delete body.generationConfig;
                 response = await send(body);

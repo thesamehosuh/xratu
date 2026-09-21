@@ -41,9 +41,17 @@ const MUTATING_TOOLS = new Set([
 let _rgPath: string | null | undefined;
 function findRipgrep(): string | null {
     if (_rgPath !== undefined) return _rgPath;
-    _rgPath = 'rg';
-    const probe = cp.spawnSync(_rgPath, ['--version'], { timeout: 1500, encoding: 'utf-8', windowsHide: true });
-    if (!probe.error && probe.status === 0) return _rgPath;
+    const probe = cp.spawnSync('rg', ['--version'], { timeout: 1500, encoding: 'utf-8', windowsHide: true });
+    if (!probe.error && probe.status === 0) {
+        _rgPath = 'rg';
+        return _rgPath;
+    }
+    // A TIMED-OUT probe is transient (slow disk, AV scan, loaded machine) and
+    // must NOT be cached as "no ripgrep" - that would permanently disable
+    // rg-backed search for the session. Only a definite absence is cached.
+    if (probe.error && (probe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+        return null;
+    }
     const bundled = process.env.VSCODE_RIPGREP_PATH;
     if (bundled && fs.existsSync(bundled)) {
         _rgPath = bundled;

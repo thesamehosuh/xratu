@@ -753,6 +753,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  a rewind or checkpoint restore does not refund already-spent tokens,
      *  and currencies are never converted into one another. */
     private _sessionCost: { USD: number; IRT: number } = { USD: 0, IRT: 0 };
+    /** Serializes read-modify-write pricing mutations so two rapid edits cannot
+     *  clobber each other's snapshot of the settings object. */
+    private _pricingWrite: Promise<void> = Promise.resolve();
     /** The in-flight local turn, held so a throttled snapshot can persist it
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
      *  turn (local mode has no server copy). Cleared in _runLocalAgent's
@@ -966,7 +969,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const action = await this.confirmBanner('geoBlockedHint', ['geoBlockedSwitch']);
         if (action !== 'geoBlockedSwitch') return;
         const credentials = await this._getSavedCredentials();
-        const iranian = credentials.find((c) => isIranianProvider(c.providerId));
+        // Exclude the EFFECTIVE active credential: switching a geo-blocked
+        // provider to itself is a no-op. Resolve the id the same way the rest
+        // of the host does (configured id, else the first saved one).
+        const activeId = await this._resolveActiveCredentialId();
+        const iranian = credentials.find((c) => c.id !== activeId && isIranianProvider(c.providerId));
         if (iranian) {
             await this._selectLlmCredential(iranian.id);
             this.notifyBanner('info', 'geoBlockedSwitched');
@@ -1384,8 +1391,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _setCostCurrencyFor(baseUrl: string): void {
         this._runBaseUrl = baseUrl;
         const lookup = this._priceLookupFor(baseUrl);
-        // Toman-billed when the provider is a known Iranian one, or when a
-        // gateway rate is configured for its host (a self-configured gateway).
+        // A resolved price knows its own currency - an explicit USD per-model
+        // override on an Iranian provider must bill in USD, so it wins over the
+        // provider's default ledger.
+        const price = priceForModel(this._selectedModel ?? '', this._modelPriceOverrides(), lookup);
+        if (price?.currency) {
+            this._runCostCurrency = price.currency;
+            return;
+        }
+        // Otherwise: Toman-billed when the provider is a known Iranian one, or
+        // when a gateway rate is configured for its host.
         const hasGatewayRate = lookup.gatewayRate != null
             || (lookup.iranian && lookup.fallbackRate != null);
         this._runCostCurrency = lookup.iranian || hasGatewayRate ? 'IRT' : 'USD';
@@ -1480,6 +1495,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /** Run a pricing read-modify-write on a single serialized queue. */
+    private _queuePricingWrite(task: () => Promise<void>): Promise<void> {
+        const run = this._pricingWrite.then(task, task);
+        // Keep the chain alive even if a task rejects.
+        this._pricingWrite = run.catch(() => undefined);
+        return run;
+    }
+
     /** Write (or clear, at <= 0) a per-host gateway rate. */
     private async _saveProviderPricing(
         host: string,
@@ -1488,19 +1511,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     ): Promise<void> {
         const key = host.trim().toLowerCase();
         if (!key) return;
-        const rates: Record<string, GatewayRate> = { ...this._gatewayRates() };
-        const value = Number(tomanPerUsd);
-        if (!Number.isFinite(value) || value <= 0) {
-            delete rates[key];
-        } else {
-            const markup = Number(markupPercent);
-            rates[key] = {
-                tomanPerUsd: value,
-                ...(Number.isFinite(markup) && markup > 0 ? { markupPercent: markup } : {}),
-            };
-        }
-        await vscode.workspace.getConfiguration('xratu')
-            .update('providerPricing', rates, vscode.ConfigurationTarget.Global);
+        await this._queuePricingWrite(async () => {
+            const rates: Record<string, GatewayRate> = { ...this._gatewayRates() };
+            const value = Number(tomanPerUsd);
+            if (!Number.isFinite(value) || value <= 0) {
+                delete rates[key];
+            } else {
+                const markup = Number(markupPercent);
+                rates[key] = {
+                    tomanPerUsd: value,
+                    ...(Number.isFinite(markup) && markup > 0 ? { markupPercent: markup } : {}),
+                };
+            }
+            await vscode.workspace.getConfiguration('xratu')
+                .update('providerPricing', rates, vscode.ConfigurationTarget.Global);
+        });
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
@@ -1519,26 +1544,33 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const outputValue = Number(output);
         if (!Number.isFinite(inputValue) || !Number.isFinite(outputValue) || inputValue < 0 || outputValue < 0) return;
         const cachedValue = Number(cachedInput);
-        const overrides: Record<string, PriceOverride> = { ...this._modelPriceOverrides() };
-        overrides[key] = {
-            input: inputValue,
-            output: outputValue,
-            ...(Number.isFinite(cachedValue) && cachedValue >= 0 ? { cachedInput: cachedValue } : {}),
-            ...(currency === 'IRT' ? { currency: 'IRT' as const } : {}),
-        };
-        await vscode.workspace.getConfiguration('xratu')
-            .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
+        await this._queuePricingWrite(async () => {
+            const overrides: Record<string, PriceOverride> = { ...this._modelPriceOverrides() };
+            overrides[key] = {
+                input: inputValue,
+                output: outputValue,
+                ...(Number.isFinite(cachedValue) && cachedValue >= 0 ? { cachedInput: cachedValue } : {}),
+                ...(currency === 'IRT' ? { currency: 'IRT' as const } : {}),
+            };
+            await vscode.workspace.getConfiguration('xratu')
+                .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
+        });
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
 
     private async _removeModelPricing(id: string): Promise<void> {
         const key = id.trim().toLowerCase();
-        const overrides: Record<string, PriceOverride> = { ...this._modelPriceOverrides() };
-        if (!(key in overrides)) return;
-        delete overrides[key];
-        await vscode.workspace.getConfiguration('xratu')
-            .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
+        let removed = false;
+        await this._queuePricingWrite(async () => {
+            const overrides: Record<string, PriceOverride> = { ...this._modelPriceOverrides() };
+            if (!(key in overrides)) return;
+            delete overrides[key];
+            removed = true;
+            await vscode.workspace.getConfiguration('xratu')
+                .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
+        });
+        if (!removed) return;
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
@@ -1546,8 +1578,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Update the global fallback Toman-per-USD rate (0 clears it). */
     private async _setFallbackRate(rate: number): Promise<void> {
         const value = Number(rate);
-        await vscode.workspace.getConfiguration('xratu')
-            .update('tomanPerUsd', Number.isFinite(value) && value > 0 ? value : 0, vscode.ConfigurationTarget.Global);
+        await this._queuePricingWrite(async () => {
+            await vscode.workspace.getConfiguration('xratu')
+                .update('tomanPerUsd', Number.isFinite(value) && value > 0 ? value : 0, vscode.ConfigurationTarget.Global);
+        });
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }

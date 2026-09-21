@@ -8,9 +8,12 @@ const CHECK_ICON = '<svg class="check-icon" xmlns="http://www.w3.org/2000/svg" v
 interface RenderedMarkdownProps {
     html: string;
     streaming?: boolean;
+    /** Announce streamed changes to screen readers. Only set for ASSISTANT
+     *  text - tool output must not be announced as if it were the answer. */
+    live?: boolean;
 }
 
-export function RenderedMarkdown({ html, streaming = false }: RenderedMarkdownProps) {
+export function RenderedMarkdown({ html, streaming = false, live = false }: RenderedMarkdownProps) {
     const handleClick = useCallback(async (event: MouseEvent<HTMLDivElement>) => {
         const target = (event.target as HTMLElement).closest<HTMLButtonElement>('.code-copy');
         if (!target) return;
@@ -41,6 +44,8 @@ export function RenderedMarkdown({ html, streaming = false }: RenderedMarkdownPr
         <div
             className={`msg-content${streaming ? ' streaming' : ''}`}
             onClick={handleClick}
+            aria-live={live ? 'polite' : undefined}
+            aria-atomic={live ? 'false' : undefined}
             dangerouslySetInnerHTML={{ __html: html }}
         />
     );

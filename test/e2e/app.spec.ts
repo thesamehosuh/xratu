@@ -61,6 +61,18 @@ test('locale message flips direction rtl -> ltr', async ({ page }) => {
     await expect(page.locator('.app')).toHaveAttribute('dir', 'ltr');
 });
 
+test('locale flip re-renders EXISTING chat bubbles (memo boundary)', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
+    const bubble = page.locator('article.msg.user').first();
+    await expect(bubble).toHaveAttribute('dir', 'rtl');
+    // The message prop is unchanged here - only the locale changes, so only the
+    // item's comparator can drive the re-render.
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await expect(bubble).toHaveAttribute('dir', 'ltr');
+});
+
 test('capabilities refresh spinner keeps spinning until EVERY echo arrives', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });

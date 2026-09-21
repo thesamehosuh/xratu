@@ -3,7 +3,7 @@ import { Bug, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Unlink, Zap 
 import type { LucideIcon } from 'lucide-react';
 import type { ChatMessage, ConnectionStatus } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
-import { t } from '../i18n';
+import { getLocale, t } from '../i18n';
 
 interface MessageListProps {
     messages: ChatMessage[];
@@ -62,6 +62,10 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
     }
     const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
 
+    // Bubble direction follows the app locale. Computed here (not inside the
+    // memoized MessageItem) so a language flip re-renders existing bubbles
+    // through the item's comparator.
+    const dir = getLocale() === 'fa' ? 'rtl' : 'ltr';
     return (
         <div
             className="messages"
@@ -138,6 +142,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     busy={busy}
                     conn={i === messages.length - 1 ? conn : undefined}
                     taskList={taskList && taskList.stepId && m.steps.some((s) => s.id === taskList.stepId) ? taskList : undefined}
+                    dir={dir}
                 />
             ))}
             </div>

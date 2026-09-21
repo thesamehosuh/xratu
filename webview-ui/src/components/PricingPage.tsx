@@ -33,7 +33,9 @@ function ProviderRateRow({
     const [dirty, setDirty] = useState(false);
     const parsedRate = rate.trim() === '' ? null : Number(rate);
     const parsedMarkup = markup.trim() === '' ? null : Number(markup);
-    const canSave = rate.trim() === '' || (Number.isFinite(parsedRate as number) && (parsedRate as number) > 0);
+    const rateValid = rate.trim() === '' || (Number.isFinite(parsedRate as number) && (parsedRate as number) > 0);
+    const markupValid = markup.trim() === '' || (Number.isFinite(parsedMarkup as number) && (parsedMarkup as number) >= 0);
+    const canSave = rateValid && markupValid;
 
     return (
         <div className="pricing-row">
@@ -124,9 +126,10 @@ function AddModelForm({ onSave }: { onSave: PricingPageProps['onSaveModel'] }) {
     const inputValue = Number(input);
     const outputValue = Number(output);
     const cachedValue = cached.trim() === '' ? null : Number(cached);
+    // Blank input/output must NOT silently become 0: both rates are required.
     const valid = id.trim() !== ''
-        && Number.isFinite(inputValue) && inputValue >= 0
-        && Number.isFinite(outputValue) && outputValue >= 0
+        && input.trim() !== '' && Number.isFinite(inputValue) && inputValue >= 0
+        && output.trim() !== '' && Number.isFinite(outputValue) && outputValue >= 0
         && (cachedValue == null || (Number.isFinite(cachedValue) && cachedValue >= 0));
 
     const submit = () => {

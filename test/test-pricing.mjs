@@ -77,6 +77,11 @@ const gwMarkup = priceForModel('claude-sonnet-5', null, {
 });
 near('gateway markup applied', gwMarkup?.input, 220, 1e-9);
 
+const gwNegative = priceForModel('claude-sonnet-5', null, {
+    host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100, markupPercent: -50 },
+});
+check('negative markup ignored', gwNegative?.input, 200);
+
 check(
     'Iranian provider with no Toman data -> null',
     priceForModel('claude-sonnet-5', null, { host: 'api.avalai.ir', iranian: true }),
