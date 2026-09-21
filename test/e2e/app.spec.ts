@@ -207,7 +207,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('gpt-4o');
     await expect(page.locator('.cost-currencies')).toHaveCount(0);
-    await expect(page.locator('.cost-col:not([aria-label$="—"])')).toHaveCount(1);
+    await expect(page.locator('.cost-col:not([aria-label$="-"])')).toHaveCount(1);
 
     // Stepper moves to July, which has two models and both currencies.
     await page.getByLabel('ماه قبل').click();
@@ -220,7 +220,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     // August has a single model, so no per-model breakdown repeats the total;
     // the axis is the LOCALE month (Jalali here), so pick the first non-empty
     // column by its label rather than assuming a Gregorian day index.
-    await page.locator('.cost-col:not([aria-label$="—"])').first().hover();
+    await page.locator('.cost-col:not([aria-label$="-"])').first().hover();
     await expect(page.locator('.cost-detail')).toContainText('تیر');
     // The detail line must never wrap: a hover cannot change the card's height
     // and shove every section below it.
@@ -239,7 +239,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-axis')).toContainText('$');
     await page.getByLabel('ماه بعد').click();
     await expect(page.locator('.cost-currencies')).toHaveCount(0);
-    await expect(page.locator('.cost-col:not([aria-label$="—"])')).toHaveCount(1);
+    await expect(page.locator('.cost-col:not([aria-label$="-"])')).toHaveCount(1);
     await expect(page.locator('.cost-axis')).toContainText('هزار');
 
     // Model filter (our own dropdown, not a native select) narrows the legend
