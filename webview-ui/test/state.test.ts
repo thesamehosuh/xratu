@@ -366,5 +366,21 @@ s = reduceChat(s, M('truncateFromUser', { userIndex: 1 }));
 ok(s.messages.filter((m) => m.role === 'user').length === 1, 'rewind dropped the second turn');
 ok(s.sessionCost?.amount === 0.9, 'session cost survives the rewind');
 
+// 28. Local transient-network retry: the countdown lands on the streaming
+//     bubble and `attempting` clears it right before the next fetch.
+s = createInitialChatState();
+s = reduceChat(s, M('startResponse'));
+const retryId = s.streamingId!;
+s = reduceChat(s, M('retrying', { attempt: 1, maxAttempts: 4, nextRetryInMs: 1000 }));
+ok(
+    s.messages.find((m) => m.id === retryId)?.retryStatus?.attempt === 1,
+    'retrying patches the streaming bubble with the countdown'
+);
+s = reduceChat(s, M('attempting'));
+ok(
+    s.messages.find((m) => m.id === retryId)?.retryStatus === null,
+    'attempting clears the countdown before the next fetch'
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

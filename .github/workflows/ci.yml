@@ -85,6 +85,9 @@ jobs:
       - name: Compaction tests
         run: npm run test:compaction
 
+      - name: Transient-network retry tests
+        run: npm run test:network-retry
+
       - name: Session approval tests
         run: npm run test:session-approval
 

@@ -61,6 +61,11 @@ export type LocalAgentEvent =
         }>;
     }
     | { type: 'status'; value: 'connecting' | 'running' | 'waitingApproval' | 'continuing' | 'done' }
+    // Transient transport retry (flaky network): `retrying` drives the
+    // countdown on the streaming bubble, `attempting` clears it right before
+    // the next fetch. Display-only - never part of the committed transcript.
+    | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number }
+    | { type: 'attempting' }
     // `estimated` marks the mid-stream usage estimates emitted WHILE a
     // response streams - the host must never record them as the turn's
     // real usage (the round-end event carries the authoritative copy).
@@ -301,6 +306,160 @@ function makeHeaders(apiKey?: string | null, sessionId?: string | null): Headers
  *  instead of stalling the agent loop indefinitely. */
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
+/** Marks a deadline XRATU itself imposed (no headers, or no chunk for
+ *  STREAM_IDLE_TIMEOUT_MS) rather than a provider rejection. The retry layer
+ *  treats it as a transient transport failure - but only before any output
+ *  reached the user. */
+export const TRANSPORT_TIMEOUT_CODE = 'XRATU_TRANSPORT_TIMEOUT';
+
+/** ES2020-safe `error.cause` assignment: the webview tsconfig targets ES2020,
+ *  which predates the Error options constructor / `cause` property. */
+function setErrorCause<T extends Error>(error: T, cause: unknown): T {
+    (error as T & { cause?: unknown }).cause = cause;
+    return error;
+}
+
+/** Deadline error carrying a stable code so the retry classifier recognizes
+ *  it even though its `cause` is the internal AbortError (a user cancel, by
+ *  contrast, is never wrapped and never retried). */
+function transportTimeoutError(message: string, cause?: unknown): Error {
+    const error = new Error(message);
+    error.name = 'XratuTransportTimeout';
+    (error as Error & { code?: string }).code = TRANSPORT_TIMEOUT_CODE;
+    if (cause !== undefined) setErrorCause(error, cause);
+    return error;
+}
+
+// --- Transient-network retry (flaky-connection hardening) -------------------
+// Iranian / mobile links drop mid-stream constantly. Node's fetch surfaces a
+// dead connection as `TypeError: terminated` (body cut) or `TypeError: fetch
+// failed` (connect cut), with the real reason buried in the `cause` chain -
+// undici attaches `SocketError: other side closed (UND_ERR_SOCKET)`,
+// `BodyTimeoutError`, `HeadersTimeoutError`, or a raw `ECONNRESET`. Every
+// competitor classifies these and retries: Cline's retry middleware names
+// exactly `terminated: SocketError: other side closed (UND_ERR_SOCKET)`,
+// opencode's retry regex matches `terminated|fetch failed|econnreset|...`,
+// Codex backs off 5s→60s on connection failures. This mirrors them, tuned
+// for a high-latency, high-loss network: four attempts, ~1s→4s jittered
+// backoff, and a hard total-time cap so a dead provider never hangs a turn.
+
+/** Error codes that mean the connection died under a request the provider
+ *  never rejected. ECONNREFUSED / ENOTFOUND are DELIBERATELY absent: those
+ *  are misconfiguration (server not started, wrong URL) and retrying them
+ *  only delays the real error. */
+const TRANSIENT_NETWORK_CODES = new Set([
+    'UND_ERR_SOCKET',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'ECONNRESET',
+    'EPIPE',
+    'ETIMEDOUT',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENETDOWN',
+    'EAI_AGAIN',
+    'ConnectionClosed',
+    TRANSPORT_TIMEOUT_CODE,
+]);
+
+/** undici wraps every mid-body cut in a TypeError with a generic message;
+ *  WebKit says "failed to fetch". */
+const TRANSIENT_NETWORK_MESSAGES = new Set(['terminated', 'fetch failed', 'failed to fetch']);
+
+/** Max `cause` hops walked - deep enough for fetch→undici→socket chains. */
+const MAX_CAUSE_DEPTH = 8;
+
+/**
+ * True when an error (anywhere in its `cause` chain) identifies a transient
+ * transport interruption - the connection died or timed out underneath a
+ * request the provider never rejected. An AbortError anywhere in the chain
+ * vetoes the match: cancelled requests surface the same socket vocabulary and
+ * a user cancel must never be retried. XRATU's own deadline error is decisive
+ * (it wraps an internal abort that is not a user cancel).
+ */
+export function isTransientNetworkError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    if ((error as { code?: unknown }).code === TRANSPORT_TIMEOUT_CODE) return true;
+    let aborted = false;
+    let transient = false;
+    const seen = new Set<unknown>();
+    let current: unknown = error;
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && current != null && typeof current === 'object'; depth++) {
+        if (seen.has(current)) break;
+        seen.add(current);
+        const node = current as { name?: unknown; message?: unknown; code?: unknown; cause?: unknown };
+        if (node.name === 'AbortError' || node.name === 'ResponseAborted') aborted = true;
+        if (typeof node.code === 'string' && TRANSIENT_NETWORK_CODES.has(node.code)) transient = true;
+        if (
+            current instanceof TypeError
+            && typeof node.message === 'string'
+            && TRANSIENT_NETWORK_MESSAGES.has(node.message.toLowerCase())
+        ) transient = true;
+        current = node.cause;
+    }
+    return transient && !aborted;
+}
+
+/** Total attempts = 1 initial + this many retries. */
+export const NETWORK_MAX_RETRIES = 3;
+/** First backoff; doubles each retry (1s → 2s → 4s) with +0–25% jitter. */
+export const NETWORK_RETRY_BASE_DELAY_MS = 1000;
+export const NETWORK_RETRY_MAX_DELAY_MS = 15_000;
+const NETWORK_RETRY_JITTER = 0.25;
+/** Hard ceiling on WALL-CLOCK spent retrying one round (attempt time included),
+ *  so a provider that is down cannot make the agent wait forever. Sized above
+ *  the 120s stream deadline / headers deadline so a single stalled attempt
+ *  still earns one retry, but a second stall ends the round. */
+export const NETWORK_RETRY_MAX_TOTAL_MS = 180_000;
+
+/** Backoff before retry `attempt` (1-based). Jitter spreads retries so a
+ *  fleet of clients does not stampede a provider that is coming back up. */
+export function networkRetryDelayMs(attempt: number, random = Math.random()): number {
+    const base = Math.min(
+        NETWORK_RETRY_MAX_DELAY_MS,
+        NETWORK_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+    );
+    return Math.min(NETWORK_RETRY_MAX_DELAY_MS, Math.round(base + base * NETWORK_RETRY_JITTER * random));
+}
+
+/** Resolve after `ms`, or immediately when `signal` aborts. Never rejects. */
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0 || !signal || signal.aborted) return Promise.resolve();
+    const abortSignal = signal;
+    return new Promise((resolve) => {
+        const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            abortSignal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+/** Append the `cause` chain to a transient transport error's message so the
+ *  user sees `terminated: other side closed / UND_ERR_SOCKET` instead of the
+ *  bare, useless `terminated`. Non-transport errors pass through unchanged. */
+function describeNetworkError(error: unknown): unknown {
+    if (!(error instanceof Error) || !isTransientNetworkError(error)) return error;
+    const parts: string[] = [];
+    const seen = new Set<unknown>();
+    let current: unknown = (error as Error & { cause?: unknown }).cause;
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && current != null && typeof current === 'object'; depth++) {
+        if (seen.has(current)) break;
+        seen.add(current);
+        const node = current as { message?: unknown; code?: unknown; cause?: unknown };
+        if (typeof node.message === 'string' && node.message && !parts.includes(node.message)) parts.push(node.message);
+        if (typeof node.code === 'string' && node.code && !parts.includes(node.code)) parts.push(node.code);
+        current = node.cause;
+    }
+    const detail = parts.join(' / ');
+    return detail ? setErrorCause(new Error(`${error.message}: ${detail}`), error) : error;
+}
+
 async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -308,7 +467,7 @@ async function readStreamChunk(reader: ReadableStreamDefaultReader<Uint8Array>):
             reader.read(),
             new Promise<never>((_, reject) => {
                 timer = setTimeout(
-                    () => reject(new Error(`Model stream stalled (no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`)),
+                    () => reject(transportTimeoutError(`Model stream stalled (no data for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`)),
                     STREAM_IDLE_TIMEOUT_MS,
                 );
             }),
@@ -435,6 +594,7 @@ async function requestChatCompletion(
             signal: controller.signal,
         }, request.dispatcher));
 
+    try {
     let response: Response;
     try {
         response = await send(body);
@@ -453,7 +613,7 @@ async function requestChatCompletion(
         }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -553,8 +713,6 @@ async function requestChatCompletion(
         if (done) break;
     }
 
-    outerSignal.removeEventListener('abort', onOuterAbort);
-
     const toolCalls: LocalToolCall[] = [];
     for (const call of toolDeltas.values()) {
         if (!call.id || !call.name) continue;
@@ -567,6 +725,12 @@ async function requestChatCompletion(
     }
 
     return { text, toolCalls, usage };
+    } finally {
+        // Always detach: a throw during fetch/read/consume must not leave the
+        // listener bound to the caller's long-lived run signal (parity with the
+        // Messages/Responses/Google transports).
+        outerSignal.removeEventListener('abort', onOuterAbort);
+    }
 }
 
 // --- Anthropic Messages API (/messages) -------------------------------------
@@ -805,7 +969,7 @@ async function requestMessagesCompletion(
         }
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -1066,7 +1230,7 @@ async function requestResponsesCompletion(
         }, request.dispatcher));
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -1347,7 +1511,7 @@ async function requestGoogleCompletion(
         }, request.dispatcher));
     } catch (e) {
         if (controller.signal.aborted && !outerSignal.aborted) {
-            throw new Error(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
+            throw transportTimeoutError(`Model request timed out (no response for ${STREAM_IDLE_TIMEOUT_MS / 1000}s).`);
         }
         throw e;
     } finally {
@@ -2036,9 +2200,26 @@ export async function* runLocalAgent(
     for (let round = 0; round < rounds; round++) {
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
-        const queue = new AsyncPushQueue<StreamDelta>();
+        // Transient-network retry state for THIS round. A round is only ever
+        // retried BEFORE any delta reached the user: once text/thinking has
+        // streamed, resuming would replay content the user already saw, so the
+        // error passes through (the same rule Cline's retry middleware uses).
+        let roundRetries = 0;
+        const retryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
+        // Kept at round scope so the settled value is visible below: the
+        // `.then` closure assignment to `result` is invisible to TS's
+        // control-flow analysis.
+        let requestPromise: Promise<CompletionResult | null> | null = null;
+
+        for (;;) {
+        const queue = new AsyncPushQueue<StreamDelta>();
+        // True once this attempt streamed anything the webview already
+        // rendered - retrying after that would duplicate it.
+        let emittedOutput = false;
+        result = null;
+        requestError = null;
 
         // Mid-stream usage estimator: every streamed text delta feeds it and
         // roughly every STREAM_USAGE_ESTIMATE_STEP new output tokens an
@@ -2066,17 +2247,23 @@ export async function* runLocalAgent(
 
         // A single huge tool result can exceed the window on its own, and
         // compaction never touches the current turn - bound it before sending.
-        boundToolResults(messages, windowTokens, toolTokens);
+        // The messages are byte-identical between retries, so bound only once.
+        if (roundRetries === 0) boundToolResults(messages, windowTokens, toolTokens);
 
-        const requestPromise = requestStreamingCompletion(
+        // Clear the previous attempt's countdown right before re-dialing: the
+        // bubble falls back to typing dots and a hung connect is not mistaken
+        // for a stalled UI (mirrors the host's cloud retry protocol).
+        if (roundRetries > 0) yield { type: 'attempting' };
+
+        requestPromise = requestStreamingCompletion(
             request,
             messages,
             tailNoteFor(noteUsed),
-            (delta) => queue.push({ kind: 'text', value: delta }),
-            (thinking) => queue.push({ kind: 'thinking', value: thinking }),
+            (delta) => { emittedOutput = true; queue.push({ kind: 'text', value: delta }); },
+            (thinking) => { emittedOutput = true; queue.push({ kind: 'thinking', value: thinking }); },
         )
             .then((value) => { result = value; return value; })
-            .catch((err) => { requestError = err; })
+            .catch((err) => { requestError = err; return null; })
             .finally(() => queue.close());
 
         while (result === null && requestError === null) {
@@ -2102,6 +2289,35 @@ export async function* runLocalAgent(
             yield { type: 'chunk', value: delta.value };
         }
         await requestPromise;
+
+        if (!requestError) break;
+
+        // Retry ONLY a transient transport drop (terminated / socket reset /
+        // timeout) that happened before any output reached the user, while
+        // attempts and the total-time budget allow. Everything else - HTTP
+        // rejections, overflow, a user cancel, mid-content death - falls
+        // through to the error/recovery path below.
+        const canRetry = !emittedOutput
+            && !request.signal?.aborted
+            && roundRetries < NETWORK_MAX_RETRIES
+            && Date.now() < retryDeadline
+            && isTransientNetworkError(requestError);
+        if (!canRetry) break;
+
+        roundRetries++;
+        const waitMs = networkRetryDelayMs(roundRetries);
+        yield {
+            type: 'retrying',
+            attempt: roundRetries,
+            maxAttempts: NETWORK_MAX_RETRIES + 1,
+            nextRetryInMs: waitMs,
+        };
+        await sleepAbortable(waitMs, request.signal);
+        // Cancelled during the backoff: surface the abort like any mid-stream
+        // cancel instead of re-dialing.
+        if (request.signal?.aborted) break;
+        }
+
         if (requestError) {
             // Some local servers (LM Studio, Ollama) reject the OpenAI-standard
             // data: URI in image_url.url and demand raw base64 - flip the
@@ -2141,9 +2357,11 @@ export async function* runLocalAgent(
                     continue;
                 }
             }
-            throw requestError;
+            throw describeNetworkError(requestError);
         }
-        const finalResult = result ?? await requestPromise.then((r) => r);
+        // Reached only on a successful attempt, so the settled value is set.
+        // `result` is read through the closure-visible promise for typing.
+        const finalResult = result ?? (requestPromise ? await requestPromise : null);
         if (!finalResult) throw new Error('Model returned no completion result.');
 
         if (finalResult.usage) yield { type: 'usage', usage: finalResult.usage };
@@ -2299,19 +2517,26 @@ export async function* runLocalAgent(
     // context-overflow rejection, compact deterministically (forced - the
     // estimate just proved wrong) and retry ONCE. The system message at
     // index 0 survives compaction, so the nudge rides on the retry as-is.
+    // Transient transport drops get the same pre-output retry as the main
+    // loop - the wrap-up is the WORST place to lose a turn, since all the
+    // work has already been done and only the summary is missing.
     let wrapRecovered = false;
+    let wrapRetries = 0;
+    const wrapRetryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
     let wrapResult: CompletionResult | null = null;
     let wrapError: unknown = null;
-    for (let wrapAttempt = 0; wrapAttempt < 2; wrapAttempt++) {
+    for (;;) {
+        let emittedOutput = false;
+        const wrapQueue = new AsyncPushQueue<StreamDelta>();
         wrapResult = null;
         wrapError = null;
-        const wrapQueue = new AsyncPushQueue<StreamDelta>();
+        if (wrapRetries > 0) yield { type: 'attempting' };
         const wrapPromise = requestStreamingCompletion(
             { ...request, tools: [] },
             wrapMessages,
             tailNoteFor(noteUsed),
-            (delta) => wrapQueue.push({ kind: 'text', value: delta }),
-            (thinking) => wrapQueue.push({ kind: 'thinking', value: thinking }),
+            (delta) => { emittedOutput = true; wrapQueue.push({ kind: 'text', value: delta }); },
+            (thinking) => { emittedOutput = true; wrapQueue.push({ kind: 'thinking', value: thinking }); },
         )
             .then((value) => { wrapResult = value; return value; })
             // null (not void) on failure: keeps the promise CompletionResult |
@@ -2343,6 +2568,29 @@ export async function* runLocalAgent(
             wrapResult = await wrapPromise;
             break;
         }
+
+        // Pre-output transient drop: retry BEFORE the overflow recovery, so a
+        // flaky link is not misread as a context problem.
+        if (
+            !emittedOutput
+            && !request.signal?.aborted
+            && wrapRetries < NETWORK_MAX_RETRIES
+            && Date.now() < wrapRetryDeadline
+            && isTransientNetworkError(wrapError)
+        ) {
+            wrapRetries++;
+            const waitMs = networkRetryDelayMs(wrapRetries);
+            yield {
+                type: 'retrying',
+                attempt: wrapRetries,
+                maxAttempts: NETWORK_MAX_RETRIES + 1,
+                nextRetryInMs: waitMs,
+            };
+            await sleepAbortable(waitMs, request.signal);
+            if (request.signal?.aborted) break;
+            continue;
+        }
+
         if (
             wrapRecovered
             || !windowTokens
@@ -2352,7 +2600,7 @@ export async function* runLocalAgent(
         ) break;
         wrapRecovered = true;
     }
-    if (wrapError) throw wrapError;
+    if (wrapError) throw describeNetworkError(wrapError);
     if (!wrapResult) throw new Error('Model returned no wrap-up completion result.');
     if (wrapResult.usage) yield { type: 'usage', usage: wrapResult.usage };
     // Tool calls in the wrap-up round are ignored: tools were not offered,

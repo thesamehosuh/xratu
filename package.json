@@ -173,6 +173,7 @@
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
 		"test:nls": "node test/test-nls.mjs",
 		"test:compaction": "node test/test-compaction.mjs",
+		"test:network-retry": "node test/test-network-retry.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",
 		"test:skills": "node test/test-skills.mjs",
 		"test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",

@@ -1501,6 +1501,140 @@ async function testGoogleApiTextToolAndUsage() {
     }
 }
 
+function deadConnection(): TypeError {
+    // Exactly the shape undici produces when the response body dies mid-stream.
+    return new TypeError('terminated', {
+        cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    });
+}
+
+async function testTransientStreamDropRetriesOnce() {
+    const requests: any[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        call++;
+        if (call === 1) {
+            // The connection dies before any SSE frame arrives.
+            throw deadConnection();
+        }
+        return sse(textSse(['recovered']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest(), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(call, 2, 'a transient pre-output drop retries exactly once');
+        const retrying = events.find((e: any) => e.type === 'retrying');
+        assert.ok(retrying, 'a retrying event drives the countdown UI');
+        assert.equal(retrying.attempt, 1);
+        assert.equal(retrying.maxAttempts, 4);
+        assert.ok(retrying.nextRetryInMs > 0);
+        assert.ok(events.some((e: any) => e.type === 'attempting'), 'the countdown is cleared before re-dialing');
+
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['recovered']);
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'recovered'));
+        // The retry re-sends the identical request shape.
+        assert.equal(requests[1].stream, true);
+        assert.deepEqual(requests[1].messages, requests[0].messages);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testNoRetryAfterOutputFlowed() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        const encoder = new TextEncoder();
+        let reads = 0;
+        return {
+            ok: true,
+            status: 200,
+            body: new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    reads++;
+                    if (reads === 1) {
+                        controller.enqueue(encoder.encode(
+                            `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+                        ));
+                        return;
+                    }
+                    // The socket dies AFTER content already reached the user.
+                    controller.error(deadConnection());
+                },
+            }),
+            text: async () => '',
+        } as MockResponse;
+    }) as typeof fetch;
+
+    try {
+        await assert.rejects(
+            collect(
+                runLocalAgent(baseRequest(), {
+                    execute: async () => ({ output: '' }),
+                }, {
+                    requestApproval: async () => ({}),
+                })
+            ),
+            // The error surfaces with its cause, not the bare word "terminated".
+            /terminated.*other side closed/,
+        );
+        assert.equal(call, 1, 'mid-content drops are never retried (would duplicate streamed text)');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testWrapupRetriesTransientDrop() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        if (call === 2) {
+            // The wrap-up - which runs after all the work is done - drops.
+            throw deadConnection();
+        }
+        return sse(textSse(['final answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), {
+                execute: async () => ({ output: 'contents' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+
+        assert.equal(call, 3, 'the wrap-up retries a transient drop before giving up');
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'final answer'));
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function main() {
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
@@ -1510,6 +1644,9 @@ async function main() {
     await testStreamingDeltas();
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();
+    await testTransientStreamDropRetriesOnce();
+    await testNoRetryAfterOutputFlowed();
+    await testWrapupRetriesTransientDrop();
     await testCachedTokensParsed();
     await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();

@@ -2285,6 +2285,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // system prompt and the session snapshot carry it forward.
                 this._sessionSummary = event.value;
                 break;
+            case 'retrying':
+                // Transient transport drop. Display-only: patch the streaming
+                // bubble with the countdown so a slow re-dial does not look
+                // like a hang. Never committed to the transcript.
+                this._view?.webview.postMessage({
+                    type: 'retrying',
+                    attempt: event.attempt,
+                    maxAttempts: event.maxAttempts,
+                    nextRetryInMs: event.nextRetryInMs,
+                });
+                break;
+            case 'attempting':
+                // Clear the countdown right before the next fetch so the bubble
+                // falls back to the typing dots.
+                this._view?.webview.postMessage({ type: 'attempting' });
+                break;
             case 'needsApproval':
                 outcome.needsApprovalId = event.approvalId;
                 break;
