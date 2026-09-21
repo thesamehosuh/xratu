@@ -21,6 +21,7 @@ import {
     aggregateByDayAndModel,
     entriesForSession,
     modelHosts,
+    modelTotals,
     recomputeCosts,
     sumUsage,
     totalsByHost,
@@ -1660,16 +1661,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     ): UsageRateRow[] {
         const overrides = this._modelPriceOverrides();
         const pairs = modelHosts(ledger);
-        const tokensByModel = new Map<string, number>();
-        // An override covers every host, so its row carries the model's total.
-        const costByModel = new Map<string, { USD: number; IRT: number }>();
-        for (const pair of pairs) {
-            tokensByModel.set(pair.model, (tokensByModel.get(pair.model) ?? 0) + pair.tokens);
-            const cost = costByModel.get(pair.model) ?? { USD: 0, IRT: 0 };
-            cost.USD += pair.USD;
-            cost.IRT += pair.IRT;
-            costByModel.set(pair.model, cost);
-        }
+        // Keyed by the lowercased id: an override is stored lowercased, so a
+        // mixed-case model id from the ledger must still match its own row.
+        const totalsByModel = modelTotals(pairs);
 
         const rows: Array<{ row: UsageRateRow; tokens: number }> = [];
         const overridden = new Set<string>();
@@ -1678,9 +1672,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             const key = id.trim().toLowerCase();
             if (!key) continue;
             overridden.add(key);
-            const tokens = tokensByModel.get(id) ?? 0;
+            const totals = totalsByModel.get(key);
             rows.push({
-                tokens,
+                tokens: totals?.tokens ?? 0,
                 row: {
                     id,
                     // Host-independent: the override wins on every provider.
@@ -1690,8 +1684,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     cachedInput: override.cachedInput != null ? Number(override.cachedInput) : null,
                     currency: override.currency === 'IRT' ? 'IRT' : 'USD',
                     source: 'override',
-                    USD: costByModel.get(id)?.USD ?? 0,
-                    IRT: costByModel.get(id)?.IRT ?? 0,
+                    USD: totals?.USD ?? 0,
+                    IRT: totals?.IRT ?? 0,
                 },
             });
         }

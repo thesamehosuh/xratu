@@ -285,6 +285,33 @@ export function modelHosts(entries: readonly UsageEntry[]): ModelHostUse[] {
     return [...byPair.values()].sort((a, b) => b.tokens - a.tokens);
 }
 
+/** All-time totals for one model, summed across the hosts it ran on. */
+export interface ModelTotals {
+    tokens: number;
+    USD: number;
+    IRT: number;
+}
+
+/**
+ * Per-model totals keyed by the LOWERCASED model id. Overrides are stored
+ * lowercased, so a mixed-case id from the ledger (OpenRouter/HuggingFace-style
+ * ids carry uppercase) must still find its own totals when the rate sheet
+ * builds the row for that override.
+ */
+export function modelTotals(pairs: readonly ModelHostUse[]): Map<string, ModelTotals> {
+    const byModel = new Map<string, ModelTotals>();
+    for (const pair of pairs) {
+        const key = pair.model.trim().toLowerCase();
+        if (!key) continue;
+        const totals = byModel.get(key) ?? { tokens: 0, USD: 0, IRT: 0 };
+        totals.tokens += pair.tokens;
+        totals.USD += pair.USD;
+        totals.IRT += pair.IRT;
+        byModel.set(key, totals);
+    }
+    return byModel;
+}
+
 /**
  * Append-only ledger on disk. Writes are serialized (one writer at a time) and
  * rewrites are atomic (temp + rename), so a crash never leaves a half file.

@@ -17,6 +17,7 @@ const {
     dayKey,
     entriesForSession,
     modelHosts,
+    modelTotals,
     normalizeEntry,
     parseLedger,
     pruneEntries,
@@ -223,6 +224,21 @@ check('USAGE_MAX_ENTRIES is a sane cap', USAGE_MAX_ENTRIES >= 1000, true);
     check('same model on another host is its own pair', modelHosts([entry({ model: 'x', host: '' })]), [
         { model: 'x', host: '', tokens: 120, USD: 1, IRT: 0 },
     ]);
+}
+
+// --- modelTotals: the rate sheet's per-model figures ---
+{
+    const totals = modelTotals(modelHosts([
+        entry({ model: 'meta-llama/Llama-3.3', host: 'a', input: 10, output: 0, amount: 2, currency: 'USD' }),
+        entry({ model: 'meta-llama/Llama-3.3', host: 'b', input: 5, output: 0, amount: 3, currency: 'USD' }),
+        entry({ model: 'gpt-4o', host: 'a', input: 1, output: 0, amount: 9000, currency: 'IRT' }),
+    ]));
+    // Lowercased keys: an override is stored lowercased, so a mixed-case id
+    // from the ledger has to find its own totals.
+    check('model totals keyed by lowercased id', [...totals.keys()], ['meta-llama/llama-3.3', 'gpt-4o']);
+    check('model totals sum across hosts', totals.get('meta-llama/llama-3.3'), { tokens: 15, USD: 5, IRT: 0 });
+    check('model totals keep currencies apart', totals.get('gpt-4o'), { tokens: 1, USD: 0, IRT: 9000 });
+    check('an id-less model is skipped', modelTotals(modelHosts([entry({ model: '', host: 'a' })])).size, 0);
 }
 
 console.log(failed === 0 ? '\nusage-ledger tests: all passed' : `\nusage-ledger tests: ${failed} FAILED`);
