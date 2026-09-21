@@ -175,6 +175,10 @@ export interface SavedCredential {
 export interface ModelCapability {
     vision?: boolean;
     noTools?: boolean;
+    /** Model supports configurable reasoning effort. */
+    reasoning?: boolean;
+    /** Authoritative "does not accept a reasoning parameter" signal. */
+    noReasoning?: boolean;
 }
 
 export interface SessionMeta {
@@ -346,7 +350,7 @@ export interface UsageTotals {
 }
 
 /** Where an effective per-model rate came from. */
-export type ModelRateSource = 'override' | 'gateway' | 'builtin' | 'unknown';
+export type ModelRateSource = 'override' | 'provider' | 'gateway' | 'builtin' | 'unknown';
 
 /** One rate-sheet row on the Usage page: a model's effective rate and its
  *  origin. An override is host-independent, so its `host` is empty. */

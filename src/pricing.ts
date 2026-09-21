@@ -53,6 +53,9 @@ export interface PriceLookup {
     gatewayRate?: GatewayRate | null;
     /** Global fallback rate from `xratu.tomanPerUsd`. */
     fallbackRate?: number | null;
+    /** Live, provider-reported USD price (per 1M tokens) for the active model.
+     *  Preferred over the curated tables, below an explicit user override. */
+    providerPrice?: ModelPrice | null;
 }
 
 export interface CostEstimate {
@@ -196,11 +199,31 @@ function usdPriceForModel(id: string): ModelPrice | null {
 }
 
 /**
+ * Sanitize a live provider-reported price. Provider prices are always
+ * normalized to USD per 1M tokens by the metadata layer, so the currency is
+ * pinned here - a gateway's per-token table is never reinterpreted as Toman.
+ */
+function sanitizeProviderPrice(price: ModelPrice | null | undefined): ModelPrice | null {
+    if (!price) return null;
+    const input = Number.isFinite(price.input) ? price.input : NaN;
+    const output = Number.isFinite(price.output) ? price.output : NaN;
+    if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) return null;
+    const cached = Number.isFinite(price.cachedInput) ? (price.cachedInput as number) : undefined;
+    if (cached != null && cached < 0) return null;
+    return {
+        input,
+        output,
+        ...(cached != null ? { cachedInput: cached } : {}),
+        currency: 'USD',
+    };
+}
+
+/**
  * Where a resolved rate came from. The Usage page shows this per model, so a
  * user can tell their own corrected rate from the curated table or a gateway's
  * Toman conversion.
  */
-export type PriceSource = 'override' | 'toman-table' | 'gateway' | 'usd-table';
+export type PriceSource = 'override' | 'provider' | 'toman-table' | 'gateway' | 'usd-table';
 
 /** An effective rate plus how it was resolved. */
 export interface ResolvedPrice {
@@ -211,10 +234,11 @@ export interface ResolvedPrice {
 /**
  * Resolve a model's price. Order (first hit wins):
  *  1. an exact user override (may carry `currency`);
- *  2. a curated Toman entry for this host + model;
- *  3. for a Toman-billed provider: per-host gateway rate (else the fallback
- *     rate) applied to the USD table;
- *  4. the curated USD table for everyone else.
+ *  2. a live provider-reported USD price for this host + model;
+ *  3. a curated Toman entry for this host + model;
+ *  4. for a Toman-billed provider: per-host gateway rate (else the fallback
+ *     rate) applied to the USD layer;
+ *  5. the curated USD table for everyone else.
  * A Toman-billed provider with no Toman data resolves to null - never a USD
  * list price dressed up as Toman.
  */
@@ -235,10 +259,19 @@ export function resolvePrice(
         }
     }
 
-    const host = (lookup?.host ?? '').trim().toLowerCase();
-    if (host) {
-        for (const [hostRe, modelRe, price] of IRANIAN_PRICE_TABLE) {
-            if (hostRe.test(host) && modelRe.test(id)) return { price, source: 'toman-table' };
+    // Live provider metadata beats every curated table, but never a user
+    // override. It is the same USD layer the curated table feeds.
+    const providerUsd = sanitizeProviderPrice(lookup?.providerPrice);
+    const usdLayer = (): ModelPrice | null => providerUsd ?? usdPriceForModel(id);
+
+    // A curated Toman row is a curated table too, so a live provider price
+    // takes precedence over it (the row is currently empty by design).
+    if (!providerUsd) {
+        const host = (lookup?.host ?? '').trim().toLowerCase();
+        if (host) {
+            for (const [hostRe, modelRe, price] of IRANIAN_PRICE_TABLE) {
+                if (hostRe.test(host) && modelRe.test(id)) return { price, source: 'toman-table' };
+            }
         }
     }
 
@@ -248,7 +281,7 @@ export function resolvePrice(
         : null;
 
     if (lookup?.iranian) {
-        const usd = usdPriceForModel(id);
+        const usd = usdLayer();
         if (usd) {
             if (gatewayRateValue) return { price: applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent), source: 'gateway' };
             const fallback = Number(lookup.fallbackRate);
@@ -260,11 +293,12 @@ export function resolvePrice(
     // A non-Iranian host with an explicit gateway rate is a self-configured
     // gateway: bill it in Toman too.
     if (gatewayRateValue) {
-        const usd = usdPriceForModel(id);
+        const usd = usdLayer();
         if (usd) return { price: applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent), source: 'gateway' };
         return null;
     }
 
+    if (providerUsd) return { price: providerUsd, source: 'provider' };
     const usd = usdPriceForModel(id);
     return usd ? { price: usd, source: 'usd-table' } : null;
 }

@@ -31,6 +31,16 @@ import {
 } from './local/usageLedger';
 import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
+import type { LocalModelInfo } from './local/localTypes';
+import {
+    cachedModelInfo,
+    catalogEntryFor,
+    readModelCatalog,
+    serializeModelCatalog,
+    setCatalogEntry,
+    type ModelCatalog,
+} from './local/modelMetadata';
+import { knownContextWindow } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
@@ -670,7 +680,7 @@ interface UsageRateRow {
     output: number;
     cachedInput: number | null;
     currency: 'USD' | 'IRT';
-    source: 'override' | 'gateway' | 'builtin' | 'unknown';
+    source: 'override' | 'provider' | 'gateway' | 'builtin' | 'unknown';
     /** All-time cost for this row's scope, per currency (never converted). */
     USD: number;
     IRT: number;
@@ -725,7 +735,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _yoloMode: boolean = false;
     private _planMode: boolean = false;
     private _selectedModel: string | null = null;
-    private _contextWindows: Record<string, number> = {};
+    /** Provider-reported context windows, scoped by provider HOST then model
+     *  id (so the same id on two providers never shares a window). Only
+     *  windows the provider actually reported live here; the curated fallback
+     *  is applied at lookup time. */
+    private _contextWindows: Record<string, Record<string, number>> = {};
+    /** Cached, normalized model metadata per host (see modelMetadata.ts). */
+    private _modelCatalog: ModelCatalog = {};
     /** Pending local approvals - resolver keyed by approvalId. */
     private _localApprovalResolvers: Record<string, {
         resolve: (decisions: Record<string, boolean>) => void;
@@ -838,6 +854,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         void this._usageLedger.compact().catch(() => undefined);
         setUiLocale(this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa');
         this._contextWindows = this._loadContextWindows();
+        this._modelCatalog = readModelCatalog(this._globalState.get<string>('xratu.modelCatalog'));
         this._loadTaskListEdits();
         setTaskListWriteListener(() => this._noteTaskListWrite());
         // exit_plan_mode (agent-initiated): ends plan mode exactly like the
@@ -851,17 +868,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    /** Last-served context-window table (provider metadata + known windows),
-     *  persisted so a mid-session extension reload does NOT silently drop the
-     *  real window: without it _contextWindowHint() returns undefined and the
-     *  run falls back to LOCAL_DEFAULT_CONTEXT_WINDOW (8192) - compacting a
-     *  1.3M-window conversation at ~8k. */
-    private _loadContextWindows(): Record<string, number> {
+    /** Provider-reported context windows, per host. Persisted so a mid-session
+     *  extension reload does NOT silently drop the real window: without it
+     *  _contextWindowHint() returns undefined and the run falls back to
+     *  LOCAL_DEFAULT_CONTEXT_WINDOW (8192) - compacting a 1.3M-window
+     *  conversation at ~8k. A legacy FLAT table (model -> window, no host) is
+     *  discarded rather than promoted: it belonged to one provider and would
+     *  bleed onto every other one. */
+    private _loadContextWindows(): Record<string, Record<string, number>> {
         try {
             const raw = this._globalState.get<string>('xratu.contextWindows');
             const parsed = raw ? JSON.parse(raw) : {};
-            return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-                ? parsed : {};
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+            const out: Record<string, Record<string, number>> = {};
+            for (const [host, table] of Object.entries<any>(parsed)) {
+                if (!table || typeof table !== 'object' || Array.isArray(table)) continue;
+                const clean: Record<string, number> = {};
+                for (const [model, win] of Object.entries<any>(table)) {
+                    if (typeof win === 'number' && Number.isFinite(win) && win >= 1024) clean[model] = Math.floor(win);
+                }
+                if (Object.keys(clean).length) out[host.toLowerCase()] = clean;
+            }
+            return out;
         } catch {
             return {};
         }
@@ -869,6 +897,29 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private async _saveContextWindows(): Promise<void> {
         await this._globalState.update('xratu.contextWindows', JSON.stringify(this._contextWindows));
+    }
+
+    private async _saveModelCatalog(): Promise<void> {
+        await this._globalState.update('xratu.modelCatalog', serializeModelCatalog(this._modelCatalog));
+    }
+
+    /** Provider-reported windows for one host (empty when none). */
+    private _contextWindowsFor(host: string | null | undefined): Record<string, number> {
+        const key = (host ?? '').trim().toLowerCase();
+        return key ? (this._contextWindows[key] ?? {}) : {};
+    }
+
+    /** Merge a probe's provider-reported windows into the host's table. */
+    private _rememberContextWindows(host: string | null | undefined, models: LocalModelInfo[]): void {
+        const key = (host ?? '').trim().toLowerCase();
+        if (!key) return;
+        const reported: Record<string, number> = {};
+        for (const m of models) {
+            if (m.id && m.contextWindowReported && m.contextWindow) reported[m.id] = m.contextWindow;
+        }
+        if (!Object.keys(reported).length) return;
+        this._contextWindows = { ...this._contextWindows, [key]: { ...(this._contextWindows[key] ?? {}), ...reported } };
+        void this._saveContextWindows();
     }
 
     // --- Session task list ("the list IS the plan") --------------------------
@@ -1404,17 +1455,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Pricing context for a provider base URL (host, Iranian flag, rates). */
-    private _priceLookupFor(baseUrl: string): PriceLookup {
-        return this._priceLookupForHost(baseUrlHost(baseUrl), isIranianProvider(this._providerIdForUrl(baseUrl)));
+    private _priceLookupFor(baseUrl: string, model?: string): PriceLookup {
+        return this._priceLookupForHost(baseUrlHost(baseUrl), isIranianProvider(this._providerIdForUrl(baseUrl)), model);
     }
 
     /** Pricing context for an already-known host - the Usage page's rate sheet
-     *  resolves models for hosts that may no longer be in saved credentials. */
-    private _priceLookupForHost(host: string | null, iranian: boolean): PriceLookup {
+     *  resolves models for hosts that may no longer be in saved credentials.
+     *  A live provider-reported price from the host-scoped catalog is included
+     *  when present. */
+    private _priceLookupForHost(host: string | null, iranian: boolean, model?: string): PriceLookup {
         const rates = this._gatewayRates();
         const gatewayRate = host ? (rates[host] ?? rates[host.toLowerCase()] ?? null) : null;
         const fallback = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
-        return { host, iranian, gatewayRate, fallbackRate: fallback > 0 ? fallback : null };
+        const id = model ?? this._selectedModel ?? '';
+        const meta = id ? cachedModelInfo(this._modelCatalog, host, id) : null;
+        const providerPrice = meta?.pricing
+            ? {
+                input: meta.pricing.input,
+                output: meta.pricing.output,
+                ...(meta.pricing.cachedInput != null ? { cachedInput: meta.pricing.cachedInput } : {}),
+            }
+            : null;
+        return { host, iranian, gatewayRate, fallbackRate: fallback > 0 ? fallback : null, providerPrice };
     }
 
     /** Cost of one usage record for the CURRENT run's provider, in the
@@ -1548,11 +1610,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const fallback = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
         return (entry) => {
             const host = entry.host;
+            const meta = cachedModelInfo(this._modelCatalog, host, entry.model);
             const lookup: PriceLookup = {
                 host,
                 iranian: iranianHosts.has(host),
                 gatewayRate: host ? (rates[host] ?? rates[host.toLowerCase()] ?? null) : null,
                 fallbackRate: fallback > 0 ? fallback : null,
+                providerPrice: meta?.pricing
+                    ? {
+                        input: meta.pricing.input,
+                        output: meta.pricing.output,
+                        ...(meta.pricing.cachedInput != null ? { cachedInput: meta.pricing.cachedInput } : {}),
+                    }
+                    : null,
             };
             const price = priceForModel(entry.model, overrides, lookup);
             if (!price) return null;
@@ -1720,7 +1790,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         for (const pair of pairs) {
             const key = pair.model.trim().toLowerCase();
             if (overridden.has(key)) continue;
-            const lookup = this._priceLookupForHost(pair.host, byHost.get(pair.host)?.iranian ?? false);
+            const lookup = this._priceLookupForHost(pair.host, byHost.get(pair.host)?.iranian ?? false, pair.model);
             const resolved = resolvePrice(pair.model, overrides, lookup);
             rows.push({
                 tokens: pair.tokens,
@@ -1733,9 +1803,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     currency: resolved?.price.currency ?? (lookup.iranian ? 'IRT' : 'USD'),
                     source: !resolved
                         ? 'unknown'
-                        : resolved.source === 'gateway' || resolved.source === 'toman-table'
-                            ? 'gateway'
-                            : 'builtin',
+                        : resolved.source === 'override'
+                            ? 'override'
+                            : resolved.source === 'provider'
+                                ? 'provider'
+                                : resolved.source === 'gateway' || resolved.source === 'toman-table'
+                                    ? 'gateway'
+                                    : 'builtin',
                     USD: pair.USD,
                     IRT: pair.IRT,
                 },
@@ -2084,21 +2158,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Best-known window for the selected model: explicit override, else the
-     *  longest matching entry of the served table (mirrors resolveWindow in
-     *  the webview). Undefined when nothing is known. */
+     *  longest matching provider-reported entry for this host, else the curated
+     *  knowledge table. Undefined when nothing is known. */
     private _contextWindowHint(): number | undefined {
         const model = this._selectedModel;
         if (!model) return undefined;
         const override = this._contextWindowOverrides()[model];
         if (typeof override === 'number' && override >= 1024) return override;
         const lowered = model.toLowerCase();
+        const table = this._contextWindowsFor(baseUrlHost(this._runBaseUrl ?? ''));
         let best: { len: number; win: number } | null = null;
-        for (const [needle, win] of Object.entries(this._contextWindows)) {
+        for (const [needle, win] of Object.entries(table)) {
             if (lowered.includes(needle.toLowerCase()) && (!best || needle.length > best.len)) {
                 best = { len: needle.length, win };
             }
         }
-        return best ? best.win : undefined;
+        return best ? best.win : knownContextWindow(model);
     }
 
     // --- Thinking-level (reasoning effort) selection ----------------------
@@ -2125,6 +2200,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _thinkingLevelHint(model: string | null | undefined): ThinkingLevel | undefined {
         if (!model) return undefined;
         return this._thinkingLevels()[model];
+    }
+
+    /** The effort to actually send: the user's level, UNLESS the provider has
+     *  authoritatively told us the model accepts no reasoning parameter (its
+     *  own list marks reasoning unsupported) - sending it there only yields a
+     *  400 we would then have to strip. */
+    private _reasoningEffortFor(model: string, baseUrl: string): ThinkingLevel | undefined {
+        const level = this._thinkingLevelHint(model);
+        if (!level) return undefined;
+        const meta = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model);
+        return meta?.supportsReasoning === false ? undefined : level;
     }
 
     private async _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void> {
@@ -2514,7 +2600,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // degenerate (repetition loops). Over-estimating small
                     // only costs extra history compaction, which is functional.
                     contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
-                    reasoningEffort: this._thinkingLevelHint(model),
+                    reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
                     // Route model traffic through the configured proxy. The
                     // dispatcher is cached and undefined when no proxy is set.
                     dispatcher: getProxyDispatcher(active.baseUrl),
@@ -2807,7 +2893,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._view.webview.postMessage({
                     type: 'modelInfo', defaultModel: '', models: [],
                     visionCapable: this.isLocalModelVisionCapable(),
-                    contextWindows: this._contextWindows,
+                    contextWindows: {},
                     overrides: this._contextWindowOverrides(),
                     thinkingLevels: this._thinkingLevels(),
                     selectedModel: this._selectedModel ?? undefined
@@ -2845,9 +2931,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const fetchCredId = await this._resolveActiveCredentialId();
         this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
         try {
-            const probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl));
+            let probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl));
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
+            }
+            // Offline / flaky network: serve the host's cached catalog rather
+            // than an empty picker. A stale-but-real list is strictly better
+            // than "unreachable", and a run still works when the endpoint
+            // comes back. The cache is NOT refreshed here (the fetch failed).
+            let fromCache = false;
+            if (!probed) {
+                const cached = catalogEntryFor(this._modelCatalog, baseUrlHost(baseUrl), Date.now());
+                if (cached) {
+                    probed = { models: cached.models };
+                    fromCache = true;
+                }
             }
             if (!probed) {
                 this._view.webview.postMessage({
@@ -2865,23 +2963,44 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 .map((m) => m.id)
                 .filter(Boolean)
                 .filter((id) => !(isOpenCodeHost(baseUrl) && isNonChatModel(id)));
-            const localWindows: Record<string, number> = {};
-            for (const m of probed.models) {
-                if (m.id && m.contextWindow) localWindows[m.id] = m.contextWindow;
+
+            const host = baseUrlHost(baseUrl);
+            // Cache the normalized metadata per HOST so the same model id on
+            // two providers never shares a window or a price, and a later run
+            // can resolve price/limit without re-probing. A cache-served list
+            // must not be re-stamped as freshly fetched.
+            if (!fromCache) {
+                this._modelCatalog = setCatalogEntry(this._modelCatalog, host, probed.models, Date.now());
+                void this._saveModelCatalog();
+                this._rememberContextWindows(host, probed.models);
             }
+
+            // What the picker/meter sees: provider-reported windows for this
+            // host, backfilled with the curated knowledge table.
+            const servedWindows: Record<string, number> = { ...this._contextWindowsFor(host) };
+            for (const m of probed.models) {
+                if (!m.id || servedWindows[m.id]) continue;
+                const win = m.contextWindowReported ? m.contextWindow : knownContextWindow(m.id);
+                if (win) servedWindows[m.id] = win;
+            }
+
             // Per-model capability badges. Only informative signals are sent:
-            // vision when supported, and "no tools" when the model cannot drive
-            // the agent loop - a tools badge on every model would be noise.
-            const capabilities: Record<string, { vision?: boolean; noTools?: boolean }> = {};
+            // vision when supported, "no tools" when the model cannot drive the
+            // agent loop, and reasoning support so the thinking selector can be
+            // hidden for models that do not accept the parameter.
+            const capabilities: Record<string, { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean }> = {};
             for (const m of probed.models) {
                 if (!m.id) continue;
                 const vision = m.supportsVision ?? modelIsLikelyVision(m.id);
                 const tools = m.supportsTools ?? modelLikelySupportsTools(m.id);
-                const entry: { vision?: boolean; noTools?: boolean } = {};
+                const entry: { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean } = {};
                 if (vision) entry.vision = true;
                 if (!tools) entry.noTools = true;
-                if (entry.vision || entry.noTools) capabilities[m.id] = entry;
+                if (m.supportsReasoning === true) entry.reasoning = true;
+                else if (m.supportsReasoning === false) entry.noReasoning = true;
+                if (entry.vision || entry.noTools || entry.reasoning || entry.noReasoning) capabilities[m.id] = entry;
             }
+
             // Prefer the model remembered for this credential, then the
             // in-memory selection; fall back to the provider's first model.
             const remembered = await this._modelForActiveCredential();
@@ -2891,23 +3010,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._selectedModel = preferred && models.includes(preferred)
                 ? preferred
                 : (models[0] ?? null);
-            this._contextWindows = { ...this._contextWindows, ...localWindows };
-            void this._saveContextWindows();
+            // The active provider is known here (even before any run), so the
+            // cost currency is correct for a reopened session.
+            this._setCostCurrencyFor(baseUrl);
             this._view.webview.postMessage({
                 type: 'modelInfo',
                 defaultModel: models[0] ?? '',
                 models,
-                contextWindows: this._contextWindows,
+                contextWindows: servedWindows,
                 overrides: this._contextWindowOverrides(),
                 thinkingLevels: this._thinkingLevels(),
                 selectedModel: this._selectedModel ?? undefined,
                 visionCapable: this.isLocalModelVisionCapable(),
                 capabilities,
             });
-            // The active provider is known here (even before any run), so the
-            // cost currency is correct for a reopened session - and re-post the
-            // total in case it was shown in the wrong currency.
-            this._setCostCurrencyFor(baseUrl);
+            // Re-post the total in case it was shown in the wrong currency.
             this._postSessionCost();
             return true;
         } catch (e) {

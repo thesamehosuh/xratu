@@ -166,6 +166,7 @@ function usageCost(cost: { USD: number; IRT: number }): string {
 
 const RATE_SOURCE_LABEL = {
     override: 'rateSourceOverride',
+    provider: 'rateSourceProvider',
     gateway: 'rateSourceGateway',
     builtin: 'rateSourceBuiltin',
     unknown: 'rateSourceUnknown',

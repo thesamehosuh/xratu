@@ -317,6 +317,18 @@ const FIRST_BYTE_TIMEOUT_MS = 300_000;
  *  whether they accept a cap at all; retry once without it. */
 export const MAX_TOKENS_REJECT_RE = /max_tokens|max_completion_tokens|max_output_tokens|maxOutputTokens/i;
 
+/** A 400 that rejects the reasoning/thinking parameter. The field name differs
+ *  per API style (`reasoning_effort`, `thinking`, `thinkingConfig`), and many
+ *  models accept none at all - retry once without it so an unsupported level
+ *  degrades to the runtime default instead of failing the whole turn. */
+export const REASONING_REJECT_RE = /reasoning_effort|reasoning[ ._]effort|thinking[ ._]?budget|thinkingConfig|\bthinking\b|reasoning is not supported|unsupported.{0,40}(reason|think)/i;
+
+/** Anthropic extended-thinking and Gemini thinking budgets for a UI level.
+ *  The floor is Anthropic's minimum; the ceiling is Gemini's max budget. */
+function thinkingBudgetFor(level: 'low' | 'medium' | 'high'): number {
+    return level === 'high' ? 24_576 : level === 'medium' ? 8_192 : 1_024;
+}
+
 /** Marks a deadline XRATU itself imposed (no headers, or no chunk for
  *  STREAM_IDLE_TIMEOUT_MS) rather than a provider rejection. The retry layer
  *  treats it as a transient transport failure - but only before any output
@@ -662,6 +674,10 @@ async function requestChatCompletion(
                 delete body.stream_options;
             } else if (request.maxTokens == null && body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_tokens;
+            } else if (body.reasoning_effort != null && REASONING_REJECT_RE.test(text)) {
+                // The model/gateway does not accept reasoning_effort - drop it
+                // and keep the run instead of failing on a UI convenience.
+                delete body.reasoning_effort;
             } else {
                 throw providerHttpError(400, text);
             }
@@ -941,6 +957,15 @@ function toMessagesBody(
         }));
     }
     if (request.temperature != null) body.temperature = request.temperature;
+    // Extended thinking: budget_tokens is required, max_tokens MUST exceed it,
+    // and Anthropic rejects a modified temperature alongside thinking - so the
+    // budget raises the cap and the temperature is dropped when enabled.
+    if (request.reasoningEffort) {
+        const budget = thinkingBudgetFor(request.reasoningEffort);
+        if ((body.max_tokens as number) <= budget) body.max_tokens = budget + 4096;
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        delete body.temperature;
+    }
     return body;
 }
 
@@ -1023,6 +1048,11 @@ async function requestMessagesCompletion(
         if (!response.ok && response.status === 400) {
             const text = await response.text().catch(() => '');
             if (/cache_control/i.test(text) && stripCacheControl(body)) {
+                response = await send(body);
+            } else if (body.thinking && REASONING_REJECT_RE.test(text)) {
+                // Gateway/model refuses extended thinking - drop it and let the
+                // runtime's own default apply rather than failing the turn.
+                delete body.thinking;
                 response = await send(body);
             } else {
                 throw providerHttpError(400, text);
@@ -1306,6 +1336,11 @@ async function requestResponsesCompletion(
             if (request.maxTokens == null && body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_output_tokens;
                 response = await send(body);
+            } else if (body.reasoning && REASONING_REJECT_RE.test(text)) {
+                // Model/gateway rejects the reasoning effort object - retry
+                // without it so the run proceeds at the runtime default.
+                delete body.reasoning;
+                response = await send(body);
             } else {
                 throw providerHttpError(400, text);
             }
@@ -1543,7 +1578,16 @@ function toGoogleBody(
         }];
     }
     const generationConfig: Record<string, unknown> = {};
-    generationConfig.maxOutputTokens = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
+    let outputCap = request.maxTokens ?? derivedMaxTokens(request.contextWindow);
+    // Gemini's thinking budget is drawn from maxOutputTokens, so the cap must
+    // clear the budget or the answer is starved of output room. includeThoughts
+    // makes the model stream its reasoning parts (parsed as `thinking`).
+    if (request.reasoningEffort) {
+        const budget = thinkingBudgetFor(request.reasoningEffort);
+        if (outputCap <= budget) outputCap = budget + 4096;
+        generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: true };
+    }
+    generationConfig.maxOutputTokens = outputCap;
     if (request.temperature != null) generationConfig.temperature = request.temperature;
     if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
     return body;
@@ -1608,6 +1652,12 @@ async function requestGoogleCompletion(
             const config = body.generationConfig as Record<string, unknown> | undefined;
             if (request.maxTokens == null && config?.maxOutputTokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete config.maxOutputTokens;
+                if (!Object.keys(config).length) delete body.generationConfig;
+                response = await send(body);
+            } else if (config?.thinkingConfig && REASONING_REJECT_RE.test(text)) {
+                // Gateway rejects thinkingConfig - drop it (keeping the output
+                // cap) rather than failing the turn.
+                delete config.thinkingConfig;
                 if (!Object.keys(config).length) delete body.generationConfig;
                 response = await send(body);
             } else {

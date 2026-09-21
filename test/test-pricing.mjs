@@ -146,5 +146,59 @@ const zeroCached = priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input
 // same as the fallback above.
 check('explicit zero cached rate costs nothing', costForUsage(zeroCached, { promptTokens: 1_000_000, completionTokens: 0, cachedTokens: 1_000_000 }), null);
 
+// --- Live provider-reported prices (override > provider > curated) ---
+check(
+    'provider price beats curated table',
+    resolvePrice('claude-sonnet-5', null, { providerPrice: { input: 9, output: 44 } })?.source,
+    'provider',
+);
+check(
+    'provider price value used',
+    priceForModel('claude-sonnet-5', null, { providerPrice: { input: 9, output: 44 } })?.input,
+    9,
+);
+check(
+    'user override still beats provider price',
+    priceForModel('claude-sonnet-5', { 'claude-sonnet-5': { input: 1, output: 2 } }, { providerPrice: { input: 9, output: 44 } })?.input,
+    1,
+);
+check(
+    'provider price fills a curated gap',
+    priceForModel('mystery-gateway-model', null, { providerPrice: { input: 3, output: 6 } })?.output,
+    6,
+);
+check(
+    'provider price carries cached rate',
+    priceForModel('mystery-gateway-model', null, { providerPrice: { input: 3, output: 6, cachedInput: 0.3 } })?.cachedInput,
+    0.3,
+);
+check(
+    'provider price is always USD',
+    priceForModel('claude-sonnet-5', null, { host: 'api.openai.com', providerPrice: { input: 9, output: 44 } })?.currency,
+    'USD',
+);
+check(
+    'invalid provider price falls through to curated',
+    resolvePrice('claude-sonnet-5', null, { providerPrice: { input: -1, output: 2 } })?.source,
+    'usd-table',
+);
+check(
+    'Iranian host: provider USD is converted via gateway rate',
+    resolvePrice('claude-sonnet-5', null, {
+        host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100 },
+        providerPrice: { input: 9, output: 44 },
+    })?.source,
+    'gateway',
+);
+near(
+    'Iranian host: provider base is the converted rate',
+    priceForModel('claude-sonnet-5', null, {
+        host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100 },
+        providerPrice: { input: 9, output: 44 },
+    })?.input,
+    900,
+    1e-9,
+);
+
 console.log(failed === 0 ? '\npricing: all tests passed' : `\npricing: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

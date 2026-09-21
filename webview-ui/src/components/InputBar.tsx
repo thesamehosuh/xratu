@@ -1030,7 +1030,7 @@ export function InputBar({
                         <span dir="ltr" className="chip-model-name">
                             {selectedModel ?? t('modelPlaceholder')}
                         </span>
-                        {thinkingLevel && (
+                        {thinkingLevel && modelCapabilities?.[selectedModel ?? '']?.noReasoning !== true && (
                             <span
                                 className={`chip-think lvl-${thinkingLevel}`}
                                 title={t('thinkingLevel')}
@@ -1196,7 +1196,7 @@ export function InputBar({
                                 </button>
                             ))}
                         </div>
-                        {selectedModel && onSetThinkingLevel && (
+                        {selectedModel && onSetThinkingLevel && modelCapabilities?.[selectedModel]?.noReasoning !== true && (
                             <div className="thinking-row" role="radiogroup" aria-label={t('thinkingLevel')}>
                                 <span className="thinking-row-label">
                                     <Brain size={12} />

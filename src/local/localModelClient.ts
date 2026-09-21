@@ -8,6 +8,7 @@
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
 import { isLikelyLocalUrl } from '../endpointGuard';
 import { normalizeBaseUrl } from './baseUrl';
+import { applyModelKnowledge, parseModelList } from './modelMetadata';
 
 export interface DiscoveredLocalModel {
     connection: LocalModelConnection;
@@ -68,12 +69,90 @@ async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, ap
     }
 }
 
-function numberFromFields(...values: unknown[]): number | undefined {
-    for (const value of values) {
-        const n = typeof value === 'string' ? Number(value.replaceAll(',', '')) : Number(value);
-        if (Number.isFinite(n) && n >= 1024 && n <= 10_000_000) return Math.floor(n);
+/** Google's OpenAI-compat base (`/v1beta/openai`) has no model list of its
+ *  own; the native Generative Language list lives at `/v1beta/models` and
+ *  takes the API key as a `key` query parameter (not a bearer token). */
+function isGoogleGenerativeHost(baseUrl: string): boolean {
+    try {
+        const host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl.trim()) ? baseUrl.trim() : `http://${baseUrl.trim()}`).hostname.toLowerCase();
+        return host === 'generativelanguage.googleapis.com';
+    } catch {
+        return false;
     }
-    return undefined;
+}
+
+function googleModelsUrl(apiKey?: string | null): string {
+    const base = 'https://generativelanguage.googleapis.com/v1beta/models';
+    return apiKey ? `${base}?key=${encodeURIComponent(apiKey)}` : base;
+}
+
+async function postJson(url: string, body: unknown, signal?: AbortSignal, timeoutMs = 2500, dispatcher?: unknown): Promise<any> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+        const init: RequestInit = {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        };
+        const response = await fetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
+        if (!response.ok) return null;
+        return response.json();
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    }
+}
+
+/** Largest `*.context_length` in an Ollama `/api/show` model_info blob.
+ *  @internal Exposed for tests. */
+export function ollamaContextLength(modelInfo: any): number | undefined {
+    if (!modelInfo || typeof modelInfo !== 'object') return undefined;
+    let best: number | undefined;
+    for (const [key, value] of Object.entries(modelInfo)) {
+        if (!key.toLowerCase().endsWith('context_length')) continue;
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 1024 && n <= 10_000_000) {
+            if (best === undefined || n > best) best = Math.floor(n);
+        }
+    }
+    return best;
+}
+
+/**
+ * Ollama's `/api/tags` carries no window or capability metadata. `/api/show`
+ * does, so enrich each model (bounded, best-effort) with its real context
+ * length and `capabilities` list. Failures leave the entry untouched.
+ */
+async function enrichOllamaModels(
+    origin: string,
+    models: LocalModelInfo[],
+    signal?: AbortSignal,
+): Promise<LocalModelInfo[]> {
+    const MAX_DETAIL_PROBES = 20;
+    return Promise.all(models.map(async (model, index) => {
+        if (index >= MAX_DETAIL_PROBES) return model;
+        const detail = await postJson(`${origin}/api/show`, { model: model.id }, signal);
+        if (!detail) return model;
+        const contextWindow = ollamaContextLength(detail.model_info);
+        const caps: string[] = Array.isArray(detail.capabilities)
+            ? detail.capabilities.map((c: unknown) => String(c).toLowerCase())
+            : [];
+        return {
+            ...model,
+            ...(contextWindow !== undefined ? { contextWindow, contextWindowReported: true } : {}),
+            ...(caps.length ? {
+                supportsVision: caps.includes('vision'),
+                supportsTools: caps.includes('tools'),
+                supportsReasoning: caps.includes('thinking') || caps.includes('reasoning'),
+            } : {}),
+        };
+    }));
 }
 
 /**
@@ -96,40 +175,58 @@ export async function probeLocalEndpoint(
     // 2-3s over a slow international route.
     const probeTimeoutMs = isLikelyLocalUrl(baseUrl) ? 1800 : 10_000;
 
+    // Google's OpenAI-compat root cannot list models; probe the native
+    // Generative Language endpoint with the key as a query parameter.
+    if (isGoogleGenerativeHost(baseUrl)) {
+        const google = await fetchJson(googleModelsUrl(apiKey), signal, probeTimeoutMs, null, proxy);
+        const parsed = parseModelList(google);
+        if (parsed) return { models: applyModelKnowledge(parsed) };
+    }
+
     // LM Studio's native v1 model endpoint exposes max_context_length and
     // per-loaded-instance context/capability metadata that the OpenAI /v1/models
     // compatibility endpoint often omits. Prefer it when available.
     if (/localhost:1234|127\.0\.0\.1:1234/.test(rawBase)) {
         const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey, proxy);
-        if (native && Array.isArray(native.models)) {
-            return {
-                models: native.models
-                    .filter((m: any) => !m.type || m.type === 'llm')
-                    .map((m: any) => ({
-                        id: m.key ?? m.id,
-                        object: 'model',
-                        ownedBy: m.publisher,
-                        contextWindow: numberFromFields(
-                            m.loaded_instances?.[0]?.config?.context_length,
-                            m.max_context_length,
-                            m.context_length,
-                        ),
-                        // `|| undefined`: absent metadata means UNKNOWN, not
-                        // false - a hard false would stop the caller's
-                        // heuristic fallback and badge every model as
-                        // "no tools".
-                        supportsVision: m.capabilities?.vision === true || undefined,
-                        supportsTools: m.capabilities?.trained_for_tool_use === true || undefined,
-                    }))
-                    .filter((m: LocalModelInfo) => !!m.id),
-            };
+        const parsed = parseModelList(native);
+        if (parsed) {
+            // `type` distinguishes chat models from embedding/reranker entries;
+            // keep only llm (or entries with no type at all). Only the native
+            // shape carries `models`; anything else is returned as parsed.
+            if (Array.isArray(native?.models)) {
+                const llms = native.models.filter((m: any) => !m?.type || m.type === 'llm');
+                const ids = new Set(llms.map((m: any) => m?.key ?? m?.id));
+                const chatOnly = parsed.filter((m) => ids.has(m.id));
+                return { models: applyModelKnowledge(chatOnly.length ? chatOnly : parsed) };
+            }
+            return { models: applyModelKnowledge(parsed) };
         }
     }
 
-    // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, LM Studio fallback).
-    // A malformed base URL must keep probeLocalEndpoint's "unreachable -> null"
-    // contract - normalizeBaseUrl throws on invalid input, and one throw here
-    // would reject the whole discoverLocalRuntimes Promise.all.
+    // Ollama: the native /api/tags + /api/show pair is the only source of real
+    // context windows and capabilities - its OpenAI-compat list omits both.
+    if (/localhost:11434|127\.0\.0\.1:11434/.test(rawBase)) {
+        let origin: string | null = null;
+        try {
+            origin = new URL(rawBase).origin;
+        } catch {
+            origin = null;
+        }
+        if (origin) {
+            const tags = await fetchJson(`${origin}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
+            const parsedTags = parseModelList(tags);
+            if (parsedTags) {
+                const enriched = await enrichOllamaModels(origin, parsedTags, signal);
+                return { models: applyModelKnowledge(enriched) };
+            }
+        }
+    }
+
+    // Try OpenAI-compatible /v1/models (vLLM, llama.cpp, custom, OpenRouter,
+    // Kaya's /api root, LM Studio fallback). A malformed base URL must keep
+    // probeLocalEndpoint's "unreachable -> null" contract - normalizeBaseUrl
+    // throws on invalid input, and one throw here would reject the whole
+    // discoverLocalRuntimes Promise.all.
     let modelsUrl: string;
     try {
         modelsUrl = `${normalizeBaseUrl(baseUrl)}/models`;
@@ -137,49 +234,13 @@ export async function probeLocalEndpoint(
         return null;
     }
     const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey, proxy);
-    if (openai && Array.isArray(openai.data)) {
-        return {
-            models: openai.data.map((m: any) => ({
-                id: m.id,
-                object: m.object,
-                ownedBy: m.owned_by ?? m.ownedBy,
-                contextWindow: numberFromFields(m.context_window, m.context_length, m.max_context_length, m.max_model_len, m.contextWindow),
-                supportsVision: m.capabilities?.vision === true || undefined,
-                supportsTools: m.capabilities?.trained_for_tool_use === true || undefined,
-            })),
-        };
-    }
-
-    // Kaya AI-style native gateway listing: { models: [{ id, provider,
-    // maxTokens, inputModalities, ... }] } at <base>/models when the base
-    // is an /api root. Richer than the OpenAI shape - maxTokens is the
-    // context window, inputModalities detects vision.
-    if (openai && Array.isArray(openai.models) && openai.models.some((m: any) => typeof m?.id === 'string')) {
-        return {
-            models: openai.models
-                .filter((m: any) => typeof m.id === 'string')
-                .map((m: any) => ({
-                    id: m.id,
-                    object: 'model',
-                    ownedBy: m.provider ?? m.ownedBy,
-                    contextWindow: numberFromFields(m.maxTokens, m.context_length, m.context_window),
-                    supportsVision: (Array.isArray(m.inputModalities) && m.inputModalities.includes('image')) || undefined,
-                })),
-        };
-    }
+    const parsed = parseModelList(openai);
+    if (parsed) return { models: applyModelKnowledge(parsed) };
 
     // Fall back to Ollama's native /api/tags endpoint.
-    const ollama = await fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
-    if (ollama && Array.isArray(ollama.models)) {
-        return {
-            models: ollama.models.map((m: any) => ({
-                id: m.name ?? m.id,
-                object: 'model',
-                ownedBy: 'ollama',
-                contextWindow: numberFromFields(m.context_length, m.context_window),
-            })),
-        };
-    }
+    const ollama = await fetchJson(`${rawBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
+    const parsedOllama = parseModelList(ollama);
+    if (parsedOllama) return { models: applyModelKnowledge(parsedOllama) };
 
     return null;
 }
