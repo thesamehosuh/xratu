@@ -176,6 +176,7 @@
 		"test:api-style": "node test/test-api-style.mjs",
 		"test:pricing": "node test/test-pricing.mjs",
 		"test:provider-errors": "node test/test-provider-errors.mjs",
+		"test:usage-ledger": "node test/test-usage-ledger.mjs",
 		"test:farsi-orthography": "node test/test-farsi-orthography.mjs",
 		"test:nls": "node test/test-nls.mjs",
 		"test:compaction": "node test/test-compaction.mjs",

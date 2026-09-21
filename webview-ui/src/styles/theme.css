@@ -5372,6 +5372,136 @@ pre.tool-cmd {
 }
 
 /* Usage + pricing page */
+.usage-ranges {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.usage-range {
+    flex: 1;
+    padding: 4px 6px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.usage-range:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--xratu-accent-dim);
+}
+
+.usage-range.active {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+    font-weight: 650;
+}
+
+.usage-range:focus-visible {
+    outline: 1px solid var(--xratu-accent);
+    outline-offset: 1px;
+}
+
+.usage-chart {
+    margin: 0 0 4px;
+}
+
+.usage-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1px;
+    height: 62px;
+}
+
+.usage-bar-slot {
+    /* flex-basis 0 + a max width: every day shares the axis equally, but a
+       7-day range does not stretch into 7 giant blocks. */
+    flex: 1 1 0;
+    max-width: 40px;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+.usage-bar {
+    width: 100%;
+    min-height: 0;
+    border-radius: 2px 2px 0 0;
+    background: var(--xratu-accent-dim);
+    transition: background 0.12s ease;
+}
+
+.usage-bar-slot:hover .usage-bar,
+.usage-bar-slot.active .usage-bar {
+    background: var(--xratu-accent);
+}
+
+.usage-bar-slot:focus-visible {
+    outline: 1px solid var(--xratu-accent);
+    outline-offset: 1px;
+    border-radius: 2px;
+}
+
+.usage-inspect {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 40px;
+    margin: 6px 0 2px;
+    padding: 6px 8px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-editor-background);
+}
+
+.usage-inspect strong {
+    font-size: 10.5px;
+    color: var(--vscode-foreground);
+}
+
+.usage-inspect-nums {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+}
+
+.usage-inspect-nums span {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-foreground);
+}
+
+.usage-inspect-nums i {
+    font-style: normal;
+    font-size: 8.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-inspect-hint {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-alltime {
+    margin: 8px 0 0;
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
 .usage-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));

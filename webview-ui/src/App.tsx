@@ -31,7 +31,7 @@ import { Welcome } from './components/Welcome';
 import { PricingPage } from './components/PricingPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
-import type { ModelPricingView, ProviderUsageView } from './types';
+import type { DailyUsage, ModelPricingView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'pricing';
 
@@ -83,6 +83,8 @@ export function App() {
         usage: { input: number; output: number; cached: number };
         costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
         models: ModelPricingView[];
+        history: DailyUsage[];
+        allTime: UsageTotals;
     } | null>(null);
     const [pricingReturnTo, setPricingReturnTo] = useState<'chat' | 'settings'>('settings');
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
@@ -398,6 +400,8 @@ export function App() {
                         usage: msg.usage,
                         costs: msg.costs,
                         models: msg.models,
+                        history: msg.history,
+                        allTime: msg.allTime,
                     });
                     break;
                 case 'modelInfo':

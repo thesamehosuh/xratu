@@ -137,7 +137,7 @@ test('stream follow survives shrink-clamps and a large edit pill', async ({ page
     expect(dist).toBeLessThan(80);
 });
 
-test('pricing page shows session usage + model overrides at sidebar width (fa/RTL)', async ({ page }) => {
+test('pricing page shows usage history, chart filters and model overrides (fa/RTL)', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
@@ -150,16 +150,42 @@ test('pricing page shows session usage + model overrides at sidebar width (fa/RT
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'pricingGetState' });
 
+    // 30 daily buckets so the Week/Month/All filters differ measurably.
+    const history = Array.from({ length: 30 }, (_, i) => ({
+        day: `2026-08-${String(i + 1).padStart(2, '0')}`,
+        input: (i + 1) * 100,
+        output: (i + 1) * 10,
+        cached: 0,
+        USD: 0,
+        IRT: 0,
+    }));
     await hostMessage(page, {
         type: 'pricingState',
         providers: [{ host: 'api.avalai.ir', label: 'Avalai', iranian: true, input: 12000, output: 3400, cached: 800 }],
         usage: { input: 12000, output: 3400, cached: 800 },
         costs: [{ amount: 9500, currency: 'IRT' }],
         models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
+        history,
+        allTime: { input: 46500, output: 4650, cached: 0, USD: 0, IRT: 9500 },
     });
 
-    // Usage readout + per-provider breakdown with the Iranian badge.
-    await expect(page.locator('.usage-stat')).toHaveCount(4);
+    // Chart: default range is the week; the filters repaint the bars.
+    await expect(page.locator('.usage-bar-slot')).toHaveCount(7);
+    await expect(page.locator('.usage-range.active')).toContainText('هفته');
+    await page.locator('.usage-range', { hasText: 'ماه' }).click();
+    await expect(page.locator('.usage-bar-slot')).toHaveCount(30);
+    await page.locator('.usage-range', { hasText: 'کل' }).click();
+    await expect(page.locator('.usage-bar-slot')).toHaveCount(30);
+    await page.locator('.usage-range', { hasText: 'هفته' }).click();
+
+    // Hovering a bar replaces the hint with THAT day's detail (4 figures).
+    await expect(page.locator('.usage-inspect-hint')).toBeVisible();
+    await page.locator('.usage-bar-slot').last().hover();
+    await expect(page.locator('.usage-inspect-hint')).toHaveCount(0);
+    await expect(page.locator('.usage-inspect-nums > span')).toHaveCount(4);
+
+    // All-time line + session provider breakdown with the Iranian badge.
+    await expect(page.locator('.usage-alltime')).toBeVisible();
     await expect(page.locator('.usage-provider')).toContainText('Avalai');
     await expect(page.locator('.usage-provider .pricing-badge')).toContainText('ایرانی');
     await expect(page.locator('.pricing-row')).toContainText('gpt-4o');

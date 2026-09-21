@@ -295,14 +295,38 @@ export type FromExtensionMessage =
     /** Response to pricingGetState / pricing* edits - the Pricing page's view. */
     | {
           type: 'pricingState';
-          /** Providers actually used this session, busiest first. */
+          /** Providers used in the CURRENT conversation, busiest first. */
           providers: ProviderUsageView[];
-          /** Session token ledger (input/output/cached), monotonic. */
+          /** Current conversation's token ledger (input/output/cached). */
           usage: { input: number; output: number; cached: number };
-          /** Session spend per currency (USD and/or IRT), never converted. */
+          /** Current conversation's spend per currency, never converted. */
           costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
           models: ModelPricingView[];
+          /** Machine-global daily buckets, oldest first, empty days included. */
+          history: DailyUsage[];
+          /** Machine-global totals across every recorded day. */
+          allTime: UsageTotals;
       };
+
+/** One day's totals in the usage chart. */
+export interface DailyUsage {
+    /** Local day, YYYY-MM-DD. */
+    day: string;
+    input: number;
+    output: number;
+    cached: number;
+    USD: number;
+    IRT: number;
+}
+
+/** Token + per-currency cost totals. */
+export interface UsageTotals {
+    input: number;
+    output: number;
+    cached: number;
+    USD: number;
+    IRT: number;
+}
 
 /** One provider's session usage on the Pricing page. */
 export interface ProviderUsageView {

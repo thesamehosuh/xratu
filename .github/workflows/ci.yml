@@ -76,6 +76,9 @@ jobs:
       - name: Provider HTTP error classification tests
         run: npm run test:provider-errors
 
+      - name: Usage ledger tests
+        run: npm run test:usage-ledger
+
       - name: Pricing tests
         run: npm run test:pricing
 

@@ -16,6 +16,15 @@ import { runLocalAgent, type LocalAgentEvent, type LocalImageAttachment, type Lo
 import type { LocalToolExecutor } from './local/localAgent';
 import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle } from './local/localSessionStore';
+import {
+    UsageLedgerStore,
+    aggregateByDay,
+    entriesForSession,
+    recomputeCosts,
+    sumUsage,
+    USAGE_CHART_DAYS,
+    type UsageEntry,
+} from './local/usageLedger';
 import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
 import { ui, setUiLocale } from './uiStrings';
@@ -759,6 +768,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Token totals per provider host for this session (persisted), so usage
      *  can be attributed without re-reading the transcript. */
     private _sessionUsageByHost: Record<string, { input: number; output: number; cached: number }> = {};
+    /** Machine-global timestamped usage ledger (daily chart + retroactive
+     *  repricing). See src/local/usageLedger.ts. */
+    private readonly _usageLedger: UsageLedgerStore;
     /** Serializes read-modify-write pricing mutations so two rapid edits cannot
      *  clobber each other's snapshot of the settings object. */
     private _pricingWrite: Promise<void> = Promise.resolve();
@@ -799,6 +811,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     ) {
         this._checkpoints = checkpoints;
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
+        this._usageLedger = new UsageLedgerStore(localStorageUri.fsPath);
         setUiLocale(this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa');
         this._contextWindows = this._loadContextWindows();
         this._loadTaskListEdits();
@@ -1481,6 +1494,86 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._sessionUsageByHost[host] = entry;
     }
 
+    /** Append one round to the global usage ledger (best-effort: a failed
+     *  append must never break the run). */
+    private async _recordUsage(entry: UsageEntry): Promise<void> {
+        try {
+            await this._usageLedger.append(entry);
+        } catch (e) {
+            console.error('xratu: usage ledger append failed', e);
+        }
+    }
+
+    /** Sync cost resolver for the ledger: host -> Iranian flag + gateway rate,
+     *  built ONCE from the saved credentials + settings. */
+    private async _ledgerCostResolver(): Promise<
+        (entry: UsageEntry) => { amount: number; currency: 'USD' | 'IRT' } | null
+    > {
+        const credentials = await this._getSavedCredentials();
+        const iranianHosts = new Set<string>();
+        for (const c of credentials) {
+            const host = baseUrlHost(c.baseUrl);
+            if (host && isIranianProvider(c.providerId)) iranianHosts.add(host);
+        }
+        const rates = this._gatewayRates();
+        const overrides = this._modelPriceOverrides();
+        const fallback = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
+        return (entry) => {
+            const host = entry.host;
+            const lookup: PriceLookup = {
+                host,
+                iranian: iranianHosts.has(host),
+                gatewayRate: host ? (rates[host] ?? rates[host.toLowerCase()] ?? null) : null,
+                fallbackRate: fallback > 0 ? fallback : null,
+            };
+            const price = priceForModel(entry.model, overrides, lookup);
+            if (!price) return null;
+            const est = costForUsage(price, {
+                promptTokens: entry.input,
+                completionTokens: entry.output,
+                cachedTokens: entry.cached,
+            });
+            return est ? { amount: est.amount, currency: est.currency } : null;
+        };
+    }
+
+    /** Re-derive the CURRENT session's ledgers from the usage ledger. Only
+     *  done when the ledger actually holds this session's rounds: a session
+     *  that predates the ledger keeps its snapshot totals (recomputing from an
+     *  empty set would zero a real total). */
+    private async _syncSessionFromLedger(entries: readonly UsageEntry[]): Promise<void> {
+        if (!this._sessionId) return;
+        const mine = entriesForSession(entries, this._sessionId);
+        if (!mine.length) return;
+        const totals = sumUsage(mine);
+        this._sessionCost = { USD: totals.USD, IRT: totals.IRT };
+        this._sessionUsage = { input: totals.input, output: totals.output, cached: totals.cached };
+        const byHost: Record<string, { input: number; output: number; cached: number }> = {};
+        for (const entry of mine) {
+            if (!entry.host) continue;
+            const bucket = byHost[entry.host] ?? { input: 0, output: 0, cached: 0 };
+            bucket.input += entry.input;
+            bucket.output += entry.output;
+            bucket.cached += entry.cached;
+            byHost[entry.host] = bucket;
+        }
+        this._sessionUsageByHost = byHost;
+        await this._persistLocalSession();
+        this._postSessionCost();
+    }
+
+    /** Re-price recorded usage after a price change, so PAST usage follows the
+     *  new rate instead of being frozen at the old one. */
+    private async _repriceLedger(onlyModel?: string): Promise<void> {
+        const before = await this._usageLedger.read();
+        if (!before.length) return;
+        const resolve = await this._ledgerCostResolver();
+        const { entries, changed } = recomputeCosts(before, resolve, onlyModel);
+        if (!changed) return;
+        await this._usageLedger.replace(entries);
+        await this._syncSessionFromLedger(entries);
+    }
+
     /** Base URL of the active credential, or '' when none is selected. */
     private async _activeBaseUrl(): Promise<string> {
         const id = await this._resolveActiveCredentialId();
@@ -1534,12 +1627,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 currency: o.currency === 'IRT' ? 'IRT' : 'USD',
             }));
 
+        const ledger = await this._usageLedger.read();
         this._view.webview.postMessage({
             type: 'pricingState',
             providers,
             usage: { ...this._sessionUsage },
             costs,
             models,
+            // Machine-global history: daily buckets (empty days included so the
+            // chart keeps a continuous axis) plus the all-time totals.
+            history: aggregateByDay(ledger, USAGE_CHART_DAYS),
+            allTime: sumUsage(ledger),
         });
     }
 
@@ -1576,6 +1674,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             await vscode.workspace.getConfiguration('xratu')
                 .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
         });
+        // Past usage follows the new price, then the page is refreshed.
+        await this._repriceLedger(key);
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
@@ -1592,6 +1692,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
         });
         if (!removed) return;
+        await this._repriceLedger(key);
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
@@ -2499,6 +2600,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // Token ledger rides alongside the cost ledger.
                     this._addSessionUsage(event.usage);
                     this._scheduleLocalPartialPersist();
+                    // Global timestamped ledger: the daily chart and retroactive
+                    // repricing both read from it (see usageLedger.ts).
+                    void this._recordUsage({
+                        ts: Date.now(),
+                        sessionId: this._sessionId,
+                        host: baseUrlHost(this._runBaseUrl ?? '') ?? '',
+                        model: this._selectedModel ?? '',
+                        input: event.usage.promptTokens ?? 0,
+                        output: event.usage.completionTokens ?? 0,
+                        cached: event.usage.cachedTokens ?? 0,
+                        amount: roundCost ? roundCost.amount : null,
+                        currency: roundCost ? roundCost.currency : null,
+                    });
                 }
                 // Mirror cloud behavior: the webview's context meter tracks
                 // each round's cumulative usage while the turn streams.

@@ -280,6 +280,18 @@ const fa = {
     usageCost: 'هزینه',
     usageEmpty: 'هنوز مصرفی ثبت نشده. بعد از اولین پاسخ، عدد ها اینجا می آیند.',
 
+    // Usage history (all time, daily chart)
+    usageHistoryTitle: 'تاریخچه مصرف',
+    usageHistoryDesc: 'مصرف همه گفتگو های این دستگاه، روز به روز. برای جزئیات هر روز نشانگر را روی ستون ببرید.',
+    usageRange7: 'هفته',
+    usageRange30: 'ماه',
+    usageRangeAll: 'کل',
+    usageChartEmpty: 'در این بازه مصرفی ثبت نشده.',
+    usageChartAria: 'نمودار مصرف روزانه',
+    usageHoverHint: 'نشانگر را روی ستون ها ببرید تا جزئیات آن روز را ببینید.',
+    usageAllTime: 'از ابتدا',
+    usageTokens: 'توکن',
+
     // Skills page
     skillsTitle: 'مهارت ها',
     skillsSectionDesc: 'مهارت های کشف شده، گروه بندی شده بر اساس محل',
@@ -748,13 +760,25 @@ const en: Record<keyof typeof fa, string> = {
     pricingAddModel: 'Add',
 
     // Session usage
-    usageTitle: 'Usage of this conversation',
+    usageTitle: 'This conversation',
     usageDesc: 'Tokens spent since this conversation started, broken down by provider.',
     usageInput: 'Input',
     usageOutput: 'Output',
     usageCached: 'Cached',
     usageCost: 'Cost',
     usageEmpty: 'No usage recorded yet. The numbers appear here after the first response.',
+
+    // Usage history (all time, daily chart)
+    usageHistoryTitle: 'Usage history',
+    usageHistoryDesc: 'Usage across every conversation on this machine, day by day. Hover a bar for that day\u2019s detail.',
+    usageRange7: 'Week',
+    usageRange30: 'Month',
+    usageRangeAll: 'All',
+    usageChartEmpty: 'No usage recorded in this range.',
+    usageChartAria: 'Daily usage chart',
+    usageHoverHint: 'Hover or focus a bar to see that day\u2019s detail.',
+    usageAllTime: 'All time',
+    usageTokens: 'tokens',
 
     // Skills page
     skillsTitle: 'Skills',
