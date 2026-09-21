@@ -1635,6 +1635,32 @@ async function testWrapupRetriesTransientDrop() {
     }
 }
 
+async function testCancelDuringRetryBackoffIsAbortError() {
+    const originalFetch = globalThis.fetch;
+    // Every attempt dies with a transient transport error.
+    globalThis.fetch = (async () => { throw deadConnection(); }) as typeof fetch;
+    const controller = new AbortController();
+    // Cancel lands during the ~1s backoff, not during a fetch.
+    const timer = setTimeout(() => controller.abort(), 200);
+
+    try {
+        await assert.rejects(
+            collect(
+                runLocalAgent(baseRequest({ signal: controller.signal }), {
+                    execute: async () => ({ output: '' }),
+                }, {
+                    requestApproval: async () => ({}),
+                })
+            ),
+            (err: any) => err?.name === 'AbortError',
+            'a cancel during retry backoff surfaces as an AbortError, not a network error',
+        );
+    } finally {
+        clearTimeout(timer);
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function main() {
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
@@ -1647,6 +1673,7 @@ async function main() {
     await testTransientStreamDropRetriesOnce();
     await testNoRetryAfterOutputFlowed();
     await testWrapupRetriesTransientDrop();
+    await testCancelDuringRetryBackoffIsAbortError();
     await testCachedTokensParsed();
     await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();

@@ -423,6 +423,16 @@ export function networkRetryDelayMs(attempt: number, random = Math.random()): nu
     return Math.min(NETWORK_RETRY_MAX_DELAY_MS, Math.round(base + base * NETWORK_RETRY_JITTER * random));
 }
 
+/** An AbortError the host recognizes: it maps `err.name === 'AbortError'` to
+ *  the localized "request cancelled" state. Used when a cancel surfaces as a
+ *  socket error, or lands during a retry backoff, instead of as a clean
+ *  AbortError from fetch. */
+function abortError(): Error {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    return error;
+}
+
 /** Resolve after `ms`, or immediately when `signal` aborts. Never rejects. */
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
     if (ms <= 0 || !signal || signal.aborted) return Promise.resolve();
@@ -2313,12 +2323,16 @@ export async function* runLocalAgent(
             nextRetryInMs: waitMs,
         };
         await sleepAbortable(waitMs, request.signal);
-        // Cancelled during the backoff: surface the abort like any mid-stream
-        // cancel instead of re-dialing.
-        if (request.signal?.aborted) break;
+        // Never start another attempt after a cancel, nor once the backoff has
+        // consumed the wall-clock budget - the throw below surfaces whichever.
+        if (request.signal?.aborted || Date.now() >= retryDeadline) break;
         }
 
         if (requestError) {
+            // A cancel that surfaced as a socket error, or landed during a
+            // retry backoff, must reach the host as an AbortError - otherwise
+            // it renders as a network error instead of a cancellation.
+            if (request.signal?.aborted) throw abortError();
             // Some local servers (LM Studio, Ollama) reject the OpenAI-standard
             // data: URI in image_url.url and demand raw base64 - flip the
             // encoding ONCE and retry the round instead of failing the turn.
@@ -2587,7 +2601,7 @@ export async function* runLocalAgent(
                 nextRetryInMs: waitMs,
             };
             await sleepAbortable(waitMs, request.signal);
-            if (request.signal?.aborted) break;
+            if (request.signal?.aborted || Date.now() >= wrapRetryDeadline) break;
             continue;
         }
 
@@ -2600,7 +2614,7 @@ export async function* runLocalAgent(
         ) break;
         wrapRecovered = true;
     }
-    if (wrapError) throw describeNetworkError(wrapError);
+    if (wrapError) throw request.signal?.aborted ? abortError() : describeNetworkError(wrapError);
     if (!wrapResult) throw new Error('Model returned no wrap-up completion result.');
     if (wrapResult.usage) yield { type: 'usage', usage: wrapResult.usage };
     // Tool calls in the wrap-up round are ignored: tools were not offered,
