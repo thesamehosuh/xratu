@@ -5542,9 +5542,11 @@ pre.tool-cmd {
 }
 
 /* Native number spinners are invisible on dark themes; give them a
-   consistent hover/active treatment so the steppers are usable. */
+   consistent hover/active treatment so the steppers are usable. `light dark`
+   (not a hardcoded `dark`) keeps the control following the active theme, so
+   light-theme users do not get mismatched dark steppers. */
 input[type="number"] {
-    color-scheme: dark;
+    color-scheme: light dark;
 }
 
 input[type="number"]::-webkit-outer-spin-button,
