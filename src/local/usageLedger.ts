@@ -33,6 +33,10 @@ export interface UsageEntry {
     input: number;
     output: number;
     cached: number;
+    /** Prompt tokens written to the provider cache (subset of `input`). Billed
+     *  above the plain input rate, so it is stored to keep retroactive cost
+     *  recomputation accurate. Older rows normalize to 0. */
+    cacheWrite: number;
     /** Cost amount in `currency`, or null when no price was known. */
     amount: number | null;
     currency: 'USD' | 'IRT' | null;
@@ -90,6 +94,7 @@ export function normalizeEntry(raw: unknown): UsageEntry | null {
         input: finiteCount(e.input),
         output: finiteCount(e.output),
         cached: finiteCount(e.cached),
+        cacheWrite: finiteCount(e.cacheWrite),
         amount,
         currency: amount != null ? currency : null,
     };

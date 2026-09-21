@@ -128,10 +128,15 @@ function parseOpenAiItem(m: any): LocalModelInfo | null {
                 m.pricing.input_cache_read ?? m.pricing.prompt_cache_read ?? m.pricing.cache_read,
                 1,
             );
+            const cachedInputWrite = toPerMillion(
+                m.pricing.input_cache_write ?? m.pricing.prompt_cache_write ?? m.pricing.cache_write,
+                1,
+            );
             model.pricing = {
                 input,
                 output,
                 ...(cachedInput !== undefined ? { cachedInput } : {}),
+                ...(cachedInputWrite !== undefined ? { cachedInputWrite } : {}),
                 ...(input === 0 && output === 0 ? { free: true } : {}),
             };
         }

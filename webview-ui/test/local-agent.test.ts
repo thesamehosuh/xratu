@@ -159,6 +159,27 @@ async function testCachedTokensParsed() {
     }
 }
 
+async function testChatCacheWriteTokensParsed() {
+    // OpenAI reports cache WRITES alongside reads; both must survive parsing so
+    // the host can bill writes at the higher rate.
+    const originalFetch = globalThis.fetch;
+    const frames = [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }], usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 64, cache_write_tokens: 12 } } })}\n\n`,
+        'data: [DONE]\n\n',
+    ];
+    globalThis.fetch = (async () => sse(frames)) as typeof fetch;
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest(), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) })
+        );
+        const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
+        assert.equal(usageEvent.usage.cachedTokens, 64);
+        assert.equal(usageEvent.usage.cacheWriteTokens, 12);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testReasoningStreamsAsCumulativeThinking() {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
@@ -920,9 +941,19 @@ async function testRoundBudgetEndsWithWrapupInsteadOfError() {
 
         // 2 budgeted rounds + 1 wrap-up round; no throw.
         assert.equal(requests.length, 3);
-        // The wrap-up request offers NO tools and carries the nudge.
-        assert.equal(requests[2].tools, undefined);
-        assert.ok(requests[2].messages[0].content.includes('ROUND LIMIT REACHED'));
+        // The wrap-up keeps the cached prefix INTACT: the same tool
+        // definitions and the same system message as every earlier round.
+        // Dropping `tools` (or rewriting the system prompt) would change the
+        // cached prefix and force a full cache miss at peak context.
+        assert.deepEqual(requests[2].tools, requests[0].tools, 'tool definitions stay byte-identical');
+        assert.equal(requests[2].tool_choice, 'none', 'tool CALLS are forbidden instead of tools being dropped');
+        assert.equal(requests[2].messages[0].content, 'You are Xratu.', 'system prompt must not be rewritten');
+        // The nudge rides the volatile tail note, after every cache breakpoint.
+        const wrapTail = requests[2].messages[requests[2].messages.length - 1];
+        assert.ok(String(wrapTail.content).includes('ROUND LIMIT REACHED'), `nudge missing from tail: ${wrapTail.content}`);
+        assert.ok(!requests[2].messages.slice(1, -1).some(
+            (m: any) => String(m.content).includes('ROUND LIMIT REACHED')),
+            'nudge must not be stored in history');
         // The final answer rides a normal assistantMessage; the turn ends done.
         const final = events.find((e: any) => e.type === 'assistantMessage' && e.text.includes('wrap-up'));
         assert.ok(final);
@@ -1183,7 +1214,7 @@ async function testMessagesApiTextThinkingAndUsage() {
     const calls: Array<{ url: string; body: any; headers: any }> = [];
     const originalFetch = globalThis.fetch;
     const frames = [
-        `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 120, output_tokens: 0, cache_read_input_tokens: 40 } } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 120, output_tokens: 0, cache_read_input_tokens: 40, cache_creation_input_tokens: 8 } } })}\n\n`,
         `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })}\n\n`,
         `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'weighing ' } })}\n\n`,
         `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'options' } })}\n\n`,
@@ -1233,10 +1264,11 @@ async function testMessagesApiTextThinkingAndUsage() {
         assert.deepEqual(chunks, ['hel', 'lo']);
         const usageEvent = events.find((e: any) => e.type === 'usage' && !e.estimated);
         // Anthropic's input_tokens is the UNCACHED input; the total prompt is
-        // input + cache_read (+ cache_creation). 120 + 40 = 160.
-        assert.equal(usageEvent.usage.promptTokens, 160);
+        // input + cache_read + cache_creation. 120 + 40 + 8 = 168.
+        assert.equal(usageEvent.usage.promptTokens, 168);
         assert.equal(usageEvent.usage.completionTokens, 2);
         assert.equal(usageEvent.usage.cachedTokens, 40);
+        assert.equal(usageEvent.usage.cacheWriteTokens, 8, 'cache writes are surfaced for cost');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1337,7 +1369,7 @@ async function testResponsesApiTextToolAndUsage() {
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'done' })}\n\n`,
-            `data: ${JSON.stringify({ type: 'response.completed', response: { usage: { input_tokens: 50, output_tokens: 7, total_tokens: 57, input_tokens_details: { cached_tokens: 20 } } } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.completed', response: { usage: { input_tokens: 50, output_tokens: 7, total_tokens: 57, input_tokens_details: { cached_tokens: 20, cache_write_tokens: 6 } } } })}\n\n`,
         ]),
     ];
     let index = 0;
@@ -1393,6 +1425,7 @@ async function testResponsesApiTextToolAndUsage() {
         assert.equal(usageEvent.usage.promptTokens, 50);
         assert.equal(usageEvent.usage.completionTokens, 7);
         assert.equal(usageEvent.usage.cachedTokens, 20);
+        assert.equal(usageEvent.usage.cacheWriteTokens, 6, 'Responses cache writes are surfaced');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1909,6 +1942,171 @@ async function testGoogleThinkingRejectedRestoresCap() {
     }
 }
 
+async function testPromptCacheKeyRoutesOpenAiHosts() {
+    // Rationale: OpenAI routes a request to a cache machine by hashing the
+    // initial tokens plus `prompt_cache_key`; a stable per-conversation key
+    // raises the cache hit rate for pre-GPT-5.6 models. It must NOT be sent to
+    // arbitrary OpenAI-compatible runtimes (strict servers 400 on it).
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+
+    try {
+        await collect(runLocalAgent(baseRequest({
+            baseUrl: 'https://opencode.ai/zen/v1',
+            model: 'glm-5',
+            sessionId: 'sess-42',
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+        assert.equal(calls[0].prompt_cache_key, 'sess-42', 'stable per-session cache key is sent on an OpenAI-family host');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+
+    const localCalls: any[] = [];
+    globalThis.fetch = (async (_input, init) => {
+        localCalls.push(JSON.parse(String(init?.body)));
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+    try {
+        await collect(runLocalAgent(baseRequest({ sessionId: 'sess-42' }), {
+            execute: async () => ({ output: '' }),
+        }, { requestApproval: async () => ({}) }));
+        assert.equal(localCalls[0].prompt_cache_key, undefined, 'no cache key for a generic local runtime');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testPromptCacheKeyRejectedIsDropped() {
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        if (calls.length === 1) {
+            return {
+                ok: false,
+                status: 400,
+                text: async () => '{"error":{"message":"prompt_cache_key is not supported by this deployment"}}',
+            } as MockResponse;
+        }
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(runLocalAgent(baseRequest({
+            baseUrl: 'https://opencode.ai/zen/v1',
+            model: 'glm-5',
+            sessionId: 'sess-42',
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+
+        assert.equal(calls.length, 2, 'exactly one retry without the key');
+        assert.equal(calls[0].prompt_cache_key, 'sess-42');
+        assert.equal(calls[1].prompt_cache_key, undefined, 'key dropped after a 400 that rejects it');
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testWrapupPreservesMessagesCacheBreakpoints() {
+    // The wrap-up runs at peak context, so its cached prefix (tools + system +
+    // history) must stay byte-identical: forbid tool CALLS, never drop the
+    // definitions, and carry the nudge in the volatile tail note.
+    const calls: any[] = [];
+    const responses = [
+        sse([
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
+        ]),
+        sse([
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'summary' } })}\n\n`,
+        ]),
+    ];
+    let index = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        return responses[index++];
+    }) as typeof fetch;
+
+    try {
+        await collect(runLocalAgent(baseRequest({
+            apiStyle: 'messages',
+            model: 'claude-sonnet-5',
+            maxRounds: 1,
+            tools: [{
+                name: 'read_file',
+                description: 'Read a file',
+                inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+            }],
+        }), { execute: async () => ({ output: 'contents' }) }, { requestApproval: async () => ({}) }));
+
+        assert.equal(calls.length, 2, 'one budgeted round + one wrap-up');
+        const wrap = calls[1];
+        assert.deepEqual(wrap.tools, calls[0].tools, 'tool definitions stay byte-identical');
+        assert.deepEqual(wrap.tool_choice, { type: 'none' }, 'calls forbidden; definitions kept');
+        assert.equal(wrap.system[0].cache_control.type, 'ephemeral', 'system cache breakpoint intact');
+        assert.equal(wrap.messages[0].content[0].text, calls[0].messages[0].content[0].text, 'history prefix unchanged');
+        const lastTurn = wrap.messages[wrap.messages.length - 1];
+        const note = lastTurn.content[lastTurn.content.length - 1];
+        assert.ok(String(note.text).includes('ROUND LIMIT REACHED'), 'nudge rides the tail note');
+        assert.equal(note.cache_control, undefined, 'nudge is never cached');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testWrapupFallsBackWhenToolChoiceRejected() {
+    // Gateways without a tool-choice control must still get a tool-free
+    // wrap-up: the transport retries with the definitions dropped too.
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        call++;
+        if (call === 1) {
+            return sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1'));
+        }
+        if (call === 2) {
+            return {
+                ok: false,
+                status: 400,
+                text: async () => '{"error":"tool_choice is not supported by this gateway"}',
+            } as MockResponse;
+        }
+        return sse(textSse(['fallback answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest({
+                maxRounds: 1,
+                tools: [{
+                    name: 'read_file',
+                    description: 'Read a file',
+                    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+                }],
+            }), { execute: async () => ({ output: 'contents' }) }, { requestApproval: async () => ({}) })
+        );
+
+        assert.equal(calls.length, 3, 'wrap-up retried without the tool-choice control');
+        assert.equal(calls[1].tool_choice, 'none');
+        assert.equal(calls[2].tool_choice, undefined, 'tool_choice dropped');
+        assert.equal(calls[2].tools, undefined, 'definitions dropped as the fallback');
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage' && e.text === 'fallback answer'));
+        assert.equal((events.at(-1) as any).type, 'status');
+        assert.equal((events.at(-1) as any).value, 'done');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function main() {
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
@@ -1923,6 +2121,7 @@ async function main() {
     await testWrapupRetriesTransientDrop();
     await testCancelDuringRetryBackoffIsAbortError();
     await testCachedTokensParsed();
+    await testChatCacheWriteTokensParsed();
     await testReasoningStreamsAsCumulativeThinking();
     await testToolCallApprovalAndContinuation();
     await testDeniedToolProducesToolResultAndContinues();
@@ -1934,6 +2133,10 @@ async function main() {
     await testHistoryKeepsRawTurnStructure();
     await testContextStatusRidesTheTailNotTheSystemPrompt();
     await testSystemPromptStaysStableAcrossRounds();
+    await testPromptCacheKeyRoutesOpenAiHosts();
+    await testPromptCacheKeyRejectedIsDropped();
+    await testWrapupPreservesMessagesCacheBreakpoints();
+    await testWrapupFallsBackWhenToolChoiceRejected();
     await testProactiveCompactDropsOldTurnsAtStart();
     await testMidRunCompactionFromServerUsage();
     await testSteerJoinsBeforeNextRound();

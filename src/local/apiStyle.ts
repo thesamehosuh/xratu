@@ -67,3 +67,19 @@ export function resolveApiStyle(baseUrl: string, model: string): ApiStyle {
 export function isNonChatModel(model: string): boolean {
     return OPENCODE_NON_CHAT_RE.test(model.trim());
 }
+
+/**
+ * Hosts where sending a stable `prompt_cache_key` is known to be accepted and
+ * to improve caching (OpenAI's own APIs and the OpenCode gateway that proxies
+ * them). OpenAI routes a request to a cache machine by hashing the initial
+ * tokens plus this key, so reusing one key per conversation raises the cache
+ * hit rate on models before GPT-5.6. Deliberately NOT sent to arbitrary
+ * OpenAI-compatible servers - strict ones 400 on unknown top-level fields, and
+ * a local runtime's cache is per-process anyway.
+ */
+export function supportsPromptCacheKey(baseUrl: string): boolean {
+    const host = hostOf(baseUrl);
+    if (!host) return false;
+    if (isOpenCodeHost(baseUrl)) return true;
+    return host === 'openai.com' || host.endsWith('.openai.com');
+}

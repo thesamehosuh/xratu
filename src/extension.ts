@@ -704,7 +704,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  Mirrors the server rule: first user message, truncated; a rename
      *  always wins. Null = untitled/new session. */
     private _sessionTitle: string | null = null;
-    private _lastFileContent: string = "";
     /** Turn-scoped checkpoint store (owned by activate, shared with the bridge). */
     private readonly _checkpoints: ShadowCheckpointStore;
     /**
@@ -1444,6 +1443,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             completionTokens: (prev.completionTokens ?? 0) + (next.completionTokens ?? 0),
             totalTokens: (prev.totalTokens ?? 0) + (next.totalTokens ?? 0),
             cachedTokens: (prev.cachedTokens ?? 0) + (next.cachedTokens ?? 0),
+            cacheWriteTokens: (prev.cacheWriteTokens ?? 0) + (next.cacheWriteTokens ?? 0),
         };
     }
 
@@ -1479,6 +1479,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 input: meta.pricing.input,
                 output: meta.pricing.output,
                 ...(meta.pricing.cachedInput != null ? { cachedInput: meta.pricing.cachedInput } : {}),
+                ...(meta.pricing.cachedInputWrite != null ? { cachedInputWrite: meta.pricing.cachedInputWrite } : {}),
             }
             : null;
         return { host, iranian, gatewayRate, fallbackRate: fallback > 0 ? fallback : null, providerPrice };
@@ -1626,6 +1627,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         input: meta.pricing.input,
                         output: meta.pricing.output,
                         ...(meta.pricing.cachedInput != null ? { cachedInput: meta.pricing.cachedInput } : {}),
+                        ...(meta.pricing.cachedInputWrite != null ? { cachedInputWrite: meta.pricing.cachedInputWrite } : {}),
                     }
                     : null,
             };
@@ -1635,6 +1637,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 promptTokens: entry.input,
                 completionTokens: entry.output,
                 cachedTokens: entry.cached,
+                cacheWriteTokens: entry.cacheWrite,
             });
             return est ? { amount: est.amount, currency: est.currency } : null;
         };
@@ -2255,7 +2258,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  canonical prompt bundled in systemPrompt.ts - the runtime is fully
      *  local, so the prompt travels with the extension. Only the
      *  local-operational notes and static context are appended here. */
-    private _buildLocalSystemPrompt(fileContent: string, rulesContext: string, sessionSummary: string | null, planMode: boolean): string {
+    private _buildLocalSystemPrompt(rulesContext: string, sessionSummary: string | null, planMode: boolean): string {
         const parts: string[] = [
             LOCAL_SYSTEM_PROMPT,
             "",
@@ -2276,9 +2279,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         if (rulesContext) {
             parts.push("", "Project Rules (from AGENTS.md):", rulesContext);
-        }
-        if (fileContent) {
-            parts.push("", "Project structure:", fileContent);
         }
         if (sessionSummary) {
             parts.push("", "Conversation summary:", sessionSummary);
@@ -2481,7 +2481,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private async _runLocalAgent(
         prompt: string,
-        fileContent: string,
         rulesContext: string,
         attachments?: ComposerAttachment[],
         existingController?: AbortController,
@@ -2579,7 +2578,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // a mid-preflight toggle must not expose mutating tools in an
         // already-started plan turn.
         const runPlanMode = planMode ?? this._planMode;
-        const systemPrompt = this._buildLocalSystemPrompt(fileContent, rulesContext, this._sessionSummary, runPlanMode);
+        const systemPrompt = this._buildLocalSystemPrompt(rulesContext, this._sessionSummary, runPlanMode);
 
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
@@ -2820,6 +2819,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         input: event.usage.promptTokens ?? 0,
                         output: event.usage.completionTokens ?? 0,
                         cached: event.usage.cachedTokens ?? 0,
+                        cacheWrite: event.usage.cacheWriteTokens ?? 0,
                         amount: roundCost ? roundCost.amount : null,
                         currency: roundCost ? roundCost.currency : null,
                     });
@@ -4727,40 +4727,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             const attachmentMeta: AttachmentMeta[] | undefined = attachments && attachments.length > 0
                 ? attachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path }))
                 : undefined;
-            const wsFolder0 = vscode.workspace.workspaceFolders?.[0];
-            let fileContent = "";
-            if (wsFolder0) {
-                try {
-                    const MAX_TREE_ENTRIES = 600;
-                    // Git is ground truth here - same keep-set the directory_tree
-                    // expansion tool uses (tracked + untracked, .gitignore-respected),
-                    // so caches, build output, DBs and secret files never reach the
-                    // structure snapshot. findFiles stays as the non-git fallback.
-                    let relPaths = Array.from(await gitWorkspaceFiles(wsFolder0.uri.fsPath));
-                    if (relPaths.length === 0) {
-                        const uris = await vscode.workspace.findFiles(
-                            '**/*',
-                            '**/{node_modules,.git,.venv,venv,__pycache__,.mypy_cache,.pytest_cache,.ruff_cache,target,dist,out,build}/**',
-                            MAX_TREE_ENTRIES + 1
-                        );
-                        relPaths = uris
-                            .map((u) => vscode.workspace.asRelativePath(u, false))
-                            // Never list secret files, even outside git.
-                            .filter((p) => !/(^|\/)\.env$|\.secrets?\.env$/.test(p));
-                    }
-                    relPaths.sort();
-                    const truncated = relPaths.length > MAX_TREE_ENTRIES;
-                    const shown = relPaths.slice(0, MAX_TREE_ENTRIES);
-                    fileContent =
-                        `// Project structure: ${wsFolder0.name}` +
-                        (truncated ? ` (first ${MAX_TREE_ENTRIES} of ${relPaths.length} paths)` : '') +
-                        '\n' +
-                        shown.join('\n');
-                } catch (e) {
-                    console.error('xratu: building project tree failed:', e);
-                }
-            }
-            this._lastFileContent = fileContent;
 
             this._view.webview.postMessage({ type: 'startResponse' });
             // Fresh turn: the streamed-text segment timeline starts empty.
@@ -4832,7 +4798,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // The chat cancel controller was registered right after
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
-                const outcome = await this._runLocalAgent(prompt, fileContent, rulesContext, sendAttachments, controller, planModeAtStart);
+                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart);
                 this._endLiveMarkdown();
                 // An empty completion (context overflow, degenerate round) must
                 // read as an error, not finalize a silent empty bubble.

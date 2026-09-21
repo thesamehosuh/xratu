@@ -43,6 +43,7 @@ const entry = (over = {}) => ({
     input: 100,
     output: 20,
     cached: 0,
+    cacheWrite: 0,
     amount: 1,
     currency: 'USD',
     ...over,
@@ -128,6 +129,10 @@ check('normalize drops amount without currency', normalizeEntry({ ts: 1, amount:
 check('normalize drops amount with a bad currency', normalizeEntry({ ts: 1, amount: 5, currency: 'EUR' }).currency, null);
 check('normalize keeps a zero amount with a currency', normalizeEntry({ ts: 1, amount: 0, currency: 'USD' }).amount, 0);
 check('normalize drops a ts-less row', normalizeEntry({ input: 1 }), null);
+// Cache-write tokens are a newer field: older rows default to 0, real values survive.
+check('normalize defaults missing cacheWrite to 0', normalizeEntry({ ts: 1, input: 10 }).cacheWrite, 0);
+check('normalize keeps cacheWrite', normalizeEntry({ ts: 1, input: 10, cacheWrite: 7 }).cacheWrite, 7);
+check('normalize drops negative cacheWrite', normalizeEntry({ ts: 1, input: 10, cacheWrite: -3 }).cacheWrite, 0);
 
 // --- sumUsage / entriesForSession -------------------------------------------
 {

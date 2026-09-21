@@ -11,6 +11,7 @@
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
 import { normalizeBaseUrl } from './baseUrl';
+import { supportsPromptCacheKey } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 
 export type LocalChatTextContent = string;
@@ -27,6 +28,10 @@ export interface LocalUsage {
     totalTokens: number | null;
     /** Prompt tokens served from the provider's cache, when reported. */
     cachedTokens?: number | null;
+    /** Prompt tokens WRITTEN to the provider's cache this request (a subset of
+     *  `promptTokens`), when reported. Billed above the plain input rate, so it
+     *  is carried separately for cost. */
+    cacheWriteTokens?: number | null;
 }
 
 export interface LocalToolCall {
@@ -133,6 +138,12 @@ export interface LocalAgentRequest {
     /** Stable per-conversation id, sent as `x-opencode-session`. OpenCode Go
      *  rejects requests without it (MissingSessionID). */
     sessionId?: string;
+    /** `'none'` disables tool CALLS while keeping the tool DEFINITIONS in the
+     *  request. Used by the round-limit wrap-up: dropping the definitions would
+     *  change the cached prefix and force a full cache miss on the largest
+     *  request of the run. Transports that reject the control fall back to
+     *  dropping the definitions themselves. */
+    toolChoice?: 'none';
 }
 
 export interface LocalToolExecutor {
@@ -327,6 +338,16 @@ export const MAX_TOKENS_REJECT_RE = /max_tokens|max_completion_tokens|max_output
  *  models accept none at all - retry once without it so an unsupported level
  *  degrades to the runtime default instead of failing the whole turn. */
 export const REASONING_REJECT_RE = /reasoning_effort|reasoning[ ._]effort|thinking[ ._]?budget|thinkingConfig|\bthinking\b|reasoning is not supported|unsupported.{0,40}(reason|think)/i;
+
+/** A 400 that rejects the tool-choice control used by the round-limit wrap-up
+ *  (`tool_choice` / Google's `toolConfig`). Not every gateway implements it;
+ *  retry without it AND without the tool definitions, so the wrap-up still
+ *  cannot call a tool even though the cached prefix is lost. */
+export const TOOL_CHOICE_REJECT_RE = /tool_choice|toolChoice|tool[ ._]?config|functionCallingConfig/i;
+
+/** A 400 that rejects the OpenAI `prompt_cache_key` routing hint - retry
+ *  without it (caching then falls back to OpenAI's automatic routing). */
+export const PROMPT_CACHE_KEY_REJECT_RE = /prompt_cache_key|prompt cache key/i;
 
 /** Anthropic extended-thinking and Gemini thinking budgets for a UI level.
  *  The floor is Anthropic's minimum; the ceiling is Gemini's max budget. */
@@ -644,6 +665,14 @@ async function requestChatCompletion(
     body.max_tokens = outputCapFor(request);
     if (request.temperature != null) body.temperature = request.temperature;
     if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
+    // OpenAI prompt caching: a stable per-conversation key helps route requests
+    // that share a prefix to the same cache machine. Only sent to hosts known
+    // to accept it (see supportsPromptCacheKey); dropped on a 400 below.
+    if (request.sessionId && supportsPromptCacheKey(request.baseUrl)) {
+        body.prompt_cache_key = request.sessionId;
+    }
+    // Keep the tool definitions (cacheable prefix) and only forbid CALLS.
+    if (request.tools.length && request.toolChoice === 'none') body.tool_choice = 'none';
 
     // Relay the caller's cancellation AND impose a headers deadline: a
     // wedged local server that accepts the connection but never answers
@@ -692,6 +721,16 @@ async function requestChatCompletion(
                 // The model/gateway does not accept reasoning_effort - drop it
                 // and keep the run instead of failing on a UI convenience.
                 delete body.reasoning_effort;
+            } else if (body.prompt_cache_key != null && PROMPT_CACHE_KEY_REJECT_RE.test(text)) {
+                // Gateway has no prompt-cache routing key; OpenAI's automatic
+                // routing still applies. Retry without the hint.
+                delete body.prompt_cache_key;
+            } else if (body.tool_choice != null && TOOL_CHOICE_REJECT_RE.test(text)) {
+                // No tool-choice control: fall back to dropping the tool
+                // definitions. The wrap-up still cannot call a tool, but its
+                // cached prefix is lost - the old behavior.
+                delete body.tool_choice;
+                delete body.tools;
             } else {
                 throw providerHttpError(400, text);
             }
@@ -738,11 +777,17 @@ async function requestChatCompletion(
             const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
                 ?? rawUsage.cache_read_input_tokens
                 ?? rawUsage.prompt_cache_hit_tokens;
+            // Cache-WRITE tokens are reported separately (OpenAI
+            // `cache_write_tokens`, Anthropic-style `cache_creation_input_tokens`)
+            // and are billed at 1.25x input, so they must reach cost accounting.
+            const writeRaw = rawUsage.prompt_tokens_details?.cache_write_tokens
+                ?? rawUsage.cache_creation_input_tokens;
             usage = {
                 promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
                 completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
                 totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
                 cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
+                cacheWriteTokens: Number.isFinite(writeRaw) ? writeRaw : null,
             };
         }
 
@@ -969,6 +1014,9 @@ function toMessagesBody(
             description: tool.description,
             input_schema: tool.inputSchema,
         }));
+        // Keep the tool definitions (cached with tools + system) and only
+        // forbid CALLS for the wrap-up. Anthropic supports { type: 'none' }.
+        if (request.toolChoice === 'none') body.tool_choice = { type: 'none' };
     }
     if (request.temperature != null) body.temperature = request.temperature;
     // Extended thinking: budget_tokens is required, max_tokens MUST exceed it,
@@ -1016,7 +1064,12 @@ function mergeMessagesUsage(raw: any, previous: LocalUsage | null): LocalUsage {
     const input = totalInput > 0 ? totalInput : previous?.promptTokens ?? null;
     const output = Number.isFinite(raw?.output_tokens) ? raw.output_tokens : previous?.completionTokens ?? null;
     const cached = Number.isFinite(raw?.cache_read_input_tokens) ? raw.cache_read_input_tokens : previous?.cachedTokens ?? null;
-    return { promptTokens: input, completionTokens: output, totalTokens: null, cachedTokens: cached };
+    // Newly-written cache tokens are billed at 1.25x input; carry them out of
+    // `input_tokens` so cost does not treat them as ordinary uncached input.
+    const cacheWrite = Number.isFinite(raw?.cache_creation_input_tokens)
+        ? raw.cache_creation_input_tokens
+        : previous?.cacheWriteTokens ?? null;
+    return { promptTokens: input, completionTokens: output, totalTokens: null, cachedTokens: cached, cacheWriteTokens: cacheWrite };
 }
 
 async function requestMessagesCompletion(
@@ -1070,6 +1123,12 @@ async function requestMessagesCompletion(
                 delete body.thinking;
                 if (request.temperature != null) body.temperature = request.temperature;
                 body.max_tokens = outputCapFor(request);
+                response = await send(body);
+            } else if (body.tool_choice != null && TOOL_CHOICE_REJECT_RE.test(text)) {
+                // No tool-choice control: drop the definitions too, so the
+                // wrap-up still cannot call a tool (cached prefix is lost).
+                delete body.tool_choice;
+                delete body.tools;
                 response = await send(body);
             } else {
                 throw providerHttpError(400, text);
@@ -1295,16 +1354,24 @@ function toResponsesBody(
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
     if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort };
+    // OpenAI prompt caching routing hint (see requestChatCompletion).
+    if (request.sessionId && supportsPromptCacheKey(request.baseUrl)) {
+        body.prompt_cache_key = request.sessionId;
+    }
+    // Keep the tool definitions (cacheable prefix) and only forbid CALLS.
+    if (request.tools.length && request.toolChoice === 'none') body.tool_choice = 'none';
     return body;
 }
 
 function responsesUsage(raw: any): LocalUsage {
     const cached = raw?.input_tokens_details?.cached_tokens;
+    const cacheWrite = raw?.input_tokens_details?.cache_write_tokens;
     return {
         promptTokens: Number.isFinite(raw?.input_tokens) ? raw.input_tokens : null,
         completionTokens: Number.isFinite(raw?.output_tokens) ? raw.output_tokens : null,
         totalTokens: Number.isFinite(raw?.total_tokens) ? raw.total_tokens : null,
         cachedTokens: Number.isFinite(cached) ? cached : null,
+        cacheWriteTokens: Number.isFinite(cacheWrite) ? cacheWrite : null,
     };
 }
 
@@ -1358,6 +1425,17 @@ async function requestResponsesCompletion(
                 // Model/gateway rejects the reasoning effort object - retry
                 // without it so the run proceeds at the runtime default.
                 delete body.reasoning;
+                response = await send(body);
+            } else if (body.prompt_cache_key != null && PROMPT_CACHE_KEY_REJECT_RE.test(text)) {
+                // No prompt-cache routing key on this gateway; automatic
+                // routing still applies. Retry without the hint.
+                delete body.prompt_cache_key;
+                response = await send(body);
+            } else if (body.tool_choice != null && TOOL_CHOICE_REJECT_RE.test(text)) {
+                // No tool-choice control: drop the definitions too, so the
+                // wrap-up still cannot call a tool (cached prefix is lost).
+                delete body.tool_choice;
+                delete body.tools;
                 response = await send(body);
             } else {
                 throw providerHttpError(400, text);
@@ -1594,6 +1672,10 @@ function toGoogleBody(
                 parameters: tool.inputSchema,
             })),
         }];
+        // Keep the tool definitions (cacheable prefix) and only forbid CALLS.
+        if (request.toolChoice === 'none') {
+            body.toolConfig = { functionCallingConfig: { mode: 'NONE' } };
+        }
     }
     const generationConfig: Record<string, unknown> = {};
     let outputCap = outputCapFor(request);
@@ -1679,6 +1761,12 @@ async function requestGoogleCompletion(
                 delete config.thinkingConfig;
                 if (config.maxOutputTokens != null) config.maxOutputTokens = outputCapFor(request);
                 if (!Object.keys(config).length) delete body.generationConfig;
+                response = await send(body);
+            } else if (body.toolConfig && TOOL_CHOICE_REJECT_RE.test(text)) {
+                // No functionCallingConfig control: drop the declarations too,
+                // so the wrap-up still cannot call a tool (prefix is lost).
+                delete body.toolConfig;
+                delete body.tools;
                 response = await send(body);
             } else {
                 throw providerHttpError(400, text);
@@ -1871,11 +1959,13 @@ export const HISTORY_TRUNCATION_MARKER =
     '[Earlier messages in this conversation were removed to fit the context window. '
     + 'Continue seamlessly; do not mention this.]';
 
-/** Appended to the system message for the ONE tool-free wrap-up round that
- *  replaces the old hard stop when the round budget runs out mid-turn: the
- *  model must stop calling tools and deliver its final answer now, so the
- *  turn ends normally (status done) instead of erroring away everything the
- *  run did. Model-facing wire string, like HISTORY_TRUNCATION_MARKER. */
+/** Carried in the volatile TAIL NOTE for the ONE wrap-up round that replaces
+ *  the old hard stop when the round budget runs out mid-turn: the model must
+ *  stop calling tools and deliver its final answer now, so the turn ends
+ *  normally (status done) instead of erroring away everything the run did.
+ *  It deliberately does NOT rewrite the system prompt: the wrap-up runs at
+ *  peak context, so its cached prefix must stay byte-stable. Model-facing wire
+ *  string, like HISTORY_TRUNCATION_MARKER. */
 const ROUND_LIMIT_WRAPUP_NUDGE =
     '\n\n⚠ ROUND LIMIT REACHED: your tool-call budget for this turn is exhausted. '
     + 'Stop calling tools. Based on the work already done, give your final answer now: '
@@ -2687,24 +2777,26 @@ export async function* runLocalAgent(
 
     // Round budget exhausted while the model was still calling tools. A hard
     // stop here throws away everything the run did mid-turn and surfaces as
-    // an error bubble; instead, give the model ONE tool-free wrap-up round
-    // (tools omitted from the body so strict servers never offer them) to
-    // deliver its final answer/summary, then end the turn normally.
+    // an error bubble; instead, give the model ONE wrap-up round to deliver
+    // its final answer/summary, then end the turn normally.
+    //
+    // PROMPT CACHING: the wrap-up runs at PEAK context, so its prefix must not
+    // change. Keep the same system message and the same tool DEFINITIONS (the
+    // old behavior - appending the nudge to the system prompt and sending
+    // `tools: []` - rewrote the cached prefix and forced a full cache miss),
+    // forbid tool CALLS with `toolChoice: 'none'`, and carry the nudge in the
+    // volatile tail note, which sits after every cache breakpoint.
     yield { type: 'status', value: 'continuing' };
-    const wrapMessages: LocalAgentMessage[] = [
-        { role: 'system', content: (messages[0]?.content ?? request.systemPrompt) + ROUND_LIMIT_WRAPUP_NUDGE },
-        ...messages.slice(1),
-    ];
+    const wrapMessages: LocalAgentMessage[] = messages;
     // The wrap-up runs at peak context - bound tool output too, or the nudge
-    // itself overflows a small window. The wrap-up sends `tools: []`, so no
-    // schema tokens need to be reserved.
-    boundToolResults(wrapMessages, windowTokens, 0);
+    // itself overflows a small window. Tool schemas still ride the request.
+    boundToolResults(wrapMessages, windowTokens, toolTokens);
 
     // The wrap-up runs when the conversation is at its largest, so the same
     // one-shot overflow recovery as the main loop applies: on a server-side
     // context-overflow rejection, compact deterministically (forced - the
     // estimate just proved wrong) and retry ONCE. The system message at
-    // index 0 survives compaction, so the nudge rides on the retry as-is.
+    // index 0 survives compaction, so the prefix stays intact on the retry.
     // Transient transport drops get the same pre-output retry as the main
     // loop - the wrap-up is the WORST place to lose a turn, since all the
     // work has already been done and only the summary is missing.
@@ -2720,9 +2812,9 @@ export async function* runLocalAgent(
         wrapError = null;
         if (wrapRetries > 0) yield { type: 'attempting' };
         const wrapPromise = requestStreamingCompletion(
-            { ...request, tools: [] },
+            { ...request, toolChoice: 'none' },
             wrapMessages,
-            tailNoteFor(noteUsed),
+            tailNoteFor(noteUsed) + ROUND_LIMIT_WRAPUP_NUDGE,
             (delta) => { emittedOutput = true; wrapQueue.push({ kind: 'text', value: delta }); },
             (thinking) => { emittedOutput = true; wrapQueue.push({ kind: 'thinking', value: thinking }); },
         )

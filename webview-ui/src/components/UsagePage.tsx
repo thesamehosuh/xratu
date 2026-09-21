@@ -159,9 +159,9 @@ function formatAxis(value: number, currency: Currency, step: number): string {
 /** Usage cost in the currency it was actually billed in (Toman wins when both
  *  ledgers have entries: it is the one a local user reads). */
 function usageCost(cost: { USD: number; IRT: number }): string {
-    if (cost.IRT > 0) return formatCost({ amount: cost.IRT, currency: 'IRT' }) ?? '—';
-    if (cost.USD > 0) return formatCost({ amount: cost.USD, currency: 'USD' }) ?? '—';
-    return '—';
+    if (cost.IRT > 0) return formatCost({ amount: cost.IRT, currency: 'IRT' }) ?? '-';
+    if (cost.USD > 0) return formatCost({ amount: cost.USD, currency: 'USD' }) ?? '-';
+    return '-';
 }
 
 const RATE_SOURCE_LABEL = {
@@ -794,7 +794,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                                 >
                                     {getLocale() === 'fa' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
                                 </button>
-                                <span className="cost-period-label">{axis?.label ?? '—'}</span>
+                                <span className="cost-period-label">{axis?.label ?? '-'}</span>
                                 <button
                                     type="button"
                                     className="icon-btn"
@@ -864,7 +864,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                                         </div>
                                         <div className="cost-cols" role="group" aria-label={t('costChartAria')}>
                                             {series.map((day) => {
-                                                const label = `${formatCalendarDate(localDayTimestamp(day.day))} · ${formatCost({ amount: day.total, currency }) ?? '—'}`;
+                                                const label = `${formatCalendarDate(localDayTimestamp(day.day))} · ${formatCost({ amount: day.total, currency }) ?? '-'}`;
                                                 return (
                                                     <button
                                                         key={day.day}
@@ -899,7 +899,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                                         <span className="cost-legend-item" key={model}>
                                             <span className="cost-swatch" style={{ background: colorFor(model) }} aria-hidden="true" />
                                             <span dir="ltr">{model}</span>
-                                            <span className="cost-legend-cost" dir="ltr">{formatCost({ amount: value, currency }) ?? '—'}</span>
+                                            <span className="cost-legend-cost" dir="ltr">{formatCost({ amount: value, currency }) ?? '-'}</span>
                                         </span>
                                     ))}
                                 </div>
@@ -919,10 +919,10 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                                                             <i style={{ background: colorFor(activeModel) }} aria-hidden="true" />
                                                             <span dir="ltr">{activeModel}</span>
                                                         </span>
-                                                        <span dir="ltr">{formatCost({ amount: hovered, currency }) ?? '—'}</span>
+                                                        <span dir="ltr">{formatCost({ amount: hovered, currency }) ?? '-'}</span>
                                                     </>
                                                 ) : (
-                                                    <span dir="ltr">{formatCost({ amount: active.total, currency }) ?? '—'}</span>
+                                                    <span dir="ltr">{formatCost({ amount: active.total, currency }) ?? '-'}</span>
                                                 )}
                                             </>
                                         );

@@ -14,6 +14,8 @@ export interface LocalModelPricing {
     input: number;
     output: number;
     cachedInput?: number;
+    /** Cache-WRITE rate (falls back to 1.25x `input` at cost time). */
+    cachedInputWrite?: number;
     /** The provider advertises the model as free. */
     free?: boolean;
 }

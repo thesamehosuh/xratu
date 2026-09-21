@@ -21,6 +21,9 @@ export interface ModelPrice {
     output: number;
     /** Cached-input rate per 1M tokens (falls back to `input`). */
     cachedInput?: number;
+    /** Cache-WRITE rate per 1M tokens. Falls back to `input * 1.25`, the
+     *  documented 5-minute-TTL write price for Anthropic and GPT-5.6+. */
+    cachedInputWrite?: number;
     /** Currency of these rates. Absent = USD (curated table only); an
      *  explicit override always carries `'USD'` or `'IRT'`. */
     currency?: 'USD' | 'IRT';
@@ -68,7 +71,16 @@ export interface UsageLike {
     promptTokens: number | null;
     completionTokens: number | null;
     cachedTokens?: number | null;
+    /** Prompt tokens WRITTEN to the provider's cache this request. They are a
+     *  subset of `promptTokens` on every provider whose total counts them
+     *  (OpenAI `cache_write_tokens`, Anthropic `cache_creation_input_tokens`),
+     *  and are billed above the plain input rate. */
+    cacheWriteTokens?: number | null;
 }
+
+/** Cache writes are billed at 1.25x the ordinary input rate for both
+ *  Anthropic's 5-minute `ephemeral` TTL and OpenAI's GPT-5.6+ caching. */
+const CACHE_WRITE_MULTIPLIER = 1.25;
 
 /** Ordered most-specific-first; matched against the lowercased model id. */
 const PRICE_TABLE: ReadonlyArray<readonly [RegExp, ModelPrice]> = [
@@ -314,9 +326,9 @@ export function priceForModel(
 
 /**
  * Cost of one usage record. Cached input is priced at `cachedInput` when
- * provided (the uncached remainder at `input`); output at `output`. The
- * price's own currency wins; `currency` is only the fallback for prices that
- * do not carry one.
+ * provided (the uncached remainder at `input`); cache WRITES at `cachedInputWrite`
+ * (default 1.25x `input`); output at `output`. The price's own currency wins;
+ * `currency` is only the fallback for prices that do not carry one.
  */
 export function costForUsage(
     price: ModelPrice,
@@ -331,10 +343,16 @@ export function costForUsage(
         Number.isFinite(usage.cachedTokens) ? Math.max(0, usage.cachedTokens as number) : 0,
         prompt,
     );
-    const uncached = prompt - cached;
+    // Writes can never overlap reads, and both are subsets of the prompt.
+    const cacheWrite = Math.min(
+        Number.isFinite(usage.cacheWriteTokens) ? Math.max(0, usage.cacheWriteTokens as number) : 0,
+        prompt - cached,
+    );
+    const uncached = Math.max(0, prompt - cached - cacheWrite);
     const cachedRate = price.cachedInput ?? price.input;
+    const writeRate = price.cachedInputWrite ?? price.input * CACHE_WRITE_MULTIPLIER;
 
-    const amount = (uncached * price.input + cached * cachedRate + completion * price.output) / 1_000_000;
+    const amount = (uncached * price.input + cached * cachedRate + cacheWrite * writeRate + completion * price.output) / 1_000_000;
     if (!Number.isFinite(amount) || amount <= 0) return null;
     return { amount, currency: price.currency ?? currency };
 }

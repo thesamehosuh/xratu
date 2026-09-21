@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { resolveApiStyle, isOpenCodeHost, isNonChatModel } = require('../out/local/apiStyle.js');
+const { resolveApiStyle, isOpenCodeHost, isNonChatModel, supportsPromptCacheKey } = require('../out/local/apiStyle.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -71,6 +71,14 @@ check('local runtime stays chat', resolveApiStyle('http://127.0.0.1:11434/v1', '
 
 // Case-insensitive model id
 check('model id case-insensitive', resolveApiStyle(GO, 'Claude-Sonnet-5'), 'messages');
+
+// `prompt_cache_key` routing hint: only hosts known to accept the OpenAI field.
+check('cache key on opencode', supportsPromptCacheKey(ZEN), true);
+check('cache key on openai', supportsPromptCacheKey('https://api.openai.com/v1'), true);
+check('cache key off openrouter', supportsPromptCacheKey('https://openrouter.ai/api/v1'), false);
+check('cache key off anthropic', supportsPromptCacheKey('https://api.anthropic.com/v1'), false);
+check('cache key off local runtime', supportsPromptCacheKey('http://127.0.0.1:11434/v1'), false);
+check('cache key off empty', supportsPromptCacheKey(''), false);
 
 console.log(failed === 0 ? '\napi-style: all tests passed' : `\napi-style: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

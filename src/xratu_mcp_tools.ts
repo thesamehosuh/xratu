@@ -172,7 +172,7 @@ function ignoredFallback(name: string): boolean {
 
 /** Workspace files as git sees them: tracked + untracked, .gitignore-respected
  *  (keep-set, NOT an ignore-list - empty means "git unavailable/non-git root").
- *  Shared by directory_tree and the static project-structure snapshot. */
+ *  Shared by directory_tree and gitIgnoredPaths. */
 export async function gitWorkspaceFiles(workspaceRoot: string, timeout = 15_000): Promise<Set<string>> {
     try {
         const r = await execFile('git', ['-C', workspaceRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true });

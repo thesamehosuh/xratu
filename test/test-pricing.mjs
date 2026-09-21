@@ -57,6 +57,35 @@ const clamped = costForUsage(sonnet, { promptTokens: 1000, completionTokens: 0, 
 // cached clamped to prompt: 1000 * 0.2 / 1M
 near('cached clamped to prompt', clamped.amount, (1000 * 0.2) / 1_000_000, 1e-12);
 
+// Cache WRITES (a subset of promptTokens) are billed at 1.25x input by default.
+const write = costForUsage(sonnet, { promptTokens: 1_000_000, completionTokens: 0, cacheWriteTokens: 1_000_000 });
+near('cache write priced at 1.25x input', write.amount, 2.5, 1e-9);
+
+const mixed = costForUsage(sonnet, {
+    promptTokens: 1_000_000,
+    completionTokens: 0,
+    cachedTokens: 300_000,
+    cacheWriteTokens: 200_000,
+});
+// uncached 500k * 2 + cached 300k * 0.2 + write 200k * 2.5 = 1.0 + 0.06 + 0.5
+near('read/write/uncached split', mixed.amount, 1.56, 1e-9);
+
+const explicitWrite = costForUsage({ input: 2, output: 10, cachedInputWrite: 3 }, {
+    promptTokens: 1_000_000,
+    completionTokens: 0,
+    cacheWriteTokens: 1_000_000,
+});
+near('explicit cache-write rate wins', explicitWrite.amount, 3, 1e-9);
+
+const overClamped = costForUsage(sonnet, {
+    promptTokens: 1000,
+    completionTokens: 0,
+    cachedTokens: 400,
+    cacheWriteTokens: 5000,
+});
+// write clamped to prompt - cached = 600; 400 * 0.2 + 600 * 2.5, all per 1M
+near('cache write clamped to the uncached prompt', overClamped.amount, (400 * 0.2 + 600 * 2.5) / 1_000_000, 1e-12);
+
 check('zero usage -> null', costForUsage(sonnet, { promptTokens: 0, completionTokens: 0 }), null);
 check('null tokens -> null', costForUsage(sonnet, { promptTokens: null, completionTokens: null }), null);
 check('IRT currency passthrough', costForUsage(sonnet, { promptTokens: 1_000_000, completionTokens: 0 }, 'IRT').currency, 'IRT');
