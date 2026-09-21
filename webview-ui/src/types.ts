@@ -80,11 +80,11 @@ export type ToExtensionMessage =
     /** User edit of the session task list (interactive checklist). The host
      *  stores it as the session override and echoes taskListState. */
     | { type: 'taskListEdit'; tasks: TaskListItem[] }
-    /** Pricing page: request the current usage + model price overrides. */
-    | { type: 'pricingGetState' }
-    /** Pricing page: set a per-model price override (currency defaults to USD). */
-    | { type: 'pricingSaveModel'; id: string; input: number; output: number; cachedInput?: number | null; currency?: 'USD' | 'IRT' }
-    | { type: 'pricingRemoveModel'; id: string }
+    /** Usage page: request the current usage + model price overrides. */
+    | { type: 'usageGetState' }
+    /** Usage page: set a per-model price override (currency defaults to USD). */
+    | { type: 'usageSaveModel'; id: string; input: number; output: number; cachedInput?: number | null; currency?: 'USD' | 'IRT' }
+    | { type: 'usageRemoveModel'; id: string }
     /** Copy a code block to the OS clipboard via the host (webview clipboard
      *  permissions are unreliable). */
     | { type: 'copyToClipboard'; value: string };
@@ -292,12 +292,13 @@ export type FromExtensionMessage =
     /** Host-echoed current task list (user override merged; null when the
      *  session has none). Drives the interactive checklist + progress chip. */
     | { type: 'taskListState'; tasks: TaskListItem[] | null }
-    /** Response to pricingGetState / pricing* edits - the Pricing page's view. */
+    /** Response to usageGetState / usage* edits - the Usage page's view. */
     | {
-          type: 'pricingState';
+          type: 'usageState';
           /** All-time usage per provider, busiest first. */
           providers: ProviderUsageView[];
-          models: ModelPricingView[];
+          /** The effective rate for every model used, plus override-only rows. */
+          rates: ModelRateView[];
           /** Sparse per-day / per-model / per-host cells (only days with use). */
           history: LedgerDay[];
           /** Machine-global totals across every recorded day. */
@@ -344,13 +345,24 @@ export interface UsageTotals {
     IRT: number;
 }
 
-/** One per-model price override row on the Pricing page. */
-export interface ModelPricingView {
+/** Where an effective per-model rate came from. */
+export type ModelRateSource = 'override' | 'gateway' | 'builtin' | 'unknown';
+
+/** One rate-sheet row on the Usage page: a model's effective rate and its
+ *  origin. An override is host-independent, so its `host` is empty. */
+export interface ModelRateView {
     id: string;
+    /** Provider host the rate applies to; '' for an override. */
+    host: string;
+    /** Rate per 1M tokens, in `currency`. */
     input: number;
     output: number;
     cachedInput: number | null;
     currency: 'USD' | 'IRT';
+    source: ModelRateSource;
+    /** All-time cost for this row's scope, per currency (never converted). */
+    USD: number;
+    IRT: number;
 }
 
 // ---------------------------------------------------------------------------

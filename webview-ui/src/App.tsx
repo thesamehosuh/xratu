@@ -28,12 +28,12 @@ import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
 import { CapabilitiesPage } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
-import { PricingPage } from './components/PricingPage';
+import { UsagePage } from './components/UsagePage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
-import type { LedgerDay, ModelPricingView, ProviderUsageView, UsageTotals } from './types';
+import type { LedgerDay, ModelRateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'pricing';
+type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -77,14 +77,14 @@ export function App() {
     const [credReturnTo, setCredReturnTo] = useState<'chat' | 'settings'>('chat');
     /** Same return-tracking for the capabilities page's Back button. */
     const [capReturnTo, setCapReturnTo] = useState<'chat' | 'settings'>('chat');
-    /** Pricing page data (host-owned settings) + its Back target. */
-    const [pricing, setPricing] = useState<{
+    /** Usage page data (host-owned settings) + its Back target. */
+    const [usage, setUsage] = useState<{
         providers: ProviderUsageView[];
-        models: ModelPricingView[];
+        rates: ModelRateView[];
         history: LedgerDay[];
         allTime: UsageTotals;
     } | null>(null);
-    const [pricingReturnTo, setPricingReturnTo] = useState<'chat' | 'settings'>('settings');
+    const [usageReturnTo, setUsageReturnTo] = useState<'chat' | 'settings'>('settings');
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
     const [injectedText, setInjectedText] = useState<{ id: number; text: string } | null>(null);
     // Workspace-relative path of the file open in the active editor - the
@@ -392,10 +392,10 @@ export function App() {
                 case 'taskListState':
                     setTaskList(msg.tasks);
                     break;
-                case 'pricingState':
-                    setPricing({
+                case 'usageState':
+                    setUsage({
                         providers: msg.providers,
-                        models: msg.models,
+                        rates: msg.rates,
                         history: msg.history,
                         allTime: msg.allTime,
                     });
@@ -708,15 +708,15 @@ export function App() {
         );
     }
 
-    if (screen === 'pricing') {
+    if (screen === 'usage') {
         return (
             <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-                <PricingPage
-                    state={pricing}
-                    onBack={() => setScreen(pricingReturnTo)}
+                <UsagePage
+                    state={usage}
+                    onBack={() => setScreen(usageReturnTo)}
                     onSaveModel={(id, input, output, cachedInput, currency) =>
-                        send({ type: 'pricingSaveModel', id, input, output, cachedInput, currency })}
-                    onRemoveModel={(id) => send({ type: 'pricingRemoveModel', id })}
+                        send({ type: 'usageSaveModel', id, input, output, cachedInput, currency })}
+                    onRemoveModel={(id) => send({ type: 'usageRemoveModel', id })}
                 />
                 {banner}
             </div>
@@ -746,10 +746,10 @@ export function App() {
                         send({ type: 'mcpGetState' });
                         send({ type: 'skillsGetState' });
                     }}
-                    onOpenPricing={() => {
-                        setPricingReturnTo('settings');
-                        setScreen('pricing');
-                        send({ type: 'pricingGetState' });
+                    onOpenUsage={() => {
+                        setUsageReturnTo('settings');
+                        setScreen('usage');
+                        send({ type: 'usageGetState' });
                     }}
                     onClearHistory={() => {
                         // "Clear history" really clears: every stored session
@@ -954,6 +954,11 @@ export function App() {
                 busy={chat.busy}
                 usage={chat.lastUsage}
                 sessionCost={chat.sessionCost}
+                onOpenUsage={() => {
+                    setUsageReturnTo('chat');
+                    setScreen('usage');
+                    send({ type: 'usageGetState' });
+                }}
                 contextWindow={
                     (selectedModel ? ctxOverrides[selectedModel] : undefined) ??
                     resolveWindow(modelInfo?.contextWindows, selectedModel)

@@ -20,6 +20,7 @@ import {
     UsageLedgerStore,
     aggregateByDayAndModel,
     entriesForSession,
+    modelHosts,
     recomputeCosts,
     sumUsage,
     totalsByHost,
@@ -36,7 +37,7 @@ import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
 import { isGeoBlockedError } from './providerErrors';
-import { priceForModel, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
+import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
@@ -657,6 +658,22 @@ function trimDisplayEvent(event: any): any {    if (event?.type === 'tool_call' 
     return event;
 }
 
+/** One row of the Usage page's rate sheet: a model's effective rate plus where
+ *  it came from (mirrors the webview's ModelRateView). */
+interface UsageRateRow {
+    id: string;
+    /** Provider host the rate applies to; '' for an override (host-independent). */
+    host: string;
+    input: number;
+    output: number;
+    cachedInput: number | null;
+    currency: 'USD' | 'IRT';
+    source: 'override' | 'gateway' | 'builtin' | 'unknown';
+    /** All-time cost for this row's scope, per currency (never converted). */
+    USD: number;
+    IRT: number;
+}
+
 class XratuChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'xratu-chat-view';
     private _view?: vscode.WebviewView;
@@ -764,7 +781,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  and currencies are never converted into one another. */
     private _sessionCost: { USD: number; IRT: number } = { USD: 0, IRT: 0 };
     /** Session TOKEN totals (input/output/cached), persisted and monotonic
-     *  like the cost ledger - the Pricing page's usage readout. */
+     *  like the cost ledger - the Usage page's usage readout. */
     private _sessionUsage: { input: number; output: number; cached: number } = { input: 0, output: 0, cached: 0 };
     /** Token totals per provider host for this session (persisted), so usage
      *  can be attributed without re-reading the transcript. */
@@ -1382,8 +1399,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Pricing context for a provider base URL (host, Iranian flag, rates). */
     private _priceLookupFor(baseUrl: string): PriceLookup {
-        const host = baseUrlHost(baseUrl);
-        const iranian = isIranianProvider(this._providerIdForUrl(baseUrl));
+        return this._priceLookupForHost(baseUrlHost(baseUrl), isIranianProvider(this._providerIdForUrl(baseUrl)));
+    }
+
+    /** Pricing context for an already-known host - the Usage page's rate sheet
+     *  resolves models for hosts that may no longer be in saved credentials. */
+    private _priceLookupForHost(host: string | null, iranian: boolean): PriceLookup {
         const rates = this._gatewayRates();
         const gatewayRate = host ? (rates[host] ?? rates[host.toLowerCase()] ?? null) : null;
         const fallback = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
@@ -1590,9 +1611,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._postSessionCost();
     }
 
-    /** The Pricing page's view: all-time per-provider usage, the sparse
-     *  per-day/per-model cost series, and the per-model price overrides. */
-    private async _sendPricingState(): Promise<void> {
+    /** The Usage page's view: all-time per-provider usage, the sparse
+     *  per-day/per-model cost series, and the effective rate per model. */
+    private async _sendUsageState(): Promise<void> {
         if (!this._view) return;
         const credentials = await this._getSavedCredentials();
         const byHost = new Map<string, { label: string; iranian: boolean }>();
@@ -1615,26 +1636,94 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             IRT: t.IRT,
         }));
 
-        const overrides = this._modelPriceOverrides();
-        const models = Object.entries(overrides)
-            .filter(([, o]) => o && (o.input != null || o.output != null))
-            .map(([id, o]) => ({
-                id,
-                input: Number(o.input) || 0,
-                output: Number(o.output) || 0,
-                cachedInput: o.cachedInput != null ? Number(o.cachedInput) : null,
-                currency: o.currency === 'IRT' ? 'IRT' : 'USD',
-            }));
-
         this._view.webview.postMessage({
-            type: 'pricingState',
+            type: 'usageState',
             providers,
-            models,
+            rates: this._modelRates(ledger, byHost),
             // Sparse per-day/per-model/per-host cells: the chart's month,
             // model and provider filters all run in the webview.
             history: aggregateByDayAndModel(ledger, USAGE_CHART_DAYS),
             allTime: sumUsage(ledger),
         });
+    }
+
+    /**
+     * The effective rate for every model that was actually used, plus one row
+     * per override whose model has not been used. An override applies to a
+     * model across providers, so it collapses to a single host-less row;
+     * everything else is resolved per host (a gateway rate is per host, so the
+     * same model can legitimately carry different rates). Busiest first.
+     */
+    private _modelRates(
+        ledger: readonly UsageEntry[],
+        byHost: Map<string, { label: string; iranian: boolean }>,
+    ): UsageRateRow[] {
+        const overrides = this._modelPriceOverrides();
+        const pairs = modelHosts(ledger);
+        const tokensByModel = new Map<string, number>();
+        // An override covers every host, so its row carries the model's total.
+        const costByModel = new Map<string, { USD: number; IRT: number }>();
+        for (const pair of pairs) {
+            tokensByModel.set(pair.model, (tokensByModel.get(pair.model) ?? 0) + pair.tokens);
+            const cost = costByModel.get(pair.model) ?? { USD: 0, IRT: 0 };
+            cost.USD += pair.USD;
+            cost.IRT += pair.IRT;
+            costByModel.set(pair.model, cost);
+        }
+
+        const rows: Array<{ row: UsageRateRow; tokens: number }> = [];
+        const overridden = new Set<string>();
+        for (const [id, override] of Object.entries(overrides)) {
+            if (!override || (override.input == null && override.output == null)) continue;
+            const key = id.trim().toLowerCase();
+            if (!key) continue;
+            overridden.add(key);
+            const tokens = tokensByModel.get(id) ?? 0;
+            rows.push({
+                tokens,
+                row: {
+                    id,
+                    // Host-independent: the override wins on every provider.
+                    host: '',
+                    input: Number(override.input) || 0,
+                    output: Number(override.output) || 0,
+                    cachedInput: override.cachedInput != null ? Number(override.cachedInput) : null,
+                    currency: override.currency === 'IRT' ? 'IRT' : 'USD',
+                    source: 'override',
+                    USD: costByModel.get(id)?.USD ?? 0,
+                    IRT: costByModel.get(id)?.IRT ?? 0,
+                },
+            });
+        }
+
+        for (const pair of pairs) {
+            const key = pair.model.trim().toLowerCase();
+            if (overridden.has(key)) continue;
+            const lookup = this._priceLookupForHost(pair.host, byHost.get(pair.host)?.iranian ?? false);
+            const resolved = resolvePrice(pair.model, overrides, lookup);
+            rows.push({
+                tokens: pair.tokens,
+                row: {
+                    id: pair.model,
+                    host: pair.host,
+                    input: resolved?.price.input ?? 0,
+                    output: resolved?.price.output ?? 0,
+                    cachedInput: resolved?.price.cachedInput ?? null,
+                    currency: resolved?.price.currency ?? (lookup.iranian ? 'IRT' : 'USD'),
+                    source: !resolved
+                        ? 'unknown'
+                        : resolved.source === 'gateway' || resolved.source === 'toman-table'
+                            ? 'gateway'
+                            : 'builtin',
+                    USD: pair.USD,
+                    IRT: pair.IRT,
+                },
+            });
+        }
+
+        return rows
+            .sort((a, b) => b.tokens - a.tokens || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0))
+            .map((r) => r.row);
     }
 
     /** Run a pricing read-modify-write on a single serialized queue. */
@@ -1672,7 +1761,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
         // Past usage follows the new price, then the page is refreshed.
         await this._repriceLedger(key);
-        await this._sendPricingState();
+        await this._sendUsageState();
         await this._refreshCostDisplay();
     }
 
@@ -1689,7 +1778,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
         if (!removed) return;
         await this._repriceLedger(key);
-        await this._sendPricingState();
+        await this._sendUsageState();
         await this._refreshCostDisplay();
     }
 
@@ -3082,10 +3171,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             await externalMcpInstance?.restart(String(data.name ?? ''));
                             await this._sendMcpState();
                             break;
-                        case 'pricingGetState':
-                            await this._sendPricingState();
+                        case 'usageGetState':
+                            await this._sendUsageState();
                             break;
-                        case 'pricingSaveModel':
+                        case 'usageSaveModel':
                             await this._saveModelPricing(
                                 String(data.id ?? ''),
                                 Number(data.input),
@@ -3094,7 +3183,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                                 data.currency === 'IRT' ? 'IRT' : 'USD',
                             );
                             break;
-                        case 'pricingRemoveModel':
+                        case 'usageRemoveModel':
                             await this._removeModelPricing(String(data.id ?? ''));
                             break;
                         case 'skillsGetState':

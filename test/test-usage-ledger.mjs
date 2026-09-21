@@ -16,6 +16,7 @@ const {
     aggregateByDayAndModel,
     dayKey,
     entriesForSession,
+    modelHosts,
     normalizeEntry,
     parseLedger,
     pruneEntries,
@@ -199,6 +200,30 @@ check('normalize drops a ts-less row', normalizeEntry({ input: 1 }), null);
 }
 
 check('USAGE_MAX_ENTRIES is a sane cap', USAGE_MAX_ENTRIES >= 1000, true);
+
+// --- model → hosts (the Usage page's rate sheet lists these pairs) ---
+{
+    const pairs = modelHosts([
+        entry({ model: 'gpt-4o', host: 'a.ir', input: 10, output: 0, amount: 1, currency: 'USD' }),
+        entry({ model: 'gpt-4o', host: 'a.ir', input: 5, output: 5, amount: 5000, currency: 'IRT' }),
+        entry({ model: 'gpt-4o', host: 'b.ir', input: 1, output: 0 }),
+        entry({ model: 'glm-5.3', host: 'b.ir', input: 200, output: 0 }),
+        // Entries without a model id carry no rate, so they are dropped.
+        entry({ model: '', host: 'b.ir', input: 999, output: 0 }),
+    ]);
+    check('one row per model+host pair', pairs.length, 3);
+    check('busiest pair first', pairs.map((p) => `${p.model}@${p.host}`), [
+        'glm-5.3@b.ir',
+        'gpt-4o@a.ir',
+        'gpt-4o@b.ir',
+    ]);
+    check('pair tokens are summed across rounds', pairs[1].tokens, 20);
+    // Cost is summed per currency and never converted between the two.
+    check('pair cost keeps its currency', [pairs[1].USD, pairs[1].IRT], [1, 5000]);
+    check('same model on another host is its own pair', modelHosts([entry({ model: 'x', host: '' })]), [
+        { model: 'x', host: '', tokens: 120, USD: 1, IRT: 0 },
+    ]);
+}
 
 console.log(failed === 0 ? '\nusage-ledger tests: all passed' : `\nusage-ledger tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

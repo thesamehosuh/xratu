@@ -20,8 +20,8 @@ interface SettingsPageProps {
     onOpenCredentials?: () => void;
     /** Open the merged capabilities page (MCP servers + Agent Skills). */
     onOpenCapabilities?: () => void;
-    /** Open the dedicated billing/pricing page. */
-    onOpenPricing?: () => void;
+    /** Open the dedicated usage page. */
+    onOpenUsage?: () => void;
     onClearHistory?: () => void;
 }
 
@@ -33,7 +33,7 @@ export function SettingsPage({
     onSetLocale,
     onOpenCredentials,
     onOpenCapabilities,
-    onOpenPricing,
+    onOpenUsage,
     onClearHistory,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
@@ -68,10 +68,7 @@ export function SettingsPage({
                         <div className="settings-section-icon" aria-hidden="true">
                             <Link size={15} />
                         </div>
-                        <div>
-                            <h3>{t('settingsConnections')}</h3>
-                            <p>{t('settingsConnectionsDesc')}</p>
-                        </div>
+                        <h3>{t('settingsConnections')}</h3>
                     </div>
 
                     <button type="button" className="settings-nav-row" onClick={onOpenCredentials}>
@@ -90,10 +87,10 @@ export function SettingsPage({
                         {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                     </button>
 
-                    <button type="button" className="settings-nav-row" onClick={onOpenPricing}>
+                    <button type="button" className="settings-nav-row" onClick={onOpenUsage}>
                         <div className="settings-nav-main">
-                            <strong>{t('settingsPricing')}</strong>
-                            <span>{t('settingsPricingDesc')}</span>
+                            <strong>{t('settingsUsage')}</strong>
+                            <span>{t('settingsUsageDesc')}</span>
                         </div>
                         {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                     </button>

@@ -9,7 +9,7 @@ import { renameWithRetry } from './localSessionStore';
  * host and model served it, the tokens it cost, and the cost as resolved at
  * that moment. It is deliberately APPEND-ONLY and machine-global (not
  * per-session) because:
- *  - the Pricing page's daily chart needs a time series, and a session's
+ *  - the Usage page's daily chart needs a time series, and a session's
  *    totals span many days, so per-session snapshots cannot be bucketed;
  *  - a price edit can only be applied retroactively if each round's tokens
  *    were recorded separately.
@@ -248,6 +248,41 @@ export function totalsByHost(entries: readonly UsageEntry[]): HostTotals[] {
         if (entry.amount != null && entry.currency) totals[entry.currency] += entry.amount;
     }
     return [...byHost.values()].sort((a, b) => (b.input + b.output) - (a.input + a.output));
+}
+
+/**
+ * One (model, host) pair that saw usage. The Usage page's rate sheet lists
+ * exactly these pairs, so every rate it shows is one that actually applied.
+ */
+export interface ModelHostUse {
+    model: string;
+    /** Provider base-URL host ('' when unknown). */
+    host: string;
+    /** All-time tokens for the pair - the sort key (busiest first). */
+    tokens: number;
+    /** All-time cost for the pair, per currency (never converted). */
+    USD: number;
+    IRT: number;
+}
+
+/** Model/host pairs with usage, busiest first. */
+export function modelHosts(entries: readonly UsageEntry[]): ModelHostUse[] {
+    const byPair = new Map<string, ModelHostUse>();
+    for (const entry of entries) {
+        const model = entry.model || '';
+        if (!model) continue;
+        const host = entry.host || '';
+        // NUL cannot appear in a model id or host, so this key is collision-free.
+        const key = `${model}\u0000${host}`;
+        let use = byPair.get(key);
+        if (!use) {
+            use = { model, host, tokens: 0, USD: 0, IRT: 0 };
+            byPair.set(key, use);
+        }
+        use.tokens += entry.input + entry.output + entry.cached;
+        if (entry.amount != null && entry.currency) use[entry.currency] += entry.amount;
+    }
+    return [...byPair.values()].sort((a, b) => b.tokens - a.tokens);
 }
 
 /**

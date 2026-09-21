@@ -260,6 +260,8 @@ interface InputBarProps {
     usage?: TokenUsage | null;
     /** Summed cost of the conversation so far (null when unknown). */
     sessionCost?: Cost | null;
+    /** Open the usage page (the cost pill is a shortcut into it). */
+    onOpenUsage?: () => void;
     /** Server-provided window for the selected model (null until known). */
     contextWindow?: number | null;
     /** Host-resolved DEFAULT window for the model (without any user override)
@@ -311,6 +313,7 @@ export function InputBar({
     onSetThinkingLevel,
     usage,
     sessionCost,
+    onOpenUsage,
     contextWindow,
     defaultContextWindow,
     planMode,
@@ -1103,9 +1106,16 @@ export function InputBar({
                         )}
                     </span>
                     {formatCost(sessionCost) && (
-                        <span className="session-cost" dir="auto" title={t('sessionCostTitle')}>
+                        <button
+                            type="button"
+                            className="session-cost"
+                            dir="auto"
+                            onClick={onOpenUsage}
+                            title={t('sessionCostTitle')}
+                            aria-label={t('sessionCostTitle')}
+                        >
                             {formatCost(sessionCost)}
-                        </span>
+                        </button>
                     )}
                     </div>
                     <div className="composer-buttons">

@@ -34,7 +34,7 @@ export interface LocalSessionSnapshot {
      *  from USD - currencies are never converted into one another. */
     totalCostIrt?: number;
     /** Cumulative session TOKEN totals (input/output/cached), monotonic like
-     *  the cost ledger - drives the Pricing page's usage readout. */
+     *  the cost ledger - drives the Usage page's usage readout. */
     totalInputTokens?: number;
     totalOutputTokens?: number;
     totalCachedTokens?: number;

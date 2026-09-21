@@ -3551,15 +3551,33 @@ pre.tool-cmd {
 /* Session cost chip, beside the context meter. inline-flex + center keeps it
    vertically aligned with the neighbouring chips (a plain inline span sits on
    the baseline and reads as misaligned). */
+/* A shortcut into the usage page, so it reads as clickable but stays a quiet
+   figure in the composer row. */
 .session-cost {
     display: inline-flex;
     align-items: center;
     align-self: center;
     margin-inline-start: 2px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
     font-size: 10.5px;
     line-height: 1;
     color: var(--vscode-descriptionForeground);
     white-space: nowrap;
+    cursor: pointer;
+}
+
+.session-cost:hover {
+    color: var(--xratu-accent-strong);
+    text-decoration: underline;
+}
+
+.session-cost:focus-visible {
+    outline: 1px solid var(--xratu-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
 }
 
 /* Context-window preset menu (anchored above the pill) */
@@ -5372,6 +5390,25 @@ pre.tool-cmd {
 }
 
 /* Usage + pricing page */
+/* The page's type runs a step larger than the rest of the app: it is dense
+   with small figures, and at sidebar width the defaults read as fine print. */
+.usage-page .settings-section-head p {
+    font-size: 12px;
+}
+
+.usage-page .mcp-hint {
+    font-size: 11.5px;
+}
+
+.usage-page .mcp-field-label {
+    font-size: 11px;
+}
+
+.usage-page .mcp-field input,
+.usage-page .mcp-field .dropdown-trigger {
+    font-size: 12px;
+}
+
 .usage-range {
     flex: 1;
     padding: 4px 6px;
@@ -5380,7 +5417,7 @@ pre.tool-cmd {
     background: transparent;
     color: var(--vscode-descriptionForeground);
     font: inherit;
-    font-size: 10px;
+    font-size: 11px;
     cursor: pointer;
 }
 
@@ -5407,7 +5444,7 @@ pre.tool-cmd {
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .cost-granularity {
@@ -5430,7 +5467,7 @@ pre.tool-cmd {
 }
 
 .cost-period-label {
-    font-size: 10.5px;
+    font-size: 11.5px;
     font-weight: 650;
     color: var(--vscode-foreground);
     white-space: nowrap;
@@ -5438,21 +5475,24 @@ pre.tool-cmd {
     text-overflow: ellipsis;
 }
 
-.cost-select {
-    max-width: 108px;
-    padding: 3px 5px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: var(--xratu-radius-sm);
-    background: var(--xratu-input);
-    color: var(--vscode-input-foreground);
-    font: inherit;
-    font-size: 10px;
+/* The period steppers stay bare: no pill background behind the chevrons. */
+.cost-period .icon-btn:hover {
+    background: transparent;
+}
+
+/* Filters share one row and split the width evenly, so neither dropdown is
+   truncated or wraps onto its own line. */
+.cost-filters {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
 }
 
 .cost-currencies {
     display: flex;
     gap: 4px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .cost-currencies .usage-range {
@@ -5465,14 +5505,18 @@ pre.tool-cmd {
     gap: 6px;
 }
 
+/* The axis reads as an axis: labels sit just off a real axis line, so a sparse
+   month shows a framed plot instead of a void with a bar at the edge. */
 .cost-axis {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-end;
-    width: 42px;
+    width: 48px;
     height: 104px;
-    font-size: 8.5px;
+    padding-inline-end: 6px;
+    border-inline-end: 1px solid var(--vscode-widget-border);
+    font-size: 10px;
     color: var(--vscode-descriptionForeground);
     font-variant-numeric: tabular-nums;
 }
@@ -5496,7 +5540,12 @@ pre.tool-cmd {
 .cost-grid span {
     height: 0;
     border-top: 1px solid var(--vscode-widget-border);
-    opacity: 0.5;
+    opacity: 0.6;
+}
+
+/* The bottom rule is the baseline: it anchors the bars and closes the plot. */
+.cost-grid span:last-child {
+    opacity: 1;
 }
 
 .cost-cols {
@@ -5524,6 +5573,16 @@ pre.tool-cmd {
     filter: brightness(1.25);
 }
 
+/* A segment under the cursor highlights alone - the rest of the stack stays
+   put, so hovering one model does not light up them all. */
+.cost-seg:hover {
+    filter: brightness(1.25);
+}
+
+.cost-col:has(.cost-seg:hover) .cost-stack {
+    filter: none;
+}
+
 .cost-col:focus-visible {
     outline: 1px solid var(--xratu-accent);
     outline-offset: 1px;
@@ -5545,14 +5604,14 @@ pre.tool-cmd {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 10px;
-    margin-top: 7px;
+    margin-top: 10px;
 }
 
 .cost-legend-item {
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 9.5px;
+    font-size: 11px;
     color: var(--vscode-descriptionForeground);
 }
 
@@ -5563,16 +5622,28 @@ pre.tool-cmd {
     flex: 0 0 auto;
 }
 
+/* The model's share of the visible period - the legend answers "which model
+   cost what" without a hover. */
+.cost-legend-cost {
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-foreground);
+}
+
 /* Hover detail sits in flow: a floating card would clip at sidebar width, and
-   a boxed panel is one separator too many. */
+   a boxed panel is one separator too many. It never wraps - a hover must not
+   change the card's height and shove the sections below it. */
 .cost-detail {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: baseline;
     gap: 3px 10px;
-    min-height: 15px;
-    margin: 8px 0 0;
-    font-size: 10.5px;
+    /* A FIXED line box, not a min-height: the empty state and the hovered
+       state must measure the same, or hovering nudges the card by a pixel. */
+    height: 18px;
+    line-height: 18px;
+    margin: 10px 0 0;
+    overflow: hidden;
+    font-size: 11.5px;
     color: var(--vscode-foreground);
 }
 
@@ -5580,6 +5651,14 @@ pre.tool-cmd {
     display: inline-flex;
     align-items: baseline;
     gap: 4px;
+    min-width: 0;
+}
+
+/* The model id truncates first: the date and the figures stay readable. */
+.cost-detail > span > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .cost-detail i {
@@ -5588,112 +5667,298 @@ pre.tool-cmd {
     border-radius: 2px;
 }
 
-.cost-detail-hint {
-    color: var(--vscode-descriptionForeground);
-}
-
 .usage-alltime {
     margin: 8px 0 0;
-    font-size: 10.5px;
+    font-size: 11.5px;
     color: var(--vscode-descriptionForeground);
 }
 
-/* Provider usage list: one row per provider, cost on the first line. */
+/* Provider usage: a stat block per provider, its own design rather than the
+   generic settings row - identity and the cost it ran up up top, then the
+   token split that produced that cost, drawn as a one-hue composition bar. */
 .prov-row {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 10px;
-    padding: 7px 0;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 0;
 }
 
-.prov-main {
+.prov-row + .prov-row {
+    border-block-start: 1px solid var(--vscode-widget-border);
+}
+
+.prov-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.prov-name {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
-    flex: 1 1 auto;
     min-width: 0;
 }
 
-.prov-main strong {
-    font-size: 11px;
+.prov-name strong {
+    font-size: 12px;
     font-weight: 650;
     color: var(--vscode-foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .prov-host {
-    font-size: 9.5px;
+    font-size: 10.5px;
     color: var(--vscode-descriptionForeground);
     overflow-wrap: anywhere;
 }
 
-.prov-cost {
-    font-size: 11px;
+.usage-cost {
+    flex: 0 0 auto;
+    font-size: 12px;
     font-weight: 650;
     font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
 }
 
-.prov-tokens {
+/* Token composition, same stacked-bar language as the chart above: one hue
+   ramps from input (solid) to cached (neutral). */
+.prov-bar {
     display: flex;
-    gap: 10px;
-    flex: 1 1 100%;
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--xratu-border-quiet);
 }
 
-.prov-tokens span {
+.prov-bar > span {
+    height: 100%;
+}
+
+.prov-bar .in,
+.prov-stats i.in {
+    background: var(--xratu-accent);
+}
+
+.prov-bar .out,
+.prov-stats i.out {
+    background: color-mix(in srgb, var(--xratu-accent) 55%, var(--vscode-widget-border));
+}
+
+.prov-bar .cached,
+.prov-stats i.cached {
+    background: var(--vscode-widget-border);
+}
+
+.prov-stats {
     display: flex;
-    align-items: baseline;
-    gap: 4px;
-    font-size: 10.5px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
 }
 
-.prov-tokens i {
-    font-style: normal;
-    font-size: 8.5px;
-    color: var(--vscode-descriptionForeground);
+.prov-stats > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.prov-stats i {
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
+.prov-stats b {
+    font-weight: 650;
 }
 
 .usage-empty {
     margin: 2px 0 0;
-    font-size: 10.5px;
+    font-size: 11.5px;
     line-height: 1.5;
     color: var(--vscode-descriptionForeground);
 }
 
-.pricing-row {
+/* Rate sheet: one row per model in use, with the rate in effect and where it
+   came from - the same shape as a provider row (identity + origin left, the
+   money right, the figures underneath). Correcting a rate opens a panel
+   anchored to the row, so the sheet keeps its shape while editing. */
+.rate-row {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 0;
+}
+
+.rate-row + .rate-row,
+.rate-row.editing {
+    border-block-start: 1px solid var(--vscode-widget-border);
+}
+
+.rate-head {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
-    padding: 7px 0;
-    border-block-end: 1px solid var(--vscode-widget-border);
 }
 
-.pricing-row:last-of-type {
-    border-block-end: 0;
+.rate-head-end {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
 }
 
-.pricing-row-head {
+.rate-pop {
+    position: absolute;
+    top: 26px;
+    inset-inline: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 10px;
+    /* A tight card caps the height inline; scroll rather than squash. */
+    overflow-y: auto;
+    /* Same as the rest of the app: no native scrollbar gutter. */
+    scrollbar-width: none;
+    background: var(--xratu-input);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* A card clips its overflow, so a panel without room below opens upward. */
+.rate-pop.up {
+    top: auto;
+    bottom: calc(100% - 6px);
+}
+
+.rate-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.rate-name {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
     flex-wrap: wrap;
 }
 
-.pricing-row-label {
-    font-size: 11px;
+.rate-name strong {
+    font-size: 12px;
     font-weight: 650;
+    color: var(--vscode-foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rate-host {
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Origin chip: your own correction is the one that should stand out, an
+   unresolved rate is the one worth acting on. */
+.rate-source {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10px;
+}
+
+.rate-source.override {
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+}
+
+.rate-source.unknown {
+    border-color: rgba(255, 107, 107, 0.45);
+    color: #ff9b9b;
+}
+
+.rate-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
 }
 
-.pricing-row-rate {
-    flex: 1;
-    text-align: end;
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
+.rate-values > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.rate-values i {
+    font-style: normal;
+    font-size: 9.5px;
     color: var(--vscode-descriptionForeground);
+}
+
+.rate-values b {
+    font-weight: 650;
+}
+
+.rate-unknown {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.rate-edit-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+}
+
+.rate-edit-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.rates-form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.rates-add-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    color: var(--xratu-accent-strong);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+.rates-add-toggle:hover {
+    text-decoration: underline;
 }
 
 .pricing-badge {
@@ -5702,7 +5967,7 @@ pre.tool-cmd {
     border: 1px solid var(--xratu-accent-dim);
     background: var(--xratu-accent-faint);
     color: var(--xratu-accent-strong);
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 650;
 }
 
@@ -5714,50 +5979,30 @@ pre.tool-cmd {
 }
 
 .pricing-add {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: end;
+    gap: 8px 8px;
     padding-top: 10px;
     margin-top: 4px;
     border-block-start: 1px solid var(--vscode-widget-border);
 }
 
-.pricing-add .mcp-field {
-    min-width: 78px;
+/* Model id spans the full width; the actions close the grid, so field pairs
+   stay in a predictable order at any width. */
+.pricing-add .pricing-add-id,
+.pricing-add .rates-form-actions {
+    grid-column: 1 / -1;
 }
 
-.pricing-add .pricing-add-id {
-    flex: 1 1 130px;
+.pricing-add .rates-form-actions {
+    justify-content: flex-end;
 }
 
-.pricing-add .settings-primary-action {
-    display: inline-flex;
-    align-items: center;
+.pricing-add .rates-form-actions button {
     gap: 4px;
     min-height: 27px;
     padding: 5px 10px;
-}
-
-/* Native number spinners are invisible on dark themes; give them a
-   consistent hover/active treatment so the steppers are usable. `light dark`
-   (not a hardcoded `dark`) keeps the control following the active theme, so
-   light-theme users do not get mismatched dark steppers. */
-input[type="number"] {
-    color-scheme: light dark;
-}
-
-input[type="number"]::-webkit-outer-spin-button,
-input[type="number"]::-webkit-inner-spin-button {
-    opacity: 0.55;
-    cursor: pointer;
-}
-
-input[type="number"]:hover::-webkit-outer-spin-button,
-input[type="number"]:hover::-webkit-inner-spin-button,
-input[type="number"]:focus::-webkit-outer-spin-button,
-input[type="number"]:focus::-webkit-inner-spin-button {
-    opacity: 1;
 }
 
 /* Language flip (Settings → گفتگو) - fa/en choice chips inside a
@@ -6236,6 +6481,173 @@ button.mcp-row-main:hover strong {
 .mcp-field select:focus,
 .mcp-field textarea:focus {
     outline: 1px solid var(--xratu-accent);
+}
+
+/* Usage page dropdown: the app's own trigger + listbox. A native <select>
+   cannot match the UI - its popup is OS-drawn (light on dark hosts) and it
+   paints the focus ring on plain mouse clicks. */
+.dropdown {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.dropdown-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-foreground);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.dropdown-trigger:hover {
+    color: var(--xratu-accent-strong);
+}
+
+.dropdown-trigger:focus-visible {
+    outline: 1px solid var(--xratu-accent);
+    outline-offset: 0;
+}
+
+.dropdown-value {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.dropdown-caret {
+    flex: 0 0 auto;
+    opacity: 0.75;
+}
+
+.dropdown-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    inset-inline: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    max-height: 190px;
+    overflow-y: auto;
+    /* Same as the rest of the app: no native scrollbar gutter. */
+    scrollbar-width: none;
+    background: var(--xratu-input);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* A card clips its overflow, so a list without room below opens upward. */
+.dropdown-list.up {
+    top: auto;
+    bottom: calc(100% + 4px);
+}
+
+.dropdown-list::-webkit-scrollbar,
+.rate-pop::-webkit-scrollbar {
+    display: none;
+}
+
+.dropdown-option {
+    display: block;
+    width: 100%;
+    padding: 5px 7px;
+    border: 0;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-foreground);
+    font: inherit;
+    font-size: 11px;
+    text-align: start;
+    cursor: pointer;
+}
+
+.dropdown-option:hover,
+.dropdown-option:focus-visible {
+    outline: none;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+}
+
+.dropdown-option[aria-selected='true'] {
+    color: var(--xratu-accent-strong);
+    font-weight: 650;
+}
+
+/* Inside the add form the trigger borrows the field chrome, so it sits level
+   with the neighboring inputs. */
+.mcp-field .dropdown {
+    flex: 0 0 auto;
+}
+
+.mcp-field .dropdown-trigger {
+    padding: 5px 8px;
+    border: 1px solid var(--xratu-border-quiet);
+    border-radius: var(--xratu-radius-xs);
+    background: var(--xratu-input);
+    color: var(--vscode-input-foreground);
+    font-size: var(--xratu-fs-sm);
+}
+
+.pricing-add .mcp-field input:focus {
+    outline: none;
+    border-color: var(--xratu-accent);
+}
+
+/* Price field with drawn steppers: the native number spinners are UA-drawn
+   and cannot follow the theme, so the field is a text input plus two small
+   chevron buttons. */
+.num-field {
+    position: relative;
+    display: block;
+}
+
+.num-field input {
+    width: 100%;
+    padding-inline-end: 20px;
+}
+
+/* Steps sit on the physical right: the field is dir="ltr" (numbers/prices are
+   LTR by rule), so its reserved inline-end padding is on the right too. */
+.num-steps {
+    position: absolute;
+    right: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+}
+
+.num-step {
+    width: 15px;
+    height: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+}
+
+.num-step:hover {
+    color: var(--xratu-accent-strong);
+}
+
+.num-step:focus-visible {
+    outline: 1px solid var(--xratu-accent);
+    outline-offset: 0;
 }
 
 .mcp-field .mcp-hint-text {

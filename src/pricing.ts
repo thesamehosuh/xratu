@@ -196,6 +196,19 @@ function usdPriceForModel(id: string): ModelPrice | null {
 }
 
 /**
+ * Where a resolved rate came from. The Usage page shows this per model, so a
+ * user can tell their own corrected rate from the curated table or a gateway's
+ * Toman conversion.
+ */
+export type PriceSource = 'override' | 'toman-table' | 'gateway' | 'usd-table';
+
+/** An effective rate plus how it was resolved. */
+export interface ResolvedPrice {
+    price: ModelPrice;
+    source: PriceSource;
+}
+
+/**
  * Resolve a model's price. Order (first hit wins):
  *  1. an exact user override (may carry `currency`);
  *  2. a curated Toman entry for this host + model;
@@ -205,11 +218,11 @@ function usdPriceForModel(id: string): ModelPrice | null {
  * A Toman-billed provider with no Toman data resolves to null - never a USD
  * list price dressed up as Toman.
  */
-export function priceForModel(
+export function resolvePrice(
     model: string,
     overrides?: Record<string, PriceOverride> | null,
     lookup?: PriceLookup | null,
-): ModelPrice | null {
+): ResolvedPrice | null {
     const id = model.trim().toLowerCase();
     if (!id) return null;
 
@@ -217,7 +230,7 @@ export function priceForModel(
         for (const [key, value] of Object.entries(overrides)) {
             if (key.trim().toLowerCase() === id) {
                 const exact = sanitizeOverride(value);
-                if (exact) return exact;
+                if (exact) return { price: exact, source: 'override' };
             }
         }
     }
@@ -225,7 +238,7 @@ export function priceForModel(
     const host = (lookup?.host ?? '').trim().toLowerCase();
     if (host) {
         for (const [hostRe, modelRe, price] of IRANIAN_PRICE_TABLE) {
-            if (hostRe.test(host) && modelRe.test(id)) return price;
+            if (hostRe.test(host) && modelRe.test(id)) return { price, source: 'toman-table' };
         }
     }
 
@@ -237,9 +250,9 @@ export function priceForModel(
     if (lookup?.iranian) {
         const usd = usdPriceForModel(id);
         if (usd) {
-            if (gatewayRateValue) return applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent);
+            if (gatewayRateValue) return { price: applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent), source: 'gateway' };
             const fallback = Number(lookup.fallbackRate);
-            if (Number.isFinite(fallback) && fallback > 0) return applyGatewayRate(usd, fallback);
+            if (Number.isFinite(fallback) && fallback > 0) return { price: applyGatewayRate(usd, fallback), source: 'gateway' };
         }
         return null;
     }
@@ -248,11 +261,21 @@ export function priceForModel(
     // gateway: bill it in Toman too.
     if (gatewayRateValue) {
         const usd = usdPriceForModel(id);
-        if (usd) return applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent);
+        if (usd) return { price: applyGatewayRate(usd, gatewayRateValue.tomanPerUsd, gatewayRateValue.markupPercent), source: 'gateway' };
         return null;
     }
 
-    return usdPriceForModel(id);
+    const usd = usdPriceForModel(id);
+    return usd ? { price: usd, source: 'usd-table' } : null;
+}
+
+/** The effective rate for a model, without its source. */
+export function priceForModel(
+    model: string,
+    overrides?: Record<string, PriceOverride> | null,
+    lookup?: PriceLookup | null,
+): ModelPrice | null {
+    return resolvePrice(model, overrides, lookup)?.price ?? null;
 }
 
 /**

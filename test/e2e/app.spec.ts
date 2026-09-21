@@ -54,6 +54,32 @@ test('showWelcome renders the welcome screen', async ({ page }) => {
     await expect(page.locator('.welcome')).toBeVisible();
 });
 
+test('the composer cost pill opens the usage page and goes back to chat', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    // No pill until the host reports a cost.
+    await expect(page.locator('.session-cost')).toHaveCount(0);
+    await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
+    const pill = page.locator('.session-cost');
+    await expect(pill).toBeVisible();
+    await pill.click();
+    await expect(page.locator('.settings-nav-row')).toHaveCount(0);
+    // The usage page asks the host for its state and renders it.
+    const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(asked).toContainEqual({ type: 'usageGetState' });
+    await hostMessage(page, {
+        type: 'usageState',
+        providers: [{ host: 'openode.ai', label: 'OpenCode Go', iranian: false, input: 300, output: 30, cached: 0, USD: 0.0068, IRT: 0 }],
+        rates: [],
+        history: [],
+        allTime: { input: 300, output: 30, cached: 0, USD: 0.0068, IRT: 0 },
+    });
+    await expect(page.locator('.settings-section-head', { hasText: 'روند هزینه' })).toBeVisible();
+    // Back returns to the chat composer, not to Settings.
+    await page.getByLabel('بازگشت').click();
+    await expect(page.locator('.composer-input')).toBeVisible();
+});
+
 test('locale message flips direction rtl -> ltr', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('.app')).toHaveAttribute('dir', 'rtl');
@@ -142,12 +168,12 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
 
-    // Settings → Usage & pricing
+    // Settings → Usage
     await page.getByTitle('تنظیمات').first().click();
-    await page.locator('.settings-nav-row', { hasText: 'مصرف و قیمت گذاری' }).click();
+    await page.locator('.settings-nav-row', { hasText: 'مصرف' }).click();
 
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
-    expect(asked).toContainEqual({ type: 'pricingGetState' });
+    expect(asked).toContainEqual({ type: 'usageGetState' });
 
     // Two calendar months so the stepper has somewhere to go. July mixes both
     // currencies; August is Toman-only (the currency-toggle edge case).
@@ -160,16 +186,22 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
         { day: '2026-08-05', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 300, output: 30, cached: 0, USD: 0, IRT: 9000 }] },
     ];
     await hostMessage(page, {
-        type: 'pricingState',
+        type: 'usageState',
         providers: [
             { host: 'a.ir', label: 'Avalai', iranian: true, input: 650, output: 65, cached: 0, USD: 6.5, IRT: 14000 },
             { host: 'b.ir', label: 'Metis', iranian: true, input: 400, output: 40, cached: 12, USD: 0, IRT: 95000 },
         ],
-        models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
+        rates: [
+            // An override is host-independent (host ''); the others are the
+            // rate actually resolved for the host the model ran on.
+            { id: 'gpt-4o', host: '', input: 1, output: 2, cachedInput: null, currency: 'IRT', source: 'override', USD: 0, IRT: 14000 },
+            { id: 'glm-5.3', host: 'a.ir', input: 0.15, output: 0.5, cachedInput: 0.03, currency: 'USD', source: 'builtin', USD: 0.5, IRT: 0 },
+            { id: 'glm-5.3', host: 'b.ir', input: 0.3, output: 1, cachedInput: 0.03, currency: 'USD', source: 'gateway', USD: 1.2, IRT: 0 },
+            { id: 'mystery-local', host: 'a.ir', input: 0, output: 0, cachedInput: null, currency: 'USD', source: 'unknown', USD: 0, IRT: 0 },
+        ],
         history,
         allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 109000 },
     });
-
     // Latest month (August) is Toman-only: bars render, no currency toggle.
     await expect(page.locator('.cost-col')).toHaveCount(31);
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
@@ -184,13 +216,22 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.getByLabel('ماه قبل')).toBeDisabled();
     await expect(page.locator('.cost-currencies')).toBeVisible();
 
-    // Hovering a day WITH usage shows that day's per-model breakdown. The axis
-    // is the LOCALE month (Jalali here), so pick the first non-empty column by
-    // its label rather than assuming a Gregorian day index.
-    await expect(page.locator('.cost-detail-hint')).toBeVisible();
+    // Hovering a day WITH usage shows that day's total in the detail line.
+    // August has a single model, so no per-model breakdown repeats the total;
+    // the axis is the LOCALE month (Jalali here), so pick the first non-empty
+    // column by its label rather than assuming a Gregorian day index.
     await page.locator('.cost-col:not([aria-label$="—"])').first().hover();
-    await expect(page.locator('.cost-detail')).toContainText('gpt-4o');
-    await expect(page.locator('.cost-detail-hint')).toHaveCount(0);
+    await expect(page.locator('.cost-detail')).toContainText('تیر');
+    // The detail line must never wrap: a hover cannot change the card's height
+    // and shove every section below it.
+    const chartHeightHovered = (await page.locator('.settings-card').first().boundingBox())!.height;
+    const providersTopHovered = (await page.locator('.settings-card').nth(1).boundingBox())!.y;
+    await page.mouse.move(5, 5);
+    await expect(page.locator('.cost-detail')).toBeEmpty();
+    const chartHeightIdle = (await page.locator('.settings-card').first().boundingBox())!.height;
+    const providersTopIdle = (await page.locator('.settings-card').nth(1).boundingBox())!.y;
+    expect(Math.round(chartHeightHovered)).toBe(Math.round(chartHeightIdle));
+    expect(Math.round(providersTopHovered)).toBe(Math.round(providersTopIdle));
 
     // Manually pick USD here, then step to the Toman-only month: the choice
     // must NOT persist as an empty chart (the toggle is hidden there).
@@ -201,14 +242,18 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-col:not([aria-label$="—"])')).toHaveCount(1);
     await expect(page.locator('.cost-axis')).toContainText('هزار');
 
-    // Model filter narrows the legend to the selected model.
+    // Model filter (our own dropdown, not a native select) narrows the legend
+    // to the selected model.
+    const modelFilter = page.locator('.cost-filters .dropdown').first();
     await page.getByLabel('ماه قبل').click();
-    await page.getByLabel('همه مدل ها').selectOption('glm-5.3');
+    await modelFilter.locator('.dropdown-trigger').click();
+    await modelFilter.locator('.dropdown-option', { hasText: 'glm-5.3' }).click();
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
 
     // Week mode: a 7-day axis with a range label, stepping by week.
-    await page.getByLabel('همه مدل ها').selectOption('all');
+    await modelFilter.locator('.dropdown-trigger').click();
+    await modelFilter.locator('.dropdown-option', { hasText: 'همه مدل ها' }).click();
     await page.locator('.cost-granularity .usage-range', { hasText: 'هفته' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(7);
     await expect(page.locator('.cost-granularity .usage-range.active')).toContainText('هفته');
@@ -224,33 +269,113 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await page.locator('.cost-granularity .usage-range', { hasText: 'ماه' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(31);
 
-    // Provider usage list: both providers, with the Iranian badge and a cost.
-    await expect(page.locator('.prov-row')).toHaveCount(2);
-    await expect(page.locator('.prov-row').first()).toContainText('Avalai');
-    await expect(page.locator('.prov-row .pricing-badge')).toHaveCount(2);
-    await expect(page.locator('.prov-row').nth(1)).toContainText('تومان');
+    // Provider usage: one stat block per provider, with the Iranian badge, its
+    // cost, and the input/output/cached split under a composition bar.
+    const providerRows = page.locator('.prov-row');
+    await expect(providerRows).toHaveCount(2);
+    await expect(providerRows.first()).toContainText('Avalai');
+    await expect(providerRows.locator('.pricing-badge')).toHaveCount(2);
+    await expect(providerRows.nth(1)).toContainText('تومان');
+    await expect(providerRows.first().locator('.prov-bar > span')).toHaveCount(2);
+    // Metis has cached input too, so its bar carries the third segment.
+    await expect(providerRows.nth(1).locator('.prov-bar > span')).toHaveCount(3);
     await expect(page.locator('.usage-alltime')).toBeVisible();
 
-    await expect(page.locator('.pricing-row')).toContainText('gpt-4o');
-    await expect(page.locator('.mcp-hint.foot')).toBeVisible();
+    // Rate sheet: the effective rate per model with its origin, edited inline.
+    const rateRows = page.locator('.rate-row');
+    await expect(rateRows).toHaveCount(4);
+    const overrideRow = rateRows.filter({ hasText: 'gpt-4o' });
+    await expect(overrideRow).toContainText('نرخ شما');
+    await expect(overrideRow.locator('.rate-values')).toContainText('1');
+    // Like a provider row, the money it has cost sits at the row's end.
+    await expect(overrideRow.locator('.usage-cost')).toContainText('تومان');
+    // A model with no resolvable rate is flagged and points at the fix.
+    const unknownRow = rateRows.filter({ hasText: 'mystery-local' });
+    await expect(unknownRow).toContainText('نامعلوم');
+    await expect(unknownRow.locator('.rate-unknown')).toBeVisible();
+    // The same model can carry a different rate per provider, so the host is
+    // shown exactly when it ran on more than one.
+    const glmRows = rateRows.filter({ hasText: 'glm-5.3' });
+    await expect(glmRows).toHaveCount(2);
+    await expect(glmRows.nth(0)).toContainText('a.ir');
+    await expect(glmRows.nth(1)).toContainText('b.ir');
+    await expect(glmRows.nth(1)).toContainText('نرخ گیت وی');
 
-    // The Add form requires BOTH rates (a blank field must not become 0).
-    const add = page.locator('.pricing-add .settings-primary-action');
-    await expect(add).toBeDisabled();
-    await page.locator('.pricing-add input[type="text"]').fill('my-model');
-    await page.locator('.pricing-add input[type="number"]').first().fill('1');
-    await expect(add).toBeDisabled();
-    await page.locator('.pricing-add input[type="number"]').nth(1).fill('2');
-    await add.click();
+    // Editing opens a panel anchored to the row (not an inline expansion), and
+    // "use the built-in rate" only exists for a model the user overrode.
+    const builtinRow = glmRows.nth(0);
+    await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
+    await builtinRow.locator('.icon-btn').click();
+    await expect(builtinRow.locator('.rate-pop')).toBeVisible();
+    await expect(builtinRow.locator('.rate-edit-grid')).toBeVisible();
+    await expect(builtinRow.locator('.settings-ghost-action', { hasText: 'بازگشت' })).toHaveCount(0);
+    // Escape closes it without saving.
+    await page.keyboard.press('Escape');
+    await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
+    await builtinRow.locator('.icon-btn').click();
+    await builtinRow.locator('.num-field input').first().fill('0.2');
+    await builtinRow.locator('.settings-primary-action').click();
+    await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(sent).toContainEqual({
-        type: 'pricingSaveModel',
+        type: 'usageSaveModel',
+        id: 'glm-5.3',
+        input: 0.2,
+        output: 0.5,
+        cachedInput: 0.03,
+        currency: 'USD',
+    });
+    // An override row offers the way back to the built-in table.
+    await overrideRow.locator('.icon-btn').click();
+    await expect(overrideRow.locator('.settings-ghost-action', { hasText: 'بازگشت' })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // An unresolved rate has nothing to prefill: editing it starts empty, so
+    // saving a row of zeros takes a deliberate act.
+    await unknownRow.locator('.icon-btn').click();
+    await expect(unknownRow.locator('.num-field input').first()).toHaveValue('');
+    await expect(unknownRow.locator('.settings-primary-action')).toBeDisabled();
+    await page.keyboard.press('Escape');
+
+    await expect(page.locator('.mcp-hint.foot')).toBeVisible();
+
+    // The add form is collapsed until asked for, and requires BOTH rates
+    // (a blank field must not become 0).
+    await expect(page.locator('.pricing-add')).toHaveCount(0);
+    await page.locator('.rates-add-toggle').click();
+    const add = page.locator('.pricing-add .settings-primary-action');
+    const rateInput = page.locator('.pricing-add .num-field input');
+    await expect(add).toBeDisabled();
+    await page.locator('.pricing-add .pricing-add-id input').fill('my-model');
+    await rateInput.first().fill('1');
+    // The drawn steppers move the value (the native spinners cannot be themed).
+    await page.locator('.pricing-add .num-step').first().click();
+    await expect(rateInput.first()).toHaveValue('2');
+    await page.locator('.pricing-add .num-step').nth(1).click();
+    await expect(rateInput.first()).toHaveValue('1');
+    await expect(add).toBeDisabled();
+    await rateInput.nth(1).fill('2');
+    await add.click();
+    const sentAdd = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(sentAdd).toContainEqual({
+        type: 'usageSaveModel',
         id: 'my-model',
         input: 1,
         output: 2,
         cachedInput: null,
         currency: 'USD',
     });
+
+    // A cramped card must never clip the list: it flips and caps to fit (the
+    // card hides its overflow, so an uncapped list gets cut in half).
+    await page.setViewportSize({ width: 420, height: 320 });
+    await page.locator('.cost-filters .dropdown').first().locator('.dropdown-trigger').click();
+    const listBox = await page.locator('.dropdown-list').boundingBox();
+    const chartCardBox = await page.locator('.settings-card').first().boundingBox();
+    expect(listBox!.y).toBeGreaterThanOrEqual(chartCardBox!.y - 1);
+    expect(listBox!.y + listBox!.height).toBeLessThanOrEqual(chartCardBox!.y + chartCardBox!.height + 1);
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 420, height: 900 });
 
     // RTL sidebar layout must not overflow horizontally.
     const overflow = await page.evaluate(() => {

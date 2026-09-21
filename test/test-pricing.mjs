@@ -6,7 +6,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { priceForModel, costForUsage } = require('../out/pricing.js');
+const { priceForModel, resolvePrice, costForUsage } = require('../out/pricing.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -115,6 +115,27 @@ const irtCost = costForUsage(
 );
 check('cost uses the price currency', irtCost.currency, 'IRT');
 near('cost amount in IRT', irtCost.amount, 1000, 1e-9);
+
+// --- Rate sources (the Usage page labels every effective rate) ---
+check('source: curated USD table', resolvePrice('claude-sonnet-5')?.source, 'usd-table');
+check('source: user override', resolvePrice('claude-sonnet-5', { 'claude-sonnet-5': { input: 1, output: 2 } })?.source, 'override');
+check(
+    'source: gateway conversion',
+    resolvePrice('claude-sonnet-5', null, { host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100 } })?.source,
+    'gateway',
+);
+check(
+    'source: fallback rate is still a gateway conversion',
+    resolvePrice('claude-sonnet-5', null, { host: 'x.ir', iranian: true, fallbackRate: 50 })?.source,
+    'gateway',
+);
+check(
+    'source: unknown model resolves to nothing',
+    resolvePrice('some-local-model'),
+    null,
+);
+// priceForModel stays the thin wrapper it always was.
+check('priceForModel matches resolvePrice', priceForModel('claude-sonnet-5')?.input, resolvePrice('claude-sonnet-5')?.price.input);
 
 console.log(failed === 0 ? '\npricing: all tests passed' : `\npricing: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

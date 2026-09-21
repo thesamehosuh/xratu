@@ -214,7 +214,7 @@ const fa = {
     copiedMsg: 'کپی شد',
     tokensTitle: 'مصرف توکن این پاسخ',
     costTitle: 'هزینه تخمینی این پاسخ',
-    sessionCostTitle: 'هزینه تخمینی این گفتگو',
+    sessionCostTitle: 'هزینه تخمینی این گفتگو؛ برای دیدن مصرف کلیک کنید',
     retrying: 'در حال تلاش دوباره',
 
     // Approval card
@@ -246,22 +246,29 @@ const fa = {
 
     // Settings page
     settingsConnections: 'اتصالات',
-    settingsConnectionsDesc: 'مدیریت کلید API و سرور های MCP',
     settingsCredentials: 'کلید های API',
     settingsCredentialsDesc: 'کلید های ذخیره شده و سرویس دهنده ها',
     capTitle: 'سرور ها و مهارت ها',
     settingsCapabilitiesDesc: 'سرور های MCP، فهرست افزوده ها و مهارت های ایجنت',
-    settingsPricing: 'مصرف و قیمت گذاری',
-    settingsPricingDesc: 'مصرف این گفتگو و قیمت مدل ها',
+    settingsUsage: 'مصرف',
+    settingsUsageDesc: 'مصرف و قیمت مدل ها',
 
-    // Pricing / usage page
-    pricingTitle: 'مصرف و قیمت گذاری',
+    // Usage page
+    usagePageTitle: 'مصرف',
     pricingDesc: 'این صفحه مصرف همین گفتگو و قیمت مدل هاست. هیچ نرخی خودکار حدس زده نمیشود؛ اگر عددی با صورتحساب ارائه دهنده شما نمیخواند، همان مدل را با قیمت درست بازنویسی کنید.',
     pricingIranianBadge: 'ایرانی',
-    pricingRemove: 'حذف',
-    pricingModelsTitle: 'قیمت هر مدل',
-    pricingModelsDesc: 'قیمت واقعی مدل هایی که استفاده میکنید. بر جدول قیمت داخلی اولویت دارد.',
-    pricingEmptyModels: 'هنوز قیمتی بازنویسی نشده.',
+    ratesTitle: 'نرخ مدل ها',
+    ratesDesc: 'نرخ هزینه مدل های هوش مصنوعی بر حسب هر میلیون توکن',
+    ratesEmpty: 'هنوز مصرفی ثبت نشده. بعد از اولین اجرا، نرخ مدل ها اینجا می آید.',
+    rateSourceOverride: 'نرخ شما',
+    rateSourceGateway: 'نرخ گیت وی',
+    rateSourceBuiltin: 'جدول داخلی',
+    rateSourceUnknown: 'نامعلوم',
+    ratesUnknownHint: 'برای این مدل نرخی پیدا نشد؛ با ویرایش، نرخ درست را وارد کنید.',
+    ratesEdit: 'ویرایش نرخ',
+    ratesSave: 'ذخیره',
+    ratesUseBuiltin: 'بازگشت به نرخ داخلی',
+    ratesAddToggle: 'تعیین نرخ برای مدل دیگر',
     pricingModelId: 'شناسه مدل',
     pricingModelInput: 'ورودی',
     pricingModelOutput: 'خروجی',
@@ -270,6 +277,8 @@ const fa = {
     pricingCurrencyUsd: 'دلار (هر یک میلیون توکن)',
     pricingCurrencyIrt: 'تومان (هر یک میلیون توکن)',
     pricingAddModel: 'افزودن',
+    pricingStepUp: 'افزایش',
+    pricingStepDown: 'کاهش',
 
     // Usage / cost page
     usageInput: 'ورودی',
@@ -280,7 +289,7 @@ const fa = {
     usageAllTime: 'از ابتدا',
     usageTokens: 'توکن',
 
-    costChartTitle: 'هزینه',
+    costChartTitle: 'روند هزینه',
     costChartDesc: 'هزینه مصرف، به تفکیک مدل.',
     costPrevMonth: 'ماه قبل',
     costNextMonth: 'ماه بعد',
@@ -295,7 +304,6 @@ const fa = {
     costCurrencyIrt: 'تومان',
     costNoData: 'در این ماه هزینه ای ثبت نشده.',
     costChartAria: 'نمودار هزینه روزانه به تفکیک مدل',
-    costHoverHint: 'نشانگر را روی ستون ها ببرید تا تفکیک آن روز را ببینید.',
     providersTitle: 'ارائه دهنده ها',
     providersDesc: 'مصرف از ابتدا، به تفکیک ارائه دهنده.',
 
@@ -711,7 +719,7 @@ const en: Record<keyof typeof fa, string> = {
     copiedMsg: 'Copied',
     tokensTitle: 'Token usage for this answer',
     costTitle: 'Estimated cost of this answer',
-    sessionCostTitle: 'Estimated cost of this conversation',
+    sessionCostTitle: 'Estimated cost of this conversation - open the usage page',
     retrying: 'Retrying',
 
     approvalHead: 'Tool execution request',
@@ -741,22 +749,29 @@ const en: Record<keyof typeof fa, string> = {
 
     // Settings page
     settingsConnections: 'Connections',
-    settingsConnectionsDesc: 'Manage API keys and MCP servers',
     settingsCredentials: 'API keys',
     settingsCredentialsDesc: 'Saved keys and providers',
     capTitle: 'Servers & Skills',
     settingsCapabilitiesDesc: 'MCP servers, the add-from-registry list, and agent skills',
-    settingsPricing: 'Usage & pricing',
-    settingsPricingDesc: "This conversation's usage and model prices",
+    settingsUsage: 'Usage',
+    settingsUsageDesc: 'Usage and model prices',
 
-    // Pricing / usage page
-    pricingTitle: 'Usage & pricing',
+    // Usage page
+    usagePageTitle: 'Usage',
     pricingDesc: 'This page shows this conversation\u2019s usage and the price of each model. No rate is ever guessed \u2014 if a number disagrees with your provider\u2019s bill, override that model with the real price.',
     pricingIranianBadge: 'Iranian',
-    pricingRemove: 'Remove',
-    pricingModelsTitle: 'Per-model prices',
-    pricingModelsDesc: 'The real price of the models you use. Wins over the built-in price table.',
-    pricingEmptyModels: 'No prices overridden yet.',
+    ratesTitle: 'Model rates',
+    ratesDesc: 'AI model rates, per million tokens.',
+    ratesEmpty: 'No usage yet. Rates appear here after your first run.',
+    rateSourceOverride: 'your rate',
+    rateSourceGateway: 'gateway rate',
+    rateSourceBuiltin: 'built-in',
+    rateSourceUnknown: 'unknown',
+    ratesUnknownHint: 'No rate found for this model - edit it to set the real one.',
+    ratesEdit: 'Edit rate',
+    ratesSave: 'Save',
+    ratesUseBuiltin: 'Use the built-in rate',
+    ratesAddToggle: 'Set a rate for another model',
     pricingModelId: 'Model id',
     pricingModelInput: 'Input',
     pricingModelOutput: 'Output',
@@ -765,6 +780,8 @@ const en: Record<keyof typeof fa, string> = {
     pricingCurrencyUsd: 'USD (per 1M tokens)',
     pricingCurrencyIrt: 'Toman (per 1M tokens)',
     pricingAddModel: 'Add',
+    pricingStepUp: 'Increase',
+    pricingStepDown: 'Decrease',
 
     // Usage / cost page
     usageInput: 'Input',
@@ -775,7 +792,7 @@ const en: Record<keyof typeof fa, string> = {
     usageAllTime: 'All time',
     usageTokens: 'tokens',
 
-    costChartTitle: 'Cost',
+    costChartTitle: 'Cost over time',
     costChartDesc: 'Usage costs broken down by model.',
     costPrevMonth: 'Previous month',
     costNextMonth: 'Next month',
@@ -790,7 +807,6 @@ const en: Record<keyof typeof fa, string> = {
     costCurrencyIrt: 'Toman',
     costNoData: 'No cost recorded in this month.',
     costChartAria: 'Daily cost by model',
-    costHoverHint: 'Hover a bar to see that day\u2019s breakdown.',
     providersTitle: 'Providers',
     providersDesc: 'All-time usage per provider.',
 
