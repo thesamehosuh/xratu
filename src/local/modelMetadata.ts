@@ -95,19 +95,25 @@ function normalizeEfforts(value: unknown): ThinkingLevel[] | undefined {
  * Pull the model's effort variants from any provider shape. OpenRouter nests
  * them under `reasoning.supported_efforts`; some gateways use a flat field.
  * An explicit `null` means the gateway accepts every effort, so offer them all
- * (minus `none`, which the picker's Default already implies). The property must
- * be probed with `in` - a `??` chain would treat the meaningful null as absent.
+ * (minus `none`, which the picker's Default already implies). Each property is
+ * probed with `in` - a `??` chain would treat the meaningful null as absent and
+ * fall through to the next key.
  */
 function pickEfforts(m: any): ThinkingLevel[] | undefined {
-    const reasoning = m?.reasoning;
+    if (!m || typeof m !== 'object') return undefined;
+    const reasoning = m.reasoning;
     if (reasoning && typeof reasoning === 'object' && 'supported_efforts' in reasoning) {
         if (reasoning.supported_efforts === null) return [...REASONING_EFFORTS];
         const normalized = normalizeEfforts(reasoning.supported_efforts);
         if (normalized) return normalized;
     }
-    const raw = m?.reasoning_efforts ?? m?.supported_efforts ?? m?.reasoningLevels;
-    if (raw === null) return [...REASONING_EFFORTS];
-    return normalizeEfforts(raw);
+    for (const key of ['reasoning_efforts', 'supported_efforts', 'reasoningLevels'] as const) {
+        if (!(key in m)) continue;
+        if (m[key] === null) return [...REASONING_EFFORTS];
+        const normalized = normalizeEfforts(m[key]);
+        if (normalized) return normalized;
+    }
+    return undefined;
 }
 
 // ---------------------------------------------------------------------------

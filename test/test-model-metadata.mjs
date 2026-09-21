@@ -79,6 +79,13 @@ const orAll = parseModelList({ data: [{ id: 'a/c', reasoning: { supported_effort
 check('openrouter: null efforts -> max offered', orAll[0].reasoningLevels.includes('max'), true);
 check('openrouter: null efforts excludes none', orAll[0].reasoningLevels.includes('none'), false);
 
+// A FLAT effort field with an explicit null must not be mistaken for absent
+// (a `??` chain would skip it and lose the "all efforts" signal).
+const flatNull = parseModelList({ data: [{ id: 'a/e', reasoning_efforts: null }] });
+check('openrouter: flat null efforts -> max offered', flatNull[0].reasoningLevels.includes('max'), true);
+const flatList = parseModelList({ data: [{ id: 'a/f', reasoningLevels: ['high', 'low'] }] });
+check('openrouter: flat effort list parsed', JSON.stringify(flatList[0].reasoningLevels), JSON.stringify(['high', 'low']));
+
 // A reasoning object without an effort list still marks capability, no levels.
 const orNoEfforts = parseModelList({ data: [{ id: 'a/d', reasoning: { mandatory: false } }] });
 check('openrouter: reasoning object without efforts -> capability', orNoEfforts[0].supportsReasoning, true);
