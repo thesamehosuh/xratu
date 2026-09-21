@@ -278,6 +278,79 @@ try {
         check('missing token totals default to 0', empty.totalInputTokens, 0);
         check('missing usageByHost defaults to {}', Object.keys(empty.usageByHost).length, 0);
     }
+
+    // 16. Model-ledger eviction: the display ledger keeps turns the model
+    // ledger dropped, and the offset (display turns - model turns) is derivable
+    // after a reload so rewind stays aligned.
+    {
+        const evicted = await store.create(ws);
+        const localHistory = [
+            { role: 'user', content: 'l3' },
+            { role: 'assistant', content: 'a3' },
+            { role: 'user', content: 'l4' },
+            { role: 'assistant', content: 'a4' },
+        ];
+        const uiHistory = [
+            { role: 'user', content: 'u1' },
+            { role: 'assistant', content: 'x1' },
+            { role: 'user', content: 'u2' },
+            { role: 'assistant', content: 'x2' },
+            { role: 'user', content: 'u3' },
+            { role: 'assistant', content: 'x3' },
+            { role: 'user', content: 'u4' },
+            { role: 'assistant', content: 'x4' },
+        ];
+        await store.save(evicted.id, {
+            workspace: ws, model: null, summary: null, localHistory, uiHistory,
+        });
+        const loaded = await store.load(evicted.id);
+        const uiTurns = loaded.uiHistory.filter((m) => m.role === 'user').length;
+        const localTurns = loaded.localHistory.filter((m) => m.role === 'user').length;
+        check('display ledger keeps every turn', uiTurns, 4);
+        check('model ledger keeps its own turns', localTurns, 2);
+        check('derived offset = display turns - model turns', uiTurns - localTurns, 2);
+        check('display tail is the newest turn', loaded.uiHistory[loaded.uiHistory.length - 2].content, 'u4');
+        check('model tail is the newest turn', loaded.localHistory[loaded.localHistory.length - 2].content, 'l4');
+    }
+
+    // 17. Turn-aligned trim: both ledgers are cut at the SAME user turn, not
+    // independently by row count (they have different rows-per-turn).
+    {
+        const many = await store.create(ws);
+        const { MAX_STORED_TURNS } = require('../out/local/historyBounds.js');
+        const total = MAX_STORED_TURNS + 10;
+        const localHistory = [];
+        const uiHistory = [];
+        for (let i = 0; i < total; i++) {
+            // The model ledger carries an extra tool row per turn.
+            localHistory.push({ role: 'user', content: `l${i}` }, { role: 'assistant', content: `a${i}` }, { role: 'tool', content: `t${i}` });
+            uiHistory.push({ role: 'user', content: `u${i}` }, { role: 'assistant', content: `x${i}` });
+        }
+        await store.save(many.id, { workspace: ws, model: null, summary: null, localHistory, uiHistory });
+        const loaded = await store.load(many.id);
+        const uiTurns = loaded.uiHistory.filter((m) => m.role === 'user').length;
+        const localTurns = loaded.localHistory.filter((m) => m.role === 'user').length;
+        check('display trim caps at MAX_STORED_TURNS', uiTurns, MAX_STORED_TURNS);
+        check('model trim lands on the same boundary', localTurns, MAX_STORED_TURNS);
+        check('both ledgers start at the same turn', loaded.uiHistory[0].content, `u${total - MAX_STORED_TURNS}`);
+        check('both ledgers start at the same turn (model)', loaded.localHistory[0].content, `l${total - MAX_STORED_TURNS}`);
+    }
+
+    // 18. A malformed snapshot whose model ledger has MORE turns than the
+    // display ledger is repaired to a consistent boundary on save.
+    {
+        const bad = await store.create(ws);
+        await store.save(bad.id, {
+            workspace: ws, model: null, summary: null,
+            localHistory: [{ role: 'user', content: 'l1' }, { role: 'user', content: 'l2' }, { role: 'user', content: 'l3' }],
+            uiHistory: [{ role: 'user', content: 'only' }],
+        });
+        const loaded = await store.load(bad.id);
+        const uiTurns = loaded.uiHistory.filter((m) => m.role === 'user').length;
+        const localTurns = loaded.localHistory.filter((m) => m.role === 'user').length;
+        check('model ledger repaired to the display boundary', localTurns, uiTurns);
+        check('derived offset is zero when aligned', uiTurns - localTurns, 0);
+    }
 } finally {
     rmSync(root, { recursive: true, force: true });
 }

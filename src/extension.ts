@@ -44,6 +44,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
+import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { MCP_REGISTRY } from './mcpRegistry';
@@ -749,6 +750,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }> = {};
     /** Local-mode conversation history (OpenAI-format messages). */
     private _localHistory: Array<{ role: string; content?: string; tool_calls?: any[]; tool_call_id?: string }> = [];
+    /** User turns evicted from the FRONT of `_localHistory` to bound memory.
+     *  The display ledger (`_history`) keeps every turn, so a displayed
+     *  userIndex maps to a model-ledger row by subtracting this offset. */
+    private _localEvictedUserTurns = 0;
     /** Steered user messages waiting to join the LIVE local run. Entries
      *  carry the PROCESSED payload (refs resolved, PDFs extracted, text
      *  attachments fenced into `text`); `carryAttachments` holds image-only
@@ -1188,8 +1193,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // being removed, or it can later close timeline items that are gone.
         this._approvalCloseItems = {};
         this._history = this._history.slice(0, targetIdx);
-        const localIdx = this._findLocalUserEntry(userIndex);
-        if (localIdx >= 0) this._localHistory = this._localHistory.slice(0, localIdx);
+        this._truncateLocalHistoryAt(userIndex);
         this._dropOrphanedTaskListEdit();
         this._view.webview.postMessage({ type: 'truncateFromUser', userIndex });
         await this._persistLocalSession();
@@ -1263,16 +1267,47 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return -1;
     }
 
-    /** Index of the userIndex-th user message in the local agent ledger, or -1. */
+    /** Index of the userIndex-th user message in the local agent ledger, or -1
+     *  when it is not present. Returns -2 when that turn's model context was
+     *  EVICTED (see `_localEvictedUserTurns`): the caller must reset the model
+     *  ledger instead of slicing by an ordinal that no longer lines up. */
     private _findLocalUserEntry(userIndex: number): number {
+        const localUserIndex = userIndex - this._localEvictedUserTurns;
+        if (localUserIndex < 0) return -2;
         let seen = -1;
         for (let i = 0; i < this._localHistory.length; i++) {
             if (this._localHistory[i].role === 'user') {
                 seen++;
-                if (seen === userIndex) return i;
+                if (seen === localUserIndex) return i;
             }
         }
         return -1;
+    }
+
+    /** Rewind the model ledger to just before the userIndex-th DISPLAYED turn.
+     *  When that turn's context was evicted, the ledger is reset and the
+     *  eviction offset is re-anchored to the new visible baseline (the display
+     *  ledger still shows those turns, but the model no longer has them). */
+    private _truncateLocalHistoryAt(userIndex: number): void {
+        const localIdx = this._findLocalUserEntry(userIndex);
+        if (localIdx === -2) {
+            this._localHistory = [];
+            this._localEvictedUserTurns = Math.max(0, userIndex);
+            return;
+        }
+        if (localIdx >= 0) this._localHistory = this._localHistory.slice(0, localIdx);
+    }
+
+    /** The model ledger is always a SUFFIX of the display turns (eviction only
+     *  drops its oldest turns), so the eviction offset is derivable from the
+     *  turn counts. Deriving it - rather than trusting a stored value - keeps
+     *  rewind aligned after a reload even for snapshots written by older
+     *  builds or hand-edited files. */
+    private _deriveEvictedUserTurns(): void {
+        this._localEvictedUserTurns = Math.max(
+            0,
+            countUserRows(this._history) - countUserRows(this._localHistory),
+        );
     }
 
     /** Shared rewind primitive behind message edit and response regenerate:
@@ -1344,10 +1379,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (targetIdx >= 0) {
             this._history = this._history.slice(0, targetIdx);
         }
-        const localIdx = this._findLocalUserEntry(userIndex);
-        if (localIdx >= 0) {
-            this._localHistory = this._localHistory.slice(0, localIdx);
-        }
+        this._truncateLocalHistoryAt(userIndex);
         this._dropOrphanedTaskListEdit();
         this._view.webview.postMessage({ type: 'truncateFromUser', userIndex });
         this._view.webview.postMessage({ type: 'restoreUser', value: text });
@@ -2289,6 +2321,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (sessionSummary) {
             parts.push("", "Conversation summary:", sessionSummary);
         }
+        if (this._localEvictedUserTurns > 0) {
+            // The model ledger dropped its oldest turns to bound memory; the
+            // display ledger still shows them. Say so (as prompt text, never as
+            // a synthetic history row - a user row would shift turn indexing).
+            parts.push(
+                "",
+                `Note: ${this._localEvictedUserTurns} older turn(s) were dropped from this session's context to bound memory. ` +
+                "If the user refers to earlier work you cannot see, say so and ask them to restate it.",
+            );
+        }
         return parts.join('\n');
     }
 
@@ -2315,6 +2357,30 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             })),
             tool_call_id: msg.tool_call_id,
         }));
+    }
+
+    /** Append to the model ledger with the in-memory content cap applied.
+     *  Every write to `_localHistory` goes through here so a huge tool result
+     *  (terminal output is capped at 200k chars, expansion at 120k) cannot sit
+     *  in memory at full size for the life of the session. */
+    private _pushLocalHistory(row: { role: string; content?: string; tool_calls?: any[]; tool_call_id?: string }): void {
+        this._localHistory.push({
+            ...row,
+            ...(typeof row.content === 'string' && row.content.length > IN_MEMORY_CONTENT_CAP
+                ? { content: clipHistoryContent(row.content) }
+                : {}),
+        });
+    }
+
+    /** Drop the oldest complete turns from the model ledger past the cap.
+     *  Only `_localHistory` is evicted - the display ledger stays complete, and
+     *  the offset is tracked so a displayed userIndex still resolves to the
+     *  right row (see `_findLocalUserEntry`). */
+    private _trimLocalHistory(): void {
+        const { rows, evicted } = evictOldestTurns(this._localHistory, MAX_IN_MEMORY_TURNS);
+        if (!evicted) return;
+        this._localHistory = rows;
+        this._localEvictedUserTurns += evicted;
     }
 
     // ---------------------------------------------------------------------------
@@ -2751,7 +2817,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             case 'toolResult':
                 this._flushLiveSegment();
                 this._localThinkingBlockEvent = null;
-                outcome.events.push({ type: 'tool_result', id: event.id, tool: event.tool, output: event.output });
+                outcome.events.push({
+                    type: 'tool_result',
+                    id: event.id,
+                    tool: event.tool,
+                    // Bound the retained copy: a single terminal/expansion
+                    // result can be 100k+ chars and this array is held for the
+                    // whole turn. The live postMessage below stays full so the
+                    // webview render is unchanged.
+                    output: clipHistoryContent(event.output),
+                });
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({
                     type: 'toolResult',
@@ -2788,7 +2863,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             case 'assistantMessage':
                 outcome.events.push({
                     type: 'assistant_message',
-                    content: event.text,
+                    content: clipHistoryContent(event.text),
                     tool_calls: event.toolCalls.map((call) => ({
                         id: call.id,
                         type: 'function',
@@ -3975,6 +4050,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._ephemeralSessionId = null;
         this._history = [];
         this._localHistory = [];
+        this._localEvictedUserTurns = 0;
         this._sessionSummary = null;
         this._sessionTitle = null;
         // A brand-new session starts its own spend counter.
@@ -4057,6 +4133,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._sessionId = snapshot.sessionId;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
+        this._deriveEvictedUserTurns();
         // Restore the session's cumulative spend (reset by _resetSessionLedgers
         // above) - switching sessions must not zero an existing total.
         this._sessionCost = {
@@ -4153,6 +4230,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
+            this._localEvictedUserTurns = 0;
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
@@ -4165,6 +4243,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
+            this._localEvictedUserTurns = 0;
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
@@ -4173,6 +4252,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
+        this._deriveEvictedUserTurns();
         this._sessionId = snapshot.sessionId;
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {
@@ -4208,21 +4288,34 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 content: pt.prompt,
                 ...(pt.attachments?.length ? { attachments: pt.attachments } : {}),
             });
+            // Steered user messages were real turns: mirror the success path so
+            // the display ledger keeps the SAME user-turn count as the model
+            // ledger. Without this a crash mid-run with a steer left the two
+            // ledgers one turn apart and rewind mapped the wrong row.
+            for (const event of pt.events ?? []) {
+                if (event.type === 'steer_user') {
+                    this._history.push({
+                        role: 'user',
+                        content: event.text,
+                        ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+                    });
+                }
+            }
             if (restoredEvents.length > 0) {
                 this._history.push({ role: 'assistant', events: restoredEvents, content: '' });
             }
-            this._localHistory.push({ role: 'user', content: pt.prompt });
+            this._pushLocalHistory({ role: 'user', content: pt.prompt });
             for (const event of pt.events ?? []) {
                 if (event.type === 'assistant_message') {
-                    this._localHistory.push({
+                    this._pushLocalHistory({
                         role: 'assistant',
                         content: event.content || '',
                         ...(event.tool_calls?.length ? { tool_calls: event.tool_calls } : {}),
                     });
                 } else if (event.type === 'tool_result') {
-                    this._localHistory.push({ role: 'tool', tool_call_id: event.id, content: event.output });
+                    this._pushLocalHistory({ role: 'tool', tool_call_id: event.id, content: event.output });
                 } else if (event.type === 'steer_user') {
-                    this._localHistory.push({ role: 'user', content: event.text });
+                    this._pushLocalHistory({ role: 'user', content: event.text });
                 }
             }
             const answered = new Set(
@@ -4231,11 +4324,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             for (const m of this._localHistory) {
                 for (const tc of m.tool_calls ?? []) {
                     if (!answered.has(tc.id)) {
-                        this._localHistory.push({ role: 'tool', tool_call_id: tc.id, content: '[interrupted by a crash]' });
+                        this._pushLocalHistory({ role: 'tool', tool_call_id: tc.id, content: '[interrupted by a crash]' });
                         answered.add(tc.id);
                     }
                 }
             }
+            // The fold above added rows to BOTH ledgers; re-derive so a legacy
+            // snapshot whose steer events had no display rows cannot leave the
+            // offset stale.
+            this._deriveEvictedUserTurns();
             await this._persistLocalSession().catch((e) => {
                 console.error('xratu: local session persist failed:', e);
             });
@@ -4258,6 +4355,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _persistLocalSession(): Promise<void> {
+        // Bound the model ledger BEFORE snapshotting: one choke point covers
+        // both turn commits and the 5s mid-run partial persist, and keeps the
+        // on-disk copy consistent with what is in memory.
+        this._trimLocalHistory();
         const epochAtEntry = this._sessionEpoch;
         if (!this._sessionId) {
             // First send with no open local session (fresh install, or the
@@ -4833,19 +4934,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // steerCarry turns re-enter with an ALREADY-ledgered user row
                     // (the carry loop below pushed it) - skip their own push.
                     if (!opts?.steerCarry) {
-                        this._localHistory.push({ role: 'user', content: prompt });
+                        this._pushLocalHistory({ role: 'user', content: prompt });
                     }
                     for (const event of outcome.events) {
                         if (event.type === 'assistant_message') {
-                            this._localHistory.push({
+                            this._pushLocalHistory({
                                 role: 'assistant',
                                 content: event.content || '',
                                 ...(event.tool_calls?.length ? { tool_calls: event.tool_calls } : {}),
                             });
                         } else if (event.type === 'tool_result') {
-                            this._localHistory.push({ role: 'tool', tool_call_id: event.id, content: event.output });
+                            this._pushLocalHistory({ role: 'tool', tool_call_id: event.id, content: event.output });
                         } else if (event.type === 'steer_user') {
-                            this._localHistory.push({ role: 'user', content: event.text });
+                            this._pushLocalHistory({ role: 'user', content: event.text });
                         }
                     }
                     outcome.events.push({ type: 'result', ...outcome.resultEvent });
@@ -4876,7 +4977,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // bubble when it steered.
                     while (this._localSteerQueue.length > 0 && epoch === this._sessionEpoch) {
                         const carry = this._localSteerQueue.shift()!;
-                        this._localHistory.push({ role: 'user', content: carry.text });
+                        this._pushLocalHistory({ role: 'user', content: carry.text });
                         this._history.push({
                             role: 'user',
                             content: carry.text,
@@ -4992,19 +5093,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     ): void {
         if (!steerCarry) {
             this._history.push({ role: 'user', content: prompt, cp: prePromptSha, attachments: attachmentMeta });
-            this._localHistory.push({ role: 'user', content: prompt });
+            this._pushLocalHistory({ role: 'user', content: prompt });
         }
         for (const event of outcome.events) {
             if (event.type === 'assistant_message') {
-                this._localHistory.push({
+                this._pushLocalHistory({
                     role: 'assistant',
                     content: event.content || '',
                     ...(event.tool_calls?.length ? { tool_calls: event.tool_calls } : {}),
                 });
             } else if (event.type === 'tool_result') {
-                this._localHistory.push({ role: 'tool', tool_call_id: event.id, content: event.output });
+                this._pushLocalHistory({ role: 'tool', tool_call_id: event.id, content: event.output });
             } else if (event.type === 'steer_user') {
-                this._localHistory.push({ role: 'user', content: event.text });
+                this._pushLocalHistory({ role: 'user', content: event.text });
                 this._history.push({
                     role: 'user',
                     content: event.text,
@@ -5051,7 +5152,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history.push({ role: 'assistant', events: displayEvents, content: '' });
         while (this._localSteerQueue.length > 0) {
             const carry = this._localSteerQueue.shift()!;
-            this._localHistory.push({ role: 'user', content: carry.text });
+            this._pushLocalHistory({ role: 'user', content: carry.text });
             this._history.push({
                 role: 'user',
                 content: carry.text,
@@ -5064,7 +5165,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         for (const m of this._localHistory) {
             for (const tc of m.tool_calls ?? []) {
                 if (!answeredLocal.has(tc.id)) {
-                    this._localHistory.push({ role: 'tool', tool_call_id: tc.id, content: toolPlaceholder });
+                    this._pushLocalHistory({ role: 'tool', tool_call_id: tc.id, content: toolPlaceholder });
                     answeredLocal.add(tc.id);
                 }
             }

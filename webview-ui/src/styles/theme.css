@@ -512,6 +512,29 @@ button {
     min-height: 100%;
 }
 
+/* Reveals the next older page of bubbles. The transcript stays complete in
+   state; only a trailing window is mounted, so this is how the reader walks
+   back through it. Logical properties keep it correct in RTL. */
+.show-earlier {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+    background: var(--xratu-input);
+    border: 1px solid var(--xratu-border);
+    border-radius: var(--xratu-radius-sm);
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.show-earlier:hover {
+    color: var(--vscode-foreground);
+    border-color: var(--xratu-accent);
+}
+
 /* Chat area wraps the scroller so floating controls can overlay it.
    Same shell tone as toolbar/composer - one continuous surface. */
 .chat-area {

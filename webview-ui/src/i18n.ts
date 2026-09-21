@@ -139,6 +139,8 @@ const fa = {
 
     // MessageList / empty state
     historyAria: 'تاریخچه گفتگو',
+    historyShowEarlier: 'پیام های قدیمی تر',
+    historyShowEarlierAria: 'نمایش پیام های قدیمی تر',
     emptyTitle: 'چطور میتونم کمک کنم؟',
     emptySub: 'هر چیزی که درباره این پروژه ذهنتو مشغول کرده بپرس، یا بگذار یکی از این ها شروع کنه',
     suggestExplore: 'یه تور از این کدبیس',
@@ -650,6 +652,8 @@ const en: Record<keyof typeof fa, string> = {
     attachRefOutside: 'Path "{name}" is outside the workspace.',
 
     historyAria: 'Chat history',
+    historyShowEarlier: 'Show earlier messages',
+    historyShowEarlierAria: 'Show earlier messages',
     emptyTitle: 'How can I help?',
     emptySub: 'Ask whatever\'s on your mind about this project, or let one of these kick things off',
     suggestExplore: 'Tour this codebase',

@@ -91,6 +91,9 @@ jobs:
       - name: Compaction tests
         run: npm run test:compaction
 
+      - name: History bounds tests
+        run: npm run test:history-bounds
+
       - name: Transient-network retry tests
         run: npm run test:network-retry
 

@@ -1,5 +1,5 @@
 import { forwardRef, type Ref } from 'react';
-import { Bug, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Unlink, Zap } from 'lucide-react';
+import { Bug, ChevronUp, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Unlink, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ChatMessage, ConnectionStatus } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
@@ -36,6 +36,11 @@ interface MessageListProps {
     /** Interactive view for the current update_task_list step (see
      *  MessageItem). Undefined when the session has no task list. */
     taskList?: TaskListView;
+    /** Index of the first message to MOUNT. Older messages stay in the array
+     *  (indices below are absolute) and are revealed by `onShowEarlier` - the
+     *  live transcript is complete, only the DOM window is bounded. */
+    firstVisible?: number;
+    onShowEarlier?: () => void;
 }
 
 // Chips show a short label; the click builds a full WORKFLOW PROMPT that the
@@ -50,17 +55,22 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; fileP
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, busy, conn, setupMode, onOpenCredentials, activeFile, taskList },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
     // bubbles (matches the host's history indexing) and last-assistant flag.
+    // Computed over the FULL array so indices stay absolute even when only a
+    // window is mounted.
     let userCount = 0;
     const userIndexOf = new Map<string, number>();
     for (const m of messages) {
         if (m.role === 'user') userIndexOf.set(m.id, userCount++);
     }
     const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
+    // Clamp so an out-of-range window still mounts the newest bubble (never a
+    // blank list) and never starts past the end.
+    const start = Math.max(0, Math.min(firstVisible, messages.length - 1));
 
     // Bubble direction follows the app locale. Computed here (not inside the
     // memoized MessageItem) so a language flip re-renders existing bubbles
@@ -129,7 +139,19 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     </div>
                 </div>
             )}
-            {messages.map((m, i) => (
+            {start > 0 && (
+                <button
+                    type="button"
+                    className="show-earlier"
+                    onClick={onShowEarlier}
+                    aria-label={t('historyShowEarlierAria')}
+                    title={t('historyShowEarlierAria')}
+                >
+                    <ChevronUp size={13} aria-hidden="true" />
+                    <span>{t('historyShowEarlier')}</span>
+                </button>
+            )}
+            {messages.slice(start).map((m, i) => (
                 <MessageItem
                     key={m.id}
                     message={m}
@@ -140,7 +162,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     userIndex={userIndexOf.get(m.id)}
                     isLastAssistant={m.id === lastAssistantId}
                     busy={busy}
-                    conn={i === messages.length - 1 ? conn : undefined}
+                    conn={start + i === messages.length - 1 ? conn : undefined}
                     taskList={taskList && taskList.stepId && m.steps.some((s) => s.id === taskList.stepId) ? taskList : undefined}
                     dir={dir}
                 />

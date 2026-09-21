@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ChevronDown, Link, ListChecks } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
@@ -48,6 +48,11 @@ function toAttachmentMeta(attachments: ComposerAttachment[]) {
             : undefined,
     }));
 }
+
+/** Trailing bubbles mounted by default. The live session keeps its full
+ *  transcript, so only a window is mounted - a long session must not grow the
+ *  DOM without limit. Older bubbles stay reachable via "show earlier". */
+const HISTORY_PAGE_SIZE = 40;
 
 export function App() {
     // 'boot' = waiting for the host's start-screen verdict (showWelcome /
@@ -325,6 +330,71 @@ export function App() {
             }, 800);
         }
     }, []);
+
+    // --- Paged message window -------------------------------------------------
+    // The transcript itself stays complete (see the host's model-ledger
+    // eviction); only the MOUNTED window is bounded. `visibleBudget` is the
+    // number of trailing bubbles rendered, so the newest message is always in
+    // the window and a scrolled-up reader keeps their anchor when a new turn
+    // appends (the budget grows by the delta).
+    const [visibleBudget, setVisibleBudget] = useState(HISTORY_PAGE_SIZE);
+    const firstVisible = Math.max(0, chat.messages.length - visibleBudget);
+    const pendingScrollAdjust = useRef<{ height: number; top: number } | null>(null);
+
+    // One layout effect owns both concerns: a session switch restarts at the
+    // tail, and a message appended WHILE the reader is scrolled up must not
+    // shift the window under them (grow the budget by the delta). Restores
+    // replay many bubbles while pinned to the bottom - those must not grow the
+    // window, or a long restored session would mount everything.
+    const sessionKey = currentSessionId ?? '';
+    const sessionKeyRef = useRef(sessionKey);
+    const prevMessageCount = useRef(chat.messages.length);
+    useLayoutEffect(() => {
+        const sessionChanged = sessionKeyRef.current !== sessionKey;
+        sessionKeyRef.current = sessionKey;
+        const prev = prevMessageCount.current;
+        prevMessageCount.current = chat.messages.length;
+        if (sessionChanged) {
+            atBottom.current = true;
+            setVisibleBudget(HISTORY_PAGE_SIZE);
+            return;
+        }
+        const delta = chat.messages.length - prev;
+        if (delta <= 0 || atBottom.current) return;
+        setVisibleBudget((budget) => {
+            // Grow by the delta whenever the append would otherwise push the
+            // window's top down (new length past the budget). That keeps
+            // firstVisible - and therefore the reader's anchor - exactly where
+            // it was, even when several messages land in one commit.
+            return prev + delta > budget ? budget + delta : budget;
+        });
+    }, [chat.messages.length, sessionKey]);
+
+    // Restore the reader's position after an earlier page is prepended: keep
+    // the same content under the viewport by offsetting scrollTop by the height
+    // the prepend added.
+    useLayoutEffect(() => {
+        const el = containerRef.current;
+        const adj = pendingScrollAdjust.current;
+        if (!el || !adj) return;
+        pendingScrollAdjust.current = null;
+        el.scrollTop = adj.top + (el.scrollHeight - adj.height);
+        // Keep the scroll bookkeeping in sync so onScroll's shrink detection
+        // does not read this programmatic jump as a user scroll-up.
+        lastScrollTop.current = el.scrollTop;
+        lastScrollHeight.current = el.scrollHeight;
+    }, [firstVisible]);
+
+    const showEarlier = useCallback(() => {
+        // No-op when nothing is hidden - otherwise a stale scroll adjustment
+        // would be applied to the NEXT window change.
+        if (chat.messages.length <= visibleBudget) return;
+        const el = containerRef.current;
+        if (el) {
+            pendingScrollAdjust.current = { height: el.scrollHeight, top: el.scrollTop };
+        }
+        setVisibleBudget((budget) => budget + HISTORY_PAGE_SIZE);
+    }, [chat.messages.length, visibleBudget]);
 
     // ESC always cancels a live run - not just when the composer has focus
     // (during a tool call or approval wait focus lives elsewhere). Inputs
@@ -910,6 +980,8 @@ export function App() {
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
+                    firstVisible={firstVisible}
+                    onShowEarlier={showEarlier}
                 />
                 {showJump && (
                     <button

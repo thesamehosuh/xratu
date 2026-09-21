@@ -16,6 +16,7 @@ const OUT_DIR = 'dist-tests';
 const suites = [
     { entry: 'webview-ui/test/state.test.ts', outfile: 'dist-tests/webview-test.cjs' },
     { entry: 'webview-ui/test/tasklist-render.test.tsx', outfile: 'dist-tests/tasklist-render-test.cjs', jsx: 'automatic' },
+    { entry: 'webview-ui/test/message-list-paging.test.tsx', outfile: 'dist-tests/message-list-paging-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/local-agent.test.ts', outfile: 'dist-tests/local-agent-test.cjs' },
     { entry: 'webview-ui/test/mention.test.ts', outfile: 'dist-tests/mention-test.cjs' },
     { entry: 'webview-ui/test/datetime.test.ts', outfile: 'dist-tests/datetime-test.cjs' },

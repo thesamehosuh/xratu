@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import { MAX_STORED_TURNS, clipHistoryContent, countUserRows, keepLastUserTurns } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
     role: string;
@@ -88,7 +89,6 @@ function transcriptMatches(uiHistory: unknown, needle: string): boolean {
 }
 
 const MAX_STORED_CONTENT = 20_000;
-const MAX_STORED_HISTORY = 120;
 const TITLE_MAX_LEN = 48;
 
 /** Windows transient rename failures: an AV scanner or the search indexer can
@@ -189,15 +189,42 @@ function normalizeUsageByHost(raw: unknown): Record<string, { input: number; out
 }
 
 function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot {
-    const localHistory = snapshot.localHistory.slice(-MAX_STORED_HISTORY).map((message) => ({
+    // Trim BOTH ledgers to the SAME turn boundary. They have different
+    // rows-per-turn (localHistory carries tool rows), so slicing each by a row
+    // count independently could cut them at different turns - and rewind maps a
+    // displayed userIndex to a row in both by counting user rows from the
+    // front. The model ledger is normally a SUFFIX of the display turns
+    // (in-memory eviction only drops its oldest turns), so the trim keeps the
+    // last N turns of each and the offset is derivable from the counts. A
+    // malformed ledger with MORE model turns than display turns (unreachable
+    // through the normal paths) is repaired to the display boundary here.
+    const localTurns = countUserRows(snapshot.localHistory);
+    const uiTurns = countUserRows(snapshot.uiHistory);
+    // Keep the last MAX_STORED_TURNS display turns, and the model turns that
+    // fall inside that same window.
+    const keepUi = Math.min(uiTurns, MAX_STORED_TURNS);
+    const keepLocal = Math.min(localTurns, keepUi);
+    // A ledger with no user turns is left untouched: `keepLastUserTurns(rows, 0)`
+    // would wipe assistant-only display rows (legacy/crash snapshots).
+    const trimRows = <T extends { role?: string }>(rows: readonly T[], turns: number): T[] =>
+        turns === 0 ? rows.slice() : keepLastUserTurns(rows, turns);
+    const localHistory = trimRows(snapshot.localHistory, keepLocal).map((message) => ({
         ...message,
         content: typeof message.content === 'string'
-            ? message.content.slice(-MAX_STORED_CONTENT)
+            ? clipHistoryContent(message.content, MAX_STORED_CONTENT)
             : message.content,
     }));
-    const uiHistory = snapshot.uiHistory.slice(-MAX_STORED_HISTORY).map((message: any) => ({
+    const uiHistory = trimRows(snapshot.uiHistory, keepUi).map((message: any) => ({
         ...message,
-        text: typeof message?.text === 'string' ? message.text.slice(-MAX_STORED_CONTENT) : message?.text,
+        // Display rows carry their text on `content` (host push shape) or
+        // `text` (legacy) - clip whichever is present so the on-disk policy
+        // matches the in-memory one.
+        ...(typeof message?.content === 'string'
+            ? { content: clipHistoryContent(message.content, MAX_STORED_CONTENT) }
+            : {}),
+        ...(typeof message?.text === 'string'
+            ? { text: clipHistoryContent(message.text, MAX_STORED_CONTENT) }
+            : {}),
     }));
     const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn) : null;
     return { ...snapshot, localHistory, uiHistory, pendingTurn };
@@ -205,25 +232,25 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot 
 
 function sanitizePendingTurn(pt: LocalPendingTurn): LocalPendingTurn {
     const events = Array.isArray(pt.events) ? pt.events.slice(-40).map((event: any) => {
-        if (event?.type === 'tool_result' && typeof event.output === 'string' && event.output.length > MAX_STORED_CONTENT) {
-            return { ...event, output: event.output.slice(-MAX_STORED_CONTENT) };
+        if (event?.type === 'tool_result' && typeof event.output === 'string') {
+            return { ...event, output: clipHistoryContent(event.output, MAX_STORED_CONTENT) };
         }
         if (event?.type === 'tool_call' && event.args && typeof event.args === 'object') {
             return {
                 ...event,
                 args: Object.fromEntries(
                     Object.entries(event.args).map(([k, v]) =>
-                        [k, typeof v === 'string' && v.length > MAX_STORED_CONTENT ? v.slice(-MAX_STORED_CONTENT) : v])
+                        [k, typeof v === 'string' ? clipHistoryContent(v, MAX_STORED_CONTENT) : v])
                 ),
             };
         }
         return event;
     }) : [];
     return {
-        prompt: pt.prompt.slice(-MAX_STORED_CONTENT),
+        prompt: clipHistoryContent(pt.prompt, MAX_STORED_CONTENT),
         events,
-        text: pt.text.slice(-MAX_STORED_CONTENT),
-        thinking: pt.thinking.slice(-MAX_STORED_CONTENT),
+        text: clipHistoryContent(pt.text, MAX_STORED_CONTENT),
+        thinking: clipHistoryContent(pt.thinking, MAX_STORED_CONTENT),
         attachments: Array.isArray(pt.attachments) ? pt.attachments : undefined,
     };
 }

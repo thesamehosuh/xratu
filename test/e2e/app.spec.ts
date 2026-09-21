@@ -99,6 +99,50 @@ test('locale flip re-renders EXISTING chat bubbles (memo boundary)', async ({ pa
     await expect(bubble).toHaveAttribute('dir', 'ltr');
 });
 
+test('long history pages: only the tail mounts, show-earlier reveals the rest', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 's1', title: null });
+    for (let i = 0; i < 50; i++) {
+        await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
+    }
+    const bubbles = page.locator('article.msg.user');
+    // Only the trailing page is mounted; the rest stays in state.
+    await expect(bubbles).toHaveCount(40);
+    await expect(page.locator('.show-earlier')).toBeVisible();
+    await expect(page.getByText('msg 0', { exact: true })).toHaveCount(0);
+    // Revealing an earlier page mounts the whole (short) transcript.
+    await page.locator('.show-earlier').click();
+    await expect(bubbles).toHaveCount(50);
+    await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
+});
+
+test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 's2', title: null });
+    for (let i = 0; i < 40; i++) {
+        await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
+    }
+    const bubbles = page.locator('article.msg.user');
+    await expect(bubbles).toHaveCount(40);
+    // Scroll to the top: the app's onScroll marks the reader as not-at-bottom.
+    await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
+    await page.waitForTimeout(50);
+    // Two messages in ONE task -> one React commit (delta=2). The window must
+    // GROW by the delta, not shift - the oldest bubble stays mounted and no
+    // control appears.
+    await page.evaluate(() => {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg x' } }));
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg y' } }));
+    });
+    await expect(bubbles).toHaveCount(42);
+    await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
+    await expect(page.locator('.show-earlier')).toHaveCount(0);
+});
+
 test('capabilities refresh spinner keeps spinning until EVERY echo arrives', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
