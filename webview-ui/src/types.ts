@@ -295,28 +295,44 @@ export type FromExtensionMessage =
     /** Response to pricingGetState / pricing* edits - the Pricing page's view. */
     | {
           type: 'pricingState';
-          /** Providers used in the CURRENT conversation, busiest first. */
+          /** All-time usage per provider, busiest first. */
           providers: ProviderUsageView[];
-          /** Current conversation's token ledger (input/output/cached). */
-          usage: { input: number; output: number; cached: number };
-          /** Current conversation's spend per currency, never converted. */
-          costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
           models: ModelPricingView[];
-          /** Machine-global daily buckets, oldest first, empty days included. */
-          history: DailyUsage[];
+          /** Sparse per-day / per-model / per-host cells (only days with use). */
+          history: LedgerDay[];
           /** Machine-global totals across every recorded day. */
           allTime: UsageTotals;
       };
 
-/** One day's totals in the usage chart. */
-export interface DailyUsage {
-    /** Local day, YYYY-MM-DD. */
-    day: string;
+/** All-time usage + cost for one provider, for the provider usage list. */
+export interface ProviderUsageView {
+    host: string;
+    label: string;
+    /** Known Iranian (Toman-billed) provider. */
+    iranian: boolean;
     input: number;
     output: number;
     cached: number;
     USD: number;
     IRT: number;
+}
+
+/** One (day, model, host) aggregation cell. */
+export interface LedgerCell {
+    model: string;
+    host: string;
+    input: number;
+    output: number;
+    cached: number;
+    USD: number;
+    IRT: number;
+}
+
+/** A day that saw usage. */
+export interface LedgerDay {
+    /** Local day, YYYY-MM-DD. */
+    day: string;
+    cells: LedgerCell[];
 }
 
 /** Token + per-currency cost totals. */
@@ -326,17 +342,6 @@ export interface UsageTotals {
     cached: number;
     USD: number;
     IRT: number;
-}
-
-/** One provider's session usage on the Pricing page. */
-export interface ProviderUsageView {
-    host: string;
-    label: string;
-    /** Known Iranian (Toman-billed) provider. */
-    iranian: boolean;
-    input: number;
-    output: number;
-    cached: number;
 }
 
 /** One per-model price override row on the Pricing page. */

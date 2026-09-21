@@ -38,17 +38,7 @@ export interface UsageEntry {
     currency: 'USD' | 'IRT' | null;
 }
 
-/** One local calendar day's totals (chart bucket). */
-export interface DailyUsage {
-    /** Local day, YYYY-MM-DD. */
-    day: string;
-    input: number;
-    output: number;
-    cached: number;
-    USD: number;
-    IRT: number;
-}
-
+/** Token + per-currency cost totals for a set of entries. */
 export interface UsageTotals {
     input: number;
     output: number;
@@ -155,36 +145,6 @@ export function entriesForSession(entries: readonly UsageEntry[], sessionId: str
 }
 
 /**
- * Daily buckets for the trailing `days` (oldest first, EMPTY DAYS INCLUDED so
- * the chart keeps a continuous axis).
- */
-export function aggregateByDay(
-    entries: readonly UsageEntry[],
-    days: number = USAGE_CHART_DAYS,
-    now: number = Date.now(),
-): DailyUsage[] {
-    const buckets = new Map<string, DailyUsage>();
-    const out: DailyUsage[] = [];
-    const today = new Date(now);
-    const count = Math.max(1, Math.floor(days));
-    for (let i = count - 1; i >= 0; i--) {
-        const key = dayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i).getTime());
-        const bucket: DailyUsage = { day: key, input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
-        buckets.set(key, bucket);
-        out.push(bucket);
-    }
-    for (const e of entries) {
-        const bucket = buckets.get(dayKey(e.ts));
-        if (!bucket) continue;
-        bucket.input += e.input;
-        bucket.output += e.output;
-        bucket.cached += e.cached;
-        if (e.amount != null && e.currency) bucket[e.currency] += e.amount;
-    }
-    return out;
-}
-
-/**
  * Re-resolve the cost of ledger entries (all, or just one model) after a price
  * change. Tokens are untouched - only `amount`/`currency` follow the new price.
  */
@@ -204,6 +164,90 @@ export function recomputeCosts(
         return { ...entry, amount, currency };
     });
     return { entries: next, changed };
+}
+
+/** One (day, model, host) aggregation cell for the cost chart. */
+export interface LedgerCell {
+    model: string;
+    host: string;
+    input: number;
+    output: number;
+    cached: number;
+    USD: number;
+    IRT: number;
+}
+
+/** A day with usage, sparse: only cells that actually saw traffic. */
+export interface LedgerDay {
+    /** Local day, YYYY-MM-DD. */
+    day: string;
+    cells: LedgerCell[];
+}
+
+/** All-time totals for one provider host (the provider usage list). */
+export interface HostTotals {
+    host: string;
+    input: number;
+    output: number;
+    cached: number;
+    USD: number;
+    IRT: number;
+}
+
+/**
+ * Sparse per-day / per-model / per-host aggregation for the trailing `days`.
+ * Sparse because the chart is filtered CLIENT-side (month, model, provider),
+ * so shipping only non-empty cells keeps the message small.
+ */
+export function aggregateByDayAndModel(
+    entries: readonly UsageEntry[],
+    days: number = USAGE_CHART_DAYS,
+    now: number = Date.now(),
+): LedgerDay[] {
+    // YYYY-MM-DD keys compare correctly as strings, so this is a plain cutoff.
+    const cutoff = dayKey(now - (Math.max(1, Math.floor(days)) - 1) * MS_PER_DAY);
+    const byDay = new Map<string, Map<string, LedgerCell>>();
+    for (const entry of entries) {
+        const day = dayKey(entry.ts);
+        if (day < cutoff) continue;
+        let cells = byDay.get(day);
+        if (!cells) {
+            cells = new Map();
+            byDay.set(day, cells);
+        }
+        // NUL cannot appear in a model id or host, so this key is collision-free.
+        const key = `${entry.model}\u0000${entry.host}`;
+        let cell = cells.get(key);
+        if (!cell) {
+            cell = { model: entry.model, host: entry.host, input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
+            cells.set(key, cell);
+        }
+        cell.input += entry.input;
+        cell.output += entry.output;
+        cell.cached += entry.cached;
+        if (entry.amount != null && entry.currency) cell[entry.currency] += entry.amount;
+    }
+    return [...byDay.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([day, cells]) => ({ day, cells: [...cells.values()] }));
+}
+
+/** All-time totals per provider host, busiest first. */
+export function totalsByHost(entries: readonly UsageEntry[]): HostTotals[] {
+    const byHost = new Map<string, HostTotals>();
+    for (const entry of entries) {
+        const host = entry.host || '';
+        let totals = byHost.get(host);
+        if (!totals) {
+            totals = { host, input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
+            byHost.set(host, totals);
+        }
+        totals.input += entry.input;
+        totals.output += entry.output;
+        totals.cached += entry.cached;
+        if (entry.amount != null && entry.currency) totals[entry.currency] += entry.amount;
+    }
+    return [...byHost.values()].sort((a, b) => (b.input + b.output) - (a.input + a.output));
 }
 
 /**

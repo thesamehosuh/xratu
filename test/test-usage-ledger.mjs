@@ -13,7 +13,7 @@ import { join } from 'path';
 const require = createRequire(import.meta.url);
 const {
     UsageLedgerStore,
-    aggregateByDay,
+    aggregateByDayAndModel,
     dayKey,
     entriesForSession,
     normalizeEntry,
@@ -22,6 +22,7 @@ const {
     recomputeCosts,
     serializeLedger,
     sumUsage,
+    totalsByHost,
     USAGE_MAX_ENTRIES,
 } = require('../out/local/usageLedger.js');
 
@@ -45,7 +46,7 @@ const entry = (over = {}) => ({
     ...over,
 });
 
-// --- dayKey / aggregateByDay -------------------------------------------------
+// --- dayKey / aggregateByDayAndModel ----------------------------------------
 const NOW = new Date(2026, 8, 21, 12, 0, 0).getTime(); // 2026-09-21 local noon
 check('dayKey is the LOCAL calendar day', dayKey(new Date(2026, 8, 21, 0, 30).getTime()), '2026-09-21');
 
@@ -53,21 +54,39 @@ check('dayKey is the LOCAL calendar day', dayKey(new Date(2026, 8, 21, 0, 30).ge
     const today = new Date(2026, 8, 21, 9, 0).getTime();
     const yesterday = new Date(2026, 8, 20, 9, 0).getTime();
     const longAgo = new Date(2026, 5, 1, 9, 0).getTime();
-    const days = aggregateByDay([
-        entry({ ts: today, input: 10, output: 1, USD: 0, amount: 2, currency: 'USD' }),
-        entry({ ts: today, input: 5, output: 1, amount: 3, currency: 'IRT' }),
-        entry({ ts: yesterday, input: 7, output: 0, amount: null, currency: null }),
+    const days = aggregateByDayAndModel([
+        entry({ ts: today, model: 'gpt-4o', host: 'a.ir', input: 10, output: 1, amount: 2, currency: 'USD' }),
+        entry({ ts: today, model: 'gpt-4o', host: 'a.ir', input: 5, output: 1, amount: 3, currency: 'USD' }),
+        entry({ ts: today, model: 'glm-5.3', host: 'a.ir', input: 7, output: 0, amount: null, currency: null }),
+        entry({ ts: yesterday, model: 'gpt-4o', host: 'b.ir', input: 9, output: 0, amount: 1, currency: 'IRT' }),
         entry({ ts: longAgo, input: 9999 }),
     ], 3, NOW);
 
-    check('aggregate returns exactly N buckets', days.length, 3);
-    check('buckets are oldest -> newest', days.map((d) => d.day), ['2026-09-19', '2026-09-20', '2026-09-21']);
-    check('today sums input across entries', days[2].input, 15);
-    check('today sums output', days[2].output, 2);
-    check('USD and IRT stay in their own buckets', [days[2].USD, days[2].IRT], [2, 3]);
-    check('yesterday keeps its own bucket', days[1].input, 7);
-    check('empty day stays at zero', [days[0].input, days[0].output], [0, 0]);
-    check('entry outside the window is ignored', days.some((d) => d.input === 9999), false);
+    check('only days with usage are returned', days.map((d) => d.day), ['2026-09-20', '2026-09-21']);
+    check('cells are grouped by model+host', days[1].cells.length, 2);
+    const gpt = days[1].cells.find((c) => c.model === 'gpt-4o');
+    check('same model+host cells merge', [gpt.input, gpt.output], [15, 2]);
+    check('merged cell sums its cost', gpt.USD, 5);
+    const glm = days[1].cells.find((c) => c.model === 'glm-5.3');
+    check('a different model is its own cell', glm.input, 7);
+    check('unknown price keeps zero cost', [glm.USD, glm.IRT], [0, 0]);
+    check('currencies stay per cell', days[0].cells[0].IRT, 1);
+    check('an entry outside the window is dropped', days.some((d) => d.cells.some((c) => c.input === 9999)), false);
+    check('days are chronological', days[0].day < days[1].day, true);
+}
+
+// --- totalsByHost -----------------------------------------------------------
+{
+    const hosts = totalsByHost([
+        entry({ host: 'a.ir', input: 10, output: 1, cached: 2, amount: 1, currency: 'USD' }),
+        entry({ host: 'a.ir', input: 5, output: 1, cached: 0, amount: 2, currency: 'USD' }),
+        entry({ host: 'b.ir', input: 40, output: 0, cached: 0, amount: 3, currency: 'IRT' }),
+    ]);
+    check('busiest host first', hosts.map((h) => h.host), ['b.ir', 'a.ir']);
+    const a = hosts.find((h) => h.host === 'a.ir');
+    check('host totals sum tokens', [a.input, a.output, a.cached], [15, 2, 2]);
+    check('host totals sum its currency', a.USD, 3);
+    check('host totals keep currencies apart', [a.IRT, hosts.find((h) => h.host === 'b.ir').USD], [0, 0]);
 }
 
 // --- pruneEntries ------------------------------------------------------------

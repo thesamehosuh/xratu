@@ -52,6 +52,27 @@ export function isSameLocalDay(a: Date, b: Date): boolean {
         && a.getDate() === b.getDate();
 }
 
+/** LOCAL calendar day key (YYYY-MM-DD) - never UTC, so chart buckets match the
+ *  user's clock (the host ledger buckets days the same way). */
+export function localDayKey(ts: number): string {
+    const d = new Date(ts);
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/** The local day `delta` days from a YYYY-MM-DD key. */
+export function shiftLocalDay(key: string, delta: number): string {
+    const [year, month, day] = key.split('-').map(Number);
+    return localDayKey(new Date(year, (month || 1) - 1, (day || 1) + delta).getTime());
+}
+
+/** LOCAL midnight for a YYYY-MM-DD key (for formatting a bucket). */
+export function localDayTimestamp(key: string): number {
+    const [year, month, day] = key.split('-').map(Number);
+    return new Date(year, (month || 1) - 1, day || 1).getTime();
+}
+
 /**
  * Message timestamp: just the clock for today, date + clock for older
  * messages. Chat UIs avoid repeating today's date on every bubble, but an

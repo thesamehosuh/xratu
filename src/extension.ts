@@ -18,10 +18,11 @@ import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle } from './local/localSessionStore';
 import {
     UsageLedgerStore,
-    aggregateByDay,
+    aggregateByDayAndModel,
     entriesForSession,
     recomputeCosts,
     sumUsage,
+    totalsByHost,
     USAGE_CHART_DAYS,
     type UsageEntry,
 } from './local/usageLedger';
@@ -1589,8 +1590,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._postSessionCost();
     }
 
-    /** The Pricing page's view: session usage per provider, the session token
-     *  ledger, its cost, and the per-model price overrides. */
+    /** The Pricing page's view: all-time per-provider usage, the sparse
+     *  per-day/per-model cost series, and the per-model price overrides. */
     private async _sendPricingState(): Promise<void> {
         if (!this._view) return;
         const credentials = await this._getSavedCredentials();
@@ -1601,21 +1602,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 byHost.set(host, { label: c.label || c.baseUrl, iranian: isIranianProvider(c.providerId) });
             }
         }
-        const providers = Object.entries(this._sessionUsageByHost)
-            .map(([host, u]) => ({
-                host,
-                label: byHost.get(host)?.label ?? host,
-                iranian: byHost.get(host)?.iranian ?? false,
-                input: u.input,
-                output: u.output,
-                cached: u.cached,
-            }))
-            // Busiest first - the page is about where the usage went.
-            .sort((a, b) => (b.input + b.output) - (a.input + a.output));
 
-        const costs = (['USD', 'IRT'] as const)
-            .filter((c) => this._sessionCost[c] > 0)
-            .map((c) => ({ amount: this._sessionCost[c], currency: c }));
+        const ledger = await this._usageLedger.read();
+        const providers = totalsByHost(ledger).map((t) => ({
+            host: t.host,
+            label: byHost.get(t.host)?.label ?? (t.host || '—'),
+            iranian: byHost.get(t.host)?.iranian ?? false,
+            input: t.input,
+            output: t.output,
+            cached: t.cached,
+            USD: t.USD,
+            IRT: t.IRT,
+        }));
 
         const overrides = this._modelPriceOverrides();
         const models = Object.entries(overrides)
@@ -1628,16 +1626,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 currency: o.currency === 'IRT' ? 'IRT' : 'USD',
             }));
 
-        const ledger = await this._usageLedger.read();
         this._view.webview.postMessage({
             type: 'pricingState',
             providers,
-            usage: { ...this._sessionUsage },
-            costs,
             models,
-            // Machine-global history: daily buckets (empty days included so the
-            // chart keeps a continuous axis) plus the all-time totals.
-            history: aggregateByDay(ledger, USAGE_CHART_DAYS),
+            // Sparse per-day/per-model/per-host cells: the chart's month,
+            // model and provider filters all run in the webview.
+            history: aggregateByDayAndModel(ledger, USAGE_CHART_DAYS),
             allTime: sumUsage(ledger),
         });
     }

@@ -31,7 +31,7 @@ import { Welcome } from './components/Welcome';
 import { PricingPage } from './components/PricingPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
-import type { DailyUsage, ModelPricingView, ProviderUsageView, UsageTotals } from './types';
+import type { LedgerDay, ModelPricingView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'pricing';
 
@@ -80,10 +80,8 @@ export function App() {
     /** Pricing page data (host-owned settings) + its Back target. */
     const [pricing, setPricing] = useState<{
         providers: ProviderUsageView[];
-        usage: { input: number; output: number; cached: number };
-        costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
         models: ModelPricingView[];
-        history: DailyUsage[];
+        history: LedgerDay[];
         allTime: UsageTotals;
     } | null>(null);
     const [pricingReturnTo, setPricingReturnTo] = useState<'chat' | 'settings'>('settings');
@@ -397,8 +395,6 @@ export function App() {
                 case 'pricingState':
                     setPricing({
                         providers: msg.providers,
-                        usage: msg.usage,
-                        costs: msg.costs,
                         models: msg.models,
                         history: msg.history,
                         allTime: msg.allTime,

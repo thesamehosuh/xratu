@@ -5372,12 +5372,6 @@ pre.tool-cmd {
 }
 
 /* Usage + pricing page */
-.usage-ranges {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 8px;
-}
-
 .usage-range {
     flex: 1;
     padding: 4px 6px;
@@ -5407,23 +5401,103 @@ pre.tool-cmd {
     outline-offset: 1px;
 }
 
-.usage-chart {
-    margin: 0 0 4px;
+/* Cost chart: stacked bars per day, one colour per model. */
+.cost-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
 }
 
-.usage-bars {
+.cost-month {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.cost-month-label {
+    font-size: 10.5px;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cost-select {
+    max-width: 108px;
+    padding: 3px 5px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-input);
+    color: var(--vscode-input-foreground);
+    font: inherit;
+    font-size: 10px;
+}
+
+.cost-currencies {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.cost-currencies .usage-range {
+    flex: 0 0 auto;
+    padding: 3px 10px;
+}
+
+.cost-chart {
+    display: flex;
+    gap: 6px;
+}
+
+.cost-axis {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    width: 42px;
+    height: 104px;
+    font-size: 8.5px;
+    color: var(--vscode-descriptionForeground);
+    font-variant-numeric: tabular-nums;
+}
+
+.cost-plot {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 104px;
+}
+
+.cost-grid {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+}
+
+.cost-grid span {
+    height: 0;
+    border-top: 1px solid var(--vscode-widget-border);
+    opacity: 0.5;
+}
+
+.cost-cols {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: flex-end;
-    justify-content: space-between;
     gap: 1px;
-    height: 62px;
 }
 
-.usage-bar-slot {
-    /* flex-basis 0 + a max width: every day shares the axis equally, but a
-       7-day range does not stretch into 7 giant blocks. */
+.cost-col {
     flex: 1 1 0;
-    max-width: 40px;
     min-width: 0;
     height: 100%;
     display: flex;
@@ -5434,65 +5508,76 @@ pre.tool-cmd {
     cursor: pointer;
 }
 
-.usage-bar {
-    width: 100%;
-    min-height: 0;
-    border-radius: 2px 2px 0 0;
-    background: var(--xratu-accent-dim);
-    transition: background 0.12s ease;
+.cost-col:hover .cost-stack,
+.cost-col.active .cost-stack {
+    filter: brightness(1.25);
 }
 
-.usage-bar-slot:hover .usage-bar,
-.usage-bar-slot.active .usage-bar {
-    background: var(--xratu-accent);
-}
-
-.usage-bar-slot:focus-visible {
+.cost-col:focus-visible {
     outline: 1px solid var(--xratu-accent);
     outline-offset: 1px;
-    border-radius: 2px;
 }
 
-.usage-inspect {
+.cost-stack {
     display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-height: 40px;
-    margin: 6px 0 2px;
-    padding: 6px 8px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-editor-background);
+    flex-direction: column-reverse;
+    width: 100%;
+    height: 100%;
 }
 
-.usage-inspect strong {
+.cost-seg {
+    flex: 0 0 auto;
+    width: 100%;
+}
+
+.cost-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin-top: 7px;
+}
+
+.cost-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cost-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
+/* Hover detail sits in flow: a floating card would clip at sidebar width, and
+   a boxed panel is one separator too many. */
+.cost-detail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 3px 10px;
+    min-height: 15px;
+    margin: 8px 0 0;
     font-size: 10.5px;
     color: var(--vscode-foreground);
 }
 
-.usage-inspect-nums {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-}
-
-.usage-inspect-nums span {
-    display: flex;
+.cost-detail > span {
+    display: inline-flex;
     align-items: baseline;
     gap: 4px;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    color: var(--vscode-foreground);
 }
 
-.usage-inspect-nums i {
-    font-style: normal;
-    font-size: 8.5px;
-    color: var(--vscode-descriptionForeground);
+.cost-detail i {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
 }
 
-.usage-inspect-hint {
-    font-size: 10px;
+.cost-detail-hint {
     color: var(--vscode-descriptionForeground);
 }
 
@@ -5502,87 +5587,59 @@ pre.tool-cmd {
     color: var(--vscode-descriptionForeground);
 }
 
-.usage-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
-    gap: 6px;
-    margin-bottom: 10px;
-}
-
-.usage-stat {
+/* Provider usage list: one row per provider, cost on the first line. */
+.prov-row {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 7px 8px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: var(--xratu-radius-sm);
-    background: var(--xratu-accent-faint);
-    min-width: 0;
-}
-
-.usage-stat-label {
-    font-size: 9px;
-    color: var(--vscode-descriptionForeground);
-}
-
-.usage-stat-value {
-    font-size: 12.5px;
-    font-weight: 650;
-    color: var(--vscode-foreground);
-    overflow-wrap: anywhere;
-}
-
-.usage-providers {
-    display: flex;
-    flex-direction: column;
-}
-
-.usage-provider {
-    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    gap: 4px 10px;
     padding: 7px 0;
-    border-block-start: 1px solid var(--vscode-widget-border);
 }
 
-.usage-provider-main {
+.prov-main {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+    flex: 1 1 auto;
     min-width: 0;
 }
 
-.usage-provider-main strong {
+.prov-main strong {
     font-size: 11px;
     font-weight: 650;
     color: var(--vscode-foreground);
 }
 
-.usage-provider-host {
+.prov-host {
     font-size: 9.5px;
     color: var(--vscode-descriptionForeground);
     overflow-wrap: anywhere;
 }
 
-.usage-provider-tokens {
-    display: flex;
-    gap: 10px;
-    flex-shrink: 0;
-}
-
-.usage-provider-tokens span {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 1px;
+.prov-cost {
     font-size: 11px;
+    font-weight: 650;
     font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
 }
 
-.usage-provider-tokens i {
+.prov-tokens {
+    display: flex;
+    gap: 10px;
+    flex: 1 1 100%;
+}
+
+.prov-tokens span {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-foreground);
+}
+
+.prov-tokens i {
     font-style: normal;
     font-size: 8.5px;
     color: var(--vscode-descriptionForeground);

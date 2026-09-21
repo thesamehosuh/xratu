@@ -1,18 +1,27 @@
 import { useMemo, useState } from 'react';
-import { Activity, ArrowLeft, ArrowRight, Coins, Info, Plus, Tag, Trash2 } from 'lucide-react';
+import {
+    Activity,
+    ArrowLeft,
+    ArrowRight,
+    ChevronLeft,
+    ChevronRight,
+    Coins,
+    Info,
+    Plus,
+    Tag,
+    Trash2,
+} from 'lucide-react';
 import { getLocale, t } from '../i18n';
 import { formatCost } from '../cost';
-import { formatCalendarDate } from '../datetime';
-import type { DailyUsage, ModelPricingView, ProviderUsageView, UsageTotals } from '../types';
+import { formatCalendarDate, localDayTimestamp, shiftLocalDay } from '../datetime';
+import type { LedgerDay, ModelPricingView, ProviderUsageView, UsageTotals } from '../types';
 
-type RangeKey = '7d' | '30d' | 'all';
+type Currency = 'USD' | 'IRT';
 
 interface PricingState {
     providers: ProviderUsageView[];
-    usage: { input: number; output: number; cached: number };
-    costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
     models: ModelPricingView[];
-    history: DailyUsage[];
+    history: LedgerDay[];
     allTime: UsageTotals;
 }
 
@@ -23,11 +32,23 @@ interface PricingPageProps {
     onRemoveModel: (id: string) => void;
 }
 
-const RANGES: Array<{ key: RangeKey; days: number | null }> = [
-    { key: '7d', days: 7 },
-    { key: '30d', days: 30 },
-    { key: 'all', days: null },
+/** Palette for stacked model segments. Stable per model id (indexed by the
+ *  all-time model list) so a color does not move when a filter changes. */
+const MODEL_COLORS = [
+    '#4ec9b0', '#e0a458', '#7aa2f7', '#c586c0', '#d16969',
+    '#8dc891', '#d7ba7d', '#569cd6', '#b2675e', '#9d7cd8',
 ];
+
+const GRID_LINES = 4;
+
+interface MonthGroup {
+    label: string;
+    days: LedgerDay[];
+}
+
+function calendarName(): string {
+    return getLocale() === 'fa' ? 'fa-IR-u-ca-persian' : 'en-US';
+}
 
 /** Token counts read as numbers, so they always render LTR with separators. */
 function formatTokens(value: number): string {
@@ -35,92 +56,74 @@ function formatTokens(value: number): string {
     return Math.max(0, Math.round(value)).toLocaleString(locale);
 }
 
-/** A day bucket's key parsed as LOCAL midnight (never UTC). */
-function dayTimestamp(key: string): number {
-    const [y, m, d] = key.split('-').map(Number);
-    return new Date(y, (m || 1) - 1, d || 1).getTime();
-}
-
-function totalTokens(day: { input: number; output: number; cached: number }): number {
-    return day.input + day.output + day.cached;
-}
-
-function UsageStat({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="usage-stat">
-            <span className="usage-stat-label">{label}</span>
-            <span className="usage-stat-value" dir="ltr">{value}</span>
-        </div>
-    );
-}
-
-/** Cost chips for a bucket's USD/IRT spend (either may be absent). */
-function CostLine({ usd, irt }: { usd: number; irt: number }) {
-    const parts = [
-        formatCost({ amount: usd, currency: 'USD' }),
-        formatCost({ amount: irt, currency: 'IRT' }),
-    ].filter((v): v is string => v != null);
-    return <>{parts.length ? parts.join(' · ') : '—'}</>;
+/** The month a day belongs to, in the LOCALE's calendar (Jalali for fa). */
+function monthLabel(dayKey: string): string {
+    return new Intl.DateTimeFormat(calendarName(), { month: 'long', year: 'numeric' })
+        .format(new Date(localDayTimestamp(dayKey)));
 }
 
 /**
- * Daily bar chart. Bars are individually focusable buttons with a full
- * accessible label, rather than one `role="img"` SVG: `role="img"` makes every
- * descendant presentational, which would hide the per-day detail from screen
- * readers (MDN). Hover AND keyboard focus both open the tooltip.
+ * Group the (chronological) days into calendar months of the ACTIVE locale.
+ * Grouping by label changes avoids any Jalali/Gregorian month math: a Jalali
+ * month is a different Gregorian span, so a fixed month length would be wrong.
  */
-function UsageChart({ days }: { days: DailyUsage[] }) {
-    const [active, setActive] = useState<number | null>(null);
-    const max = Math.max(1, ...days.map(totalTokens));
-    const activeDay = active != null ? days[active] : null;
+function buildMonths(history: LedgerDay[]): MonthGroup[] {
+    const groups: MonthGroup[] = [];
+    let current: MonthGroup | null = null;
+    for (const day of history) {
+        const label = monthLabel(day.day);
+        if (!current || current.label !== label) {
+            current = { label, days: [] };
+            groups.push(current);
+        }
+        current.days.push(day);
+    }
+    return groups;
+}
 
-    return (
-        <div className="usage-chart" dir="ltr">
-            <div className="usage-bars" role="group" aria-label={t('usageChartAria')}>
-                {days.map((day, i) => {
-                    const total = totalTokens(day);
-                    const height = total > 0 ? Math.max(4, Math.round((total / max) * 100)) : 0;
-                    const label = [
-                        formatCalendarDate(dayTimestamp(day.day)),
-                        `${t('usageInput')} ${formatTokens(day.input)}`,
-                        `${t('usageOutput')} ${formatTokens(day.output)}`,
-                        `${t('usageCached')} ${formatTokens(day.cached)}`,
-                    ].join(' · ');
-                    return (
-                        <button
-                            key={day.day}
-                            type="button"
-                            className={`usage-bar-slot${active === i ? ' active' : ''}`}
-                            aria-label={label}
-                            onMouseEnter={() => setActive(i)}
-                            onMouseLeave={() => setActive((cur) => (cur === i ? null : cur))}
-                            onFocus={() => setActive(i)}
-                            onBlur={() => setActive((cur) => (cur === i ? null : cur))}
-                        >
-                            <span className="usage-bar" style={{ height: `${height}%` }} aria-hidden="true" />
-                        </button>
-                    );
-                })}
-            </div>
-            {/* The detail sits in flow rather than as a floating tooltip: at
-                sidebar width a floating card would clip at the edges. */}
-            <div className="usage-inspect" role="status" aria-live="polite">
-                {activeDay ? (
-                    <>
-                        <strong>{formatCalendarDate(dayTimestamp(activeDay.day))}</strong>
-                        <span className="usage-inspect-nums" dir="ltr">
-                            <span><i>{t('usageInput')}</i>{formatTokens(activeDay.input)}</span>
-                            <span><i>{t('usageOutput')}</i>{formatTokens(activeDay.output)}</span>
-                            <span><i>{t('usageCached')}</i>{formatTokens(activeDay.cached)}</span>
-                            <span><i>{t('usageCost')}</i><CostLine usd={activeDay.USD} irt={activeDay.IRT} /></span>
-                        </span>
-                    </>
-                ) : (
-                    <span className="usage-inspect-hint">{t('usageHoverHint')}</span>
-                )}
-            </div>
-        </div>
-    );
+/** Every local day of the group's month, so the axis has no gaps. */
+function expandMonth(group: MonthGroup): string[] {
+    const label = monthLabel(group.days[0].day);
+    let first = group.days[0].day;
+    let last = group.days[group.days.length - 1].day;
+    for (let i = 0; i < 31 && monthLabel(shiftLocalDay(first, -1)) === label; i++) {
+        first = shiftLocalDay(first, -1);
+    }
+    for (let i = 0; i < 31 && monthLabel(shiftLocalDay(last, 1)) === label; i++) {
+        last = shiftLocalDay(last, 1);
+    }
+    const days: string[] = [];
+    for (let day = first; day <= last; day = shiftLocalDay(day, 1)) days.push(day);
+    return days;
+}
+
+/** Round an axis maximum up to a readable 1/2/2.5/5 x 10^n step. */
+function niceMax(value: number): number {
+    if (!Number.isFinite(value) || value <= 0) return 1;
+    const base = 10 ** Math.floor(Math.log10(value));
+    const norm = value / base;
+    const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
+    return step * base;
+}
+
+function formatAxis(value: number, currency: Currency): string {
+    if (currency === 'IRT') {
+        if (value <= 0) return '۰';
+        return new Intl.NumberFormat('fa-IR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+    }
+    return new Intl.NumberFormat('en-US', {
+        notation: 'compact',
+        maximumFractionDigits: 1,
+        style: 'currency',
+        currency: 'USD',
+    }).format(value);
+}
+
+/** A provider's all-time cost, in the currency it actually billed. */
+function providerCost(provider: ProviderUsageView): string {
+    if (provider.IRT > 0) return formatCost({ amount: provider.IRT, currency: 'IRT' }) ?? '—';
+    if (provider.USD > 0) return formatCost({ amount: provider.USD, currency: 'USD' }) ?? '—';
+    return '—';
 }
 
 function ModelRow({ model, onRemove }: { model: ModelPricingView; onRemove: (id: string) => void }) {
@@ -211,34 +214,105 @@ function AddModelForm({ onSave }: { onSave: PricingPageProps['onSaveModel'] }) {
 }
 
 export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: PricingPageProps) {
-    const [range, setRange] = useState<RangeKey>('7d');
-    const usage = state?.usage ?? { input: 0, output: 0, cached: 0 };
-    const costs = state?.costs ?? [];
-    const providers = state?.providers ?? [];
+    const locale = getLocale();
     const history = state?.history ?? [];
+    const providers = state?.providers ?? [];
     const allTime = state?.allTime;
 
-    const shownDays = useMemo(() => {
-        const config = RANGES.find((r) => r.key === range);
-        return config?.days ? history.slice(-config.days) : history;
-    }, [history, range]);
+    // -1 means "latest month" so the initial view is correct even though the
+    // data arrives after mount (no effect needed).
+    const [monthIdx, setMonthIdx] = useState(-1);
+    const [modelFilter, setModelFilter] = useState('all');
+    const [hostFilter, setHostFilter] = useState('all');
+    const [currencyChoice, setCurrencyChoice] = useState<'auto' | Currency>('auto');
+    const [activeDay, setActiveDay] = useState<string | null>(null);
 
-    const rangeTotals = useMemo(
-        () => shownDays.reduce(
-            (acc, day) => ({
-                input: acc.input + day.input,
-                output: acc.output + day.output,
-                cached: acc.cached + day.cached,
-                USD: acc.USD + day.USD,
-                IRT: acc.IRT + day.IRT,
-            }),
-            { input: 0, output: 0, cached: 0, USD: 0, IRT: 0 },
-        ),
-        [shownDays],
-    );
+    const months = useMemo(() => buildMonths(history), [history, locale]);
+    const idx = months.length ? (monthIdx < 0 ? months.length - 1 : Math.min(monthIdx, months.length - 1)) : -1;
+    const month = idx >= 0 ? months[idx] : null;
 
-    const hasUsage = usage.input > 0 || usage.output > 0 || usage.cached > 0;
-    const hasRangeUsage = totalTokens(rangeTotals) > 0;
+    // Filter options come from the WHOLE ledger, not just the visible month.
+    const allModels = useMemo(() => {
+        const totals = new Map<string, number>();
+        for (const day of history) {
+            for (const cell of day.cells) {
+                totals.set(cell.model, (totals.get(cell.model) ?? 0) + cell.input + cell.output + cell.cached);
+            }
+        }
+        return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
+    }, [history]);
+
+    const dayCells = useMemo(() => {
+        const map = new Map<string, LedgerDay>();
+        for (const day of history) map.set(day.day, day);
+        return map;
+    }, [history]);
+
+    const monthDays = useMemo(() => (month ? expandMonth(month) : []), [month, locale]);
+
+    /** Cells of the selected month that pass the model/provider filters. */
+    const filteredCells = useMemo(() => {
+        const out: Array<{ day: string; cell: LedgerDay['cells'][number] }> = [];
+        for (const day of monthDays) {
+            for (const cell of dayCells.get(day)?.cells ?? []) {
+                if (modelFilter !== 'all' && cell.model !== modelFilter) continue;
+                if (hostFilter !== 'all' && cell.host !== hostFilter) continue;
+                out.push({ day, cell });
+            }
+        }
+        return out;
+    }, [monthDays, dayCells, modelFilter, hostFilter]);
+
+    const monthTotals = useMemo(() => {
+        const totals = { USD: 0, IRT: 0, tokens: 0 };
+        for (const { cell } of filteredCells) {
+            totals.USD += cell.USD;
+            totals.IRT += cell.IRT;
+            totals.tokens += cell.input + cell.output + cell.cached;
+        }
+        return totals;
+    }, [filteredCells]);
+
+    // Toman is the default when a Toman-billed provider contributed, since that
+    // is the money the user actually pays; USD providers fall back to USD.
+    const currency: Currency = currencyChoice === 'auto'
+        ? (monthTotals.IRT > 0 ? 'IRT' : 'USD')
+        : currencyChoice;
+    const bothCurrencies = monthTotals.USD > 0 && monthTotals.IRT > 0;
+
+    /** One stacked column per day of the month, in the active currency. */
+    const series = useMemo(() => {
+        return monthDays.map((day) => {
+            const byModel = new Map<string, number>();
+            let total = 0;
+            let tokens = 0;
+            for (const cell of dayCells.get(day)?.cells ?? []) {
+                if (modelFilter !== 'all' && cell.model !== modelFilter) continue;
+                if (hostFilter !== 'all' && cell.host !== hostFilter) continue;
+                tokens += cell.input + cell.output + cell.cached;
+                const value = currency === 'IRT' ? cell.IRT : cell.USD;
+                if (value <= 0) continue;
+                byModel.set(cell.model, (byModel.get(cell.model) ?? 0) + value);
+                total += value;
+            }
+            return { day, byModel, total, tokens };
+        });
+    }, [monthDays, dayCells, modelFilter, hostFilter, currency]);
+
+    const max = useMemo(() => niceMax(Math.max(0, ...series.map((d) => d.total))), [series]);
+
+    const legend = useMemo(() => {
+        const totals = new Map<string, number>();
+        for (const day of series) {
+            for (const [model, value] of day.byModel) totals.set(model, (totals.get(model) ?? 0) + value);
+        }
+        return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
+    }, [series]);
+
+    const colorFor = (model: string) => MODEL_COLORS[Math.max(0, allModels.indexOf(model)) % MODEL_COLORS.length];
+
+    const active = activeDay ? series.find((d) => d.day === activeDay) ?? null : null;
+    const axisTicks = Array.from({ length: GRID_LINES + 1 }, (_, i) => (max * i) / GRID_LINES).reverse();
 
     return (
         <div className="settings-page">
@@ -264,54 +338,149 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
                             <Activity size={15} />
                         </div>
                         <div>
-                            <h3>{t('usageHistoryTitle')}</h3>
-                            <p>{t('usageHistoryDesc')}</p>
+                            <h3>{t('costChartTitle')}</h3>
+                            <p>{t('costChartDesc')}</p>
                         </div>
                     </div>
 
                     <div className="settings-card-body">
-                        <div className="usage-ranges" role="tablist" aria-label={t('usageHistoryTitle')}>
-                            {RANGES.map((r) => (
+                        <div className="cost-toolbar">
+                            <div className="cost-month">
                                 <button
-                                    key={r.key}
                                     type="button"
-                                    role="tab"
-                                    aria-selected={range === r.key}
-                                    className={`usage-range${range === r.key ? ' active' : ''}`}
-                                    onClick={() => setRange(r.key)}
+                                    className="icon-btn"
+                                    aria-label={t('costPrevMonth')}
+                                    title={t('costPrevMonth')}
+                                    disabled={idx <= 0}
+                                    onClick={() => setMonthIdx(Math.max(0, idx - 1))}
                                 >
-                                    {t(r.key === '7d' ? 'usageRange7' : r.key === '30d' ? 'usageRange30' : 'usageRangeAll')}
+                                    {getLocale() === 'fa' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
                                 </button>
-                            ))}
+                                <span className="cost-month-label">{month?.label ?? '—'}</span>
+                                <button
+                                    type="button"
+                                    className="icon-btn"
+                                    aria-label={t('costNextMonth')}
+                                    title={t('costNextMonth')}
+                                    disabled={idx < 0 || idx >= months.length - 1}
+                                    onClick={() => setMonthIdx(Math.min(months.length - 1, idx + 1))}
+                                >
+                                    {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+                                </button>
+                            </div>
+                            <select
+                                className="cost-select"
+                                aria-label={t('costAllModels')}
+                                value={modelFilter}
+                                onChange={(e) => { setModelFilter(e.target.value); setActiveDay(null); }}
+                            >
+                                <option value="all">{t('costAllModels')}</option>
+                                {allModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                            </select>
+                            <select
+                                className="cost-select"
+                                aria-label={t('costAllProviders')}
+                                value={hostFilter}
+                                onChange={(e) => { setHostFilter(e.target.value); setActiveDay(null); }}
+                            >
+                                <option value="all">{t('costAllProviders')}</option>
+                                {providers.map((p) => <option key={p.host} value={p.host}>{p.label}</option>)}
+                            </select>
                         </div>
 
-                        {hasRangeUsage ? (
-                            <UsageChart days={shownDays} />
-                        ) : (
-                            <p className="usage-empty">{t('usageChartEmpty')}</p>
+                        {bothCurrencies && (
+                            <div className="cost-currencies" role="group" aria-label={t('usageCost')}>
+                                <button
+                                    type="button"
+                                    className={`usage-range${currency === 'IRT' ? ' active' : ''}`}
+                                    aria-pressed={currency === 'IRT'}
+                                    onClick={() => setCurrencyChoice('IRT')}
+                                >
+                                    {t('costCurrencyIrt')}
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`usage-range${currency === 'USD' ? ' active' : ''}`}
+                                    aria-pressed={currency === 'USD'}
+                                    onClick={() => setCurrencyChoice('USD')}
+                                >
+                                    {t('costCurrencyUsd')}
+                                </button>
+                            </div>
                         )}
 
-                        <div className="usage-stats">
-                            <UsageStat label={t('usageInput')} value={formatTokens(rangeTotals.input)} />
-                            <UsageStat label={t('usageOutput')} value={formatTokens(rangeTotals.output)} />
-                            <UsageStat label={t('usageCached')} value={formatTokens(rangeTotals.cached)} />
-                            <UsageStat
-                                label={t('usageCost')}
-                                value={rangeTotals.USD > 0 || rangeTotals.IRT > 0
-                                    ? [formatCost({ amount: rangeTotals.USD, currency: 'USD' }), formatCost({ amount: rangeTotals.IRT, currency: 'IRT' })]
-                                        .filter((v): v is string => v != null)
-                                        .join(' · ')
-                                    : '—'}
-                            />
-                        </div>
+                        {legend.length > 0 ? (
+                            <>
+                                <div className="cost-chart" dir="ltr">
+                                    <div className="cost-axis" aria-hidden="true">
+                                        {axisTicks.map((tick, i) => (
+                                            <span key={i}>{formatAxis(tick, currency)}</span>
+                                        ))}
+                                    </div>
+                                    <div className="cost-plot">
+                                        <div className="cost-grid" aria-hidden="true">
+                                            {axisTicks.map((_, i) => <span key={i} />)}
+                                        </div>
+                                        <div className="cost-cols" role="group" aria-label={t('costChartAria')}>
+                                            {series.map((day) => {
+                                                const label = `${formatCalendarDate(localDayTimestamp(day.day))} · ${formatCost({ amount: day.total, currency }) ?? '—'}`;
+                                                return (
+                                                    <button
+                                                        key={day.day}
+                                                        type="button"
+                                                        className={`cost-col${activeDay === day.day ? ' active' : ''}`}
+                                                        aria-label={label}
+                                                        onMouseEnter={() => setActiveDay(day.day)}
+                                                        onMouseLeave={() => setActiveDay((cur) => (cur === day.day ? null : cur))}
+                                                        onFocus={() => setActiveDay(day.day)}
+                                                        onBlur={() => setActiveDay((cur) => (cur === day.day ? null : cur))}
+                                                    >
+                                                        <span className="cost-stack" aria-hidden="true">
+                                                            {[...day.byModel.entries()].map(([model, value]) => (
+                                                                <span
+                                                                    key={model}
+                                                                    className="cost-seg"
+                                                                    style={{ height: `${(value / max) * 100}%`, background: colorFor(model) }}
+                                                                />
+                                                            ))}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
 
-                        {allTime && (
-                            <p className="usage-alltime" dir="auto">
-                                {t('usageAllTime')}: {formatTokens(totalTokens(allTime))} {t('usageTokens')}
-                                {(allTime.USD > 0 || allTime.IRT > 0) && (
-                                    <> · <CostLine usd={allTime.USD} irt={allTime.IRT} /></>
-                                )}
-                            </p>
+                                <div className="cost-legend">
+                                    {legend.map((model) => (
+                                        <span className="cost-legend-item" key={model}>
+                                            <span className="cost-swatch" style={{ background: colorFor(model) }} aria-hidden="true" />
+                                            <span dir="ltr">{model}</span>
+                                        </span>
+                                    ))}
+                                </div>
+
+                                {/* Hover detail in flow (no box, no extra rule). */}
+                                <p className="cost-detail" role="status">
+                                    {active ? (
+                                        <>
+                                            <strong>{formatCalendarDate(localDayTimestamp(active.day))}</strong>
+                                            <span dir="ltr">{formatCost({ amount: active.total, currency }) ?? '—'}</span>
+                                            {[...active.byModel.entries()].map(([model, value]) => (
+                                                <span key={model}>
+                                                    <i style={{ background: colorFor(model) }} aria-hidden="true" />
+                                                    <span dir="ltr">{model}</span>
+                                                    <span dir="ltr">{formatCost({ amount: value, currency }) ?? '—'}</span>
+                                                </span>
+                                            ))}
+                                        </>
+                                    ) : (
+                                        <span className="cost-detail-hint">{t('costHoverHint')}</span>
+                                    )}
+                                </p>
+                            </>
+                        ) : (
+                            <p className="usage-empty">{t('costNoData')}</p>
                         )}
                     </div>
                 </section>
@@ -322,43 +491,40 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
                             <Coins size={15} />
                         </div>
                         <div>
-                            <h3>{t('usageTitle')}</h3>
-                            <p>{t('usageDesc')}</p>
+                            <h3>{t('providersTitle')}</h3>
+                            <p>{t('providersDesc')}</p>
                         </div>
                     </div>
 
                     <div className="settings-card-body">
-                        <div className="usage-stats">
-                            <UsageStat label={t('usageInput')} value={formatTokens(usage.input)} />
-                            <UsageStat label={t('usageOutput')} value={formatTokens(usage.output)} />
-                            <UsageStat label={t('usageCached')} value={formatTokens(usage.cached)} />
-                            <UsageStat
-                                label={t('usageCost')}
-                                value={costs.length
-                                    ? costs.map((c) => formatCost(c) ?? '—').join(' · ')
-                                    : '—'}
-                            />
-                        </div>
-
-                        {providers.length > 0 && (
-                            <div className="usage-providers">
-                                {providers.map((p) => (
-                                    <div className="usage-provider" key={p.host}>
-                                        <div className="usage-provider-main">
-                                            <strong dir="ltr">{p.label}</strong>
-                                            <span className="usage-provider-host" dir="ltr">{p.host}</span>
-                                            {p.iranian && <span className="pricing-badge">{t('pricingIranianBadge')}</span>}
-                                        </div>
-                                        <div className="usage-provider-tokens" dir="ltr">
-                                            <span><i>{t('usageInput')}</i>{formatTokens(p.input)}</span>
-                                            <span><i>{t('usageOutput')}</i>{formatTokens(p.output)}</span>
-                                            {p.cached > 0 && <span><i>{t('usageCached')}</i>{formatTokens(p.cached)}</span>}
-                                        </div>
-                                    </div>
-                                ))}
+                        {providers.length > 0 ? providers.map((p) => (
+                            <div className="prov-row" key={p.host}>
+                                <div className="prov-main">
+                                    <strong dir="ltr">{p.label}</strong>
+                                    <span className="prov-host" dir="ltr">{p.host}</span>
+                                    {p.iranian && <span className="pricing-badge">{t('pricingIranianBadge')}</span>}
+                                </div>
+                                <span className="prov-cost" dir="ltr">{providerCost(p)}</span>
+                                <div className="prov-tokens" dir="ltr">
+                                    <span><i>{t('usageInput')}</i>{formatTokens(p.input)}</span>
+                                    <span><i>{t('usageOutput')}</i>{formatTokens(p.output)}</span>
+                                    {p.cached > 0 && <span><i>{t('usageCached')}</i>{formatTokens(p.cached)}</span>}
+                                </div>
                             </div>
+                        )) : (
+                            <p className="usage-empty">{t('usageEmpty')}</p>
                         )}
-                        {!hasUsage && <p className="usage-empty">{t('usageEmpty')}</p>}
+
+                        {allTime && (
+                            <p className="usage-alltime">
+                                {t('usageAllTime')}: {formatTokens(allTime.input + allTime.output + allTime.cached)} {t('usageTokens')}
+                                {(allTime.USD > 0 || allTime.IRT > 0) && (
+                                    <> · {[formatCost({ amount: allTime.USD, currency: 'USD' }), formatCost({ amount: allTime.IRT, currency: 'IRT' })]
+                                        .filter((v): v is string => v != null)
+                                        .join(' · ')}</>
+                                )}
+                            </p>
+                        )}
                     </div>
                 </section>
 

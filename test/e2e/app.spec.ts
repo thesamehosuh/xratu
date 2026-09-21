@@ -137,7 +137,7 @@ test('stream follow survives shrink-clamps and a large edit pill', async ({ page
     expect(dist).toBeLessThan(80);
 });
 
-test('pricing page shows usage history, chart filters and model overrides (fa/RTL)', async ({ page }) => {
+test('cost page: stacked model chart, month stepper, filters, provider list (fa/RTL)', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
@@ -146,50 +146,61 @@ test('pricing page shows usage history, chart filters and model overrides (fa/RT
     await page.getByTitle('تنظیمات').first().click();
     await page.locator('.settings-nav-row', { hasText: 'مصرف و قیمت گذاری' }).click();
 
-    // The page asks the host for its state on open.
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'pricingGetState' });
 
-    // 30 daily buckets so the Week/Month/All filters differ measurably.
-    const history = Array.from({ length: 30 }, (_, i) => ({
-        day: `2026-08-${String(i + 1).padStart(2, '0')}`,
-        input: (i + 1) * 100,
-        output: (i + 1) * 10,
-        cached: 0,
-        USD: 0,
-        IRT: 0,
-    }));
+    // Two calendar months so the stepper has somewhere to go.
+    const history = [
+        { day: '2026-07-10', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 100, output: 10, cached: 0, USD: 1, IRT: 0 }] },
+        { day: '2026-07-11', cells: [
+            { model: 'gpt-4o', host: 'a.ir', input: 200, output: 20, cached: 0, USD: 2, IRT: 0 },
+            { model: 'glm-5.3', host: 'a.ir', input: 50, output: 5, cached: 0, USD: 0.5, IRT: 0 },
+        ] },
+        { day: '2026-08-05', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 300, output: 30, cached: 0, USD: 3, IRT: 0 }] },
+    ];
     await hostMessage(page, {
         type: 'pricingState',
-        providers: [{ host: 'api.avalai.ir', label: 'Avalai', iranian: true, input: 12000, output: 3400, cached: 800 }],
-        usage: { input: 12000, output: 3400, cached: 800 },
-        costs: [{ amount: 9500, currency: 'IRT' }],
+        providers: [
+            { host: 'a.ir', label: 'Avalai', iranian: true, input: 650, output: 65, cached: 0, USD: 6.5, IRT: 0 },
+            { host: 'b.ir', label: 'Metis', iranian: true, input: 400, output: 40, cached: 12, USD: 0, IRT: 95000 },
+        ],
         models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
         history,
-        allTime: { input: 46500, output: 4650, cached: 0, USD: 0, IRT: 9500 },
+        allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 95000 },
     });
 
-    // Chart: default range is the week; the filters repaint the bars.
-    await expect(page.locator('.usage-bar-slot')).toHaveCount(7);
-    await expect(page.locator('.usage-range.active')).toContainText('هفته');
-    await page.locator('.usage-range', { hasText: 'ماه' }).click();
-    await expect(page.locator('.usage-bar-slot')).toHaveCount(30);
-    await page.locator('.usage-range', { hasText: 'کل' }).click();
-    await expect(page.locator('.usage-bar-slot')).toHaveCount(30);
-    await page.locator('.usage-range', { hasText: 'هفته' }).click();
+    // Latest month (August) has one model; the whole month is the axis.
+    await expect(page.locator('.cost-col')).toHaveCount(31);
+    await expect(page.locator('.cost-legend-item')).toHaveCount(1);
+    await expect(page.locator('.cost-legend-item')).toContainText('gpt-4o');
 
-    // Hovering a bar replaces the hint with THAT day's detail (4 figures).
-    await expect(page.locator('.usage-inspect-hint')).toBeVisible();
-    await page.locator('.usage-bar-slot').last().hover();
-    await expect(page.locator('.usage-inspect-hint')).toHaveCount(0);
-    await expect(page.locator('.usage-inspect-nums > span')).toHaveCount(4);
+    // Stepper moves to July, which has two models in the legend.
+    await page.getByLabel('ماه قبل').click();
+    await expect(page.locator('.cost-legend-item')).toHaveCount(2);
+    await expect(page.locator('.cost-legend')).toContainText('glm-5.3');
+    await expect(page.getByLabel('ماه قبل')).toBeDisabled();
 
-    // All-time line + session provider breakdown with the Iranian badge.
+    // Hovering a day WITH usage shows that day's per-model breakdown. The axis
+    // is the LOCALE month (Jalali here), so pick the first non-empty column by
+    // its label rather than assuming a Gregorian day index.
+    await expect(page.locator('.cost-detail-hint')).toBeVisible();
+    await page.locator('.cost-col:not([aria-label$="—"])').first().hover();
+    await expect(page.locator('.cost-detail')).toContainText('gpt-4o');
+    await expect(page.locator('.cost-detail-hint')).toHaveCount(0);
+
+    // Model filter narrows the legend to the selected model.
+    await page.getByLabel('همه مدل ها').selectOption('glm-5.3');
+    await expect(page.locator('.cost-legend-item')).toHaveCount(1);
+    await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
+
+    // Provider usage list: both providers, with the Iranian badge and a cost.
+    await expect(page.locator('.prov-row')).toHaveCount(2);
+    await expect(page.locator('.prov-row').first()).toContainText('Avalai');
+    await expect(page.locator('.prov-row .pricing-badge')).toHaveCount(2);
+    await expect(page.locator('.prov-row').nth(1)).toContainText('تومان');
     await expect(page.locator('.usage-alltime')).toBeVisible();
-    await expect(page.locator('.usage-provider')).toContainText('Avalai');
-    await expect(page.locator('.usage-provider .pricing-badge')).toContainText('ایرانی');
+
     await expect(page.locator('.pricing-row')).toContainText('gpt-4o');
-    // Fine print lives in the footer, not the header.
     await expect(page.locator('.mcp-hint.foot')).toBeVisible();
 
     // The Add form requires BOTH rates (a blank field must not become 0).

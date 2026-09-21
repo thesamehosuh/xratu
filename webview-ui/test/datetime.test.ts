@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, isSameLocalDay } from '../src/datetime';
+import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, isSameLocalDay, localDayKey, localDayTimestamp, shiftLocalDay } from '../src/datetime';
 import { setLocale } from '../src/i18n';
 
 // A LOCAL 13:05 - deliberately past noon so a 12-hour clock would render a
@@ -49,6 +49,18 @@ assert.ok(olderText.includes(formatClockTime(older)), `older messages carry the 
 // Full timestamp (tooltip) always has both.
 assert.ok(formatFullTimestamp(older).includes(formatCalendarDate(older)));
 assert.ok(formatFullTimestamp(older).includes(formatClockTime(older)));
+
+// Local day keys must bucket by the LOCAL calendar (the host ledger does the
+// same), so a late-evening instant never lands on the next UTC day.
+assert.equal(localDayKey(new Date(2026, 8, 20, 23, 30).getTime()), '2026-09-20');
+assert.equal(localDayKey(new Date(2026, 8, 20, 0, 15).getTime()), '2026-09-20');
+assert.equal(shiftLocalDay('2026-09-20', 1), '2026-09-21');
+assert.equal(shiftLocalDay('2026-09-01', -1), '2026-08-31');
+assert.equal(shiftLocalDay('2026-12-31', 1), '2027-01-01');
+// Month rollover across a leap year.
+assert.equal(shiftLocalDay('2028-02-28', 1), '2028-02-29');
+// localDayTimestamp is LOCAL midnight of that key, so round-tripping is stable.
+assert.equal(localDayKey(localDayTimestamp('2026-09-20')), '2026-09-20');
 
 // Restore the Persian-first default for any later test in the bundle.
 setLocale('fa');
