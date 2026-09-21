@@ -49,6 +49,15 @@ export function isOpenCodeHost(baseUrl: string): boolean {
     return host === 'opencode.ai' || (!!host && host.endsWith('.opencode.ai'));
 }
 
+/** True for openrouter.ai (and subdomains). OpenRouter serves every model over
+ *  `/chat/completions` but only honors the unified `reasoning: { effort }`
+ *  parameter for many of them - a bare `reasoning_effort` is dropped/ignored
+ *  on those. The chat transport branches on this. */
+export function isOpenRouterHost(baseUrl: string): boolean {
+    const host = hostOf(baseUrl);
+    return host === 'openrouter.ai' || (!!host && host.endsWith('.openrouter.ai'));
+}
+
 /**
  * Resolve the API style for a request. Defaults to `chat` unless the host is
  * OpenCode and the model id maps to a different documented endpoint.

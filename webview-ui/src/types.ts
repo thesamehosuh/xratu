@@ -117,8 +117,9 @@ export interface NotificationItem {
     actions?: string[];
 }
 
-/** Reasoning-effort levels (Default is encoded as null/absent, never a string). */
-export type ThinkingLevel = 'low' | 'medium' | 'high';
+/** Reasoning-effort variants a model may accept (Default is encoded as
+ *  null/absent, never a string). Superset of the efforts providers report. */
+export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** A file attached to a chat message.  `id` is UI-local only (never sent);
  *  `dataBase64` travels with the request but is NOT persisted
@@ -179,6 +180,8 @@ export interface ModelCapability {
     reasoning?: boolean;
     /** Authoritative "does not accept a reasoning parameter" signal. */
     noReasoning?: boolean;
+    /** Provider-reported effort variants; absent = offer the default set. */
+    reasoningLevels?: ThinkingLevel[];
 }
 
 export interface SessionMeta {

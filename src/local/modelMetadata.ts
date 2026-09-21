@@ -16,7 +16,7 @@
  */
 
 import { knownModelKnowledge } from '../modelKnowledge';
-import type { LocalModelInfo } from './localTypes';
+import { THINKING_LEVELS, REASONING_EFFORTS, type ThinkingLevel, type LocalModelInfo } from './localTypes';
 
 // ---------------------------------------------------------------------------
 // Coercion helpers
@@ -69,6 +69,47 @@ function stringList(value: unknown): string[] | null {
     return Array.isArray(value) ? value.map((v) => String(v).toLowerCase()) : null;
 }
 
+const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
+
+/**
+ * Normalize a provider's effort-variant list into our canonical levels,
+ * preserving the provider's order (highest first). Unknown spellings are
+ * dropped. Returns undefined when the list is absent or holds nothing we
+ * recognize, so the caller can fall back to the curated/default set instead
+ * of restricting the picker to nothing.
+ */
+function normalizeEfforts(value: unknown): ThinkingLevel[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const seen = new Set<ThinkingLevel>();
+    const out: ThinkingLevel[] = [];
+    for (const raw of value) {
+        const level = String(raw).trim().toLowerCase() as ThinkingLevel;
+        if (!THINKING_LEVEL_SET.has(level) || seen.has(level)) continue;
+        seen.add(level);
+        out.push(level);
+    }
+    return out.length ? out : undefined;
+}
+
+/**
+ * Pull the model's effort variants from any provider shape. OpenRouter nests
+ * them under `reasoning.supported_efforts`; some gateways use a flat field.
+ * An explicit `null` means the gateway accepts every effort, so offer them all
+ * (minus `none`, which the picker's Default already implies). The property must
+ * be probed with `in` - a `??` chain would treat the meaningful null as absent.
+ */
+function pickEfforts(m: any): ThinkingLevel[] | undefined {
+    const reasoning = m?.reasoning;
+    if (reasoning && typeof reasoning === 'object' && 'supported_efforts' in reasoning) {
+        if (reasoning.supported_efforts === null) return [...REASONING_EFFORTS];
+        const normalized = normalizeEfforts(reasoning.supported_efforts);
+        if (normalized) return normalized;
+    }
+    const raw = m?.reasoning_efforts ?? m?.supported_efforts ?? m?.reasoningLevels;
+    if (raw === null) return [...REASONING_EFFORTS];
+    return normalizeEfforts(raw);
+}
+
 // ---------------------------------------------------------------------------
 // Per-shape adapters
 // ---------------------------------------------------------------------------
@@ -119,6 +160,13 @@ function parseOpenAiItem(m: any): LocalModelInfo | null {
         model.supportsTools = false;
     }
 
+    // Per-model reasoning variants (OpenRouter `reasoning.supported_efforts`).
+    // A present `reasoning` object is authoritative for capability too, so it
+    // overrides a `supported_parameters` list that omitted the reasoning flags.
+    const efforts = pickEfforts(m);
+    if (efforts) model.reasoningLevels = efforts;
+    if (m.reasoning && typeof m.reasoning === 'object') model.supportsReasoning = true;
+
     // OpenRouter: pricing is USD per token as a STRING.
     if (m.pricing && typeof m.pricing === 'object') {
         const input = toPerMillion(m.pricing.prompt, 1);
@@ -161,6 +209,8 @@ function parseKayaItem(m: any): LocalModelInfo | null {
     else if (typeof m.modality === 'string' && /image/.test(m.modality)) model.supportsVision = true;
     if (typeof m.supportsTools === 'boolean') model.supportsTools = m.supportsTools;
     if (typeof m.supportsReasoning === 'boolean') model.supportsReasoning = m.supportsReasoning;
+    const efforts = pickEfforts(m);
+    if (efforts) model.reasoningLevels = efforts;
 
     const input = toPerMillion(m.inputPricePer1k, 1000);
     const output = toPerMillion(m.outputPricePer1k, 1000);
@@ -301,6 +351,9 @@ export function applyModelKnowledge(models: LocalModelInfo[]): LocalModelInfo[] 
         if (merged.supportsVision === undefined) merged.supportsVision = known.supportsVision;
         if (merged.supportsTools === undefined) merged.supportsTools = known.supportsTools;
         if (merged.supportsReasoning === undefined) merged.supportsReasoning = known.supportsReasoning;
+        if (!merged.reasoningLevels?.length && known.reasoningLevels && merged.supportsReasoning !== false) {
+            merged.reasoningLevels = [...known.reasoningLevels];
+        }
         return merged;
     });
 }
@@ -341,7 +394,9 @@ export function readModelCatalog(raw: unknown): ModelCatalog {
         const key = normalizeCatalogHost(host);
         if (!key || !entry || typeof entry !== 'object') continue;
         const models = Array.isArray(entry.models)
-            ? entry.models.filter((m: any) => m && typeof m.id === 'string' && m.id)
+            ? entry.models
+                .filter((m: any) => m && typeof m.id === 'string' && m.id)
+                .map(sanitizeCachedModel)
             : [];
         if (!models.length) continue;
         catalog[key] = {
@@ -350,6 +405,20 @@ export function readModelCatalog(raw: unknown): ModelCatalog {
         };
     }
     return catalog;
+}
+
+/** Drop an unrecognized persisted effort variant so a stale/corrupt cache can
+ *  never surface a level the picker cannot label or the request cannot send. */
+function sanitizeCachedModel(m: any): LocalModelInfo {
+    const levels = Array.isArray(m.reasoningLevels)
+        ? m.reasoningLevels.filter((l: unknown) => typeof l === 'string' && THINKING_LEVEL_SET.has(l))
+        : undefined;
+    if (!levels?.length) {
+        const copy = { ...m };
+        delete copy.reasoningLevels;
+        return copy;
+    }
+    return { ...m, reasoningLevels: levels };
 }
 
 export function serializeModelCatalog(catalog: ModelCatalog): string {

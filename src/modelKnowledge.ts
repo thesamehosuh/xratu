@@ -19,7 +19,9 @@
  * Pure and dependency-free so it can be unit-tested.
  */
 
-export type KnownReasoningLevel = 'low' | 'medium' | 'high';
+/** Curated fallback effort variants. Excludes `none` (a curated entry marks
+ *  reasoning as a capability; disabling it stays the user's explicit choice). */
+export type KnownReasoningLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ModelKnowledge {
     /** Total context window in tokens. */

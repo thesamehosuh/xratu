@@ -32,6 +32,7 @@ import {
 import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
 import type { LocalModelInfo } from './local/localTypes';
+import { THINKING_LEVELS, type ThinkingLevel } from './local/localTypes';
 import {
     cachedModelInfo,
     catalogEntryFor,
@@ -84,8 +85,8 @@ interface AttachmentMeta {
     path?: string;
 }
 
-/** Reasoning effort levels (null/absent = Default). */
- type ThinkingLevel = 'low' | 'medium' | 'high';
+/** Reasoning-effort variants the host accepts from the webview. */
+const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
 
 
@@ -2196,7 +2197,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
             const clean: Record<string, ThinkingLevel> = {};
             for (const [model, level] of Object.entries(parsed)) {
-                if (level === 'low' || level === 'medium' || level === 'high') clean[model] = level;
+                if (typeof level === 'string' && THINKING_LEVEL_SET.has(level)) {
+                    clean[model] = level as ThinkingLevel;
+                }
             }
             return clean;
         } catch {
@@ -2210,15 +2213,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return this._thinkingLevels()[model];
     }
 
-    /** The effort to actually send: the user's level, UNLESS the provider has
-     *  authoritatively told us the model accepts no reasoning parameter (its
-     *  own list marks reasoning unsupported) - sending it there only yields a
-     *  400 we would then have to strip. */
+    /** The effort to actually send: the user's variant, unless the provider
+     *  authoritatively told us the model accepts no reasoning parameter, or
+     *  reported a variant set that does not include the chosen one (a stale
+     *  selection from before the model list changed) - sending either only
+     *  yields a 400 we would then have to strip. */
     private _reasoningEffortFor(model: string, baseUrl: string): ThinkingLevel | undefined {
         const level = this._thinkingLevelHint(model);
         if (!level) return undefined;
         const meta = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model);
-        return meta?.supportsReasoning === false ? undefined : level;
+        if (meta?.supportsReasoning === false) return undefined;
+        if (meta?.reasoningLevels?.length && !meta.reasoningLevels.includes(level)) return undefined;
+        return level;
     }
 
     /** Provider/curated max output for the model, when known. The runtime
@@ -2233,7 +2239,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private async _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void> {
         if (!model) return;
         const map = this._thinkingLevels();
-        if (level === 'low' || level === 'medium' || level === 'high') {
+        if (level && THINKING_LEVEL_SET.has(level)) {
             map[model] = level;
         } else {
             delete map[model];
@@ -3011,17 +3017,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // vision when supported, "no tools" when the model cannot drive the
             // agent loop, and reasoning support so the thinking selector can be
             // hidden for models that do not accept the parameter.
-            const capabilities: Record<string, { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean }> = {};
+            const capabilities: Record<string, { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean; reasoningLevels?: ThinkingLevel[] }> = {};
             for (const m of probed.models) {
                 if (!m.id) continue;
                 const vision = m.supportsVision ?? modelIsLikelyVision(m.id);
                 const tools = m.supportsTools ?? modelLikelySupportsTools(m.id);
-                const entry: { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean } = {};
+                const entry: { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean; reasoningLevels?: ThinkingLevel[] } = {};
                 if (vision) entry.vision = true;
                 if (!tools) entry.noTools = true;
                 if (m.supportsReasoning === true) entry.reasoning = true;
                 else if (m.supportsReasoning === false) entry.noReasoning = true;
-                if (entry.vision || entry.noTools || entry.reasoning || entry.noReasoning) capabilities[m.id] = entry;
+                // Provider-reported (or curated) variants restrict the picker;
+                // absent = offer the default set.
+                if (m.reasoningLevels?.length) entry.reasoningLevels = m.reasoningLevels;
+                if (entry.vision || entry.noTools || entry.reasoning || entry.noReasoning || entry.reasoningLevels) {
+                    capabilities[m.id] = entry;
+                }
             }
 
             // Prefer the model remembered for this credential, then the

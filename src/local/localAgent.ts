@@ -11,8 +11,9 @@
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
 import { normalizeBaseUrl } from './baseUrl';
-import { supportsPromptCacheKey } from './apiStyle';
+import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
+import type { ThinkingLevel } from './localTypes';
 
 export type LocalChatTextContent = string;
 
@@ -120,9 +121,9 @@ export interface LocalAgentRequest {
      *  `maxTokens` is set - an explicit caller cap always wins. */
     maxOutputLimit?: number;
     temperature?: number;
-    /** Reasoning effort (OpenAI-style); undefined = omit from the body so
-     *  runtimes keep their default behavior. */
-    reasoningEffort?: 'low' | 'medium' | 'high';
+    /** Reasoning-effort variant; undefined = omit from the body so runtimes
+     *  keep their default behavior. `none` explicitly disables reasoning. */
+    reasoningEffort?: ThinkingLevel;
     maxRounds?: number;
     contextWindow?: number | null;
     /** Current session task list (client-echoed, user edits merged) -
@@ -353,10 +354,20 @@ export const TOOL_CHOICE_REJECT_RE = /tool_choice|toolChoice|tool[ ._]?config|fu
  *  without it (caching then falls back to OpenAI's automatic routing). */
 export const PROMPT_CACHE_KEY_REJECT_RE = /prompt_cache_key|prompt cache key/i;
 
-/** Anthropic extended-thinking and Gemini thinking budgets for a UI level.
- *  The floor is Anthropic's minimum; the ceiling is Gemini's max budget. */
-function thinkingBudgetFor(level: 'low' | 'medium' | 'high'): number {
-    return level === 'high' ? 24_576 : level === 'medium' ? 8_192 : 1_024;
+/** Anthropic extended-thinking and Gemini thinking budgets for a UI effort
+ *  variant. The floor is Anthropic's minimum (1024); the ceiling is Gemini's
+ *  max budget. `none` maps to 0 (disable). Ordered minimal → max so a higher
+ *  variant never yields a smaller budget. */
+function thinkingBudgetFor(level: ThinkingLevel): number {
+    switch (level) {
+        case 'none': return 0;
+        case 'minimal': return 1_024;
+        case 'low': return 4_096;
+        case 'medium': return 8_192;
+        case 'high': return 24_576;
+        case 'xhigh': return 32_768;
+        case 'max': return 49_152;
+    }
 }
 
 /** Marks a deadline XRATU itself imposed (no headers, or no chunk for
@@ -668,7 +679,15 @@ async function requestChatCompletion(
     if (request.tools.length) body.tools = toOpenAITools(request.tools);
     body.max_tokens = outputCapFor(request);
     if (request.temperature != null) body.temperature = request.temperature;
-    if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
+    // Reasoning effort. OpenRouter accepts the unified `reasoning: { effort }`
+    // object for every reasoning model, while a bare top-level `reasoning_effort`
+    // is only honored by the subset that advertises it - so gateways that expose
+    // effort selection get the object. Direct OpenAI-compatible servers keep the
+    // OpenAI field name.
+    if (request.reasoningEffort) {
+        if (isOpenRouterHost(request.baseUrl)) body.reasoning = { effort: request.reasoningEffort };
+        else body.reasoning_effort = request.reasoningEffort;
+    }
     // OpenAI prompt caching: a stable per-conversation key helps route requests
     // that share a prefix to the same cache machine. Only sent to hosts known
     // to accept it (see supportsPromptCacheKey); dropped on a 400 below.
@@ -721,10 +740,11 @@ async function requestChatCompletion(
                 delete body.stream_options;
             } else if (request.maxTokens == null && body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_tokens;
-            } else if (body.reasoning_effort != null && REASONING_REJECT_RE.test(text)) {
-                // The model/gateway does not accept reasoning_effort - drop it
-                // and keep the run instead of failing on a UI convenience.
+            } else if ((body.reasoning_effort != null || body.reasoning != null) && REASONING_REJECT_RE.test(text)) {
+                // The model/gateway does not accept the reasoning effort - drop
+                // it and keep the run instead of failing on a UI convenience.
                 delete body.reasoning_effort;
+                delete body.reasoning;
             } else if (body.prompt_cache_key != null && PROMPT_CACHE_KEY_REJECT_RE.test(text)) {
                 // Gateway has no prompt-cache routing key; OpenAI's automatic
                 // routing still applies. Retry without the hint.
@@ -1026,7 +1046,8 @@ function toMessagesBody(
     // Extended thinking: budget_tokens is required, max_tokens MUST exceed it,
     // and Anthropic rejects a modified temperature alongside thinking - so the
     // budget raises the cap and the temperature is dropped when enabled.
-    if (request.reasoningEffort) {
+    // `none` disables thinking: send no thinking block at all.
+    if (request.reasoningEffort && request.reasoningEffort !== 'none') {
         const budget = thinkingBudgetFor(request.reasoningEffort);
         if ((body.max_tokens as number) <= budget) body.max_tokens = budget + 4096;
         body.thinking = { type: 'enabled', budget_tokens: budget };
@@ -1689,7 +1710,12 @@ function toGoogleBody(
     if (request.reasoningEffort) {
         const budget = thinkingBudgetFor(request.reasoningEffort);
         if (outputCap <= budget) outputCap = budget + 4096;
-        generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: true };
+        generationConfig.thinkingConfig = {
+            thinkingBudget: budget,
+            // `none` disables reasoning; requesting the thought trace would be
+            // contradictory (and some gateways reject it).
+            includeThoughts: request.reasoningEffort !== 'none',
+        };
     }
     generationConfig.maxOutputTokens = outputCap;
     if (request.temperature != null) generationConfig.temperature = request.temperature;

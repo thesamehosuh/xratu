@@ -61,6 +61,35 @@ near('openrouter: prompt per-token -> per 1M', openrouter[0].pricing.input, 0.07
 near('openrouter: completion per-token -> per 1M', openrouter[0].pricing.output, 0.5, 1e-12);
 near('openrouter: cache read -> per 1M', openrouter[0].pricing.cachedInput, 0.01, 1e-12);
 
+// --- OpenRouter reasoning variants ----------------------------------------
+const orReasoning = parseModelList({ data: [{
+    id: 'x-ai/grok-4.7',
+    context_length: 500000,
+    reasoning: { mandatory: true, default_enabled: true, supported_efforts: ['xhigh', 'high', 'medium', 'low'], default_effort: 'high' },
+}] });
+check('openrouter: reasoning object marks capability', orReasoning[0].supportsReasoning, true);
+check('openrouter: efforts parsed in provider order', JSON.stringify(orReasoning[0].reasoningLevels), JSON.stringify(['xhigh', 'high', 'medium', 'low']));
+
+// Unknown spellings dropped, case normalized, provider order preserved.
+const orUnknown = parseModelList({ data: [{ id: 'a/b', reasoning: { supported_efforts: ['pro', 'HIGH', 'low'] } }] });
+check('openrouter: unknown efforts dropped + lowercased', JSON.stringify(orUnknown[0].reasoningLevels), JSON.stringify(['high', 'low']));
+
+// An explicit null means the gateway accepts every effort.
+const orAll = parseModelList({ data: [{ id: 'a/c', reasoning: { supported_efforts: null } }] });
+check('openrouter: null efforts -> max offered', orAll[0].reasoningLevels.includes('max'), true);
+check('openrouter: null efforts excludes none', orAll[0].reasoningLevels.includes('none'), false);
+
+// A reasoning object without an effort list still marks capability, no levels.
+const orNoEfforts = parseModelList({ data: [{ id: 'a/d', reasoning: { mandatory: false } }] });
+check('openrouter: reasoning object without efforts -> capability', orNoEfforts[0].supportsReasoning, true);
+check('openrouter: reasoning object without efforts -> no levels', orNoEfforts[0].reasoningLevels, undefined);
+
+// Curated variants fill only when the provider reported none.
+const curatedLevels = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5' }] }));
+check('knowledge fills reasoning variants', JSON.stringify(curatedLevels[0].reasoningLevels), JSON.stringify(['low', 'medium', 'high']));
+const providerLevels = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5', reasoning: { supported_efforts: ['max'] } }] }));
+check('provider variants beat curated', JSON.stringify(providerLevels[0].reasoningLevels), JSON.stringify(['max']));
+
 // Authoritative "no reasoning" must survive; knowledge must not flip it true.
 const noReason = applyModelKnowledge(parseModelList({ data: [{
     id: 'deepseek-v4-flash',
@@ -199,6 +228,14 @@ check('catalog round-trips', catalogEntryFor(roundTrip, 'example.com', now)?.mod
 check('corrupt JSON -> empty catalog', Object.keys(readModelCatalog('{not json')).length, 0);
 check('non-object -> empty catalog', Object.keys(readModelCatalog('[1,2,3]')).length, 0);
 check('entry without models dropped', Object.keys(readModelCatalog({ 'x.com': { fetchedAt: 1, models: [] } })).length, 0);
+
+// A corrupt persisted variant list must not survive the cache read.
+const sanitized = readModelCatalog({ 'x.com': { fetchedAt: 1, models: [
+    { id: 'm1', reasoningLevels: ['high', 'bogus'] },
+    { id: 'm2', reasoningLevels: ['nope'] },
+] } });
+check('catalog keeps known variants', JSON.stringify(cachedModelInfo(sanitized, 'x.com', 'm1').reasoningLevels), JSON.stringify(['high']));
+check('catalog drops unknown variants', cachedModelInfo(sanitized, 'x.com', 'm2').reasoningLevels, undefined);
 
 console.log(failed === 0 ? '\nmodel-metadata: all tests passed' : `\nmodel-metadata: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

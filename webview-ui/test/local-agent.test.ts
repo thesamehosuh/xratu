@@ -1942,8 +1942,122 @@ async function testGoogleThinkingRejectedRestoresCap() {
     }
 }
 
-async function testPromptCacheKeyRoutesOpenAiHosts() {
-    // Rationale: OpenAI routes a request to a cache machine by hashing the
+async function testOpenRouterReasoningUsesUnifiedField() {
+    // OpenRouter only honors a bare `reasoning_effort` on the subset of models
+    // that advertise it; the unified `reasoning: { effort }` object works for
+    // every reasoning model, so the chat transport must send that instead.
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+
+    try {
+        await collect(runLocalAgent(baseRequest({
+            baseUrl: 'https://openrouter.ai/api/v1',
+            model: 'x-ai/grok-4.7',
+            reasoningEffort: 'xhigh',
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+
+        assert.deepEqual(calls[0].reasoning, { effort: 'xhigh' }, 'unified reasoning object sent');
+        assert.equal(calls[0].reasoning_effort, undefined, 'bare reasoning_effort not sent to OpenRouter');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testOpenRouterReasoningRejectedRetriesWithout() {
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        call++;
+        if (call === 1) {
+            return {
+                ok: false,
+                status: 400,
+                text: async () => '{"error":"reasoning.effort is not supported by this model"}',
+            } as MockResponse;
+        }
+        return sse(textSse(['ok']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(runLocalAgent(baseRequest({
+            baseUrl: 'https://openrouter.ai/api/v1',
+            model: 'x-ai/grok-4.7',
+            reasoningEffort: 'max',
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+
+        assert.equal(call, 2, 'retries once without the reasoning object');
+        assert.deepEqual(calls[0].reasoning, { effort: 'max' });
+        assert.equal(calls[1].reasoning, undefined, 'reasoning dropped on retry');
+        assert.ok(events.some((e: any) => e.type === 'assistantMessage'));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testMessagesThinkingBudgetsAndNone() {
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    const frames = [
+        `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 0 } } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+    ];
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        return sse(frames);
+    }) as typeof fetch;
+
+    try {
+        await collect(runLocalAgent(baseRequest({
+            apiStyle: 'messages', model: 'claude-sonnet-5', apiKey: 'sk-test',
+            reasoningEffort: 'xhigh', maxTokens: 4096, contextWindow: 200000,
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+        assert.equal(calls[0].thinking.budget_tokens, 32768, 'xhigh budget is larger than high');
+        assert.ok(calls[0].max_tokens > calls[0].thinking.budget_tokens, 'cap clears the xhigh budget');
+
+        await collect(runLocalAgent(baseRequest({
+            apiStyle: 'messages', model: 'claude-sonnet-5', apiKey: 'sk-test',
+            reasoningEffort: 'none', maxTokens: 2048, temperature: 0.5, contextWindow: 200000,
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+        assert.equal(calls[1].thinking, undefined, 'none sends no thinking block');
+        assert.equal(calls[1].temperature, 0.5, 'temperature kept when thinking is off');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testGoogleNoneDisablesThoughts() {
+    const calls: any[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        return sse([
+            `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] } }] })}\n\n`,
+        ]);
+    }) as typeof fetch;
+
+    try {
+        await collect(runLocalAgent(baseRequest({
+            apiStyle: 'google', model: 'gemini-3.8-flash', apiKey: 'g-key',
+            reasoningEffort: 'none', contextWindow: 128000,
+        }), { execute: async () => ({ output: '' }) }, { requestApproval: async () => ({}) }));
+
+        const config = calls[0].generationConfig;
+        assert.equal(config.thinkingConfig.thinkingBudget, 0, 'none maps to a zero budget');
+        assert.equal(config.thinkingConfig.includeThoughts, false, 'thoughts not requested when off');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+async function testPromptCacheKeyRoutesOpenAiHosts() {    // Rationale: OpenAI routes a request to a cache machine by hashing the
     // initial tokens plus `prompt_cache_key`; a stable per-conversation key
     // raises the cache hit rate for pre-GPT-5.6 models. It must NOT be sent to
     // arbitrary OpenAI-compatible runtimes (strict servers 400 on it).
@@ -2169,7 +2283,11 @@ async function main() {
     await testMaxOutputLimitLowersDerivedCap();
     await testExplicitMaxTokensBeatsOutputLimit();
     await testChatReasoningEffortRejectedRetriesWithout();
+    await testOpenRouterReasoningUsesUnifiedField();
+    await testOpenRouterReasoningRejectedRetriesWithout();
+    await testMessagesThinkingBudgetsAndNone();
     await testGoogleThinkingConfig();
+    await testGoogleNoneDisablesThoughts();
     await testGoogleThinkingRejectedRestoresCap();
 
     console.log('local-agent.test.ts: all tests passed');

@@ -12,7 +12,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { resolveApiStyle, isOpenCodeHost, isNonChatModel, supportsPromptCacheKey } = require('../out/local/apiStyle.js');
+const { resolveApiStyle, isOpenCodeHost, isOpenRouterHost, isNonChatModel, supportsPromptCacheKey } = require('../out/local/apiStyle.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -30,6 +30,14 @@ check('non-opencode host', isOpenCodeHost('https://openrouter.ai/api/v1'), false
 // An explicit port must not defeat the host match.
 check('opencode host with port', isOpenCodeHost('https://opencode.ai:8443/zen/v1'), true);
 check('messages with explicit port', resolveApiStyle('https://opencode.ai:8443/zen/go/v1', 'claude-sonnet-5'), 'messages');
+
+// OpenRouter host detection (drives the unified `reasoning: { effort }` field).
+check('openrouter host detected', isOpenRouterHost('https://openrouter.ai/api/v1'), true);
+check('openrouter subdomain detected', isOpenRouterHost('https://eu.openrouter.ai/api/v1'), true);
+check('openrouter host with port', isOpenRouterHost('https://openrouter.ai:8443/api/v1'), true);
+check('non-openrouter host', isOpenRouterHost('https://api.openai.com/v1'), false);
+check('openrouter lookalike rejected', isOpenRouterHost('https://notopenrouter.ai/api/v1'), false);
+check('openrouter empty', isOpenRouterHost(''), false);
 
 // Messages families
 for (const model of ['claude-sonnet-5', 'claude-opus-4-8', 'qwen3.8-flash', 'qwen3.7-max', 'minimax-m3', 'minimax-m2.7']) {
@@ -72,8 +80,7 @@ check('local runtime stays chat', resolveApiStyle('http://127.0.0.1:11434/v1', '
 // Case-insensitive model id
 check('model id case-insensitive', resolveApiStyle(GO, 'Claude-Sonnet-5'), 'messages');
 
-// `prompt_cache_key` routing hint: only hosts known to accept the OpenAI field.
-check('cache key on opencode', supportsPromptCacheKey(ZEN), true);
+// `prompt_cache_key` routing hint: only hosts known to accept the OpenAI field.check('cache key on opencode', supportsPromptCacheKey(ZEN), true);
 check('cache key on openai', supportsPromptCacheKey('https://api.openai.com/v1'), true);
 check('cache key off openrouter', supportsPromptCacheKey('https://openrouter.ai/api/v1'), false);
 check('cache key off anthropic', supportsPromptCacheKey('https://api.anthropic.com/v1'), false);

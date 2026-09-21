@@ -1,5 +1,24 @@
 export type XratuRuntimeMode = 'cloud' | 'local';
 
+/**
+ * Reasoning-effort variants a model may accept, ordered weakest → strongest.
+ * `none` disables reasoning; `default` is encoded as `null`/absent (omit the
+ * parameter so the runtime's own default applies). Superset of the efforts
+ * providers report (OpenAI's `minimal..high`, OpenRouter's `xhigh`/`max`).
+ */
+export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** Ordered weakest → strongest; the single source for validating persisted
+ *  levels and filtering provider-reported effort lists. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+];
+
+/** Effort levels a model accepts with reasoning enabled. Excludes `none`. */
+export const REASONING_EFFORTS: readonly ThinkingLevel[] = [
+    'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+];
+
 export interface LocalModelConnection {
     id: string;
     runtime: 'ollama' | 'lm-studio' | 'llama.cpp' | 'vllm' | 'custom';
@@ -38,6 +57,10 @@ export interface LocalModelInfo {
     supportsVision?: boolean;
     /** True when the model performs internal reasoning / thinking. */
     supportsReasoning?: boolean;
+    /** Effort variants the provider reported for this model, ordered. Absent =
+     *  the provider does not expose effort selection (offer the default set).
+     *  An EMPTY array is never stored - it would wrongly read as "no levels". */
+    reasoningLevels?: ThinkingLevel[];
     /** Provider-reported per-1M-token USD pricing. */
     pricing?: LocalModelPricing;
 }

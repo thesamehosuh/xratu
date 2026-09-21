@@ -39,6 +39,23 @@ const CTX_PRESETS: Array<{ label: string; value: number }> = [
     { label: '1M', value: 1048576 },
 ];
 
+/** Effort variants offered when the provider reports none for a model. */
+const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ['low', 'medium', 'high'];
+
+/** Canonical weakest → strongest order for sorting provider-reported variants. */
+const THINKING_ORDER: ThinkingLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/** i18n key per effort variant (resolved at render time, never at module scope). */
+const THINKING_KEYS = {
+    none: 'thinkingNone',
+    minimal: 'thinkingMinimal',
+    low: 'thinkingLow',
+    medium: 'thinkingMedium',
+    high: 'thinkingHigh',
+    xhigh: 'thinkingXhigh',
+    max: 'thinkingMax',
+} as const satisfies Record<ThinkingLevel, string>;
+
 const ATTACH_MAX_COUNT = 20;
 const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACH_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
@@ -364,6 +381,18 @@ export function InputBar({
     const usedTokens = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
     const hasUsage = usage != null;
     const usagePercent = limit > 0 ? (usedTokens / limit) * 100 : 0;
+
+    // Effort variants for the selected model: the provider's reported set when
+    // it exposes one, else the conservative default set. Sorted weakest →
+    // strongest for the segmented control.
+    const thinkingOptions = useMemo<ThinkingLevel[]>(() => {
+        const reported = selectedModel ? modelCapabilities?.[selectedModel]?.reasoningLevels : undefined;
+        if (!reported?.length) return DEFAULT_THINKING_LEVELS;
+        return [...reported].sort((a, b) => THINKING_ORDER.indexOf(a) - THINKING_ORDER.indexOf(b));
+    }, [selectedModel, modelCapabilities]);
+    // A persisted variant the model no longer reports reads as Default, so the
+    // chip and the radio group never show a level the request would drop.
+    const activeThinking = thinkingLevel && thinkingOptions.includes(thinkingLevel) ? thinkingLevel : null;
 
     // Window options smaller than the context ALREADY occupied by the
     // conversation are disabled - shrinking below the filled level would
@@ -1030,13 +1059,13 @@ export function InputBar({
                         <span dir="ltr" className="chip-model-name">
                             {selectedModel ?? t('modelPlaceholder')}
                         </span>
-                        {thinkingLevel && modelCapabilities?.[selectedModel ?? '']?.noReasoning !== true && (
+                        {activeThinking && modelCapabilities?.[selectedModel ?? '']?.noReasoning !== true && (
                             <span
-                                className={`chip-think lvl-${thinkingLevel}`}
+                                className={`chip-think lvl-${activeThinking}`}
                                 title={t('thinkingLevel')}
                             >
                                 <Brain size={11} />
-                                {t(thinkingLevel === 'low' ? 'thinkingLow' : thinkingLevel === 'medium' ? 'thinkingMedium' : 'thinkingHigh')}
+                                {t(THINKING_KEYS[activeThinking])}
                             </span>
                         )}
                         <ChevronUp size={12} />
@@ -1203,8 +1232,8 @@ export function InputBar({
                                     {t('thinkingLevel')}
                                 </span>
                                 <div className="thinking-seg">
-                                    {([null, 'low', 'medium', 'high'] as const).map((lvl) => {
-                                        const active = (thinkingLevel ?? null) === lvl;
+                                    {[null, ...thinkingOptions].map((lvl) => {
+                                        const active = activeThinking === lvl;
                                         return (
                                             <button
                                                 key={lvl ?? 'default'}
@@ -1214,7 +1243,7 @@ export function InputBar({
                                                 className={`thinking-seg-opt${active ? ' selected' : ''}`}
                                                 onClick={() => onSetThinkingLevel(lvl)}
                                             >
-                                                {t(lvl === null ? 'thinkingDefault' : lvl === 'low' ? 'thinkingLow' : lvl === 'medium' ? 'thinkingMedium' : 'thinkingHigh')}
+                                                {t(lvl === null ? 'thinkingDefault' : THINKING_KEYS[lvl])}
                                             </button>
                                         );
                                     })}
