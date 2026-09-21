@@ -80,16 +80,11 @@ export type ToExtensionMessage =
     /** User edit of the session task list (interactive checklist). The host
      *  stores it as the session override and echoes taskListState. */
     | { type: 'taskListEdit'; tasks: TaskListItem[] }
-    /** Pricing page: request the current provider rates + model overrides. */
+    /** Pricing page: request the current usage + model price overrides. */
     | { type: 'pricingGetState' }
-    /** Pricing page: set (or clear, at null/<=0) a per-host gateway rate. */
-    | { type: 'pricingSaveProvider'; host: string; tomanPerUsd: number | null; markupPercent?: number | null }
-    | { type: 'pricingRemoveProvider'; host: string }
     /** Pricing page: set a per-model price override (currency defaults to USD). */
     | { type: 'pricingSaveModel'; id: string; input: number; output: number; cachedInput?: number | null; currency?: 'USD' | 'IRT' }
     | { type: 'pricingRemoveModel'; id: string }
-    /** Pricing page: set the global fallback Toman-per-USD rate (0 clears). */
-    | { type: 'pricingSetFallback'; tomanPerUsd: number }
     /** Copy a code block to the OS clipboard via the host (webview clipboard
      *  permissions are unreliable). */
     | { type: 'copyToClipboard'; value: string };
@@ -298,18 +293,26 @@ export type FromExtensionMessage =
      *  session has none). Drives the interactive checklist + progress chip. */
     | { type: 'taskListState'; tasks: TaskListItem[] | null }
     /** Response to pricingGetState / pricing* edits - the Pricing page's view. */
-    | { type: 'pricingState'; providers: ProviderPricingView[]; models: ModelPricingView[]; fallbackRate: number };
+    | {
+          type: 'pricingState';
+          /** Providers actually used this session, busiest first. */
+          providers: ProviderUsageView[];
+          /** Session token ledger (input/output/cached), monotonic. */
+          usage: { input: number; output: number; cached: number };
+          /** Session spend per currency (USD and/or IRT), never converted. */
+          costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
+          models: ModelPricingView[];
+      };
 
-/** One provider host's pricing row on the Pricing page. */
-export interface ProviderPricingView {
+/** One provider's session usage on the Pricing page. */
+export interface ProviderUsageView {
     host: string;
     label: string;
     /** Known Iranian (Toman-billed) provider. */
     iranian: boolean;
-    /** Configured Toman per USD, or null when unset. */
-    tomanPerUsd: number | null;
-    /** Optional markup percentage applied on top of the rate. */
-    markupPercent: number | null;
+    input: number;
+    output: number;
+    cached: number;
 }
 
 /** One per-model price override row on the Pricing page. */

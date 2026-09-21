@@ -33,6 +33,14 @@ export interface LocalSessionSnapshot {
     /** Cumulative Toman spend (Iranian/gateway providers), tracked separately
      *  from USD - currencies are never converted into one another. */
     totalCostIrt?: number;
+    /** Cumulative session TOKEN totals (input/output/cached), monotonic like
+     *  the cost ledger - drives the Pricing page's usage readout. */
+    totalInputTokens?: number;
+    totalOutputTokens?: number;
+    totalCachedTokens?: number;
+    /** Token totals per provider host, so usage can be attributed per
+     *  provider without re-reading the transcript. */
+    usageByHost?: Record<string, { input?: number; output?: number; cached?: number }>;
 }
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
@@ -163,6 +171,21 @@ export function resolveSessionTitle(
     const firstMessage = uiHistory?.length ? firstUserText(uiHistory) : null;
     if (firstMessage && title === deriveTitle(firstMessage, ws)) return title;
     return title === workspaceLabel(ws) ? null : title;
+}
+
+/** Clamp a persisted per-host usage map: finite, non-negative token counts
+ *  only, dropping empty entries so a corrupt snapshot cannot inflate totals. */
+function normalizeUsageByHost(raw: unknown): Record<string, { input: number; output: number; cached: number }> {
+    if (!raw || typeof raw !== 'object') return {};
+    const n = (x: unknown): number => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0);
+    const out: Record<string, { input: number; output: number; cached: number }> = {};
+    for (const [host, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') continue;
+        const v = value as { input?: unknown; output?: unknown; cached?: unknown };
+        const entry = { input: n(v.input), output: n(v.output), cached: n(v.cached) };
+        if (entry.input || entry.output || entry.cached) out[host] = entry;
+    }
+    return out;
 }
 
 function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot {
@@ -424,6 +447,16 @@ export class LocalSessionStore {
                 totalCostIrt: Number.isFinite(parsed?.totalCostIrt) && parsed.totalCostIrt > 0
                     ? parsed.totalCostIrt
                     : 0,
+                totalInputTokens: Number.isFinite(parsed?.totalInputTokens) && parsed.totalInputTokens > 0
+                    ? parsed.totalInputTokens
+                    : 0,
+                totalOutputTokens: Number.isFinite(parsed?.totalOutputTokens) && parsed.totalOutputTokens > 0
+                    ? parsed.totalOutputTokens
+                    : 0,
+                totalCachedTokens: Number.isFinite(parsed?.totalCachedTokens) && parsed.totalCachedTokens > 0
+                    ? parsed.totalCachedTokens
+                    : 0,
+                usageByHost: normalizeUsageByHost(parsed?.usageByHost),
             };
         } catch {
             return null;

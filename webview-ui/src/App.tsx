@@ -31,7 +31,7 @@ import { Welcome } from './components/Welcome';
 import { PricingPage } from './components/PricingPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
-import type { ModelPricingView, ProviderPricingView } from './types';
+import type { ModelPricingView, ProviderUsageView } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'pricing';
 
@@ -79,9 +79,10 @@ export function App() {
     const [capReturnTo, setCapReturnTo] = useState<'chat' | 'settings'>('chat');
     /** Pricing page data (host-owned settings) + its Back target. */
     const [pricing, setPricing] = useState<{
-        providers: ProviderPricingView[];
+        providers: ProviderUsageView[];
+        usage: { input: number; output: number; cached: number };
+        costs: Array<{ amount: number; currency: 'USD' | 'IRT' }>;
         models: ModelPricingView[];
-        fallbackRate: number;
     } | null>(null);
     const [pricingReturnTo, setPricingReturnTo] = useState<'chat' | 'settings'>('settings');
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
@@ -392,7 +393,12 @@ export function App() {
                     setTaskList(msg.tasks);
                     break;
                 case 'pricingState':
-                    setPricing({ providers: msg.providers, models: msg.models, fallbackRate: msg.fallbackRate });
+                    setPricing({
+                        providers: msg.providers,
+                        usage: msg.usage,
+                        costs: msg.costs,
+                        models: msg.models,
+                    });
                     break;
                 case 'modelInfo':
                     setModelInfo({
@@ -708,13 +714,9 @@ export function App() {
                 <PricingPage
                     state={pricing}
                     onBack={() => setScreen(pricingReturnTo)}
-                    onSaveProvider={(host, tomanPerUsd, markupPercent) =>
-                        send({ type: 'pricingSaveProvider', host, tomanPerUsd, markupPercent })}
-                    onRemoveProvider={(host) => send({ type: 'pricingRemoveProvider', host })}
                     onSaveModel={(id, input, output, cachedInput, currency) =>
                         send({ type: 'pricingSaveModel', id, input, output, cachedInput, currency })}
                     onRemoveModel={(id) => send({ type: 'pricingRemoveModel', id })}
-                    onSetFallback={(tomanPerUsd) => send({ type: 'pricingSetFallback', tomanPerUsd })}
                 />
                 {banner}
             </div>

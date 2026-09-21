@@ -255,6 +255,29 @@ try {
         });
         check('missing totalCostUsd defaults to 0', (await store.load(withoutCost.id)).totalCostUsd, 0);
     }
+
+    // 15. Session token ledger + per-host usage round-trip.
+    {
+        const withUsage = await store.create(ws);
+        await store.save(withUsage.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [],
+            totalInputTokens: 12000, totalOutputTokens: 3400, totalCachedTokens: 800,
+            usageByHost: { 'api.avalai.ir': { input: 12000, output: 3400, cached: 800 } },
+        });
+        const loaded = await store.load(withUsage.id);
+        check('totalInputTokens round-trips', loaded.totalInputTokens, 12000);
+        check('totalOutputTokens round-trips', loaded.totalOutputTokens, 3400);
+        check('totalCachedTokens round-trips', loaded.totalCachedTokens, 800);
+        check('usageByHost round-trips', loaded.usageByHost['api.avalai.ir'].output, 3400);
+
+        const withoutUsage = await store.create(ws);
+        await store.save(withoutUsage.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [],
+        });
+        const empty = await store.load(withoutUsage.id);
+        check('missing token totals default to 0', empty.totalInputTokens, 0);
+        check('missing usageByHost defaults to {}', Object.keys(empty.usageByHost).length, 0);
+    }
 } finally {
     rmSync(root, { recursive: true, force: true });
 }

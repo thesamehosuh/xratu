@@ -753,6 +753,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  a rewind or checkpoint restore does not refund already-spent tokens,
      *  and currencies are never converted into one another. */
     private _sessionCost: { USD: number; IRT: number } = { USD: 0, IRT: 0 };
+    /** Session TOKEN totals (input/output/cached), persisted and monotonic
+     *  like the cost ledger - the Pricing page's usage readout. */
+    private _sessionUsage: { input: number; output: number; cached: number } = { input: 0, output: 0, cached: 0 };
+    /** Token totals per provider host for this session (persisted), so usage
+     *  can be attributed without re-reading the transcript. */
+    private _sessionUsageByHost: Record<string, { input: number; output: number; cached: number }> = {};
     /** Serializes read-modify-write pricing mutations so two rapid edits cannot
      *  clobber each other's snapshot of the settings object. */
     private _pricingWrite: Promise<void> = Promise.resolve();
@@ -1430,6 +1436,51 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /** Zero the session token ledgers (new session / cleared history). */
+    private _resetSessionUsage(): void {
+        this._sessionUsage = { input: 0, output: 0, cached: 0 };
+        this._sessionUsageByHost = {};
+    }
+
+    /** Restore the persisted token ledgers from a session snapshot. */
+    private _restoreSessionUsage(snapshot: {
+        totalInputTokens?: number;
+        totalOutputTokens?: number;
+        totalCachedTokens?: number;
+        usageByHost?: Record<string, { input?: number; output?: number; cached?: number }>;
+    }): void {
+        const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+        this._sessionUsage = {
+            input: n(snapshot.totalInputTokens),
+            output: n(snapshot.totalOutputTokens),
+            cached: n(snapshot.totalCachedTokens),
+        };
+        const byHost: Record<string, { input: number; output: number; cached: number }> = {};
+        for (const [host, u] of Object.entries(snapshot.usageByHost ?? {})) {
+            if (!u) continue;
+            const entry = { input: n(u.input), output: n(u.output), cached: n(u.cached) };
+            if (entry.input || entry.output || entry.cached) byHost[host] = entry;
+        }
+        this._sessionUsageByHost = byHost;
+    }
+
+    /** Add one non-estimated round to the session token ledgers. */
+    private _addSessionUsage(usage: LocalUsage): void {
+        const prompt = usage.promptTokens ?? 0;
+        const completion = usage.completionTokens ?? 0;
+        const cached = usage.cachedTokens ?? 0;
+        this._sessionUsage.input += prompt;
+        this._sessionUsage.output += completion;
+        this._sessionUsage.cached += cached;
+        const host = baseUrlHost(this._runBaseUrl ?? '');
+        if (!host) return;
+        const entry = this._sessionUsageByHost[host] ?? { input: 0, output: 0, cached: 0 };
+        entry.input += prompt;
+        entry.output += completion;
+        entry.cached += cached;
+        this._sessionUsageByHost[host] = entry;
+    }
+
     /** Base URL of the active credential, or '' when none is selected. */
     private async _activeBaseUrl(): Promise<string> {
         const id = await this._resolveActiveCredentialId();
@@ -1444,37 +1495,33 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._postSessionCost();
     }
 
-    /** The Pricing page's view: saved provider hosts + rates + model overrides. */
+    /** The Pricing page's view: session usage per provider, the session token
+     *  ledger, its cost, and the per-model price overrides. */
     private async _sendPricingState(): Promise<void> {
         if (!this._view) return;
         const credentials = await this._getSavedCredentials();
-        const rates = this._gatewayRates();
-        const seen = new Set<string>();
-        const providers: Array<{
-            host: string; label: string; iranian: boolean;
-            tomanPerUsd: number | null; markupPercent: number | null;
-        }> = [];
-        const pushProvider = (host: string, label: string, iranian: boolean) => {
-            if (!host || seen.has(host)) return;
-            seen.add(host);
-            const rate = rates[host] ?? rates[host.toLowerCase()];
-            const rateValue = rate && Number.isFinite(rate.tomanPerUsd) && rate.tomanPerUsd > 0
-                ? rate.tomanPerUsd
-                : null;
-            providers.push({
-                host,
-                label,
-                iranian,
-                tomanPerUsd: rateValue,
-                markupPercent: rate && Number.isFinite(rate.markupPercent) ? (rate.markupPercent as number) : null,
-            });
-        };
+        const byHost = new Map<string, { label: string; iranian: boolean }>();
         for (const c of credentials) {
-            pushProvider(baseUrlHost(c.baseUrl) ?? '', c.label || c.baseUrl, isIranianProvider(c.providerId));
+            const host = baseUrlHost(c.baseUrl);
+            if (host && !byHost.has(host)) {
+                byHost.set(host, { label: c.label || c.baseUrl, iranian: isIranianProvider(c.providerId) });
+            }
         }
-        // A rate may exist for a host no longer in the saved list - keep it
-        // visible so it can be edited or removed.
-        for (const host of Object.keys(rates)) pushProvider(host.toLowerCase(), host, false);
+        const providers = Object.entries(this._sessionUsageByHost)
+            .map(([host, u]) => ({
+                host,
+                label: byHost.get(host)?.label ?? host,
+                iranian: byHost.get(host)?.iranian ?? false,
+                input: u.input,
+                output: u.output,
+                cached: u.cached,
+            }))
+            // Busiest first - the page is about where the usage went.
+            .sort((a, b) => (b.input + b.output) - (a.input + a.output));
+
+        const costs = (['USD', 'IRT'] as const)
+            .filter((c) => this._sessionCost[c] > 0)
+            .map((c) => ({ amount: this._sessionCost[c], currency: c }));
 
         const overrides = this._modelPriceOverrides();
         const models = Object.entries(overrides)
@@ -1486,12 +1533,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 cachedInput: o.cachedInput != null ? Number(o.cachedInput) : null,
                 currency: o.currency === 'IRT' ? 'IRT' : 'USD',
             }));
-        const fallback = Number(vscode.workspace.getConfiguration('xratu').get('tomanPerUsd')) || 0;
+
         this._view.webview.postMessage({
             type: 'pricingState',
             providers,
+            usage: { ...this._sessionUsage },
+            costs,
             models,
-            fallbackRate: fallback > 0 ? fallback : 0,
         });
     }
 
@@ -1501,33 +1549,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // Keep the chain alive even if a task rejects.
         this._pricingWrite = run.catch(() => undefined);
         return run;
-    }
-
-    /** Write (or clear, at <= 0) a per-host gateway rate. */
-    private async _saveProviderPricing(
-        host: string,
-        tomanPerUsd: number | null,
-        markupPercent?: number | null,
-    ): Promise<void> {
-        const key = host.trim().toLowerCase();
-        if (!key) return;
-        await this._queuePricingWrite(async () => {
-            const rates: Record<string, GatewayRate> = { ...this._gatewayRates() };
-            const value = Number(tomanPerUsd);
-            if (!Number.isFinite(value) || value <= 0) {
-                delete rates[key];
-            } else {
-                const markup = Number(markupPercent);
-                rates[key] = {
-                    tomanPerUsd: value,
-                    ...(Number.isFinite(markup) && markup > 0 ? { markupPercent: markup } : {}),
-                };
-            }
-            await vscode.workspace.getConfiguration('xratu')
-                .update('providerPricing', rates, vscode.ConfigurationTarget.Global);
-        });
-        await this._sendPricingState();
-        await this._refreshCostDisplay();
     }
 
     /** Write a per-model price override (in the given currency). */
@@ -1571,17 +1592,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 .update('modelPricing', overrides, vscode.ConfigurationTarget.Global);
         });
         if (!removed) return;
-        await this._sendPricingState();
-        await this._refreshCostDisplay();
-    }
-
-    /** Update the global fallback Toman-per-USD rate (0 clears it). */
-    private async _setFallbackRate(rate: number): Promise<void> {
-        const value = Number(rate);
-        await this._queuePricingWrite(async () => {
-            await vscode.workspace.getConfiguration('xratu')
-                .update('tomanPerUsd', Number.isFinite(value) && value > 0 ? value : 0, vscode.ConfigurationTarget.Global);
-        });
         await this._sendPricingState();
         await this._refreshCostDisplay();
     }
@@ -2483,9 +2493,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         this._sessionCost[roundCost.currency] += roundCost.amount;
                         this._postSessionCost();
                         // Persist soon (throttled): a crash between the round
-                        // and the turn-level save must not lose the spend.
+                        // and the next full save must not lose the spend.
                         this._scheduleLocalPartialPersist();
                     }
+                    // Token ledger rides alongside the cost ledger.
+                    this._addSessionUsage(event.usage);
+                    this._scheduleLocalPartialPersist();
                 }
                 // Mirror cloud behavior: the webview's context meter tracks
                 // each round's cumulative usage while the turn streams.
@@ -2962,16 +2975,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         case 'pricingGetState':
                             await this._sendPricingState();
                             break;
-                        case 'pricingSaveProvider':
-                            await this._saveProviderPricing(
-                                String(data.host ?? ''),
-                                data.tomanPerUsd == null ? null : Number(data.tomanPerUsd),
-                                data.markupPercent == null ? null : Number(data.markupPercent),
-                            );
-                            break;
-                        case 'pricingRemoveProvider':
-                            await this._saveProviderPricing(String(data.host ?? ''), null, null);
-                            break;
                         case 'pricingSaveModel':
                             await this._saveModelPricing(
                                 String(data.id ?? ''),
@@ -2983,9 +2986,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             break;
                         case 'pricingRemoveModel':
                             await this._removeModelPricing(String(data.id ?? ''));
-                            break;
-                        case 'pricingSetFallback':
-                            await this._setFallbackRate(Number(data.tomanPerUsd));
                             break;
                         case 'skillsGetState':
                             await this._sendSkillsState();
@@ -3605,6 +3605,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._sessionTitle = null;
         // A brand-new session starts its own spend counter.
         this._sessionCost = { USD: 0, IRT: 0 };
+        this._resetSessionUsage();
         this._approvalCloseItems = {};
         this._sessionApprovedKinds.clear();
         this._virtualDocuments.clear();
@@ -3688,6 +3689,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             USD: snapshot.totalCostUsd ?? 0,
             IRT: snapshot.totalCostIrt ?? 0,
         };
+        this._restoreSessionUsage(snapshot);
         this._sessionSummary = snapshot.summary ?? null;
         // A stored title that is still the workspace placeholder reads as
         // untitled - otherwise the placeholder blocks first-message seeding
@@ -3780,6 +3782,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
+            this._resetSessionUsage();
             return;
         }
         const snapshot = await this._localSessionStore.load(meta.id);
@@ -3791,6 +3794,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
+            this._resetSessionUsage();
             return;
         }
         this._localHistory = snapshot.localHistory;
@@ -3801,6 +3805,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             USD: snapshot.totalCostUsd ?? 0,
             IRT: snapshot.totalCostIrt ?? 0,
         };
+        this._restoreSessionUsage(snapshot);
         this._sessionSummary = snapshot.summary ?? null;
         // Same placeholder rule as _openSessionNow - see resolveSessionTitle.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
@@ -3916,6 +3921,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 uiHistory: this._history,
                 totalCostUsd: this._sessionCost.USD,
                 totalCostIrt: this._sessionCost.IRT,
+                totalInputTokens: this._sessionUsage.input,
+                totalOutputTokens: this._sessionUsage.output,
+                totalCachedTokens: this._sessionUsage.cached,
+                usageByHost: this._sessionUsageByHost,
                 pendingTurn: this._localPendingTurn ? {
                     prompt: this._localPendingTurn.prompt,
                     events: this._localPendingTurn.events,

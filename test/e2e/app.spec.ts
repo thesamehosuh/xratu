@@ -137,14 +137,14 @@ test('stream follow survives shrink-clamps and a large edit pill', async ({ page
     expect(dist).toBeLessThan(80);
 });
 
-test('pricing page renders gateway rates + model overrides at sidebar width (fa/RTL)', async ({ page }) => {
+test('pricing page shows session usage + model overrides at sidebar width (fa/RTL)', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
 
-    // Settings → Cost & pricing
+    // Settings → Usage & pricing
     await page.getByTitle('تنظیمات').first().click();
-    await page.locator('.settings-nav-row', { hasText: 'هزینه و قیمت گذاری' }).click();
+    await page.locator('.settings-nav-row', { hasText: 'مصرف و قیمت گذاری' }).click();
 
     // The page asks the host for its state on open.
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
@@ -152,21 +152,37 @@ test('pricing page renders gateway rates + model overrides at sidebar width (fa/
 
     await hostMessage(page, {
         type: 'pricingState',
-        providers: [{ host: 'api.avalai.ir', label: 'Avalai', iranian: true, tomanPerUsd: 90000, markupPercent: null }],
+        providers: [{ host: 'api.avalai.ir', label: 'Avalai', iranian: true, input: 12000, output: 3400, cached: 800 }],
+        usage: { input: 12000, output: 3400, cached: 800 },
+        costs: [{ amount: 9500, currency: 'IRT' }],
         models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
-        fallbackRate: 0,
     });
 
-    await expect(page.locator('.pricing-row').first()).toContainText('Avalai');
-    await expect(page.locator('.pricing-badge').first()).toContainText('ایرانی');
-    await expect(page.locator('.pricing-row.compact')).toContainText('gpt-4o');
+    // Usage readout + per-provider breakdown with the Iranian badge.
+    await expect(page.locator('.usage-stat')).toHaveCount(4);
+    await expect(page.locator('.usage-provider')).toContainText('Avalai');
+    await expect(page.locator('.usage-provider .pricing-badge')).toContainText('ایرانی');
+    await expect(page.locator('.pricing-row')).toContainText('gpt-4o');
+    // Fine print lives in the footer, not the header.
+    await expect(page.locator('.mcp-hint.foot')).toBeVisible();
 
-    // Editing a gateway rate sends the save message with the host key.
-    const rate = page.locator('.pricing-row').first().locator('input[type="number"]').first();
-    await rate.fill('95000');
-    await page.locator('.pricing-row').first().locator('button', { hasText: 'ذخیره' }).click();
+    // The Add form requires BOTH rates (a blank field must not become 0).
+    const add = page.locator('.pricing-add .settings-primary-action');
+    await expect(add).toBeDisabled();
+    await page.locator('.pricing-add input[type="text"]').fill('my-model');
+    await page.locator('.pricing-add input[type="number"]').first().fill('1');
+    await expect(add).toBeDisabled();
+    await page.locator('.pricing-add input[type="number"]').nth(1).fill('2');
+    await add.click();
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
-    expect(sent).toContainEqual({ type: 'pricingSaveProvider', host: 'api.avalai.ir', tomanPerUsd: 95000, markupPercent: null });
+    expect(sent).toContainEqual({
+        type: 'pricingSaveModel',
+        id: 'my-model',
+        input: 1,
+        output: 2,
+        cachedInput: null,
+        currency: 'USD',
+    });
 
     // RTL sidebar layout must not overflow horizontally.
     const overflow = await page.evaluate(() => {

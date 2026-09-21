@@ -5371,24 +5371,110 @@ pre.tool-cmd {
     background: var(--xratu-accent-faint);
 }
 
-/* Pricing / billing page rows */
-.pricing-row {
+/* Usage + pricing page */
+.usage-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.usage-stat {
     display: flex;
     flex-direction: column;
+    gap: 2px;
+    padding: 7px 8px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--xratu-accent-faint);
+    min-width: 0;
+}
+
+.usage-stat-label {
+    font-size: 9px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-stat-value {
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+    overflow-wrap: anywhere;
+}
+
+.usage-providers {
+    display: flex;
+    flex-direction: column;
+}
+
+.usage-provider {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 0;
+    border-block-start: 1px solid var(--vscode-widget-border);
+}
+
+.usage-provider-main {
+    display: flex;
+    align-items: center;
     gap: 6px;
-    padding: 8px 0;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.usage-provider-main strong {
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.usage-provider-host {
+    font-size: 9.5px;
+    color: var(--vscode-descriptionForeground);
+    overflow-wrap: anywhere;
+}
+
+.usage-provider-tokens {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.usage-provider-tokens span {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-foreground);
+}
+
+.usage-provider-tokens i {
+    font-style: normal;
+    font-size: 8.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-empty {
+    margin: 2px 0 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--vscode-descriptionForeground);
+}
+
+.pricing-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
     border-block-end: 1px solid var(--vscode-widget-border);
 }
 
-.pricing-row:last-child {
+.pricing-row:last-of-type {
     border-block-end: 0;
-}
-
-.pricing-row.compact {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
 }
 
 .pricing-row-head {
@@ -5404,10 +5490,12 @@ pre.tool-cmd {
     color: var(--vscode-foreground);
 }
 
-.pricing-row-host {
+.pricing-row-rate {
+    flex: 1;
+    text-align: end;
     font-size: 10px;
+    font-variant-numeric: tabular-nums;
     color: var(--vscode-descriptionForeground);
-    overflow-wrap: anywhere;
 }
 
 .pricing-badge {
@@ -5420,51 +5508,56 @@ pre.tool-cmd {
     font-weight: 650;
 }
 
-.pricing-row-fields,
+.pricing-badge.currency {
+    border-color: var(--vscode-widget-border);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-variant-numeric: tabular-nums;
+}
+
 .pricing-add {
     display: flex;
     align-items: flex-end;
     gap: 8px;
     flex-wrap: wrap;
+    padding-top: 10px;
+    margin-top: 4px;
+    border-block-start: 1px solid var(--vscode-widget-border);
 }
 
-.pricing-row-actions {
-    display: flex;
-    gap: 6px;
+.pricing-add .mcp-field {
+    min-width: 78px;
 }
 
-.pricing-field {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 96px;
+.pricing-add .pricing-add-id {
+    flex: 1 1 130px;
 }
 
-.pricing-field.grow {
-    flex: 1 1 160px;
-}
-
-.pricing-field > span {
-    font-size: 9px;
-    color: var(--vscode-descriptionForeground);
-}
-
-.pricing-field input,
-.pricing-field select {
+.pricing-add .settings-primary-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     min-height: 27px;
-    padding: 4px 7px;
-    border-radius: var(--xratu-radius-sm);
-    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    font: inherit;
-    font-size: 11px;
+    padding: 5px 10px;
 }
 
-.pricing-empty {
-    margin: 4px 0;
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
+/* Native number spinners are invisible on dark themes; give them a
+   consistent hover/active treatment so the steppers are usable. */
+input[type="number"] {
+    color-scheme: dark;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    opacity: 0.55;
+    cursor: pointer;
+}
+
+input[type="number"]:hover::-webkit-outer-spin-button,
+input[type="number"]:hover::-webkit-inner-spin-button,
+input[type="number"]:focus::-webkit-outer-spin-button,
+input[type="number"]:focus::-webkit-inner-spin-button {
+    opacity: 1;
 }
 
 /* Language flip (Settings → گفتگو) - fa/en choice chips inside a
