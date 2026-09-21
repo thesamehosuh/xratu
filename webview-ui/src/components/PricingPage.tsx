@@ -275,9 +275,13 @@ export function PricingPage({ state, onBack, onSaveModel, onRemoveModel }: Prici
 
     // Toman is the default when a Toman-billed provider contributed, since that
     // is the money the user actually pays; USD providers fall back to USD.
-    const currency: Currency = currencyChoice === 'auto'
-        ? (monthTotals.IRT > 0 ? 'IRT' : 'USD')
-        : currencyChoice;
+    const autoCurrency: Currency = monthTotals.IRT > 0 ? 'IRT' : 'USD';
+    // A manual choice only sticks while that currency HAS usage in the viewed
+    // month. Otherwise stepping to a single-currency month (where the toggle is
+    // hidden) would draw an empty chart for a month that really did cost money.
+    const currency: Currency = currencyChoice !== 'auto' && monthTotals[currencyChoice] > 0
+        ? currencyChoice
+        : autoCurrency;
     const bothCurrencies = monthTotals.USD > 0 && monthTotals.IRT > 0;
 
     /** One stacked column per day of the month, in the active currency. */

@@ -149,36 +149,40 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'pricingGetState' });
 
-    // Two calendar months so the stepper has somewhere to go.
+    // Two calendar months so the stepper has somewhere to go. July mixes both
+    // currencies; August is Toman-only (the currency-toggle edge case).
     const history = [
-        { day: '2026-07-10', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 100, output: 10, cached: 0, USD: 1, IRT: 0 }] },
+        { day: '2026-07-10', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 100, output: 10, cached: 0, USD: 1, IRT: 5000 }] },
         { day: '2026-07-11', cells: [
             { model: 'gpt-4o', host: 'a.ir', input: 200, output: 20, cached: 0, USD: 2, IRT: 0 },
-            { model: 'glm-5.3', host: 'a.ir', input: 50, output: 5, cached: 0, USD: 0.5, IRT: 0 },
+            { model: 'glm-5.3', host: 'a.ir', input: 50, output: 5, cached: 0, USD: 0.5, IRT: 700 },
         ] },
-        { day: '2026-08-05', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 300, output: 30, cached: 0, USD: 3, IRT: 0 }] },
+        { day: '2026-08-05', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 300, output: 30, cached: 0, USD: 0, IRT: 9000 }] },
     ];
     await hostMessage(page, {
         type: 'pricingState',
         providers: [
-            { host: 'a.ir', label: 'Avalai', iranian: true, input: 650, output: 65, cached: 0, USD: 6.5, IRT: 0 },
+            { host: 'a.ir', label: 'Avalai', iranian: true, input: 650, output: 65, cached: 0, USD: 6.5, IRT: 14000 },
             { host: 'b.ir', label: 'Metis', iranian: true, input: 400, output: 40, cached: 12, USD: 0, IRT: 95000 },
         ],
         models: [{ id: 'gpt-4o', input: 1, output: 2, cachedInput: null, currency: 'IRT' }],
         history,
-        allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 95000 },
+        allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 109000 },
     });
 
-    // Latest month (August) has one model; the whole month is the axis.
+    // Latest month (August) is Toman-only: bars render, no currency toggle.
     await expect(page.locator('.cost-col')).toHaveCount(31);
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('gpt-4o');
+    await expect(page.locator('.cost-currencies')).toHaveCount(0);
+    await expect(page.locator('.cost-col:not([aria-label$="—"])')).toHaveCount(1);
 
-    // Stepper moves to July, which has two models in the legend.
+    // Stepper moves to July, which has two models and both currencies.
     await page.getByLabel('ماه قبل').click();
     await expect(page.locator('.cost-legend-item')).toHaveCount(2);
     await expect(page.locator('.cost-legend')).toContainText('glm-5.3');
     await expect(page.getByLabel('ماه قبل')).toBeDisabled();
+    await expect(page.locator('.cost-currencies')).toBeVisible();
 
     // Hovering a day WITH usage shows that day's per-model breakdown. The axis
     // is the LOCALE month (Jalali here), so pick the first non-empty column by
@@ -188,7 +192,17 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-detail')).toContainText('gpt-4o');
     await expect(page.locator('.cost-detail-hint')).toHaveCount(0);
 
+    // Manually pick USD here, then step to the Toman-only month: the choice
+    // must NOT persist as an empty chart (the toggle is hidden there).
+    await page.locator('.cost-currencies .usage-range', { hasText: 'دلار' }).click();
+    await expect(page.locator('.cost-axis')).toContainText('$');
+    await page.getByLabel('ماه بعد').click();
+    await expect(page.locator('.cost-currencies')).toHaveCount(0);
+    await expect(page.locator('.cost-col:not([aria-label$="—"])')).toHaveCount(1);
+    await expect(page.locator('.cost-axis')).toContainText('هزار');
+
     // Model filter narrows the legend to the selected model.
+    await page.getByLabel('ماه قبل').click();
     await page.getByLabel('همه مدل ها').selectOption('glm-5.3');
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
