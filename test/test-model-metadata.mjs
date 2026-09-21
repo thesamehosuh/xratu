@@ -93,9 +93,24 @@ check('openrouter: reasoning object without efforts -> no levels', orNoEfforts[0
 
 // Curated variants fill only when the provider reported none.
 const curatedLevels = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5' }] }));
-check('knowledge fills reasoning variants', JSON.stringify(curatedLevels[0].reasoningLevels), JSON.stringify(['low', 'medium', 'high']));
+check('knowledge fills reasoning variants', JSON.stringify(curatedLevels[0].reasoningLevels), JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max']));
 const providerLevels = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5', reasoning: { supported_efforts: ['max'] } }] }));
 check('provider variants beat curated', JSON.stringify(providerLevels[0].reasoningLevels), JSON.stringify(['max']));
+
+// Curated variants are per-family (models.dev), not a flat low/medium/high.
+const variantOf = (id) => applyModelKnowledge(parseModelList({ data: [{ id }] }))[0];
+check('curated: gpt-5.6 variants', JSON.stringify(variantOf('gpt-5.6-luna').reasoningLevels), JSON.stringify(['none', 'low', 'medium', 'high', 'xhigh', 'max']));
+check('curated: gpt-5.5 variants', JSON.stringify(variantOf('gpt-5.5').reasoningLevels), JSON.stringify(['none', 'low', 'medium', 'high', 'xhigh']));
+check('curated: gpt-5.1-codex-max variants', JSON.stringify(variantOf('gpt-5.1-codex-max').reasoningLevels), JSON.stringify(['low', 'medium', 'high', 'xhigh']));
+check('curated: kimi-k3 max only', JSON.stringify(variantOf('kimi-k3').reasoningLevels), JSON.stringify(['max']));
+check('curated: deepseek-v4-pro', JSON.stringify(variantOf('deepseek-v4-pro').reasoningLevels), JSON.stringify(['high', 'max']));
+check('curated: gemini-3.6-flash', JSON.stringify(variantOf('gemini-3.6-flash').reasoningLevels), JSON.stringify(['minimal', 'low', 'medium', 'high']));
+check('curated: gemini-3.8-flash', JSON.stringify(variantOf('gemini-3.8-flash').reasoningLevels), JSON.stringify(['low', 'medium', 'high']));
+check('curated: grok-4.7', JSON.stringify(variantOf('grok-4.7').reasoningLevels), JSON.stringify(['low', 'medium', 'high', 'xhigh']));
+check('curated: glm-5.2', JSON.stringify(variantOf('glm-5.2').reasoningLevels), JSON.stringify(['high', 'max']));
+check('curated: qwen3.8-flash', JSON.stringify(variantOf('qwen3.8-flash').reasoningLevels), JSON.stringify(['low', 'medium', 'xhigh']));
+// A non-reasoning Qwen coder must not be swept up by the qwen3 family.
+check('curated: qwen3-coder stays non-reasoning', variantOf('qwen3-coder').reasoningLevels, undefined);
 
 // Authoritative "no reasoning" must survive; knowledge must not flip it true.
 const noReason = applyModelKnowledge(parseModelList({ data: [{
