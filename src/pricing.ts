@@ -21,7 +21,8 @@ export interface ModelPrice {
     output: number;
     /** Cached-input rate per 1M tokens (falls back to `input`). */
     cachedInput?: number;
-    /** Currency of these rates. Absent = USD. */
+    /** Currency of these rates. Absent = USD (curated table only); an
+     *  explicit override always carries `'USD'` or `'IRT'`. */
     currency?: 'USD' | 'IRT';
 }
 
@@ -178,7 +179,11 @@ function sanitizeOverride(override: PriceOverride | undefined): ModelPrice | nul
         input,
         output,
         ...(cachedInput != null ? { cachedInput } : {}),
-        ...(override.currency === 'IRT' ? { currency: 'IRT' as const } : {}),
+        // An explicit override always carries a DEFINITE currency, so callers
+        // can tell "USD by intent" from "USD by table default". Curated table
+        // entries keep omitting it, so a Toman-billed provider still resolves
+        // to IRT through the provider/gateway path.
+        currency: override.currency === 'IRT' ? 'IRT' : 'USD',
     };
 }
 

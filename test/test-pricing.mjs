@@ -66,6 +66,16 @@ const irtOverride = priceForModel('my-model', { 'my-model': { input: 1000, outpu
 check('override currency IRT', irtOverride?.currency, 'IRT');
 check('override IRT input untouched', irtOverride?.input, 1000);
 
+// A USD override must stay USD even on a Toman-billed provider: it carries an
+// explicit currency so the host does not fall through to the IRT ledger.
+const usdOverride = priceForModel(
+    'claude-sonnet-5',
+    { 'claude-sonnet-5': { input: 3, output: 9 } },
+    { host: 'api.avalai.ir', iranian: true, fallbackRate: 100 },
+);
+check('USD override carries USD currency', usdOverride?.currency, 'USD');
+check('USD override beats gateway rate', usdOverride?.input, 3);
+
 const gw = priceForModel('claude-sonnet-5', null, {
     host: 'api.avalai.ir', iranian: true, gatewayRate: { tomanPerUsd: 100 },
 });
