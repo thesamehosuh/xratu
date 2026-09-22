@@ -374,7 +374,7 @@ interface PatchBlock {
  *  that clipping. Returns null only when no block structure exists at all
  *  so callers fall back to plain text. Marker content lines are refused
  *  upstream (mcp.ts), so the split is unambiguous in practice. */
-function parsePatchBlocks(patch: string): PatchBlock[] | null {
+export function parsePatchBlocks(patch: string): PatchBlock[] | null {
     const lines = stripReplayMarkers(patch)
         .replace(/^\uFEFF/, '')
         .replace(/\r\n/g, '\n')
@@ -394,18 +394,22 @@ function parsePatchBlocks(patch: string): PatchBlock[] | null {
     };
     for (const raw of lines) {
         const line = raw.replace(/\r$/, '').trimEnd();
-        // A mid-line SEARCH marker (junk prepended by an old clipping bug
-        // rides the same line) still opens a block - everything before the
-        // marker is junk the host executor ignores too.
+        // A real SEARCH marker is ALONE on its line (junk may ride in front of
+        // it from an old clipping bug - the host executor ignores that prefix
+        // too). A marker that continues into code is content, not a marker: a
+        // patch carrying the literal `"<<<<<<< SEARCH"` inside a string used to
+        // open a bogus block and render a nonsense diff instead of falling back
+        // to the raw view.
         const searchIdx = line.search(/<{7}\s*SEARCH/);
         if (searchIdx >= 0) {
-            const prefix = line.slice(0, searchIdx);
-            if (phase !== 'none') flush();
-            phase = 'search';
             const tail = line.slice(searchIdx).replace(/^<{7}\s*SEARCH[^\S\n]*/, '');
-            if (tail) search.push(tail);
-            else if (prefix) search.push(prefix);
-            continue;
+            if (!tail) {
+                const prefix = line.slice(0, searchIdx);
+                if (phase !== 'none') flush();
+                phase = 'search';
+                if (prefix) search.push(prefix);
+                continue;
+            }
         }
         if (/^={7}$/.test(line)) {
             if (phase !== 'search') return null;
