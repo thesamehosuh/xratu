@@ -256,6 +256,42 @@ ok(textSteps.length === 2 && textSteps[0].html === '<p>seg1</p>' && textSteps[1]
     'segmentsHtml attaches final html per text step');
 ok(tmsg.renderedHtml === undefined, 'matched segments suppress the single bottom block');
 
+// 20b. Steering splits one turn across two assistant bubbles. fullResponse
+//      must attach only the TRAILING segments to the post-steer bubble - a
+//      front-aligned / collapsed fallback would dump the whole answer
+//      (pre-steer prose included) at the end of the final bubble.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'do a then b' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('chunk', { value: 'first part ' }));
+s = reduceChat(s, M('toolCall', { tool: 'read_file', args: '{}', callId: 's1' }));
+s = reduceChat(s, M('toolResult', { tool: 'read_file', output: 'r', callId: 's1' }));
+const preSteerId = s.streamingId!;
+s = reduceChat(s, M('steerUser', { value: 'also do X' }));
+const postSteerId = s.streamingId!;
+ok(postSteerId !== preSteerId, 'steer opens a fresh assistant bubble');
+s = reduceChat(s, M('chunk', { value: 'second part' }));
+s = reduceChat(s, M('fullResponse', {
+    persian: 'first part second part',
+    segmentsHtml: ['<p>first part</p>', '<p>second part</p>'],
+}));
+const preSteer = s.messages.find((m) => m.id === preSteerId)!;
+const postSteer = s.messages.find((m) => m.id === postSteerId)!;
+const postText = postSteer.steps.filter((st) => st.kind === 'text');
+ok(preSteer.status === 'done', 'steer closes the in-flight bubble');
+ok(
+    postText.length === 1 && postText[0].html === '<p>second part</p>',
+    'post-steer bubble takes only the trailing segment'
+);
+ok(
+    postSteer.renderedHtml === undefined && !postText[0].text.includes('first part'),
+    'pre-steer prose is not bumped into the final bubble'
+);
+ok(
+    preSteer.steps.some((st) => st.kind === 'text' && st.text === 'first part '),
+    'pre-steer text step stays in its own bubble'
+);
+
 // 21. Mid-run usage events update the meter without ending the stream.
 s = createInitialChatState();
 s = reduceChat(s, M('startResponse'));

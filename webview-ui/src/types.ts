@@ -4,7 +4,11 @@
 export type ToExtensionMessage =
     | { type: 'webviewReady' }
     | { type: 'askQuestion'; value: string; attachments?: ComposerAttachment[] }
-    | { type: 'steerRun'; value: string; attachments?: ComposerAttachment[] }
+    /** Steer a LIVE run. `steerId` identifies the pending bubble the webview
+     *  holds until the host confirms the message was actually injected (after
+     *  the in-flight tool call finishes), so the timeline is never split while
+     *  the model is still busy. */
+    | { type: 'steerRun'; value: string; attachments?: ComposerAttachment[]; steerId?: string }
     | { type: 'toggleYolo' }
     | { type: 'togglePlanMode' }
     | { type: 'clearHistory' }
@@ -202,8 +206,16 @@ export type FromExtensionMessage =
     | { type: 'userCheckpoint'; userIndex: number; sha: string }
     /** Webview-internal (never sent by the host): a message steered into a
      *  LIVE run. Closes the in-flight assistant bubble at the steer point;
-     *  subsequent chunks open a fresh bubble AFTER the steer. */
+     *  subsequent chunks open a fresh bubble AFTER the steer. Dispatched when
+     *  the host confirms injection via `steerApplied` - NOT optimistically at
+     *  send time, so the split waits for the current tool call to finish. */
     | { type: 'steerUser'; value: string; attachments?: AttachmentMeta[] }
+    /** Host confirms the steer identified by `steerId` was injected into the
+     *  live run at a round boundary. `mode: 'turn'` means the run had already
+     *  settled, so the message starts an ordinary new turn (render a normal
+     *  user bubble, not a steered one); `mode: 'drop'` discards the held
+     *  bubble without rendering (session switched out from under it). */
+    | { type: 'steerApplied'; steerId: string; mode?: 'steer' | 'turn' | 'drop' }
     | { type: 'startResponse' }
     | { type: 'chunk'; value: string }
     // Throttled LIVE markdown render of the CURRENT text segment (host-side,
@@ -276,7 +288,7 @@ export type FromExtensionMessage =
     | { type: 'attachmentsFromHost'; attachments: ComposerAttachment[] }
     /** Attachment-rejection error - renders INLINE in the composer (not as a
      *  chat bubble), auto-dismisses. */
-    | { type: 'composerError'; value?: string; valueKey?: string; params?: Record<string, string> }
+    | { type: 'composerError'; value?: string; valueKey?: string; params?: Record<string, string>; steerId?: string }
     | { type: 'discoverLocalModels' }
     | { type: 'localModelsDiscovered'; runtimes: DiscoveredLocalRuntime[]; error?: string }
     /** Host-side notification banner (info/warning/error), optionally with

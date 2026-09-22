@@ -883,7 +883,7 @@ async function testSteerJoinsBeforeNextRound() {
             }, {
                 // Queued while round 1 was streaming; must drain at the round
                 // boundary - AFTER the tool result, BEFORE round 2's request.
-                drain: () => [{ text: 'also check b.txt' }],
+                drain: () => [{ text: 'also check b.txt', steerId: 'steer-7' }],
             })
         );
 
@@ -892,6 +892,9 @@ async function testSteerJoinsBeforeNextRound() {
         const toolResultIdx = events.findIndex((e: any) => e.type === 'toolResult');
         assert.ok(steerIdx > toolResultIdx, 'steer must follow the tool result');
         assert.equal((events[steerIdx] as any).text, 'also check b.txt');
+        // The webview's pending-bubble id rides the event back to the host,
+        // which confirms injection only at this real boundary.
+        assert.equal((events[steerIdx] as any).steerId, 'steer-7');
 
         // Round 2 request: steer sits AFTER the tool result, at the tail.
         const round2 = requests[1].body.messages;

@@ -58,7 +58,7 @@ export type LocalAgentEvent =
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; id: string; value: string }
     | { type: 'assistantMessage'; text: string; toolCalls: LocalToolCall[] }
-    | { type: 'steer'; text: string; attachments?: LocalImageAttachment[] }
+    | { type: 'steer'; text: string; attachments?: LocalImageAttachment[]; steerId?: string }
     | {
         type: 'needsApproval';
         approvalId: string;
@@ -185,6 +185,9 @@ export interface LocalApprovalGate {
 export interface LocalSteerMessage {
     text: string;
     attachments?: LocalImageAttachment[];
+    /** Opaque webview id echoed back on the `steer` event so the host can
+     *  confirm the pending bubble the moment it is actually injected. */
+    steerId?: string;
 }
 
 /** Injected into a running agent so the loop can pick up steered user
@@ -2812,7 +2815,12 @@ export async function* runLocalAgent(
                 const text = steer.text.trim();
                 if (!text && !steer.attachments?.length) continue;
                 messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
-                yield { type: 'steer', text, ...(steer.attachments?.length ? { attachments: steer.attachments } : {}) };
+                yield {
+                    type: 'steer',
+                    text,
+                    ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+                    ...(steer.steerId ? { steerId: steer.steerId } : {}),
+                };
             }
         }
     }

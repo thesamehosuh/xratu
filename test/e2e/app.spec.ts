@@ -428,3 +428,39 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     });
     expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test('a steer waits for the tool call: queued chip, then the bubble on steerApplied', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'restoreUser', value: 'do a then b' });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'chunk', value: 'first part ' });
+    // A tool call is in flight - the run is busy.
+    await hostMessage(page, { type: 'toolCall', tool: 'read_file', args: '{}', callId: 'c1' });
+
+    const userBefore = await page.locator('.msg.user').count();
+    const assistantBefore = await page.locator('.msg.assistant').count();
+
+    // Send while busy: a queued chip, NOT a timeline split.
+    await page.locator('.composer-input').fill('also check b.txt');
+    await page.locator('.composer-input').press('Enter');
+    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+    await expect(page.locator('.queued-steer-chip')).toContainText('also check b.txt');
+    expect(await page.locator('.msg.user').count()).toBe(userBefore);
+    expect(await page.locator('.msg.assistant').count()).toBe(assistantBefore);
+    expect(await page.locator('.msg.user.steered').count()).toBe(0);
+
+    // Host finishes the tool call and injects the steer at its boundary.
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
+    const steerId = sent.find((m) => m.type === 'steerRun')?.steerId;
+    expect(steerId).toBeTruthy();
+    await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: 'r', callId: 'c1' });
+    await hostMessage(page, { type: 'steerApplied', steerId });
+
+    // The held bubble now renders (with the steered badge) and the chip clears.
+    await expect(page.locator('.msg.user.steered')).toHaveCount(1);
+    await expect(page.locator('.msg.user.steered')).toContainText('also check b.txt');
+    await expect(page.locator('.queued-steer-chip')).toHaveCount(0);
+});
+

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { ChevronDown, Link, ListChecks } from 'lucide-react';
+import { ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
+    AttachmentMeta,
     ComposerAttachment,
     DiscoveredLocalRuntime,
     FromExtensionMessage,
@@ -215,6 +216,27 @@ export function App() {
     // so mid-run navigation can tell a live stream from a settled one.
     const busyRef = useRef(chat.busy);
     busyRef.current = chat.busy;
+
+    /** Steers sent while a run was live, held until the host confirms the
+     *  message was actually injected (`steerApplied`). Rendering the bubble
+     *  optimistically would split the timeline while the current tool call is
+     *  still running; the host injects at the next round boundary, so the
+     *  bubble must wait for that. Keyed by the steerId echoed back by the
+     *  host, with the webview's own attachments (image previews intact). */
+    const pendingSteers = useRef(new Map<string, { value: string; attachments: AttachmentMeta[] }>());
+    const steerSeq = useRef(0);
+    /** Mirror of the pending map for RENDERING: a compact "queued" chip while
+     *  the steer waits for the current tool call to finish. The ref stays the
+     *  source of truth for the message handler (registered once). */
+    const [queuedSteers, setQueuedSteers] = useState<Array<{ id: string; label: string }>>([]);
+    /** Release a held steer: drop it from the map and the visible chips. */
+    const releasePendingSteer = useCallback((id: string) => {
+        const entry = pendingSteers.current.get(id);
+        if (!entry) return undefined;
+        pendingSteers.current.delete(id);
+        setQueuedSteers((prev) => prev.filter((s) => s.id !== id));
+        return entry;
+    }, []);
 
     const dismissNotification = useCallback((id: string, action: string | null) => {
         setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -511,7 +533,23 @@ export function App() {
                 case 'fileList':
                     setWorkspaceFiles(msg.files);
                     break;
+                case 'steerApplied': {
+                    // Host injected the steer at a round boundary (or degraded
+                    // it to a fresh turn). Only NOW does the bubble render and
+                    // the queued chip clear.
+                    const pending = releasePendingSteer(msg.steerId);
+                    if (!pending || msg.mode === 'drop') break;
+                    dispatch({
+                        type: msg.mode === 'turn' ? 'restoreUser' : 'steerUser',
+                        value: pending.value,
+                        attachments: pending.attachments,
+                    } as FromExtensionMessage);
+                    break;
+                }
                 case 'composerError':
+                    // A steer rejected during validation never reaches the
+                    // queue - drop its held bubble + chip so it cannot render.
+                    if (msg.steerId) releasePendingSteer(msg.steerId);
                     setComposerError((prev) => ({ id: (prev?.id ?? 0) + 1, value: msg.value ?? '', valueKey: msg.valueKey, params: msg.params }));
                     break;
                 case 'byokSetupHint':
@@ -589,21 +627,17 @@ export function App() {
             }
             if (chat.busy) {
                 // The agent loop lives in the extension - STEER the live run.
-                // The message joins the conversation before the model's next
-                // tool call; the in-flight bubble closes at the steer point
-                // and the continuation opens a fresh one below it.
-                dispatch({
-                    type: 'steerUser',
-                    value,
-                    attachments: toAttachmentMeta(attachments),
-                } as FromExtensionMessage);
-                send({ type: 'steerRun', value, attachments });
-                atBottom.current = true;
-                const el = containerRef.current;
-                if (el) {
-                    el.scrollTo({ top: el.scrollHeight });
-                    setShowJump(false);
-                }
+                // The message is held as PENDING: it joins the conversation
+                // only after the current tool call finishes (the host's next
+                // round boundary) and confirms via `steerApplied`, so the
+                // timeline is not split while the model is still busy.
+                const steerId = `steer-${Date.now()}-${steerSeq.current++}`;
+                pendingSteers.current.set(steerId, { value, attachments: toAttachmentMeta(attachments) });
+                setQueuedSteers((prev) => [...prev, {
+                    id: steerId,
+                    label: value || attachments.map((a) => a.name).join(', '),
+                }]);
+                send({ type: 'steerRun', value, attachments, steerId });
                 return;
             }
             dispatch({
@@ -1024,6 +1058,20 @@ export function App() {
             {/* In-app banners sit above the composer card, same slot as the
                 byok-hint banner. */}
             {banner}
+            {/* Steers sent while busy wait for the current tool call to end.
+                A compact chip keeps each one visible until the host injects
+                it (then the real user bubble takes over). */}
+            {queuedSteers.length > 0 && (
+                <div className="queued-steers" aria-label={t('steerQueued')}>
+                    {queuedSteers.map((s) => (
+                        <span className="queued-steer-chip" key={s.id} title={t('steerQueuedTitle')}>
+                            <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
+                            <span className="queued-steer-label">{t('steerQueued')}</span>
+                            <span className="queued-steer-text" dir="auto">{s.label}</span>
+                        </span>
+                    ))}
+                </div>
+            )}
             <InputBar
                 busy={chat.busy}
                 usage={chat.lastUsage}

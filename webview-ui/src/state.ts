@@ -370,15 +370,24 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // When the host's per-segment renders line up with the streamed
             // text steps, each step carries its FINAL formatted content
             // between the pills - nothing is collapsed back into one bottom
-            // block. On a mismatch (e.g. an approval resume continued a text
-            // run) fall back to the single rendered block and drop the raw
-            // segments so nothing renders twice.
+            // block. Alignment is by the TAIL: a steer closes the in-flight
+            // bubble and opens a fresh one, so the CURRENT bubble owns the
+            // turn's TRAILING segments. Mapping from the front (or falling
+            // back to the single rendered block) would dump the whole answer -
+            // pre-steer prose included - into the final bubble, bumping every
+            // earlier AI text response to the end. Any leading text steps the
+            // segments no longer cover keep their live streamed html.
             let steps: Step[] | undefined;
             let renderedHtml = msg.renderedHtml;
-            if (streaming && segs && segs.length > 0 && segs.length === textSteps.length) {
-                let i = 0;
+            if (streaming && segs && segs.length > 0 && textSteps.length > 0) {
+                const tailSteps = textSteps.slice(Math.max(0, textSteps.length - segs.length));
+                const tailSegs = segs.slice(Math.max(0, segs.length - textSteps.length));
+                const htmlByStep = new Map<string, string>();
+                for (let i = 0; i < tailSteps.length; i++) htmlByStep.set(tailSteps[i].id, tailSegs[i]);
                 steps = streaming.steps.map((st) =>
-                    st.kind === 'text' ? { ...st, html: segs[i++] } : st
+                    st.kind === 'text' && htmlByStep.has(st.id)
+                        ? { ...st, html: htmlByStep.get(st.id) }
+                        : st
                 );
                 renderedHtml = undefined;
             } else if (streaming && textSteps.length > 0) {

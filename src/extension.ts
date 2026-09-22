@@ -765,6 +765,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         images?: LocalImageAttachment[];
         meta?: AttachmentMeta[];
         carryAttachments?: ComposerAttachment[];
+        /** Webview id of the pending bubble to confirm on injection. Absent
+         *  for steers routed from a plain askQuestion race (the webview
+         *  already rendered that user row). */
+        steerId?: string;
     }> = [];
     /** Identity of the current chat turn. `_handleSteer` captures it BEFORE
      *  its async attachment work and re-checks before queueing: a steer
@@ -2518,10 +2522,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  validation, PDF extraction) and queue it for the loop's next round
      *  boundary. With no live run (race: the turn settled first) it
      *  degrades to an ordinary send. */
-    private async _handleSteer(value: string, attachments?: ComposerAttachment[]): Promise<void> {
+    private async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
         const text = value.trim();
-        if (!text && !(attachments && attachments.length > 0)) return;
+        if (!text && !(attachments && attachments.length > 0)) {
+            this._confirmSteer(steerId, 'drop');
+            return;
+        }
+        // The webview holds the steer bubble until we confirm injection; a
+        // rejection below must release it (the composerError carries the id).
         if (!this._localRunActive) {
+            // Race: the run already settled. Degrade to an ordinary turn - the
+            // webview rendered nothing yet, so confirm first (mode 'turn').
+            this._confirmSteer(steerId, 'turn');
             void this._handleChatRequest(text, attachments);
             return;
         }
@@ -2536,31 +2548,32 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const sessionEpochAtEntry = this._sessionEpoch;
         const refError = await this._resolveReferenceAttachments(attachments);
         if (refError) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params });
+            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params, ...(steerId ? { steerId } : {}) });
             return;
         }
         const attachValidationError = validateHostAttachments(attachments);
         if (attachValidationError) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: attachValidationError.key, params: attachValidationError.params });
+            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: attachValidationError.key, params: attachValidationError.params, ...(steerId ? { steerId } : {}) });
             return;
         }
         const pdfExtraction = await extractPdfAttachments(attachments ?? []);
         if (pdfExtraction.error) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params });
+            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params, ...(steerId ? { steerId } : {}) });
             return;
         }
         const sendAttachments = pdfExtraction.attachments;
         if (this._sessionEpoch !== sessionEpochAtEntry) {
             // The session this steer belonged to was cleared/switched while
-            // attachments were processed - drop it silently; its bubbles are
-            // gone and queueing would corrupt the fresh session.
+            // attachments were processed - drop it; its bubbles are gone and
+            // queueing would corrupt the fresh session.
+            this._confirmSteer(steerId, 'drop');
             return;
         }
         if (!this._localRunActive || this._localTurnToken !== turnToken) {
-            // The targeted run settled while attachments were processed -
-            // the webview already rendered the steer bubble, so run the
-            // message as an ordinary turn (its own user row keeps the
-            // ledgers aligned with that bubble).
+            // The targeted run settled while attachments were processed - the
+            // webview held the bubble, so confirm it as a plain turn (its own
+            // user row keeps the ledgers aligned) and run it standalone.
+            this._confirmSteer(steerId, 'turn');
             void this._handleChatRequest(text, sendAttachments);
             return;
         }
@@ -2578,7 +2591,27 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     .filter((a) => isImageAttachment(a.mimeType))
                     .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
             } : {}),
+            ...(steerId ? { steerId } : {}),
         });
+    }
+
+    /** Confirm a pending steer bubble to the webview. Only steers that came
+     *  through `steerRun` carry an id; askQuestion-routed ones already
+     *  rendered their own user row. */
+    private _confirmSteer(steerId: string | undefined, mode: 'steer' | 'turn' | 'drop' = 'steer'): void {
+        if (!steerId) return;
+        this._view?.webview.postMessage({ type: 'steerApplied', steerId, mode });
+    }
+
+    /** Drop queued steers from `fromIndex` on (a session switch, a no-run
+     *  guard, or an empty completion) and release their held webview bubbles
+     *  so they cannot render later in the wrong session. */
+    private _discardQueuedSteers(fromIndex = 0): void {
+        for (const entry of this._localSteerQueue.slice(fromIndex)) {
+            this._confirmSteer(entry.steerId, 'drop');
+        }
+        if (fromIndex <= 0) this._localSteerQueue.length = 0;
+        else this._localSteerQueue.splice(fromIndex);
     }
 
     private async _runLocalAgent(
@@ -2778,6 +2811,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     drain: () => this._localSteerQueue.splice(0).map((e) => ({
                         text: e.text,
                         ...(e.images?.length ? { attachments: e.images } : {}),
+                        ...(e.steerId ? { steerId: e.steerId } : {}),
                     })),
                 },
             );
@@ -2889,9 +2923,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 });
                 break;
             case 'steer':
-                // Ledger-only: the webview rendered the steer bubble
-                // optimistically when it sent the steer. Events order it
-                // exactly where the model will see it.
+                // The webview held this steer bubble while the tool call ran;
+                // confirm it now so the timeline splits at the exact point the
+                // model receives the message.
+                this._confirmSteer(event.steerId);
+                // Ledger-only: the webview renders the bubble on confirmation.
                 outcome.events.push({
                     type: 'steer_user',
                     text: event.text,
@@ -3305,7 +3341,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             await this._handleChatRequest(data.value, data.attachments);
                             break;
                         case 'steerRun':
-                            void this._handleSteer(data.value, data.attachments);
+                            void this._handleSteer(data.value, data.attachments, data.steerId);
                             break;
                         case 'requestFileList':
                             void this._pushFileList();
@@ -5023,6 +5059,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // bubble when it steered.
                     while (this._localSteerQueue.length > 0 && epoch === this._sessionEpoch) {
                         const carry = this._localSteerQueue.shift()!;
+                        // Confirm the held bubble before the follow-up turn
+                        // streams, so the user row lands above its response.
+                        this._confirmSteer(carry.steerId);
                         this._pushLocalHistory({ role: 'user', content: carry.text });
                         this._history.push({
                             role: 'user',
@@ -5068,7 +5107,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // floor (a concurrent run's steers) is not ours to remove. The
                 // loop never started, so no drain can have shifted the indices.
                 if (this._localSteerQueue.length > steerQueueFloor) {
-                    this._localSteerQueue.splice(steerQueueFloor);
+                    this._discardQueuedSteers(steerQueueFloor);
                 }
             } else {
                 // Empty completion - no text, no events. Nothing streamed to
@@ -5081,7 +5120,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         console.error('xratu: local session persist failed:', e);
                     });
                 }
-                this._localSteerQueue.length = 0;
+                this._discardQueuedSteers();
                 this._view?.webview.postMessage({ type: 'error', valueKey: 'localNoResponse' });
             }
             } finally {
@@ -5096,7 +5135,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // turns: the carry loop that spawned them owns it, and a reset
                 // here would let a steer arriving between carry turns start a
                 // CONCURRENT second turn.
-                if (epoch !== this._sessionEpoch) this._localSteerQueue.length = 0;
+                if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
                 if (!opts?.steerCarry) {
                     this._localRunActive = false;
                     this._settleLocalRun();
@@ -5110,7 +5149,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // seed, attachment resolution, PDF extraction, project-tree I/O).
             // Idempotent - the inner finally performs the same bookkeeping
             // once the controller is registered.
-            if (epoch !== this._sessionEpoch) this._localSteerQueue.length = 0;
+            if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
             if (!opts?.steerCarry) {
                 this._localRunActive = false;
                 this._settleLocalRun();
@@ -5198,6 +5237,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history.push({ role: 'assistant', events: displayEvents, content: '' });
         while (this._localSteerQueue.length > 0) {
             const carry = this._localSteerQueue.shift()!;
+            // Never reached a round boundary before the cancel/error: release
+            // its held bubble so the rendered user rows match this ledger.
+            this._confirmSteer(carry.steerId);
             this._pushLocalHistory({ role: 'user', content: carry.text });
             this._history.push({
                 role: 'user',

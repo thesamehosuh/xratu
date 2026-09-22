@@ -1261,12 +1261,12 @@ button {
 }
 
 /* Steered user turn - sent into a LIVE run (queued at the agent loop's
-   next round). Same amber signal as a dropped connection on the corner
-   brackets plus an explicit badge, so "the model got this mid-run" is
-   stated, not implied. */
+   next round). The teal accent (same family as the corner brackets' normal
+   tint) plus an explicit badge, so "the model got this mid-run" is stated,
+   not implied. */
 .msg.user.steered::before,
 .msg.user.steered::after {
-    border-color: #bf8700;
+    border-color: var(--xratu-accent);
 }
 
 .msg-steered-badge {
@@ -1274,7 +1274,7 @@ button {
     align-items: flex-start;
     gap: 5px;
     margin-bottom: 6px;
-    color: #bf8700;
+    color: var(--xratu-accent-strong);
     font-size: var(--xratu-fs-xs);
 }
 
@@ -2426,6 +2426,35 @@ pre.tool-cmd {
     margin: 0;
 }
 
+/* Live terminal output while a command runs: the same capped scroll window as
+   a result, but the newest lines follow the bottom (MessageItem pins it). The
+   default light UA scrollbar reads as a foreign strip on the dark pill, so use
+   a thin themed slider; overscroll containment stops the wheel from chaining
+   into the transcript scroller at either end. */
+.term-live {
+    scrollbar-width: thin;
+    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2)) transparent;
+    overscroll-behavior: contain;
+}
+
+.term-live::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.term-live::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.term-live::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2));
+    border-radius: 4px;
+}
+
+.term-live::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
+}
+
 .term-err {
     color: #f85149;
 }
@@ -2581,6 +2610,57 @@ pre.tool-cmd {
 
 .msg-meta:last-child {
     margin-inline-start: auto;
+}
+
+/* Queued steer chips: a message sent while the run is busy waits for the
+   current tool call to end. Compact chips above the composer keep each one
+   visible until the host injects it; the real user bubble then replaces the
+   chip. Logical/symmetric spacing keeps RTL correct. */
+.queued-steers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px 0;
+    background: var(--xratu-shell);
+}
+
+.queued-steer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-width: 0;
+    padding: 3px 10px;
+    border: 1px dashed var(--vscode-widget-border);
+    border-radius: 999px;
+    background: var(--xratu-input);
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-sm);
+    line-height: 1.6;
+}
+
+.queued-steer-chip svg {
+    flex-shrink: 0;
+    animation: xratu-queued-pulse 1.4s ease-in-out infinite;
+}
+
+.queued-steer-label {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    opacity: 0.85;
+}
+
+.queued-steer-text {
+    min-width: 0;
+    max-width: 42ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@keyframes xratu-queued-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.9; }
 }
 
 /* ---------------------------------------------------------------------------
