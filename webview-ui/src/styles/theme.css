@@ -1137,10 +1137,6 @@ button {
     box-shadow: 0 0 0 3px var(--xratu-accent-faint);
 }
 
-.msg.approval-paused .msg-content.streaming::after {
-    display: none;
-}
-
 /* Empty state - brand mark + suggestion chips */
 .empty-state {
     margin: auto;
@@ -1766,36 +1762,6 @@ button {
     .pill-diff-code {
         font-size: 12px;
     }
-}
-
-/* ---------------------------------------------------------------------------
-   Streaming cursor (Cursor-like blinking caret at end of streamed content).
-   Lives on .msg-content::after so it also works while the host streams live
-   markdown HTML - no JS span needed. Rendered markdown always ends in a BLOCK
-   element (markdown-it wraps text in <p>…), which would push a container-level
-   inline-block caret onto its own empty line BELOW the text - so the caret
-   attaches INSIDE the last block (::after of the last child / grandchild),
-   and the container caret only renders for raw text-node content.
-   --------------------------------------------------------------------------- */
-.msg-content.streaming::after,
-.msg-content.streaming > :last-child:not(:has(*))::after,
-.msg-content.streaming > :last-child > :last-child::after {
-    content: '';
-    display: inline-block;
-    width: 2px;
-    height: 1.05em;
-    margin-inline-start: 2px;
-    vertical-align: text-bottom;
-    background: var(--xratu-accent);
-    border-radius: 1px;
-    animation: xratu-blink 1.05s steps(1, end) infinite;
-}
-
-/* Content made of element children (rendered markdown) carries the caret on
-   its last block (rules above) - suppress the container-level one so it can't
-   render a second, orphaned caret on a line of its own. */
-.msg-content.streaming:has(> *)::after {
-    content: none;
 }
 
 @keyframes xratu-blink {
