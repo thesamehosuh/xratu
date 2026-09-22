@@ -51,4 +51,56 @@ check('new-file idiom (empty SEARCH) still parses', () => {
     }
 });
 
+/** A patch that must be refused with an error matching `re`. */
+const throwsWith = (patch, re) => {
+    try { parsePatchBlocks(patch); } catch (e) {
+        if (!re.test(e.message)) throw new Error(`wrong error: ${e.message}`);
+        return;
+    }
+    throw new Error('expected refusal, got parsed blocks');
+};
+
+// --- precise diagnosis of an unusable patch --------------------------------
+// Regression: a patch sent without its final closing marker parsed to zero
+// blocks, and the caller reported only "no valid SEARCH/REPLACE blocks found"
+// - naming neither the fault nor the fix, so a one-line syntax slip became a
+// dead end (hit live while dogfooding).
+check('missing closing marker is named', () => {
+    throwsWith('<<<<<<< SEARCH\nold\n=======\nnew\n', /closing/i);
+});
+
+check('missing separator is named', () => {
+    throwsWith('<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n', /separator/i);
+});
+
+check('closing marker without an opener is named', () => {
+    throwsWith('>>>>>>> REPLACE\n', /opening/i);
+});
+
+check('unbalanced marker counts are named', () => {
+    throwsWith('<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n<<<<<<< SEARCH\nc\n=======\nd\n', /match/i);
+});
+
+check('stray text on a marker line is named', () => {
+    throwsWith('<<<<<<< search\na\n=======\nb\n>>>>>>> replace\n', /exactly/i);
+});
+
+check('every diagnosis mentions the marker', () => {
+    // The caller surfaces the message verbatim; keep it self-explanatory.
+    for (const bad of [
+        '<<<<<<< SEARCH\nold\n=======\nnew\n',
+        '<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n',
+        '>>>>>>> REPLACE\n',
+        '<<<<<<< search\na\n=======\nb\n>>>>>>> replace\n',
+    ]) {
+        try { parsePatchBlocks(bad); throw new Error(`not refused: ${bad}`); }
+        catch (e) { if (!/marker/i.test(e.message)) throw new Error(`no 'marker' in: ${e.message}`); }
+    }
+});
+
+check('marker-less text still returns [] so the caller keeps its own message', () => {
+    const blocks = parsePatchBlocks('plain prose, no markers here at all');
+    if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
+});
+
 process.exit(failed ? 1 : 0);

@@ -16,9 +16,12 @@
  *   webview / e2e  - need the webview build + a browser (separate CI steps)
  *   host           - this runner
  *
- * Requires the compiled host output (`out/`) because the suites under test
- * resolve `../out/*.js`. CI compiles before calling this; locally run
- * `npx tsc -p . --outDir out` first.
+ * Compiles the host itself before running anything, because the suites under
+ * test resolve `../out/*.js`. That is not a convenience: a STALE `out/` is
+ * worse than a missing one. Observed live - `tsc` failed with four TS2300
+ * errors while the previous build stayed in place, and this runner still
+ * reported "all 20 suites passed" against output that no longer matched the
+ * source. Compiling here makes that false green impossible.
  *
  * Run:  npm run test:host
  */
@@ -49,9 +52,24 @@ if (suites.length === 0) {
     process.exit(1);
 }
 
+// Compile FIRST: the suites import `../out/*.js`, so a failed compile with a
+// stale out/ left behind would run the PREVIOUS build and report green.
+console.log('host-tests: compiling host (npm run compile-tests)');
+const compile = crossSpawnSync('npm', ['run', '--silent', 'compile-tests'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+});
+if (compile.status !== 0) {
+    console.error(
+        '\nhost-tests: host compile FAILED - refusing to run the suites against '
+        + 'stale or missing out/ output.',
+    );
+    process.exit(1);
+}
+
 if (!existsSync(join(repoRoot, 'out'))) {
     console.error(
-        'host-tests: compiled host output is missing (out/).\n' +
+        'host-tests: compiled host output is missing (out/) after a successful compile.\n' +
         '  The suites require it - run:  npx tsc -p . --outDir out',
     );
     process.exit(1);

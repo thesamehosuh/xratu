@@ -17,6 +17,8 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
     IN_MEMORY_CONTENT_CAP,
+    MAX_CONTENT_CAP,
+    contentCapForWindow,
     MAX_IN_MEMORY_TURNS,
     MAX_STORED_TURNS,
     clipHistoryContent,
@@ -122,6 +124,69 @@ const shape = clipJsonValue({ a: 'x'.repeat(1000), b: [1, 2, { c: 'y'.repeat(100
 checkTrue('clipJsonValue keeps the object shape', typeof shape.a === 'string' && Array.isArray(shape.b));
 checkTrue('clipJsonValue clips nested leaves', shape.b[2].c.length < 1000);
 check('clipJsonValue leaves non-strings alone', clipJsonValue({ n: 5, t: true, z: null }, 300).n, 5);
+
+// --- contentCapForWindow: the cap must SCALE with the window ----------------
+// Regression: the fixed 40k-char cap (~13k tokens) was applied to every window.
+// On a 1M-token window at 11% fill it discarded ~80% of a legitimate 200k-char
+// tool result (head+tail clipped, middle gone) while ~935k tokens sat free.
+// The user experiences that as unexplained context loss.
+checkTrue('ceiling is at least the old floor', MAX_CONTENT_CAP >= IN_MEMORY_CONTENT_CAP);
+
+check('unknown window falls back to the old floor', contentCapForWindow(undefined), IN_MEMORY_CONTENT_CAP);
+check('null window falls back to the old floor', contentCapForWindow(null), IN_MEMORY_CONTENT_CAP);
+check('NaN window falls back to the old floor', contentCapForWindow(NaN), IN_MEMORY_CONTENT_CAP);
+check('tiny window keeps the old floor', contentCapForWindow(4095), IN_MEMORY_CONTENT_CAP);
+check('8k window keeps the old floor', contentCapForWindow(8192), IN_MEMORY_CONTENT_CAP);
+check('zero window keeps the old floor', contentCapForWindow(0), IN_MEMORY_CONTENT_CAP);
+
+// The property that matters most: never TIGHTER than before, on any window.
+let tighter = 0;
+for (const w of [undefined, null, NaN, 0, 1, 4096, 8192, 16_384, 32_768, 128_000, 200_000, 1_048_576, 1e9]) {
+    if (contentCapForWindow(w) < IN_MEMORY_CONTENT_CAP) tighter++;
+}
+check('never tighter than the old cap on any window', tighter, 0);
+
+// The regression itself: a 200k-char tool result must survive on a 1M window.
+const bigWindowCap = contentCapForWindow(1_048_576);
+checkTrue('1M window can hold a 200k-char message', bigWindowCap >= 200_000, `cap=${bigWindowCap}`);
+check('1M window cap is bounded by the ceiling', bigWindowCap, MAX_CONTENT_CAP);
+checkTrue(
+    '200k-char content is NOT clipped at a 1M window',
+    clipHistoryContent('x'.repeat(200_000), bigWindowCap).length === 200_000,
+);
+checkTrue(
+    'the same content IS clipped at the old fixed cap (the bug)',
+    clipHistoryContent('x'.repeat(200_000), IN_MEMORY_CONTENT_CAP).length <= IN_MEMORY_CONTENT_CAP,
+);
+
+// Mid-size windows scale between floor and ceiling.
+checkTrue('128k window cap is above the floor', contentCapForWindow(128_000) > IN_MEMORY_CONTENT_CAP);
+checkTrue('128k window cap is below the ceiling', contentCapForWindow(128_000) < MAX_CONTENT_CAP);
+
+// Monotonic non-decreasing in the window, and always within bounds.
+let last = 0;
+let monotonic = true;
+let outOfBounds = 0;
+for (const w of [4096, 8192, 16_384, 32_768, 65_536, 128_000, 262_144, 524_288, 1_048_576, 2_000_000]) {
+    const cap = contentCapForWindow(w);
+    if (cap < last) monotonic = false;
+    if (cap < IN_MEMORY_CONTENT_CAP || cap > MAX_CONTENT_CAP) outOfBounds++;
+    last = cap;
+}
+checkTrue('cap is monotonic in the window', monotonic);
+check('cap always stays within bounds', outOfBounds, 0);
+
+// Never throws, always a usable integer.
+let badCap = 0;
+for (const w of [undefined, null, NaN, Infinity, -Infinity, -1, 'x', {}, [], 0, 1e9, 2.5, true, 10n]) {
+    try {
+        const cap = contentCapForWindow(w);
+        if (!Number.isInteger(cap) || cap < IN_MEMORY_CONTENT_CAP || cap > MAX_CONTENT_CAP) badCap++;
+    } catch {
+        badCap++;
+    }
+}
+check('cap resolution never throws or leaves bounds', badCap, 0);
 
 if (failed) {
     console.error(`\n${failed} check(s) failed`);

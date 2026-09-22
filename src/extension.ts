@@ -44,7 +44,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, countUserRows, evictOldestTurns } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { resolveEditMode } from './tooling/editFileArgs';
@@ -2387,23 +2387,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  tool-call argument (an edit patch) cannot sit in memory at full size for
      *  the life of the session. */
     private _pushLocalHistory(row: { role: string; content?: string; tool_calls?: any[]; tool_call_id?: string }): void {
+        // Scale the per-message cap to the run's window: the fixed 40k-char cap
+        // (~13k tokens) silently discarded ~80% of a legitimate 200k-char tool
+        // result even at 11% window fill on a 1M window, which the user sees as
+        // context loss. Never tighter than before, generous when there is room.
+        const cap = contentCapForWindow(this._contextWindowHint());
         this._localHistory.push({
             ...row,
-            ...(typeof row.content === 'string' && row.content.length > IN_MEMORY_CONTENT_CAP
-                ? { content: clipHistoryContent(row.content) }
+            ...(typeof row.content === 'string' && row.content.length > cap
+                ? { content: clipHistoryContent(row.content, cap) }
                 : {}),
             ...(Array.isArray(row.tool_calls) && row.tool_calls.length
-                ? { tool_calls: row.tool_calls.map((tc) => this._clipToolCall(tc)) }
+                ? { tool_calls: row.tool_calls.map((tc) => this._clipToolCall(tc, cap)) }
                 : {}),
         });
     }
 
     /** Clip one tool call's `function.arguments` string. Kept valid JSON - the
      *  ledger is replayed to the provider, which rejects malformed arguments. */
-    private _clipToolCall(tc: any): any {
+    private _clipToolCall(tc: any, cap: number = IN_MEMORY_CONTENT_CAP): any {
         const args = tc?.function?.arguments;
-        if (typeof args !== 'string' || args.length <= IN_MEMORY_CONTENT_CAP) return tc;
-        return { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args) } };
+        if (typeof args !== 'string' || args.length <= cap) return tc;
+        return { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args, cap) } };
     }
 
     /** Drop the oldest complete turns from the model ledger past the cap.

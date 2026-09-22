@@ -7,6 +7,60 @@ import * as path from 'path';
 
 export interface PatchBlock { search: string; replace: string; }
 
+/** Count marker lines anchored at the start of a line (the parser only ever
+ *  treats line-initial markers as structural). */
+function countMarkerLines(patch: string, re: RegExp): number {
+    return (patch.match(re) ?? []).length;
+}
+
+/**
+ * Explain why a marker-based patch produced no blocks, or null when the text
+ * holds no marker-like content at all (the caller's generic message is then
+ * the honest answer).
+ *
+ * Regression: a patch sent without its final `>>>>>>> REPLACE` line parsed to
+ * zero blocks and the caller reported only "no valid SEARCH/REPLACE blocks
+ * found" - which names neither the fault nor the fix, so a recoverable
+ * syntax slip (an omitted closing marker) became a dead end. Diagnosing here
+ * keeps the explanation next to the parser that knows the exact grammar.
+ */
+export function diagnosePatchBlocks(patch: string): string | null {
+    const opens = countMarkerLines(patch, /^<<<<<<<.*$/gm);
+    const seps = countMarkerLines(patch, /^=======\r?$/gm);
+    const closes = countMarkerLines(patch, /^>>>>>>>.*$/gm);
+    if (opens === 0 && seps === 0 && closes === 0) return null;
+
+    if (opens > 0 && closes === 0) {
+        return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) but NO closing `
+            + `'>>>>>>> REPLACE' marker. Every block needs all three lines: '<<<<<<< SEARCH', `
+            + `'=======', '>>>>>>> REPLACE'. The closing marker is the one most often dropped - `
+            + `add it directly after the replacement text and re-send the SAME block unchanged.`;
+    }
+    if (opens > 0 && seps === 0) {
+        return `patch has ${opens} '<<<<<<< SEARCH' marker line(s) but no '=======' separator `
+            + `marker line. Each block needs '=======' alone on its own line between the search `
+            + `text and the replacement text.`;
+    }
+    if (opens === 0 && closes > 0) {
+        return `patch has ${closes} '>>>>>>> REPLACE' marker line(s) but no '<<<<<<< SEARCH' `
+            + `opening marker - every block starts with '<<<<<<< SEARCH'.`;
+    }
+    if (opens !== closes) {
+        return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) and ${closes} closing `
+            + `'>>>>>>> REPLACE' marker line(s) - the counts must match, one closing marker per `
+            + `opened block.`;
+    }
+    if (seps < opens) {
+        return `patch opens ${opens} block(s) but has only ${seps} '=======' separator marker `
+            + `line(s) - each block needs its own '=======' between search and replacement.`;
+    }
+    // Markers are present in plausible numbers yet no block parsed, so the
+    // FORM is off (stray text on a marker line, wrong case, trailing spaces).
+    return `patch contains SEARCH/REPLACE marker lines but no block parsed. Each marker must be `
+        + `exactly '<<<<<<< SEARCH', '=======' and '>>>>>>> REPLACE', alone on its own line `
+        + `(no trailing text, no leading whitespace).`;
+}
+
 /** Parse SEARCH/REPLACE patch blocks. Accepts the standard Cline/Claude-style
  *  markers (models emit these natively) and falls back to the legacy
  *  ===<<< … >>>=== internal variant. An EMPTY SEARCH block is the new-file
@@ -32,9 +86,21 @@ export function parsePatchBlocks(patch: string): PatchBlock[] {
                 );
             }
         }
+        // An opener with no closing marker is silently SKIPPED by the
+        // non-greedy scan: the earlier blocks parse, the unterminated one
+        // vanishes, and the caller believes the whole patch landed. Refuse
+        // rather than partially apply a patch the model thinks is complete.
+        const opened = countMarkerLines(patch, /^<<<<<<<.*$/gm);
+        if (opened > out.length) {
+            throw new Error(
+                `patch opens ${opened} block(s) but only ${out.length} close with '>>>>>>> REPLACE' - `
+                + `the counts must match. The unterminated block(s) would be silently dropped: add the `
+                + `missing closing marker and re-send the SAME patch.`
+            );
+        }
         return out;
     }
-    return patch
+    const legacy = patch
         .split('===<<<')
         .filter((b) => b.includes('>>>==='))
         .map((b) => {
@@ -42,6 +108,14 @@ export function parsePatchBlocks(patch: string): PatchBlock[] {
             return { search: (parts[0] ?? '').trim(), replace: (parts[1] ?? '').trim() };
         })
         .filter((b) => b.search.length > 0);
+    if (legacy.length > 0) return legacy;
+
+    // Nothing parsed. If the text looks like an attempted patch, say exactly
+    // what is wrong instead of handing back [] for the caller to describe
+    // generically; genuinely marker-less text still returns [].
+    const diagnosis = diagnosePatchBlocks(patch);
+    if (diagnosis) throw new Error(diagnosis);
+    return [];
 }
 
 function comparable(p: string): string {
