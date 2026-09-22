@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 /**
- * Prompt-cache SHAPE tests - the cacheable prefix must grow monotonically.
+ * Prompt-cache shape tests - the volatile tail note must not mutate replayed
+ * bytes, and must not break role alternation.
  *
- * Regression: cache hit rate was ~50% in xratu against >98% in a comparable
- * harness. Cause: the volatile per-round note was MERGED into the last
- * message's content. The note is never stored in `messages`, so the next
- * request replayed that message CLEAN - its bytes differed from what was sent
- * - and the cached prefix ended one message early, every round and every turn.
+ * Regression, measured live: the chat transport merged the per-round note into
+ * the last message's content. The note is never stored, so the NEXT request
+ * replayed that message clean; its bytes differed from what had been sent and
+ * the cached prefix ended one message EARLY, every round and every turn. In a
+ * tool-using loop that meant the newest tool result (usually the largest
+ * message) could never be read from cache - a ~50% hit rate against >98% for a
+ * harness that keeps its prefix stable.
  *
- * THE INVARIANT (stated precisely, because the first version of this test got
- * it wrong): for consecutive requests, the longest common prefix must equal
- * `stored.length` of the PREVIOUS request - that is, every message that
- * request sent, with the volatile note costing exactly ONE extra message at
- * the tail and nothing else.
+ * The fix appends the note as its OWN trailing user turn, so every stored
+ * message stays byte-exact and the cacheable prefix grows monotonically. It
+ * still merges when the last stored message is already `user`: some strict
+ * OpenAI-compatible servers and every Gemini endpoint reject consecutive
+ * same-role turns, and nothing is cached before the first request of a turn, so
+ * that merge costs no cache hit while the tool rounds keep the fix.
  *
- * Note the asymmetry that is easy to get wrong: a message PRODUCED in round N
- * cannot be read from cache in round N (it had never been sent before); it
- * becomes readable in round N+1. So the invariant is about the previous
- * request's stored messages, not about "the whole history".
- *
- * Run (after `npx tsc -p . --outDir out`):  node test/test-prompt-cache-shape.mjs
+ * Run: node test/test-prompt-cache-shape.mjs
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -43,106 +42,97 @@ function commonPrefix(a, b) {
     return i;
 }
 
-// Deliberately different every round - that is the point of a volatile note,
-// and exactly what the old merge could not survive.
+/** No two consecutive contents may share a role (Gemini / strict servers). */
+function alternates(messages) {
+    for (let i = 1; i < messages.length; i++) {
+        if (messages[i].role === messages[i - 1].role) return false;
+    }
+    return true;
+}
+
+// Deliberately different every round - that is the point of a volatile note.
 const note1 = '[Task list: 0/3 done]\n[Context status: 12% (120k/1048576 tokens)]';
 const note2 = '[Task list: 1/3 done]\n[Context status: 13% (131k/1048576 tokens)]';
 const note3 = '[Task list: 2/3 done]\n[Context status: 15% (157k/1048576 tokens)]';
 
-// --- the note must actually reach the model, without mutating anything -----
+// --- the note reaches the model, without mutating anything ------------------
 {
-    const base = [sys('S'), user('hello')];
-    const wire = appendTailNote(base, note1);
+    const toolEnding = [sys('S'), user('hello'), asst('calling tool'), tool('TOOL RESULT')];
+    const wire = appendTailNote(toolEnding, note1);
     ok('the note is present in the request', JSON.stringify(wire).includes('Context status'));
-    ok('the stored messages are not mutated', !JSON.stringify(base).includes('Context status'));
-    ok('a request gains exactly one message', wire.length === base.length + 1);
-    ok('the note is the LAST message', wire[wire.length - 1].content.includes('Context status'));
+    ok('the stored messages are not mutated', !JSON.stringify(toolEnding).includes('Context status'));
+    ok('a tool-ending request gains exactly one message', wire.length === toolEnding.length + 1);
+    ok('the note is its own LAST user turn', wire[wire.length - 1].role === 'user'
+        && String(wire[wire.length - 1].content).includes('Context status'));
+    ok('tool-ending shape keeps roles alternating', alternates(wire));
 }
 
-// --- WITHIN a turn --------------------------------------------------------
+// --- a user-ending request MERGES, to keep roles alternating ----------------
 {
-    const stored1 = [sys('S'), user('earlier turn'), user('do the thing')];
-    const wire1 = appendTailNote(stored1, note1);
-
-    const stored2 = [...stored1, asst('calling tool'), tool('TOOL RESULT 1')];
-    const wire2 = appendTailNote(stored2, note2);
-
-    const shared = commonPrefix(wire1, wire2);
-    ok(
-        "round 2 reuses ALL of round 1's stored prefix",
-        shared === stored1.length,
-        `shared=${shared}, stored1.length=${stored1.length}`,
-    );
-    ok('the changing note does not truncate the prefix', shared > 0);
+    const userEnding = [sys('S'), user('hello')];
+    const wire = appendTailNote(userEnding, note1);
+    ok('a user-ending request does NOT gain a second user turn', wire.length === userEnding.length);
+    ok('the merged note still reaches the model', String(wire[wire.length - 1].content).includes('Context status'));
+    ok('user-ending shape keeps roles alternating', alternates(wire));
+    ok('the merge does not mutate the stored array', !JSON.stringify(userEnding).includes('Context status'));
 }
 
-// --- ACROSS turns ---------------------------------------------------------
+// --- WITHIN a turn: the tool result must become byte-stable -----------------
 {
-    const stored1 = [sys('S'), user('turn one')];
-    const wire1 = appendTailNote(stored1, note1);
-
-    const stored2 = [...stored1, asst('worked'), tool('TOOL RESULT 1'), user('turn two')];
+    const stored2 = [sys('S'), user('u'), asst('calling tool'), tool('TOOL RESULT 1')];
     const wire2 = appendTailNote(stored2, note2);
 
-    const shared = commonPrefix(wire1, wire2);
-    ok(
-        "turn 2 reuses ALL of turn 1's stored prefix",
-        shared === stored1.length,
-        `shared=${shared}, stored1.length=${stored1.length}`,
-    );
+    const stored3 = [...stored2, asst('calling again'), tool('TOOL RESULT 2')];
+    const wire3 = appendTailNote(stored3, note3);
 
-    // Turn 3 is where turn 1's produced content becomes readable.
+    const shared = commonPrefix(wire2, wire3);
+    ok('round 3 reuses ALL of round 2\'s stored prefix', shared === stored2.length,
+        `shared=${shared}, want ${stored2.length}`);
+    ok('round 2\'s tool result is cacheable by round 3',
+        JSON.stringify(wire3.slice(0, shared)).includes('TOOL RESULT 1'));
+    ok('within-turn shapes keep roles alternating', alternates(wire2) && alternates(wire3));
+}
+
+// --- ACROSS turns: a finished turn's tool result must be reusable -----------
+{
+    const stored2 = [sys('S'), user('turn one'), asst('worked'), tool('TOOL RESULT 1'), user('turn two')];
+    const wire2 = appendTailNote(stored2, note2);
+
     const stored3 = [...stored2, asst('worked again'), tool('TOOL RESULT 2'), user('turn three')];
     const wire3 = appendTailNote(stored3, note3);
+
     const shared23 = commonPrefix(wire2, wire3);
-    ok(
-        "turn 3 reuses ALL of turn 2's stored prefix",
-        shared23 === stored2.length,
-        `shared=${shared23}, stored2.length=${stored2.length}`,
-    );
-    const cachedForTurn3 = JSON.stringify(wire3.slice(0, shared23));
-    ok(
-        "turn 1's tool result is cacheable by turn 3",
-        cachedForTurn3.includes('TOOL RESULT 1'),
-    );
+    // The trailing user turn is the ONE message the note merges into, so it is
+    // the only stored message turn 3 cannot reuse - every tool result before it
+    // (the large, expensive content) is reused.
+    ok('turn 3 reuses turn 2\'s prefix up to the trailing user turn', shared23 === stored2.length - 1,
+        `shared=${shared23}, want ${stored2.length - 1}`);
+    ok('turn 1\'s tool result is cacheable by turn 3',
+        JSON.stringify(wire3.slice(0, shared23)).includes('TOOL RESULT 1'));
+    ok('across-turn shapes keep roles alternating', alternates(wire2) && alternates(wire3));
 }
 
-// --- three rounds: the newest tool result must become cacheable -----------
+// --- a stale note must never leak into the replayed prefix ------------------
 {
-    const r1 = appendTailNote([sys('S'), user('u')], note1);
-    const stored2 = [sys('S'), user('u'), asst('a'), tool('t1')];
-    const r2 = appendTailNote(stored2, note2);
-    const stored3 = [...stored2, asst('a2'), tool('t2')];
-    const r3 = appendTailNote(stored3, note3);
-
-    const p12 = commonPrefix(r1, r2);
-    const p23 = commonPrefix(r2, r3);
-    ok('the cacheable prefix grows across rounds', p23 > p12, `p12=${p12} p23=${p23}`);
-    ok('round 3 reuses all of round 2', p23 === stored2.length, `p23=${p23}, want ${stored2.length}`);
-    ok(
-        "round 2's tool result is read from cache in round 3",
-        JSON.stringify(r3.slice(0, p23)).includes('t1'),
-    );
-}
-
-// --- a stale note must never leak into the replayed prefix ----------------
-{
-    const stored = [sys('S'), user('u')];
+    const stored = [sys('S'), user('u'), asst('a'), tool('t')];
     const wire = appendTailNote(stored, note1);
     const replayed = wire.slice(0, stored.length);
     ok('no stale note leaks into the replayed prefix', !JSON.stringify(replayed).includes('Context status'));
 }
 
-// --- robustness -----------------------------------------------------------
+// --- robustness -------------------------------------------------------------
 {
     ok('empty input is returned as-is', appendTailNote([], note1).length === 0);
     const base = [sys('S'), user('u')];
     ok('an empty note is a no-op', appendTailNote(base, '').length === base.length);
     const arr = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
-    ok('array content is handled', appendTailNote(arr, note1).length === 2);
+    const merged = appendTailNote(arr, note1);
+    ok('array content is merged in place', merged.length === 1
+        && merged[0].content.length === 2
+        && merged[0].content[1].text.includes('Context status'));
 }
 
-// --- PROOF: the old merge truncated the prefix, this does not -------------
+// --- PROOF: the old merge truncated the prefix, this does not --------------
 // Reproduces the removed implementation so the regression is MEASURED. If this
 // comparison ever stops showing a difference, the test has stopped testing.
 {
@@ -153,8 +143,7 @@ const note3 = '[Task list: 2/3 done]\n[Context status: 15% (157k/1048576 tokens)
         return out;
     };
 
-    const stored1 = [sys('S'), user('u1')];
-    const stored2 = [...stored1, asst('a1'), tool('TOOL RESULT 1')];
+    const stored2 = [sys('S'), user('u1'), asst('a1'), tool('TOOL RESULT 1')];
     const stored3 = [...stored2, asst('a2'), tool('TOOL RESULT 2')];
 
     const oldP23 = commonPrefix(oldAppend(stored2, note2), oldAppend(stored3, note3));
@@ -164,10 +153,8 @@ const note3 = '[Task list: 2/3 done]\n[Context status: 15% (157k/1048576 tokens)
     ok('the old merge fell one message short (regression reproduced)', oldP23 === stored2.length - 1, `old=${oldP23}`);
     ok('the new append reuses the whole previous prefix', newP23 === stored2.length, `new=${newP23}`);
     ok('the fix strictly improves the cacheable prefix', newP23 > oldP23, `old=${oldP23} new=${newP23}`);
-    ok(
-        "the old shape could not cache the newest tool result (the ~50% cause)",
-        !JSON.stringify(oldAppend(stored3, note3).slice(0, oldP23)).includes('TOOL RESULT 1'),
-    );
+    ok('the old shape could not cache the newest tool result (the ~50% cause)',
+        !JSON.stringify(oldAppend(stored3, note3).slice(0, oldP23)).includes('TOOL RESULT 1'));
 }
 
 console.log(failed === 0 ? '\nall prompt-cache-shape checks passed' : `\n${failed} check(s) failed`);
