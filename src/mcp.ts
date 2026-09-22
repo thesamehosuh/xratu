@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 import { parsePatchBlocks, sanitizePath } from './paths';
+import { resolveEditMode } from './tooling/editFileArgs';
 import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
 import { executeWebTool } from './webTools';
@@ -356,12 +357,20 @@ async function dispatchTool(
     onOutput?: (chunk: string) => void,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     if (name === 'edit_file') {
+        // Resolve `mode` FIRST: an unknown value must fail loudly, before any
+        // fs work and before a checkpoint is taken. This used to silently
+        // become "overwrite", so a botched partial-edit call (mode:
+        // "replace") destroyed the whole file instead of erroring.
+        const resolvedMode = resolveEditMode(args.mode);
+        if ('error' in resolvedMode) {
+            return { content: [{ type: 'text', text: resolvedMode.error }], isError: true };
+        }
         await ensureTurnSnapshot(workspaceRoot, 'before edit');
         const fullPath = sanitizePath(args.path, workspaceRoot);
         fs.mkdirSync(path.dirname(fullPath), { recursive: true });
         const existed = fs.existsSync(fullPath);
         const previous = existed ? fs.readFileSync(fullPath, 'utf-8') : '';
-        const mode = ['create', 'overwrite', 'append'].includes(args.mode) ? args.mode : 'overwrite';
+        const mode = resolvedMode.mode;
         if (mode === 'create' && existed) {
             return { content: [{ type: 'text', text: `Error: ${args.path} already exists - use mode "overwrite" to replace it or "append" to add to it.` }], isError: true };
         }
