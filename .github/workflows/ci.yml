@@ -50,61 +50,15 @@ jobs:
       - name: Webview E2E (Playwright)
         run: npm run test:e2e
 
-      # Host-side security suites. endpoint-guard tests require the compiled
-      # JS (they require out/endpointGuard.js), so emit it once here.
+      # Host-side suites (pure-node logic + security heuristics). Compile the
+      # host first - the suites resolve `../out/*.js` (endpoint-guard needs
+      # out/endpointGuard.js, etc.).
       - name: Compile host for node test suites
         run: npx tsc -p . --outDir out
 
-      - name: HTML sanitizer tests
-        run: npm run test:sanitizer
-
-      - name: Endpoint guard tests
-        run: npm run test:endpoint-guard
-
-      - name: Base URL normalization tests
-        run: npm run test:base-url
-
-      - name: Proxy resolution tests
-        run: npm run test:proxy
-
-      - name: Provider identity tests
-        run: npm run test:provider-identity
-
-      - name: API style routing tests
-        run: npm run test:api-style
-
-      - name: Provider HTTP error classification tests
-        run: npm run test:provider-errors
-
-      - name: Usage ledger tests
-        run: npm run test:usage-ledger
-
-      - name: Pricing tests
-        run: npm run test:pricing
-
-      - name: Farsi orthography guard
-        run: npm run test:farsi-orthography
-
-      - name: package.nls consistency
-        run: npm run test:nls
-
-      - name: Compaction tests
-        run: npm run test:compaction
-
-      - name: History bounds tests
-        run: npm run test:history-bounds
-
-      - name: Transient-network retry tests
-        run: npm run test:network-retry
-
-      - name: Session approval tests
-        run: npm run test:session-approval
-
-      - name: Agent skills tests
-        run: npm run test:skills
-
-      - name: Shadow checkpoint restore tests
-        run: npm run test:shadow-checkpoint
-
-      - name: Session store tests
-        run: npm run test:session-store
+      # ONE step, auto-discovering every `test:*` npm script (see
+      # test/run-host-tests.mjs). The hand-maintained step list this replaces
+      # had already drifted: test:model-metadata was never wired in at all,
+      # so 90 assertions only ran on machines where someone typed it.
+      - name: Host-side test suites
+        run: npm run test:host
