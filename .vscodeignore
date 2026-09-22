@@ -1,18 +1,47 @@
-# Don't include dev/build files in the VSIX package
+# Don't include dev/build files in the VSIX package.
+#
+# IMPORTANT: vsce reads ONLY this file. A .gitignore entry does NOT keep a
+# file out of the VSIX. Assuming otherwise is how 131 of 143 packaged files
+# ended up being machine-local agent tooling (.kilo/, .playwright-mcp/,
+# kilo.json - all marked "never commit" in .gitignore) plus tsc test output
+# and test artifacts. test/test-vsix-contents.mjs now fails CI if anything
+# outside the intended file set is packaged again.
 .vscode/
 .vscode-test/
 src/
 node_modules/
 .git/
+.github/
 *.ts
 tsconfig.json
 esbuild.js
 webpack.config.js
+vite.config.ts
 .gitignore
 *.md
 LICENSE
 test/
 **/*.test.ts
+
+# Machine-local agent tooling - see .gitignore. Gitignored is NOT enough.
+.kilo/
+.playwright-mcp/
+kilo.json
+
+# tsc output for the node test suites. The extension runs from the esbuild
+# bundle (dist/extension.js - see "main"), so out/ is never needed at runtime.
+out/
+
+# Test output and reports
+test-results/
+playwright-report/
+dist-tests/
+
+# Environment files and logs must never ship
+.env
+.env.*
+*.secrets.env
+*.log
 
 # Bundled default skills seed ~/.agents/skills on first run - the SKILL.md
 # assets must ship despite the *.md exclusion above.
@@ -26,7 +55,6 @@ assets/brand/**
 !LICENSE
 
 # React webview sources are compiled into dist/webview-ui; exclude the source
-# tree and the test bundles (npm run test:webview writes dist-tests/).
+# tree and the test bundles.
 webview-ui/
-dist-tests/
 dist/*.map
