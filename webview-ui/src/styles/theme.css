@@ -588,47 +588,44 @@ button {
 .jump-btn {
     position: absolute;
     bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
+    /* Bottom-start corner, not centered and not over the right-aligned user
+       turns - a centered button sits over the text column mid-transcript. */
+    left: 16px;
     z-index: 5;
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
     border-radius: 50%;
-    border: 1px solid var(--vscode-widget-border);
+    border: none;
     background: color-mix(in srgb, var(--xratu-shell) 72%, #000);
     color: var(--vscode-descriptionForeground);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(6px);
-    /* Own keyframes: the shared xratu-rise animates `transform`, which would
-       clobber the translateX(-50%) centering while it runs - the button
-       appears off-center and then jumps into place. */
     animation: xratu-jump-in 0.15s ease-out;
-    transition: color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    transition: color 0.15s ease, transform 0.15s ease;
 }
 
 @keyframes xratu-jump-in {
     from {
         opacity: 0;
-        transform: translateX(-50%) translateY(8px);
+        transform: translateY(8px);
     }
     to {
         opacity: 1;
-        transform: translateX(-50%);
+        transform: translateY(0);
     }
 }
 
 .jump-btn:hover {
     color: var(--xratu-accent-strong);
-    border-color: var(--xratu-accent);
-    transform: translateX(-50%) translateY(-2px);
+    transform: translateY(-2px);
 }
 
 .jump-btn:active {
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
 }
 
 .approval-card {
