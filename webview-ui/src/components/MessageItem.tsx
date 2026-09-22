@@ -14,6 +14,7 @@ import {
     CodeXml,
     Copy,
     CornerDownRight,
+    ExternalLink,
     FilePen,
     FileText,
     FolderOpen,
@@ -40,7 +41,7 @@ import {
 } from 'lucide-react';
 import type { ApprovalPayload, ChatMessage, ConnectionStatus, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
 
@@ -509,15 +510,111 @@ function PillDiffBlock({ block, lang }: { block: PatchBlock; lang: string }) {
 
 /** Edit-family diff view: per-line del/add tint with +/− gutter marks and
  *  IDE-style syntax highlighting, full-bleed on the pill background.
- *  Unparseable patch → plain text. */
+ *  Unparseable patch → a no-wrap raw scroll box (never a wrapped wall of
+ *  markers) with a short note. */
 function PatchBlocksView({ patch, lang }: { patch: string; lang: string }) {
     const blocks = useMemo(() => parsePatchBlocks(patch), [patch]);
-    if (!blocks) return <pre dir="ltr">{truncateArg(patch)}</pre>;
+    if (!blocks) {
+        return (
+            <div className="pill-patch-raw">
+                <p className="pill-patch-note">{t('patchUnparsed')}</p>
+                <pre className="pill-patch-pre" dir="ltr">{truncateArg(patch)}</pre>
+            </div>
+        );
+    }
     return (
         <div className="pill-diff" dir="ltr">
             {blocks.map((b, i) => (
                 <PillDiffBlock key={i} block={b} lang={lang} />
             ))}
+        </div>
+    );
+}
+
+interface EditStats {
+    add: number;
+    del: number;
+}
+
+/** +added / −removed counts for one patch, from the same LCS diff the pill
+ *  renders. Oversized blocks return null from diffBlockLines and are skipped. */
+function editStatsOf(patch: string): EditStats {
+    const blocks = parsePatchBlocks(patch);
+    const stats: EditStats = { add: 0, del: 0 };
+    if (!blocks) return stats;
+    for (const b of blocks) {
+        const lines = diffBlockLines(b.search, b.replace);
+        if (!lines) continue;
+        for (const l of lines) {
+            if (l.kind === 'add') stats.add++;
+            else if (l.kind === 'del') stats.del++;
+        }
+    }
+    return stats;
+}
+
+/** Sum of every patch a run of edit calls wrote. */
+function sumEditStats(calls: ToolRow[]): EditStats {
+    const total: EditStats = { add: 0, del: 0 };
+    for (const c of calls) {
+        const args = parseArgs(c.call.text);
+        const patch = argString(args, 'patch') ?? (c.call.text.includes('<<<<<<<') ? c.call.text : undefined);
+        if (!patch) continue;
+        const s = editStatsOf(patch);
+        total.add += s.add;
+        total.del += s.del;
+    }
+    return total;
+}
+
+/** Plain-text "+N −M" readout (no chip). */
+function EditStatsText({ stats }: { stats: EditStats }) {
+    return (
+        <span className="step-stat" dir="ltr">
+            <span className="a">+{stats.add}</span> <span className="d">−{stats.del}</span>
+        </span>
+    );
+}
+
+/** Per-file header inside an open edit body: path + change counts. The
+ *  open-in-editor affordance lives once on the pill summary, not per file. */
+function EditFileHead({ path, stats }: { path?: string; stats: EditStats }) {
+    return (
+        <div className="edit-file-head" dir="ltr">
+            <span className="edit-file-path">{path || 'patch'}</span>
+            <span className="edit-file-stat">
+                <span className="a">+{stats.add}</span> <span className="d">−{stats.del}</span>
+            </span>
+        </div>
+    );
+}
+
+/** One file's worth of an edit run (grouped multi-edit): header + diff. */
+function EditFileSection({ call, result }: { call: Step; result?: Step }) {
+    const args = useMemo(() => parseArgs(call.text), [call.text]);
+    const path = argString(args, 'path');
+    const patch = argString(args, 'patch');
+    const rawPatch = !patch && call.text.includes('<<<<<<<') ? call.text : undefined;
+    const effective = patch ?? rawPatch;
+    const stats = useMemo(() => (effective ? editStatsOf(effective) : { add: 0, del: 0 }), [effective]);
+    const done = !!call.result || !!result;
+    const failed = toolRowFailed(call, result);
+    return (
+        <div className="edit-file">
+            <EditFileHead path={path} stats={stats} />
+            {done ? (
+                effective !== undefined ? (
+                    <PatchBlocksView patch={effective} lang={extToLang(path ?? '')} />
+                ) : (
+                    <ArgView call={call} />
+                )
+            ) : (
+                <div className="tool-loading">
+                    <span className="spinner" aria-hidden="true" />
+                    <span>{t('toolRunning')}</span>
+                </div>
+            )}
+            {failed && <ResultLine text={resultTextOf(call, result)} />}
         </div>
     );
 }
@@ -603,31 +700,47 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
     // break JSON.parse) can still carry patch blocks in the raw text -
     // parsePatchBlocks strips the markers and ignores leading junk.
     const rawPatch = !patch && !content && call.text.includes('<<<<<<<') ? call.text : undefined;
+    const effectivePatch = patch ?? rawPatch;
+    const stats = useMemo(() => (effectivePatch ? editStatsOf(effectivePatch) : null), [effectivePatch]);
     // Edit bodies NEVER stream: the patch/content grows per chunk while the
     // tool runs, so the dropdown shows a loading row and renders the full
     // (shiki-highlighted) diff only when the write has finished.
     const done = !!call.result || !!result;
+    const failed = toolRowFailed(call, result);
     return (
         <>
-            {path && <PathLine path={path} />}
             {mode && <span className="tool-mode" dir="ltr">{mode}</span>}
             {done ? (
-                patch !== undefined ? (
-                    <PatchBlocksView patch={patch} lang={extToLang(path ?? '')} />
-                ) : rawPatch !== undefined ? (
-                    <PatchBlocksView patch={rawPatch} lang={extToLang(path ?? '')} />
-                ) : content !== undefined ? (
-                    <HighlightedPre code={truncateArg(content)} lang={extToLang(path ?? '')} />
-                ) : (
-                    <ArgView call={call} />
-                )
+                <>
+                    {effectivePatch !== undefined ? (
+                        <>
+                            <EditFileHead path={path} stats={stats ?? { add: 0, del: 0 }} />
+                            <PatchBlocksView patch={effectivePatch} lang={extToLang(path ?? '')} />
+                        </>
+                    ) : content !== undefined ? (
+                        <>
+                            {path && <PathLine path={path} />}
+                            <HighlightedPre code={truncateArg(content)} lang={extToLang(path ?? '')} />
+                        </>
+                    ) : (
+                        <>
+                            {path && <PathLine path={path} />}
+                            <ArgView call={call} />
+                        </>
+                    )}
+                </>
             ) : (
-                <div className="tool-loading">
-                    <span className="spinner" aria-hidden="true" />
-                    <span>{t('toolRunning')}</span>
-                </div>
+                <>
+                    {path && <PathLine path={path} />}
+                    <div className="tool-loading">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>{t('toolRunning')}</span>
+                    </div>
+                </>
             )}
-            <ResultLine text={resultTextOf(call, result)} />
+            {/* Result text is surfaced only on failure - a successful outcome
+                lives in the pill summary (+N −M), not as a line under the pill. */}
+            {failed && <ResultLine text={resultTextOf(call, result)} />}
         </>
     );
 }
@@ -703,11 +816,6 @@ function TerminalBody({ call, result }: { call: Step; result?: Step }) {
             {done ? (
                 parsed ? (
                     <div className="term-out" dir="ltr">
-                        {parsed.exitCode !== null && parsed.exitCode !== '0' && (
-                            <span className="term-exit err" dir="ltr">
-                                {t('termExitCode')}: {parsed.exitCode}
-                            </span>
-                        )}
                         {parsed.stdout && (
                             <>
                                 <span className="step-io-tag">{t('termStdout')}</span>
@@ -826,16 +934,21 @@ function ToolBody({ call, result }: { call: Step; result?: Step }) {
 /** A run of identical consecutive tool calls: one summary pill with an
  *  "×N" badge; expanding reveals each call as its own pill. */
 function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
-    const Icon = toolIcon(row.calls[0].call.tool);
-    const { fa } = toolLabel(row.calls[0].call.tool);
+    const tool = row.calls[0].call.tool;
+    const Icon = toolIcon(tool);
+    const { fa } = toolLabel(tool);
     const allDone = row.calls.every(toolRowDone);
     const anyFailed = row.calls.some((c) => toolRowFailed(c.call, c.result));
+    // A run of edits is ONE "N files edited" pill whose body is a per-file
+    // diff list - not N stacked edit pills.
+    const isEdit = toolFamily(tool) === 'edit';
+    const stats = useMemo(() => (isEdit ? sumEditStats(row.calls) : null), [isEdit, row.calls]);
     return (
         <details className={`step${allDone ? '' : ' running'}${anyFailed ? ' group-fail' : ''}`}>
             <summary>
                 <Icon size={13} className="step-icon" />
-                <span className="step-label" dir={fa === row.calls[0].call.tool ? 'ltr' : undefined}>
-                    {fa}
+                <span className="step-label" dir={isEdit ? undefined : fa === tool ? 'ltr' : undefined}>
+                    {isEdit ? tf('editedFiles', { count: String(row.calls.length) }) : fa}
                 </span>
                 {anyFailed ? (
                     <X size={13} className="step-status err" />
@@ -844,14 +957,27 @@ function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
                 ) : (
                     <span className="step-status spinner" aria-hidden="true" />
                 )}
-                <span className="step-count" dir="ltr">×{row.calls.length}</span>
+                {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
+                {isEdit && (
+                    <button type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}>
+                        <ExternalLink size={12} />
+                    </button>
+                )}
                 <ChevronDown size={13} className="step-chev" />
             </summary>
-            <div className="step-group-body">
-                {row.calls.map((c) => (
-                    <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} />
-                ))}
-            </div>
+            {isEdit ? (
+                <div className="step-body">
+                    {row.calls.map((c) => (
+                        <EditFileSection key={c.key} call={c.call} result={c.result} />
+                    ))}
+                </div>
+            ) : (
+                <div className="step-group-body">
+                    {row.calls.map((c) => (
+                        <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} />
+                    ))}
+                </div>
+            )}
         </details>
     );
 }
@@ -880,6 +1006,22 @@ function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'tool
         const el = thinkRef.current;
         if (el) thinkPinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     };
+
+    // Summary readouts (edit change counts, terminal exit code). Hooks stay
+    // unconditional ahead of the thinking early-return below.
+    const summaryCall = row.kind === 'thinking' ? null : row.call;
+    const summaryResult = row.kind === 'thinking' ? undefined : row.result;
+    const editStat = useMemo(() => {
+        if (!summaryCall || family !== 'edit') return null;
+        const args = parseArgs(summaryCall.text);
+        const patch = argString(args, 'patch') ?? (summaryCall.text.includes('<<<<<<<') ? summaryCall.text : undefined);
+        return patch ? editStatsOf(patch) : null;
+    }, [summaryCall, family]);
+    const termExit = useMemo(() => {
+        if (!summaryCall || family !== 'terminal') return null;
+        if (!toolRowDone({ key: '', call: summaryCall, result: summaryResult })) return null;
+        return parseTerminalOutput(resultTextOf(summaryCall, summaryResult))?.exitCode ?? null;
+    }, [summaryCall, summaryResult, family]);
 
     if (row.kind === 'thinking') {
         const dur = fmtDur((row.step.endedAt ?? 0) - (row.step.startedAt ?? 0));
@@ -940,6 +1082,17 @@ function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'tool
                     )
                 ) : (
                     <span className="step-status spinner" aria-hidden="true" />
+                )}
+                {editStat && <EditStatsText stats={editStat} />}
+                {termExit !== null && (
+                    <span className={`step-stat ${termExit === '0' ? 'ok' : 'd'}`} dir="ltr">
+                        {t('termExitCode')} {termExit}
+                    </span>
+                )}
+                {family === 'edit' && (
+                    <button type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}>
+                        <ExternalLink size={12} />
+                    </button>
                 )}
                 <ChevronDown size={13} className="step-chev" />
             </summary>

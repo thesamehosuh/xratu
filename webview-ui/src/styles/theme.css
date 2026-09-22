@@ -1316,7 +1316,10 @@ button {
 
 .msg.user {
     background: var(--xratu-bubble-user);
-    align-self: flex-end;
+    /* Physical, not logical: the user turn stays on the RIGHT in both locales
+       (align-self: flex-end would flip it to the left in RTL). */
+    margin-left: auto;
+    margin-right: 0;
     max-width: 85%;
     padding: 9px 12px;
 }
@@ -1793,19 +1796,12 @@ button {
     margin-bottom: 8px;
 }
 
-/* Tool pills sit between the sidebar background and the message bubble -
-   darker than the bubble, lightened when open. (Committed state.) */
+/* Tool pills carry NO surface of their own - the row and its open body sit
+   directly on the message background; the rail is the only structure. */
 .step {
     border-radius: var(--xratu-radius-sm);
-    background: color-mix(in srgb, var(--vscode-sideBar-background) 75%, #000);
     font-size: 12.5px;
     overflow: hidden;
-}
-
-/* Open pill drops the teal ring - sits BETWEEN the sidebar background and
-   the closed pill (75% sidebar / 25% black): lightened, not lit up. */
-.step[open] {
-    background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, #000);
 }
 
 .step[open] > summary .step-label {
@@ -1822,11 +1818,18 @@ button {
     color: var(--vscode-descriptionForeground);
     list-style: none;
     border-radius: var(--xratu-radius-sm);
-    transition: background 0.15s ease;
+    transition: color 0.15s ease;
 }
 
+/* No fill on hover: with no horizontal padding a background reads as a bar or
+   a blob. The row simply brightens - label and chevron to foreground, the icon
+   to the brighter teal. */
 .step summary:hover {
-    background: var(--xratu-accent-faint);
+    color: var(--vscode-foreground);
+}
+
+.step summary:hover .step-icon {
+    color: var(--xratu-accent-strong);
 }
 
 .step summary::-webkit-details-marker {
@@ -2218,7 +2221,7 @@ button {
 
 .step-chev {
     flex-shrink: 0;
-    opacity: 0.5;
+    opacity: 1;
     transition: transform 0.15s ease;
 }
 
@@ -2226,6 +2229,7 @@ button {
    descendant selector would flip every nested chevron permanently. */
 .step[open] > summary .step-chev {
     transform: rotate(180deg);
+    color: var(--vscode-foreground);
 }
 
 .step-body {
@@ -2233,6 +2237,125 @@ button {
     flex-direction: column;
     gap: 6px;
     padding: 2px 0 8px;
+}
+
+/* The open body is tied to its pill by one rail that drops straight from the
+   icon column; the body content lines up with the pill label. Applies to every
+   open pill - tool bodies, grouped runs, and reasoning. */
+.step[open] > .step-body,
+.step[open] > .step-group-body,
+.step[open] > .step-think-body,
+.step[open] > pre {
+    margin-inline-start: 6px;
+    padding-inline-start: 14px;
+    border-inline-start: 1px solid var(--xratu-accent-dim);
+}
+
+/* Plain-text run stats in a pill summary ("3 files +18 −6") - no chip. */
+.step-stat {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+}
+
+.step-stat .a {
+    color: #3fb950;
+}
+
+.step-stat .d {
+    color: #f85149;
+}
+
+.step-stat.ok {
+    color: #3fb950;
+}
+
+.step-stat.d {
+    color: #f85149;
+}
+
+/* Edit file sub-header inside an open edit body / edit group. */
+.edit-file-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border) 45%, transparent);
+}
+
+.edit-file-path {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-sm);
+    color: var(--xratu-accent);
+    direction: ltr;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.edit-file-stat {
+    flex-shrink: 0;
+    font-size: var(--xratu-fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+}
+
+.edit-file-stat .a {
+    color: #3fb950;
+}
+
+.edit-file-stat .d {
+    color: #f85149;
+}
+
+.edit-file-head .spacer {
+    flex: 1 1 auto;
+}
+
+/* Static "open in editor" affordance (wired up later). */
+.icon-btn-mini {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.55;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.icon-btn-mini:hover {
+    opacity: 1;
+    color: var(--vscode-foreground);
+    background: var(--xratu-accent-faint);
+}
+
+/* Unparseable patch: NEVER wrap the markers into a wall - a no-wrap scroll
+   box keeps SEARCH/REPLACE blocks legible. */
+.step pre.pill-patch-pre {
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 220px;
+    padding: 6px 8px;
+    border-radius: var(--xratu-radius-xs);
+    background: color-mix(in srgb, var(--vscode-sideBar-background) 70%, #000);
+    scrollbar-width: thin;
+}
+
+.pill-patch-note {
+    margin: 0 0 4px;
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
 }
 
 .step-io-tag {
@@ -2264,6 +2387,7 @@ button {
 .step > pre {
     padding: 2px 0 8px;
     max-height: 340px;
+    color: var(--vscode-descriptionForeground);
 }
 
 /* Rendered-markdown thinking body: same scroll window as the raw pre
@@ -2274,7 +2398,7 @@ button {
     padding: 2px 0 8px;
     font-size: 12.5px;
     line-height: 1.55;
-    color: var(--vscode-editor-foreground);
+    color: var(--vscode-descriptionForeground);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2333,9 +2457,9 @@ pre.tool-cmd {
 
 /* Per-line diff rows inside pill diff blocks (LCS-diffed SEARCH↔REPLACE):
    only real changes carry the tint + colored gutter bar - unchanged lines
-   stay neutral so the actual edit pops. Tints are deliberately LOW-alpha:
-   the diffEditor token backgrounds are tuned for the lighter editor
-   background and read as a dark veil over the tokens on the pill. */
+   stay neutral so the actual edit pops. Tints stay low-alpha (the diffEditor
+   tokens are tuned for the lighter editor background and read as a dark veil
+   over the tokens on the message surface). */
 .pill-diff-line {
     display: flex;
     align-items: baseline;
@@ -2344,12 +2468,12 @@ pre.tool-cmd {
 }
 
 .pill-diff-line.del {
-    background: rgba(248, 81, 73, 0.09);
+    background: rgba(248, 81, 73, 0.13);
     border-inline-start: 2px solid #f85149;
 }
 
 .pill-diff-line.add {
-    background: rgba(63, 185, 80, 0.09);
+    background: rgba(63, 185, 80, 0.13);
     border-inline-start: 2px solid #3fb950;
 }
 
@@ -2423,14 +2547,14 @@ pre.tool-cmd {
 }
 
 .step pre.pill-diff-del {
-    background: rgba(248, 81, 73, 0.09);
+    background: rgba(248, 81, 73, 0.13);
     border-inline-start: 2px solid #f85149;
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
 }
 
 .step pre.pill-diff-add {
-    background: rgba(63, 185, 80, 0.09);
+    background: rgba(63, 185, 80, 0.13);
     border-inline-start: 2px solid #3fb950;
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
