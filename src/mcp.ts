@@ -220,16 +220,18 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
         name: 'apply_patch',
         description: [
             'Edits ONE OR MORE places in an existing file using SEARCH/REPLACE blocks - the tool for ALL targeted edits (a single block replaces exactly one string; repeat blocks for multiple edits).',
-            'Format each block EXACTLY like this, repeating for every edit:',
-            '<<<<<<< SEARCH',
-            '<exact lines currently in the file>',
-            '=======',
-            '<replacement lines>',
-            '>>>>>>> REPLACE',
+            'Format each block EXACTLY like this, repeating for every edit. Every marker goes ALONE on its own line:',
+            // Rendered with REAL newlines. This example used to be joined with
+            // spaces, so all five markers appeared INLINE on a single line while
+            // the parser requires a newline after each. A model imitating the
+            // description then emitted a one-line patch that could never parse,
+            // and the error blamed a missing separator it could not see. The
+            // example must match the grammar it documents.
+            ['<<<<<<< SEARCH', '<exact lines currently in the file>', '=======', '<replacement lines>', '>>>>>>> REPLACE'].join('\n'),
             'SEARCH must match the current file (copy byte-exact from read_file output); leading indentation is auto-corrected and whitespace-normalized fallback matching applies.',
             'To CREATE a new file, use one block with an EMPTY SEARCH section and the full file content as REPLACE.',
             'Never include lines starting with <<<<<<<, =======, or >>>>>>> inside block content - the parser refuses such patches; edit those hunks with edit_file instead.',
-        ].join(' '),
+        ].join('\n'),
         inputSchema: {
             type: 'object',
             properties: {
