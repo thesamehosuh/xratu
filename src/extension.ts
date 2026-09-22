@@ -4501,7 +4501,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         : {}),
                 } : null,
             },
-            this._sessionTitle ?? undefined
+            this._sessionTitle ?? undefined,
+            // Persist at the SAME window-relative cap the run keeps in memory,
+            // so a reload restores what memory held instead of a silently
+            // shortened copy of it (the reload-loss sawtooth).
+            contentCapForWindow(this._contextWindowHint())
         );
         // The store derives the title from the first user message when the
         // user has not renamed the session - adopt it so the toolbar shows

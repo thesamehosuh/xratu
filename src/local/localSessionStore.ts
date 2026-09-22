@@ -205,7 +205,15 @@ function normalizeUsageByHost(raw: unknown): Record<string, { input: number; out
     return out;
 }
 
-function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot {
+/**
+ * `contentCap` is the per-message ceiling to PERSIST. Callers pass the same
+ * window-relative cap the run keeps in memory (`contentCapForWindow`), so a
+ * reload restores exactly what memory held. It used to be a fixed
+ * half-of-memory value, which is what silently shortened sessions on every
+ * reinstall - verified from a real snapshot containing
+ * `[...clipped 41230 chars...]`.
+ */
+function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = MAX_STORED_CONTENT): LocalSessionSnapshot {
     // Trim BOTH ledgers to the SAME turn boundary. They have different
     // rows-per-turn (localHistory carries tool rows), so slicing each by a row
     // count independently could cut them at different turns - and rewind maps a
@@ -228,7 +236,7 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot 
     const localHistory = trimRows(snapshot.localHistory, keepLocal).map((message) => ({
         ...message,
         content: typeof message.content === 'string'
-            ? clipHistoryContent(message.content, MAX_STORED_CONTENT)
+            ? clipHistoryContent(message.content, contentCap)
             : message.content,
     }));
     const uiHistory = trimRows(snapshot.uiHistory, keepUi).map((message: any) => ({
@@ -237,31 +245,31 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot): LocalSessionSnapshot 
         // `text` (legacy) - clip whichever is present so the on-disk policy
         // matches the in-memory one.
         ...(typeof message?.content === 'string'
-            ? { content: clipHistoryContent(message.content, MAX_STORED_CONTENT) }
+            ? { content: clipHistoryContent(message.content, contentCap) }
             : {}),
         ...(typeof message?.text === 'string'
-            ? { text: clipHistoryContent(message.text, MAX_STORED_CONTENT) }
+            ? { text: clipHistoryContent(message.text, contentCap) }
             : {}),
     }));
-    const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn) : null;
+    const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn, contentCap) : null;
     return { ...snapshot, localHistory, uiHistory, pendingTurn };
 }
 
-function sanitizePendingTurn(pt: LocalPendingTurn): LocalPendingTurn {
+function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
     const events = Array.isArray(pt.events) ? pt.events.slice(-40).map((event: any) => {
         if (event?.type === 'tool_result' && typeof event.output === 'string') {
-            return { ...event, output: clipHistoryContent(event.output, MAX_STORED_CONTENT) };
+            return { ...event, output: clipHistoryContent(event.output, contentCap) };
         }
         if (event?.type === 'assistant_message' && Array.isArray(event.tool_calls)) {
             return {
                 ...event,
                 content: typeof event.content === 'string'
-                    ? clipHistoryContent(event.content, MAX_STORED_CONTENT)
+                    ? clipHistoryContent(event.content, contentCap)
                     : event.content,
                 tool_calls: event.tool_calls.map((tc: any) => {
                     const args = tc?.function?.arguments;
-                    return typeof args === 'string' && args.length > MAX_STORED_CONTENT
-                        ? { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args, MAX_STORED_CONTENT) } }
+                    return typeof args === 'string' && args.length > contentCap
+                        ? { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args, contentCap) } }
                         : tc;
                 }),
             };
@@ -270,7 +278,7 @@ function sanitizePendingTurn(pt: LocalPendingTurn): LocalPendingTurn {
             // Clip NESTED string leaves (a top-level-only pass let nested
             // arguments bypass the persisted limit), then enforce a total-size
             // ceiling on the re-serialized payload.
-            const clipped = clipJsonValue(event.args, MAX_STORED_CONTENT);
+            const clipped = clipJsonValue(event.args, contentCap);
             let serialized = '';
             try { serialized = JSON.stringify(clipped); } catch { serialized = ''; }
             return {
@@ -524,10 +532,10 @@ export class LocalSessionStore {
         }
     }
 
-    private async writeMeta(meta: LocalSessionMeta, snapshot: LocalSessionSnapshot): Promise<void> {
+    private async writeMeta(meta: LocalSessionMeta, snapshot: LocalSessionSnapshot, contentCap: number = MAX_STORED_CONTENT): Promise<void> {
         const dir = this.sessionDir(meta.id);
         await fs.mkdir(dir, { recursive: true });
-        const payload = { ...meta, ...sanitizeSnapshot(snapshot) };
+        const payload = { ...meta, ...sanitizeSnapshot(snapshot, contentCap) };
         const temp = path.join(dir, 'snapshot.json.tmp');
         await fs.writeFile(temp, JSON.stringify(payload), 'utf8');
         await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
@@ -540,11 +548,11 @@ export class LocalSessionStore {
      *  message (server-matching rule) until the user explicitly renames the
      *  session - `_create` only seeds the workspace label, so without the
      *  re-derivation every session would keep that placeholder forever. */
-    async save(id: string, snapshot: LocalSessionSnapshot, renamedTitle?: string): Promise<{ meta: LocalSessionMeta } | null> {
-        return this.enqueue(() => this._save(id, snapshot, renamedTitle));
+    async save(id: string, snapshot: LocalSessionSnapshot, renamedTitle?: string, contentCap?: number): Promise<{ meta: LocalSessionMeta } | null> {
+        return this.enqueue(() => this._save(id, snapshot, renamedTitle, contentCap));
     }
 
-    private async _save(id: string, snapshot: LocalSessionSnapshot, renamedTitle?: string): Promise<{ meta: LocalSessionMeta } | null> {
+    private async _save(id: string, snapshot: LocalSessionSnapshot, renamedTitle?: string, contentCap?: number): Promise<{ meta: LocalSessionMeta } | null> {
         const index = await this.readIndex();
         const existing = index[id];
         const title = renamedTitle ?? (existing?.renamed
@@ -558,7 +566,7 @@ export class LocalSessionStore {
             updatedAt: Date.now(),
             ...(existing?.renamed ? { renamed: true } : {}),
         };
-        await this.writeMeta(meta, snapshot);
+        await this.writeMeta(meta, snapshot, contentCap);
         return { meta };
     }
 
