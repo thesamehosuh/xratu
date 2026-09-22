@@ -150,6 +150,12 @@ export interface LocalAgentRequest {
      *  stops calling tools, not at a fixed count. */
     maxRounds?: number;
     contextWindow?: number | null;
+    /** Fraction of the window (0-1) at which proactive compaction fires.
+     *  Absent uses AUTO_COMPACT_RATIO. The host reads
+     *  `xratu.autoCompactThreshold` so the policy is the user's choice rather
+     *  than a constant - Cline's rule, and the right one: compacting early
+     *  costs cache hits and a summarizer call, compacting late risks overflow. */
+    autoCompactRatio?: number;
     /** Current session task list (client-echoed, user edits merged) -
      *  appended to the system message each round so the model stays on-plan
      *  even after compaction dropped the original tool call. */
@@ -2158,10 +2164,14 @@ function contextStatusLine(usedTokens: number, windowTokens?: number | null): st
     return `\n\n[Context status: ${pct}% of the ${windowTokens}-token context window is in use (${usedTokens}/${windowTokens} tokens).]`;
 }
 
-function contextHint(usedTokens: number, windowTokens?: number | null): string {
+function contextHint(
+    usedTokens: number,
+    windowTokens?: number | null,
+    compactRatio: number = AUTO_COMPACT_RATIO,
+): string {
     if (!windowTokens || windowTokens <= 0) return '';
     const ratio = usedTokens / windowTokens;
-    if (ratio > AUTO_COMPACT_RATIO) {
+    if (ratio > compactRatio) {
         return '\n\n⚠ CONTEXT CRITICAL: the context window is nearly exhausted and older turns may have been removed. Keep responses minimal, avoid re-reading files, and prefer precise edits.';
     }
     if (ratio > 0.7) {
@@ -2196,6 +2206,7 @@ export function compactMessages(
     usedTokens?: number,
     toolTokens = 0,
     force = false,
+    ratio: number = AUTO_COMPACT_RATIO,
 ): LocalAgentMessage[] {
     // Proactive compaction keeps its 4k-window floor; forced recovery (the
     // server just rejected the prompt as too long) runs on ANY real window.
@@ -2203,7 +2214,11 @@ export function compactMessages(
     // Include tool-schema overhead in the occupancy so the mechanical trim
     // fires on small windows where schemas are a large fraction of the prompt.
     let total = (usedTokens ?? estimateRunTokens(messages)) + toolTokens;
-    if (!force && (windowTokens < 4096 || total < windowTokens * AUTO_COMPACT_RATIO)) return [];
+    // `ratio` is the caller's threshold (default AUTO_COMPACT_RATIO, settable
+    // per run). Cline makes this user-configurable for good reason: the right
+    // point to compact is a policy choice, not a constant - compacting early
+    // costs cache hits and a summarizer call, compacting late risks overflow.
+    if (!force && (windowTokens < 4096 || total < windowTokens * ratio)) return [];
     // The estimated prompt size that triggered this call. On a FORCED recovery
     // the server just REJECTED a prompt at least this big (the estimator is a
     // lower bound), so the configured window is demonstrably larger than the
@@ -2231,6 +2246,25 @@ export function compactMessages(
     // Basing the target on what actually failed does that in a single pass.
     const basis = force ? observed : windowTokens;
     const target = Math.max(2048, Math.floor(basis * AUTO_COMPACT_TARGET_RATIO));
+
+    // CHEAP TIER, tried before anything is dropped or summarized: elide stale
+    // tool output. It is model-free, costs nothing, and loses far less than
+    // dropping a turn (which discards the user's request and the model's
+    // reasoning along with the tool output). When it reclaims enough on its
+    // own, return [] - no turns dropped and no summarizer call, which is the
+    // difference between a gentle trim and an expensive, lossy one.
+    //
+    // The forced path deliberately does NOT take the early return: there the
+    // estimate just proved unreliable (the server rejected the prompt), so a
+    // turn is still dropped to guarantee progress. Elision simply means less
+    // has to go.
+    // `lastUser` bounds elision to the droppable history: the current turn
+    // (from `lastUser` on) must stay intact, exactly as the turn loop below
+    // guarantees for whole-turn drops.
+    if (elideOldToolResults(messages, TOOL_RESULT_ELISION_KEEP, lastUser)) {
+        total = Math.max(0, total - Math.max(0, observed - estimateRunTokens(messages) - toolTokens));
+        if (!force && total <= target) return [];
+    }
     let start = 1;
     while (start < lastUser && (total > target || (force && start === 1))) {
         let end = start + 1;
@@ -2258,6 +2292,59 @@ const TOOL_RESULT_TOTAL_RATIO = 0.5;
 const TOOL_RESULT_MIN_CHARS = 800;
 /** Last-resort replacement when even the floor cannot fit the budget. */
 const TOOL_RESULT_OMISSION = '[tool output omitted to fit the context window]';
+
+/** Tool results kept intact by the cheap elision tier (see below). */
+export const TOOL_RESULT_ELISION_KEEP = 5;
+/** Replacement for an elided tool result. Says how to recover the content. */
+export const TOOL_RESULT_ELISION_MARKER =
+    '[older tool result elided to reclaim context - re-run the tool if you need this output again]';
+
+/**
+ * CHEAP TIER of context reclamation: elide all but the most recent tool results.
+ *
+ * Modelled on Claude Code's micro-compaction, which is model-free and targets
+ * tool output because that is the primary source of context bloat. It is
+ * strictly gentler than what it replaces: dropping a whole turn loses the
+ * user's request, the model's reasoning AND the tool output, while this loses
+ * only stale tool output - and the model is told how to recover it.
+ *
+ * Deliberately model-free and free, so it can run BEFORE the expensive
+ * summarization path. When it reclaims enough, the run skips both the turn
+ * drops and the summarizer call entirely (see `compactMessages`).
+ *
+ * `beforeIndex` (the caller passes the CURRENT TURN's first index, `lastUser`)
+ * bounds elision to turns that compaction may touch at all: a single user turn
+ * can call more than `keepLast` tools, and eliding those mid-turn would strip
+ * results the model is actively reasoning over - exactly what `compactMessages`
+ * guarantees it will not do.
+ *
+ * A row is only replaced when the marker is genuinely SMALLER: a short result
+ * ('ok') can be shorter than the marker, and growing it would raise occupancy
+ * while the caller subtracts a zero reclaim, leaving its running estimate
+ * stale and its target unmet.
+ *
+ * Mutates `messages`; returns the estimated tokens reclaimed.
+ */
+export function elideOldToolResults(
+    messages: LocalAgentMessage[],
+    keepLast = TOOL_RESULT_ELISION_KEEP,
+    beforeIndex = messages.length,
+): number {
+    const limit = Math.min(beforeIndex, messages.length);
+    const idxs: number[] = [];
+    for (let i = 1; i < limit; i++) {
+        if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
+    }
+    if (idxs.length <= keepLast) return 0;
+    const before = estimateRunTokens(messages);
+    for (const i of idxs.slice(0, idxs.length - keepLast)) {
+        const current = messages[i].content as string;
+        if (current === TOOL_RESULT_ELISION_MARKER) continue;
+        if (TOOL_RESULT_ELISION_MARKER.length >= current.length) continue;
+        messages[i] = { ...messages[i], content: TOOL_RESULT_ELISION_MARKER };
+    }
+    return Math.max(0, before - estimateRunTokens(messages));
+}
 
 /**
  * Bound tool results to a window-relative budget.
@@ -2565,7 +2652,10 @@ async function compactWithSummary(
     existingSummary: string | null,
     toolTokens = 0,
 ): Promise<string | null> {
-    const dropped = compactMessages(messages, windowTokens, usedTokens, toolTokens);
+    const dropped = compactMessages(
+        messages, windowTokens, usedTokens, toolTokens, false,
+        request.autoCompactRatio ?? AUTO_COMPACT_RATIO,
+    );
     if (!dropped.length) return null;
     const summary = await summarizeDroppedTurns(request, dropped, existingSummary, windowTokens);
     if (summary) {
@@ -2613,6 +2703,10 @@ export async function* runLocalAgent(
 ): AsyncGenerator<LocalAgentEvent> {
     const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
+    // Threshold for this run: the host's setting, else the default. Used by the
+    // mid-run gate, the pre-request compaction and the context hints so all
+    // three agree on when the window counts as "full".
+    const compactRatio = request.autoCompactRatio ?? AUTO_COMPACT_RATIO;
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
     const toolTokens = estimateToolTokens(request.tools);
@@ -2636,7 +2730,7 @@ export async function* runLocalAgent(
     const tailNoteFor = (usedTokens: number): string =>
         taskListReminderLine(reminderTaskList(request))
         + contextStatusLine(usedTokens, windowTokens)
-        + contextHint(usedTokens, windowTokens);
+        + contextHint(usedTokens, windowTokens, compactRatio);
 
     const history = boundHistory(request.history ?? [], request.contextWindow, toolTokens);
     let imageFormat: ImageUrlFormat = 'data-uri';
@@ -2848,7 +2942,7 @@ export async function* runLocalAgent(
         // NOW instead of failing the next request outright.
         if (finalResult.usage?.promptTokens != null) {
             let used = finalResult.usage.promptTokens + (finalResult.usage.completionTokens ?? 0);
-            if (windowTokens && used >= windowTokens * AUTO_COMPACT_RATIO) {
+            if (windowTokens && used >= windowTokens * compactRatio) {
                 const summary = await compactWithSummary(
                     messages, request, windowTokens, used, sessionSummary,
                 );

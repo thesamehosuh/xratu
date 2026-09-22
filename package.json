@@ -91,6 +91,11 @@
 					"type": "number",
 					"default": 0,
 					"description": "%config.maxAgentRounds.desc%"
+				},
+				"xratu.autoCompactThreshold": {
+					"type": "number",
+					"default": 90,
+					"description": "%config.autoCompactThreshold.desc%"
 				}
 			},
 			"restrictedConfigurations": [
@@ -202,6 +207,7 @@
 		"test:reasoning-replay": "node test/test-reasoning-replay.mjs",
 		"test:prompt-cache-shape": "node test/test-prompt-cache-shape.mjs",
 		"test:prompt-cache-rate": "node test/test-prompt-cache-rate.mjs",
+		"test:compaction-policy": "node test/test-compaction-policy.mjs",
 		"package": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && node esbuild.js --production && vite build --mode production",
 		"package-vsix": "npx vsce package --no-dependencies",
 		"compile-tests": "tsc -p . --outDir out",
