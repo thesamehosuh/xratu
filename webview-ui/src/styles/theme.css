@@ -26,14 +26,21 @@
     --xratu-accent-dim: rgba(20, 227, 200, 0.18);
     --xratu-accent-faint: rgba(20, 227, 200, 0.08);
 
-    /* Bubbles read by elevation, not outline: the assistant turn sits a clear
-       step above the shell, the user turn a step below it. */
+    /* Bubbles read by elevation, not outline: the assistant turn is frameless
+       (brackets + content sitting directly on the shell), and the user turn is
+       a filled capsule one step below it. */
     --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
     /* One shared "inset" surface: the user turn, the composer, dropdowns,
        suggestion cards and icon tiles all sit on the same dark tone. */
     --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
     --xratu-bubble-user: var(--xratu-surface-inset);
     --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
+
+    /* Fenced-code surfaces - one inset step below the message. Tokenized so a
+       light theme inverts toward the FOREGROUND (a light gray inset) instead
+       of toward black. */
+    --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
+    --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
 
     /* Sub-page card tone - the composer card's exact color, kept from the
        sub-page redesign (settings/capabilities/credentials/welcome). */
@@ -107,6 +114,8 @@ body.vscode-light {
     --xratu-bubble: var(--vscode-editor-background);
     --xratu-surface-inset: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
     --xratu-bubble-user: var(--xratu-surface-inset);
+    --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+    --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground));
 }
 
 html,
@@ -1633,7 +1642,7 @@ button {
     margin: 12px 0;
     overflow: hidden;
     border-radius: var(--xratu-radius-sm);
-    background: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
+    background: var(--xratu-code-bg);
     direction: ltr;
     unicode-bidi: isolate;
 }
@@ -1646,7 +1655,7 @@ button {
     min-height: 30px;
     padding: 4px 8px 4px 10px;
     border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent);
-    background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+    background: var(--xratu-code-head-bg);
 }
 
 .code-title {
@@ -1744,6 +1753,17 @@ button {
     .code-surface > pre,
     .code-surface > pre.shiki {
         padding: 9px 10px;
+        font-size: 12px;
+    }
+
+    /* Keep the narrow code/pill scale consistent - without these the pill and
+       diff type stays 12.5px while fenced code drops to 12px. */
+    .step,
+    .step pre,
+    .step-think-body,
+    .tool-path,
+    pre.tool-cmd,
+    .pill-diff-code {
         font-size: 12px;
     }
 }
@@ -7193,8 +7213,10 @@ button.mcp-row-main:hover strong {
 /* Persian placeholders inside LTR-locked key/search inputs render scrambled
    word order under the input's LTR base direction (e.g. "کلید API خود را…"
    came out reordered). Chromium IGNORES `direction` on ::placeholder, so the
-   fix flips the INPUT while it is empty (`:placeholder-shown`) and it snaps
-   back to LTR the moment a value is typed - keys and URLs stay LTR. */
+   fix flips the INPUT while it is empty (`:placeholder-shown`). The
+   credential inputs (dir="ltr") snap back to LTR once a value is typed;
+   the dir="auto" controls (session search, task-list edit) instead keep the
+   direction their value resolves to - RTL for Persian, LTR for a URL. */
 [dir='rtl'] .cred-secret input:placeholder-shown,
 [dir='rtl'] .saved-edit-row input:placeholder-shown,
 [dir='rtl'] .cred-search-wrap input:placeholder-shown,
@@ -7214,11 +7236,15 @@ button.mcp-row-main:hover strong {
     *::before,
     *::after {
         animation-duration: 0.01ms !important;
+        animation-delay: 0s !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
 
-    .spinner {
+    /* Progress indicators stay turning: they are the only "still working"
+       signal when a row has no text yet. */
+    .spinner,
+    .spinning {
         animation-duration: 0.8s !important;
         animation-iteration-count: infinite !important;
     }
