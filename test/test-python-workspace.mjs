@@ -22,7 +22,7 @@
 import { createRequire } from 'module';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, basename } from 'path';
+import { join, sep, isAbsolute } from 'path';
 
 const require = createRequire(import.meta.url);
 const { findManifestDir, pythonWorkspace, PYTHON_MANIFESTS } = require('../out/tooling/pythonWorkspace.js');
@@ -275,11 +275,23 @@ try {
     }
 
     {
+        // No venv and no $VIRTUAL_ENV -> the bare PATH name, not a stray path.
         setVirtualEnv(undefined);
         const root = newRoot();
         const ws = pythonWorkspace(root);
-        check('interpreter path is absolute-ish under root', ws.python === 'python' || existsSync(ws.python), true);
+        check('no venv -> bare PATH name, not a stray interpreter', ws.python, 'python');
         check('returned cwd exists on disk', existsSync(ws.cwd), true);
+    }
+
+    {
+        // A detected interpreter must live INSIDE the fixture root: an
+        // unrelated existing path on disk must not satisfy this.
+        setVirtualEnv(undefined);
+        const root = newRoot();
+        const expected = makeVenv(root, '.venv');
+        const ws = pythonWorkspace(root);
+        check('detected interpreter is under the workspace root', ws.python, expected);
+        ok('detected interpreter path is beneath root', isAbsolute(ws.python) && ws.python.startsWith(root + sep));
     }
 } finally {
     setVirtualEnv(savedVenv);
