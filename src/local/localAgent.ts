@@ -2140,9 +2140,11 @@ export function compactMessages(
     // fires on small windows where schemas are a large fraction of the prompt.
     let total = (usedTokens ?? estimateRunTokens(messages)) + toolTokens;
     if (!force && (windowTokens < 4096 || total < windowTokens * AUTO_COMPACT_RATIO)) return [];
-    // The prompt size that triggered this call. On a FORCED recovery this is
-    // ground truth: the server just REJECTED a prompt this big, so the
-    // configured window is demonstrably larger than the model's real limit.
+    // The estimated prompt size that triggered this call. On a FORCED recovery
+    // the server just REJECTED a prompt at least this big (the estimator is a
+    // lower bound), so the configured window is demonstrably larger than the
+    // model's real limit - and targeting a fraction of THIS, rather than of the
+    // window, is what clears the real limit in one pass.
     const observed = total;
 
     // The LAST user message opens the current turn - everything from there

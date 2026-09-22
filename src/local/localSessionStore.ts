@@ -89,7 +89,7 @@ function transcriptMatches(uiHistory: unknown, needle: string): boolean {
 }
 
 /**
- * Per-message content ceiling in the PERSISTED snapshot (chars).
+ * Per-message content FLOOR in the PERSISTED snapshot (chars).
  *
  * Regression (verified from a real snapshot on disk, which contained
  * `[...clipped 41230 chars...]`): this sat at HALF the in-memory floor
@@ -99,11 +99,10 @@ function transcriptMatches(uiHistory: unknown, needle: string): boolean {
  * thousands of tokens and then slowly climbed back: exactly the sawtooth
  * reported from dogfooding.
  *
- * Matching the in-memory floor removes the worst of it: the snapshot can no
- * longer lose more per message than memory already holds. The remaining gap is
- * for large windows, where the in-memory cap scales ABOVE this (see
- * `contentCapForWindow`); closing it properly means threading the run's window
- * into `sanitizeSnapshot`, which is the follow-up rather than a guess.
+ * `sanitizeSnapshot` now persists at the run's WINDOW-relative cap (the same
+ * `contentCapForWindow` memory uses), so a reload restores what memory held.
+ * This constant remains the floor for the aggregate-budget scaling and the
+ * default when no cap is threaded (see `boundedContentCap`).
  */
 const MAX_STORED_CONTENT = 40_000;
 const TITLE_MAX_LEN = 48;
@@ -233,26 +232,68 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
     // would wipe assistant-only display rows (legacy/crash snapshots).
     const trimRows = <T extends { role?: string }>(rows: readonly T[], turns: number): T[] =>
         turns === 0 ? rows.slice() : keepLastUserTurns(rows, turns);
-    const localHistory = trimRows(snapshot.localHistory, keepLocal).map((message) => ({
+    const localRows = trimRows(snapshot.localHistory, keepLocal);
+    const uiRows = trimRows(snapshot.uiHistory, keepUi);
+    // The window-scaled cap is per MESSAGE; a 1M-window session could still
+    // hold dozens of messages at the 200k ceiling, and the snapshot is
+    // re-serialized on every turn (and every few seconds mid-run) on the main
+    // thread. Scale the cap down when the kept rows blow the aggregate budget,
+    // never below the floor, so small sessions are untouched and a reload can
+    // only shrink below memory for pathologically large ones.
+    const cap = boundedContentCap(contentCap, localRows, uiRows, snapshot.pendingTurn);
+    const localHistory = localRows.map((message) => ({
         ...message,
         content: typeof message.content === 'string'
-            ? clipHistoryContent(message.content, contentCap)
+            ? clipHistoryContent(message.content, cap)
             : message.content,
     }));
-    const uiHistory = trimRows(snapshot.uiHistory, keepUi).map((message: any) => ({
+    const uiHistory = uiRows.map((message: any) => ({
         ...message,
         // Display rows carry their text on `content` (host push shape) or
         // `text` (legacy) - clip whichever is present so the on-disk policy
         // matches the in-memory one.
         ...(typeof message?.content === 'string'
-            ? { content: clipHistoryContent(message.content, contentCap) }
+            ? { content: clipHistoryContent(message.content, cap) }
             : {}),
         ...(typeof message?.text === 'string'
-            ? { text: clipHistoryContent(message.text, contentCap) }
+            ? { text: clipHistoryContent(message.text, cap) }
             : {}),
     }));
-    const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn, contentCap) : null;
+    const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn, cap) : null;
     return { ...snapshot, localHistory, uiHistory, pendingTurn };
+}
+
+/**
+ * Aggregate content ceiling for one persisted snapshot (chars). Bounds the file
+ * written on every turn; when the kept rows exceed it, the per-message cap is
+ * scaled down proportionally. The 40k floor still applies, so the hard ceiling
+ * is MAX_STORED_TURNS rows x the floor (~12 MB) - this budget's job is to stop
+ * the WINDOW-scaled cap (up to 200k) from multiplying that by up to 5x.
+ */
+const SNAPSHOT_CONTENT_BUDGET = 2_000_000;
+
+/** Per-message cap adjusted so the snapshot's total content stays near budget. */
+function boundedContentCap(
+    contentCap: number,
+    localRows: readonly any[],
+    uiRows: readonly any[],
+    pendingTurn: LocalPendingTurn | null | undefined,
+): number {
+    // A bad caller (0/NaN/negative) must never persist empty content.
+    if (!Number.isFinite(contentCap) || contentCap <= 0) return MAX_STORED_CONTENT;
+    let total = 0;
+    const add = (s: unknown) => { if (typeof s === 'string') total += s.length; };
+    for (const rows of [localRows, uiRows]) {
+        for (const m of rows) { add(m?.content); add(m?.text); }
+    }
+    if (pendingTurn) {
+        add(pendingTurn.prompt); add(pendingTurn.text); add(pendingTurn.thinking);
+        const events = Array.isArray(pendingTurn.events) ? pendingTurn.events.slice(-40) : [];
+        for (const e of events as any[]) { add(e?.output); add(e?.content); }
+    }
+    if (total <= SNAPSHOT_CONTENT_BUDGET || total === 0) return contentCap;
+    const scaled = Math.floor(contentCap * (SNAPSHOT_CONTENT_BUDGET / total));
+    return Math.max(MAX_STORED_CONTENT, Math.min(contentCap, scaled));
 }
 
 function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
@@ -277,22 +318,25 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
         if (event?.type === 'tool_call' && event.args && typeof event.args === 'object') {
             // Clip NESTED string leaves (a top-level-only pass let nested
             // arguments bypass the persisted limit), then enforce a total-size
-            // ceiling on the re-serialized payload.
+            // ceiling on the re-serialized payload. The ceiling is `contentCap`,
+            // NOT the fixed floor: with a large window the per-message cap is
+            // larger, and comparing the re-serialized size against the smaller
+            // floor collapsed an already-clipped payload to `{_truncated:true}`.
             const clipped = clipJsonValue(event.args, contentCap);
             let serialized = '';
             try { serialized = JSON.stringify(clipped); } catch { serialized = ''; }
             return {
                 ...event,
-                args: serialized.length <= MAX_STORED_CONTENT ? clipped : { _truncated: true },
+                args: serialized.length <= contentCap ? clipped : { _truncated: true },
             };
         }
         return event;
     }) : [];
     return {
-        prompt: clipHistoryContent(pt.prompt, MAX_STORED_CONTENT),
+        prompt: clipHistoryContent(pt.prompt, contentCap),
         events,
-        text: clipHistoryContent(pt.text, MAX_STORED_CONTENT),
-        thinking: clipHistoryContent(pt.thinking, MAX_STORED_CONTENT),
+        text: clipHistoryContent(pt.text, contentCap),
+        thinking: clipHistoryContent(pt.thinking, contentCap),
         attachments: Array.isArray(pt.attachments) ? pt.attachments : undefined,
     };
 }

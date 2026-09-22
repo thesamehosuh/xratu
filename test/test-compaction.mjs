@@ -347,18 +347,27 @@ checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
 // dropped again - a sawtooth instead of one decisive trim.
 {
     const big = (n) => 'x'.repeat(n);
-    const msgs = [{ role: 'system', content: 'sys' }];
-    for (let i = 0; i < 10; i++) {
-        msgs.push({ role: 'user', content: `turn ${i} ${big(1000)}` });
-        msgs.push({ role: 'assistant', content: big(1000) });
-        msgs.push({ role: 'tool', content: big(43_000), tool_call_id: `c${i}` });
-    }
-    const before = estimateRunTokens(msgs);
+    const build = () => {
+        const msgs = [{ role: 'system', content: 'sys' }];
+        for (let i = 0; i < 10; i++) {
+            msgs.push({ role: 'user', content: `turn ${i} ${big(1000)}` });
+            msgs.push({ role: 'assistant', content: big(1000) });
+            msgs.push({ role: 'tool', content: big(43_000), tool_call_id: `c${i}` });
+        }
+        return msgs;
+    };
     const wrongWindow = 1_048_576;   // the bad override
-    const out = compactMessages(msgs, wrongWindow, undefined, 0, true);
-    const after = estimateRunTokens(out);
 
-    checkTrue('forced recovery drops turns', out.length < msgs.length);
+    const msgs = build();
+    const before = estimateRunTokens(msgs);
+    const originalLength = msgs.length;
+    // compactMessages MUTATES its input and RETURNS the dropped turns - measure
+    // the surviving array, not the return value, or every assertion below is
+    // vacuous (it passed on the pre-fix code too).
+    compactMessages(msgs, wrongWindow, undefined, 0, true);
+    const after = estimateRunTokens(msgs);
+
+    checkTrue('forced recovery drops turns', msgs.length < originalLength);
     checkTrue(
         'forced recovery lands near 60% of the OBSERVED size, not one turn',
         after <= Math.floor(before * 0.6) + 2000,
@@ -371,7 +380,7 @@ checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
     );
     // The proactive path must be UNCHANGED: with no overflow the target still
     // comes from the window, so this fix cannot make normal compaction greedy.
-    const proactive = compactMessages(msgs, wrongWindow, undefined, 0, false);
+    const proactive = compactMessages(build(), wrongWindow, undefined, 0, false);
     check('proactive path refuses far below the window ratio', proactive.length, 0);
 }
 
