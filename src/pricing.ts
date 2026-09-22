@@ -21,8 +21,11 @@ export interface ModelPrice {
     output: number;
     /** Cached-input rate per 1M tokens (falls back to `input`). */
     cachedInput?: number;
-    /** Cache-WRITE rate per 1M tokens. Falls back to `input * 1.25`, the
-     *  documented 5-minute-TTL write price for Anthropic and GPT-5.6+. */
+    /** Cache-WRITE rate per 1M tokens. Falls back to `input` - automatic
+     *  prefix caching on OpenAI-compatible providers (OpenAI, DeepSeek,
+     *  OpenCode Zen/Go) charges writes at the ordinary input rate. Rows that
+     *  DO charge a premium set it explicitly (Anthropic's 5-minute-TTL
+     *  `ephemeral` writes at 1.25x input, GPT-5.6+). */
     cachedInputWrite?: number;
     /** Currency of these rates. Absent = USD (curated table only); an
      *  explicit override always carries `'USD'` or `'IRT'`. */
@@ -78,24 +81,28 @@ export interface UsageLike {
     cacheWriteTokens?: number | null;
 }
 
-/** Cache writes are billed at 1.25x the ordinary input rate for both
- *  Anthropic's 5-minute `ephemeral` TTL and OpenAI's GPT-5.6+ caching. */
-const CACHE_WRITE_MULTIPLIER = 1.25;
+/** Cache writes are billed at 1.25x the ordinary input rate where the
+ *  provider documents a premium (Anthropic's 5-minute `ephemeral` TTL and
+ *  GPT-5.6+ caching). Applied explicitly per row, never as a blanket default:
+ *  OpenAI-compatible prefix caching charges writes at the plain input rate,
+ *  and a 1.25x default overstated every cached round on those providers. */
+const CACHE_WRITE_PREMIUM = 1.25;
 
 /** Ordered most-specific-first; matched against the lowercased model id. */
 const PRICE_TABLE: ReadonlyArray<readonly [RegExp, ModelPrice]> = [
-    // Anthropic
-    [/claude-(fable|mythos)-5/, { input: 10, output: 50, cachedInput: 0.25 }],
-    [/claude-opus-5|claude-opus-4-8|claude-opus-4-7|claude-opus-4-6/, { input: 5, output: 25, cachedInput: 0.5 }],
-    [/claude-sonnet-5/, { input: 2, output: 10, cachedInput: 0.2 }],
-    [/claude-sonnet-4-6/, { input: 3, output: 15, cachedInput: 0.3 }],
-    [/claude-sonnet-4-5|claude-sonnet-4\b/, { input: 3, output: 15, cachedInput: 0.3 }],
-    [/claude-haiku-4-5/, { input: 1, output: 5, cachedInput: 0.1 }],
-    // OpenAI
-    [/gpt-6-astra/, { input: 10, output: 50, cachedInput: 1 }],
-    [/gpt-5\.6-sol/, { input: 4, output: 20, cachedInput: 0.4 }],
-    [/gpt-5\.6-terra/, { input: 2, output: 12, cachedInput: 0.2 }],
-    [/gpt-5\.6-luna/, { input: 0.2, output: 1.2, cachedInput: 0.02 }],
+    // Anthropic - 5-minute `ephemeral` cache writes bill at 1.25x input.
+    [/claude-(fable|mythos)-5/, { input: 10, output: 50, cachedInput: 0.25, cachedInputWrite: 10 * CACHE_WRITE_PREMIUM }],
+    [/claude-opus-5|claude-opus-4-8|claude-opus-4-7|claude-opus-4-6/, { input: 5, output: 25, cachedInput: 0.5, cachedInputWrite: 5 * CACHE_WRITE_PREMIUM }],
+    [/claude-sonnet-5/, { input: 2, output: 10, cachedInput: 0.2, cachedInputWrite: 2 * CACHE_WRITE_PREMIUM }],
+    [/claude-sonnet-4-6/, { input: 3, output: 15, cachedInput: 0.3, cachedInputWrite: 3 * CACHE_WRITE_PREMIUM }],
+    [/claude-sonnet-4-5|claude-sonnet-4\b/, { input: 3, output: 15, cachedInput: 0.3, cachedInputWrite: 3 * CACHE_WRITE_PREMIUM }],
+    [/claude-haiku-4-5/, { input: 1, output: 5, cachedInput: 0.1, cachedInputWrite: 1 * CACHE_WRITE_PREMIUM }],
+    // OpenAI - GPT-5.6+ writes cache at 1.25x input; older families (and
+    // DeepSeek/OpenCode-compatible caching) write at the plain input rate.
+    [/gpt-6-astra/, { input: 10, output: 50, cachedInput: 1, cachedInputWrite: 10 * CACHE_WRITE_PREMIUM }],
+    [/gpt-5\.6-sol/, { input: 4, output: 20, cachedInput: 0.4, cachedInputWrite: 4 * CACHE_WRITE_PREMIUM }],
+    [/gpt-5\.6-terra/, { input: 2, output: 12, cachedInput: 0.2, cachedInputWrite: 2 * CACHE_WRITE_PREMIUM }],
+    [/gpt-5\.6-luna/, { input: 0.2, output: 1.2, cachedInput: 0.02, cachedInputWrite: 0.2 * CACHE_WRITE_PREMIUM }],
     [/gpt-5\.5-pro/, { input: 30, output: 180, cachedInput: 30 }],
     [/gpt-5\.5/, { input: 5, output: 30, cachedInput: 0.5 }],
     [/gpt-5\.4-pro/, { input: 30, output: 180, cachedInput: 30 }],
@@ -178,6 +185,7 @@ function applyGatewayRate(price: ModelPrice, tomanPerUsd: number, markupPercent?
         input: price.input * factor,
         output: price.output * factor,
         ...(price.cachedInput != null ? { cachedInput: price.cachedInput * factor } : {}),
+        ...(price.cachedInputWrite != null ? { cachedInputWrite: price.cachedInputWrite * factor } : {}),
         currency: 'IRT',
     };
 }
@@ -222,10 +230,13 @@ function sanitizeProviderPrice(price: ModelPrice | null | undefined): ModelPrice
     if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) return null;
     const cached = Number.isFinite(price.cachedInput) ? (price.cachedInput as number) : undefined;
     if (cached != null && cached < 0) return null;
+    const cachedWrite = Number.isFinite(price.cachedInputWrite) ? (price.cachedInputWrite as number) : undefined;
+    if (cachedWrite != null && cachedWrite < 0) return null;
     return {
         input,
         output,
         ...(cached != null ? { cachedInput: cached } : {}),
+        ...(cachedWrite != null ? { cachedInputWrite: cachedWrite } : {}),
         currency: 'USD',
     };
 }
@@ -326,9 +337,11 @@ export function priceForModel(
 
 /**
  * Cost of one usage record. Cached input is priced at `cachedInput` when
- * provided (the uncached remainder at `input`); cache WRITES at `cachedInputWrite`
- * (default 1.25x `input`); output at `output`. The price's own currency wins;
- * `currency` is only the fallback for prices that do not carry one.
+ * provided (the uncached remainder at `input`); cache WRITES at
+ * `cachedInputWrite` (default: the plain `input` rate - only providers that
+ * document a write premium carry one); output at `output`. The price's own
+ * currency wins; `currency` is only the fallback for prices that do not carry
+ * one.
  */
 export function costForUsage(
     price: ModelPrice,
@@ -350,7 +363,7 @@ export function costForUsage(
     );
     const uncached = Math.max(0, prompt - cached - cacheWrite);
     const cachedRate = price.cachedInput ?? price.input;
-    const writeRate = price.cachedInputWrite ?? price.input * CACHE_WRITE_MULTIPLIER;
+    const writeRate = price.cachedInputWrite ?? price.input;
 
     const amount = (uncached * price.input + cached * cachedRate + cacheWrite * writeRate + completion * price.output) / 1_000_000;
     if (!Number.isFinite(amount) || amount <= 0) return null;

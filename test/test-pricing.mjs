@@ -57,9 +57,16 @@ const clamped = costForUsage(sonnet, { promptTokens: 1000, completionTokens: 0, 
 // cached clamped to prompt: 1000 * 0.2 / 1M
 near('cached clamped to prompt', clamped.amount, (1000 * 0.2) / 1_000_000, 1e-12);
 
-// Cache WRITES (a subset of promptTokens) are billed at 1.25x input by default.
+// Cache WRITES (a subset of promptTokens): Anthropic/GPT-5.6+ rows carry an
+// explicit 1.25x write rate.
 const write = costForUsage(sonnet, { promptTokens: 1_000_000, completionTokens: 0, cacheWriteTokens: 1_000_000 });
 near('cache write priced at 1.25x input', write.amount, 2.5, 1e-9);
+
+// OpenAI-compatible prefix caching bills writes at the PLAIN input rate - the
+// blanket 1.25x default overstated every cached round on those providers.
+const flash = priceForModel('deepseek-v4-flash');
+const flashWrite = costForUsage(flash, { promptTokens: 1_000_000, completionTokens: 0, cacheWriteTokens: 1_000_000 });
+near('non-premium cache write priced at plain input', flashWrite.amount, 0.14, 1e-9);
 
 const mixed = costForUsage(sonnet, {
     promptTokens: 1_000_000,
@@ -200,6 +207,11 @@ check(
     'provider price carries cached rate',
     priceForModel('mystery-gateway-model', null, { providerPrice: { input: 3, output: 6, cachedInput: 0.3 } })?.cachedInput,
     0.3,
+);
+check(
+    'provider price carries cache-write rate',
+    priceForModel('mystery-gateway-model', null, { providerPrice: { input: 3, output: 6, cachedInputWrite: 3.75 } })?.cachedInputWrite,
+    3.75,
 );
 check(
     'provider price is always USD',
