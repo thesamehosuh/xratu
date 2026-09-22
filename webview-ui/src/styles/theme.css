@@ -26,9 +26,10 @@
     --xratu-accent-dim: rgba(20, 227, 200, 0.18);
     --xratu-accent-faint: rgba(20, 227, 200, 0.08);
 
-    /* Darker bubbles (darkened relative to the VS Code theme tokens) */
-    --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
-    --xratu-bubble-user: color-mix(in srgb, var(--vscode-sideBar-background) 90%, #000);
+    /* Bubbles read by elevation, not outline: the assistant turn sits a clear
+       step above the shell, the user turn a step below it. */
+    --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
+    --xratu-bubble-user: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
     --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
 
     /* Sub-page card tone - the composer card's exact color, kept from the
@@ -64,6 +65,14 @@
 
 * {
     box-sizing: border-box;
+}
+
+/* Light themes invert the elevation: the editor is the lightest surface, so
+   the assistant turn stays at editor tone and the user turn is a soft step
+   toward the foreground. */
+body.vscode-light {
+    --xratu-bubble: var(--vscode-editor-background);
+    --xratu-bubble-user: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
 }
 
 html,
@@ -527,16 +536,15 @@ button {
     padding: 5px 12px;
     font-size: var(--xratu-fs-sm);
     color: var(--vscode-descriptionForeground);
-    background: var(--xratu-input);
-    border: 1px solid var(--xratu-border);
+    background: transparent;
+    border: 0;
     border-radius: var(--xratu-radius-sm);
     cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease;
+    transition: color 0.15s ease;
 }
 
 .show-earlier:hover {
     color: var(--vscode-foreground);
-    border-color: var(--xratu-accent);
 }
 
 /* Chat area wraps the scroller so floating controls can overlay it.
@@ -1206,11 +1214,9 @@ button {
    --------------------------------------------------------------------------- */
 .msg {
     position: relative;
-    border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius);
     padding: 11px 13px;
     background: var(--xratu-bubble);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
     animation: xratu-rise 0.18s ease-out;
 }
 
@@ -1333,7 +1339,6 @@ button {
     width: min(100%, 240px);
     margin: 0;
     overflow: hidden;
-    border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     background: var(--vscode-editor-background);
 }
@@ -1352,7 +1357,6 @@ button {
     gap: 5px;
     min-width: 0;
     padding: 5px 7px;
-    border-top: 1px solid var(--vscode-widget-border);
     color: var(--vscode-descriptionForeground);
     font-size: 10.5px;
 }
@@ -1371,7 +1375,6 @@ button {
     gap: 6px;
     max-width: 240px;
     padding: 5px 8px;
-    border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-xs);
     background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000);
     color: var(--vscode-descriptionForeground);
@@ -1536,7 +1539,6 @@ button {
     margin: 12px 0;
     border-collapse: separate;
     border-spacing: 0;
-    border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     overflow: hidden;
     font-size: 0.95em;
@@ -1575,10 +1577,8 @@ button {
 .code-block {
     margin: 12px 0;
     overflow: hidden;
-    border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    background: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
     direction: ltr;
     unicode-bidi: isolate;
 }
@@ -1590,7 +1590,7 @@ button {
     gap: 10px;
     min-height: 30px;
     padding: 4px 8px 4px 10px;
-    border-bottom: 1px solid var(--vscode-widget-border);
+    border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent);
     background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
 }
 
@@ -2574,9 +2574,7 @@ pre.tool-cmd {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 8px;
-    padding-top: 6px;
-    border-top: 1px solid var(--vscode-widget-border);
+    margin-top: 10px;
 }
 
 .icon-btn {
