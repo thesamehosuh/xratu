@@ -1303,10 +1303,15 @@ button {
    The user turn is a compact capsule on the end side. */
 .msg.assistant {
     background: transparent;
-    /* The corner brackets are positioned against the article edge, so the
-       content has to start past them - otherwise the first pill's background
-       covers the bracket and it reads as clipped. */
-    padding: 6px 12px;
+    padding: 2px 0;
+}
+
+/* With no box to accent, the assistant turn's corner brackets are orphaned -
+   on a long turn the top and bottom marks sit a whole turn apart. Brackets now
+   mark the USER's turn only, where the capsule gives them a real corner. */
+.msg.assistant::before,
+.msg.assistant::after {
+    display: none;
 }
 
 .msg.user {
