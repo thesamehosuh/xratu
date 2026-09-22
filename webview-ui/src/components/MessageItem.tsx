@@ -127,17 +127,25 @@ function isGroupableTool(tool: string | undefined): boolean {
     return toolFamily(tool) !== 'terminal';
 }
 
+/** Two consecutive calls belong in one pill when they are the SAME tool - or
+ *  any two EDIT-family tools, so a run that mixes apply_patch / edit_file /
+ *  replace_in_file still reads as one "N files edited" pill. */
+function sameToolGroup(a?: string, b?: string): boolean {
+    if (a === b) return true;
+    return toolFamily(a) === 'edit' && toolFamily(b) === 'edit';
+}
+
 /** Consecutive same-tool calls collapse into ONE pill ("Read file ×8") -
  *  a run that reads ten files in a row should read as one action, not ten
  *  identical rows. Thinking steps and other tools break the run. */
 function pushToolRow(rows: Row[], row: ToolRow): void {
     const last = rows[rows.length - 1];
     const groupable = isGroupableTool(row.call.tool);
-    if (groupable && last?.kind === 'toolGroup' && last.calls[0].call.tool === row.call.tool) {
+    if (groupable && last?.kind === 'toolGroup' && sameToolGroup(last.calls[0].call.tool, row.call.tool)) {
         last.calls.push(row);
         return;
     }
-    if (groupable && last?.kind === 'tool' && last.call.tool === row.call.tool) {
+    if (groupable && last?.kind === 'tool' && sameToolGroup(last.call.tool, row.call.tool)) {
         rows[rows.length - 1] = { key: last.key, kind: 'toolGroup', calls: [last, row] };
         return;
     }
@@ -549,7 +557,7 @@ type UnifiedLine = { kind: 'same' | 'del' | 'add'; text: string };
 /** Unified-diff fallback (`---` / `+++` / `@@` hunks with `-`/`+`/` ` lines).
  *  Returns null unless there is at least one real +/- change, so plain prose
  *  still reaches the raw view. */
-function parseUnifiedDiff(text: string): UnifiedLine[] | null {
+export function parseUnifiedDiff(text: string): UnifiedLine[] | null {
     const lines = stripReplayMarkers(text)
         .replace(/^\uFEFF/, '')
         .replace(/\r\n/g, '\n')
@@ -557,15 +565,21 @@ function parseUnifiedDiff(text: string): UnifiedLine[] | null {
         .split('\n');
     const out: UnifiedLine[] = [];
     let inHunk = false;
-    for (const raw of lines) {
-        const line = raw.replace(/\r$/, '');
+    const lastIdx = lines.length - 1;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].replace(/\r$/, '');
         if (/^@@/.test(line)) {
             inHunk = true;
             continue;
         }
-        if (/^(---|\+\+\+)\s/.test(line)) continue;
+        // File headers only appear BEFORE the first hunk. Inside a hunk a `-- `
+        // or `++ ` payload is a real removed/added line, not a header.
+        if (!inHunk && /^(---|\+\+\+)\s/.test(line)) continue;
         if (!inHunk) continue;
         if (line.startsWith('\\')) continue; // "\ No newline at end of file"
+        // `split('\n')` leaves a trailing '' for a normally-terminated diff;
+        // a genuine blank context line is a single space, handled below.
+        if (line === '' && i === lastIdx) continue;
         if (line.startsWith('+')) out.push({ kind: 'add', text: line.slice(1) });
         else if (line.startsWith('-')) out.push({ kind: 'del', text: line.slice(1) });
         else if (line.startsWith(' ') || line === '') out.push({ kind: 'same', text: line.slice(1) });
@@ -606,7 +620,14 @@ function editStatsOf(patch: string): EditStats | null {
         const stats: EditStats = { add: 0, del: 0 };
         for (const b of blocks) {
             const lines = diffBlockLines(b.search, b.replace);
-            if (!lines) continue;
+            if (!lines) {
+                // Oversized block: the pill renders the whole SEARCH section as
+                // removed and the whole REPLACE as added, so count the same way
+                // rather than silently reporting nothing for real changes.
+                stats.del += b.search ? b.search.split('\n').length : 0;
+                stats.add += b.replace ? b.replace.split('\n').length : 0;
+                continue;
+            }
             for (const l of lines) {
                 if (l.kind === 'add') stats.add++;
                 else if (l.kind === 'del') stats.del++;
@@ -624,19 +645,22 @@ function editStatsOf(patch: string): EditStats | null {
     return null;
 }
 
-/** Sum of every patch a run of edit calls wrote. */
-function sumEditStats(calls: ToolRow[]): EditStats {
+/** Sum of every patch a run of edit calls wrote. `null` when NOTHING in the
+ *  run parsed, so a group renders no stats instead of a misleading "+0 −0". */
+function sumEditStats(calls: ToolRow[]): EditStats | null {
     const total: EditStats = { add: 0, del: 0 };
+    let hasStats = false;
     for (const c of calls) {
         const args = parseArgs(c.call.text);
         const patch = argString(args, 'patch') ?? (c.call.text.includes('<<<<<<<') ? c.call.text : undefined);
         if (!patch) continue;
         const s = editStatsOf(patch);
         if (!s) continue;
+        hasStats = true;
         total.add += s.add;
         total.del += s.del;
     }
-    return total;
+    return hasStats ? total : null;
 }
 
 /** Plain-text "+N −M" readout (no chip). */
@@ -669,7 +693,8 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
     const args = useMemo(() => parseArgs(call.text), [call.text]);
     const path = argString(args, 'path');
     const patch = argString(args, 'patch');
-    const rawPatch = !patch && call.text.includes('<<<<<<<') ? call.text : undefined;
+    const content = argString(args, 'new_content');
+    const rawPatch = !patch && !content && call.text.includes('<<<<<<<') ? call.text : undefined;
     const effective = patch ?? rawPatch;
     const stats = useMemo(() => (effective ? editStatsOf(effective) : null), [effective]);
     const done = !!call.result || !!result;
@@ -680,6 +705,8 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
             {done ? (
                 effective !== undefined ? (
                     <PatchBlocksView patch={effective} lang={extToLang(path ?? '')} />
+                ) : content !== undefined ? (
+                    <HighlightedPre code={truncateArg(content)} lang={extToLang(path ?? '')} />
                 ) : (
                     <ArgView call={call} />
                 )
