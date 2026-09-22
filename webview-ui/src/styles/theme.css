@@ -2241,11 +2241,29 @@ button {
    open pill - tool bodies, grouped runs, and reasoning. */
 .step[open] > .step-body,
 .step[open] > .step-group-body,
-.step[open] > .step-think-body,
-.step[open] > pre {
+.step[open] > .step-think-body {
     margin-inline-start: 6px;
     padding-inline-start: 14px;
     border-inline-start: 1px solid var(--xratu-accent-dim);
+}
+
+/* Raw reasoning renders in a `<pre dir="ltr">` (its content is code). The dir
+   attribute makes `inline-start` resolve to the LEFT even under RTL, which
+   would drop the rail on the chevron side - pin it physically to the pill's
+   own start edge instead. */
+.step[open] > pre {
+    margin-left: 6px;
+    padding-left: 14px;
+    border-left: 1px solid var(--xratu-accent-dim);
+}
+
+[dir='rtl'] .step[open] > pre {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+    margin-right: 6px;
+    padding-right: 14px;
+    border-right: 1px solid var(--xratu-accent-dim);
 }
 
 /* Plain-text run stats in a pill summary ("3 files +18 −6") - no chip. */
@@ -7140,5 +7158,26 @@ button.mcp-row-main:hover strong {
 [dir='rtl'] .cred-search-wrap input::placeholder,
 [dir='rtl'] .task-list-edit-input::placeholder {
     direction: rtl;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion - honor the OS preference. The decorative entrances (bubble
+ * rise, chip stagger, jump-in) and the typing dots stop; the running spinner
+ * keeps turning because it is the only "still working" signal when a row has
+ * no text yet.
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .spinner {
+        animation-duration: 0.8s !important;
+        animation-iteration-count: infinite !important;
+    }
 }
 
