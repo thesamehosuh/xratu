@@ -2351,7 +2351,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  cacheable prefix whenever a nested AGENTS.md was crossed, dropping the
      *  session cache rate under 50%. */
     private _localRulesContext(): Promise<string> {
-        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        // Key on the SAME root `collectProjectRules()` resolves from - the
+        // active editor's workspace folder, else the first workspace folder -
+        // so switching workspace folders (multi-root) recomputes, while moving
+        // between files inside one root does not.
+        const editor = vscode.window.activeTextEditor;
+        const folder = (editor && editor.document.uri.scheme === 'file'
+            ? vscode.workspace.getWorkspaceFolder(editor.document.uri)
+            : undefined) ?? vscode.workspace.workspaceFolders?.[0];
+        const root = folder?.uri.fsPath ?? '';
         return this._localRulesSnapshot.resolve(root, () => collectProjectRules());
     }
 
@@ -4309,6 +4317,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._history = [];
             this._localHistory = [];
             this._localEvictedUserTurns = 0;
+            this._localRulesSnapshot.reset();
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
@@ -4322,6 +4331,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._history = [];
             this._localHistory = [];
             this._localEvictedUserTurns = 0;
+            this._localRulesSnapshot.reset();
             this._sessionSummary = null;
             this._sessionTitle = null;
             this._sessionCost = { USD: 0, IRT: 0 };
