@@ -108,3 +108,6 @@ jobs:
 
       - name: Session store tests
         run: npm run test:session-store
+
+      - name: Python workspace resolution tests
+        run: npm run test:python-workspace
