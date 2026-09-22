@@ -3550,7 +3550,7 @@ pre.tool-cmd {
 
 .welcome p {
     color: var(--vscode-descriptionForeground);
-    font-size: 12px;
+    font-size: 13px;
     margin: 2px 0 0;
 }
 
@@ -3632,7 +3632,7 @@ pre.tool-cmd {
 }
 
 .welcome-local h2 {
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 650;
     color: var(--vscode-descriptionForeground);
     margin: 6px 0 0;
@@ -4208,7 +4208,7 @@ pre.tool-cmd {
 }
 
 .cred-head h2 {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 650;
     margin: 0;
     color: var(--vscode-foreground);
@@ -4217,7 +4217,7 @@ pre.tool-cmd {
 .cred-head-copy > span {
     display: block;
     margin-top: 2px;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--vscode-descriptionForeground);
 }
 
@@ -4234,13 +4234,13 @@ pre.tool-cmd {
     align-items: center;
     gap: 6px;
     color: var(--vscode-foreground);
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 650;
 }
 
 .cred-notice-body {
     margin-top: 4px;
-    font-size: 10.5px;
+    font-size: 12px;
     line-height: 1.55;
     overflow-wrap: anywhere;
 }
@@ -4310,13 +4310,13 @@ pre.tool-cmd {
 }
 
 .cred-provider-section-label {
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 600;
     color: var(--vscode-descriptionForeground);
 }
 
 .cred-provider-section-hint {
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--vscode-descriptionForeground);
     opacity: 0.85;
 }
@@ -4335,7 +4335,7 @@ pre.tool-cmd {
     cursor: pointer;
     text-align: start;
     font-family: inherit;
-    font-size: 10px;
+    font-size: 11.5px;
     white-space: nowrap;
     transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 }
@@ -4365,7 +4365,7 @@ pre.tool-cmd {
     gap: 5px;
     margin: 2px 0 0;
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
     opacity: 0.75;
 }
 
@@ -4400,7 +4400,7 @@ pre.tool-cmd {
     display: block;
     margin-top: 2px;
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: 11.5px;
 }
 
 .cred-saved-list {
@@ -4483,7 +4483,7 @@ pre.tool-cmd {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--vscode-foreground);
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 600;
 }
 
@@ -4493,7 +4493,7 @@ pre.tool-cmd {
     white-space: nowrap;
     color: var(--vscode-descriptionForeground);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 9.5px;
+    font-size: 11.5px;
 }
 
 .saved-active {
@@ -4502,7 +4502,7 @@ pre.tool-cmd {
     align-items: center;
     gap: 4px;
     color: var(--xratu-accent-strong);
-    font-size: 9.5px;
+    font-size: 11.5px;
     font-weight: 600;
 }
 
@@ -4550,7 +4550,7 @@ pre.tool-cmd {
     cursor: pointer;
     text-align: start;
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
     transition: border-color 0.14s ease, background 0.14s ease;
 }
 
@@ -4597,7 +4597,7 @@ pre.tool-cmd {
     background: var(--xratu-input);
     color: var(--vscode-input-foreground);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
 }
 
 .cred-search-wrap input:focus {
@@ -4613,7 +4613,7 @@ pre.tool-cmd {
 
 .cred-group-label {
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 650;
 }
 
@@ -4646,7 +4646,7 @@ pre.tool-cmd {
     cursor: pointer;
     text-align: start;
     font-family: inherit;
-    font-size: 10px;
+    font-size: 11.5px;
     transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.1s ease;
 }
 
@@ -4718,19 +4718,19 @@ pre.tool-cmd {
 
 .cred-form-provider strong {
     color: var(--vscode-foreground);
-    font-size: 11px;
+    font-size: 12.5px;
 }
 
 .cred-form-provider span {
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
 }
 
 .cred-field {
     display: flex;
     flex-direction: column;
     gap: 5px;
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--vscode-descriptionForeground);
 }
 
@@ -4793,7 +4793,7 @@ pre.tool-cmd {
     min-height: 33px;
     border-radius: var(--xratu-radius-sm);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
     cursor: pointer;
 }
 
@@ -4835,7 +4835,7 @@ pre.tool-cmd {
     border: none;
     color: var(--vscode-foreground);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 14px;
     cursor: pointer;
 }
 .cred-local-toggle:hover {
@@ -4869,7 +4869,7 @@ pre.tool-cmd {
     align-items: center;
     gap: 8px;
     padding: 8px 0;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--vscode-descriptionForeground);
 }
 .cred-local-empty {
@@ -4894,14 +4894,14 @@ pre.tool-cmd {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
 }
 .cred-local-runtime-name svg {
     color: var(--xratu-accent);
 }
 .cred-local-runtime-meta {
-    font-size: 11px;
+    font-size: 12.5px;
     color: var(--vscode-descriptionForeground);
 }
 .cred-local-connect {
@@ -4913,7 +4913,7 @@ pre.tool-cmd {
     color: var(--xratu-accent-strong);
     border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 600;
     cursor: pointer;
     font-family: inherit;
@@ -4938,7 +4938,7 @@ pre.tool-cmd {
     color: var(--xratu-accent);
     border: 1px solid var(--xratu-accent-dim);
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 600;
     white-space: nowrap;
 }
@@ -5030,7 +5030,7 @@ pre.tool-cmd {
 }
 
 .cred-card-copy strong {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 650;
     color: var(--vscode-foreground);
 }
@@ -5039,7 +5039,7 @@ pre.tool-cmd {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--vscode-descriptionForeground);
 }
 
@@ -5060,7 +5060,7 @@ pre.tool-cmd {
     border-radius: 999px;
     border: 1px solid var(--vscode-widget-border);
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
     font-variant-numeric: tabular-nums;
 }
 
@@ -5070,7 +5070,7 @@ pre.tool-cmd {
     align-items: center;
     gap: 4px;
     color: var(--xratu-accent-strong);
-    font-size: 9.5px;
+    font-size: 11.5px;
     font-weight: 650;
 }
 
@@ -5095,7 +5095,7 @@ pre.tool-cmd {
 .cred-card-note {
     margin: 0;
     color: var(--vscode-descriptionForeground);
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.5;
 }
 
@@ -5155,7 +5155,7 @@ pre.tool-cmd {
     cursor: pointer;
     text-align: start;
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
     transition: background 0.14s ease;
 }
 
@@ -5183,7 +5183,7 @@ pre.tool-cmd {
     white-space: nowrap;
     color: var(--vscode-descriptionForeground);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 9.5px;
+    font-size: 11.5px;
 }
 
 /* Elegant labeled separator above the saved-connections list */
@@ -5193,7 +5193,7 @@ pre.tool-cmd {
     gap: 10px;
     margin-top: 2px;
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 650;
 }
 
@@ -5256,7 +5256,7 @@ pre.tool-cmd {
     background: var(--xratu-input);
     color: var(--vscode-input-foreground);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 11px;
+    font-size: 12.5px;
 }
 
 .saved-edit-row input:focus {
@@ -5320,7 +5320,7 @@ pre.tool-cmd {
     display: block;
     color: var(--vscode-errorForeground);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 9.5px;
+    font-size: 11.5px;
     overflow-wrap: anywhere;
 }
 
@@ -5415,7 +5415,7 @@ pre.tool-cmd {
     gap: 8px;
     padding: 9px 10px;
     border-radius: var(--xratu-radius-sm);
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.45;
 }
 
@@ -5474,14 +5474,14 @@ pre.tool-cmd {
 
 .settings-section-head h3 {
     margin: 0 0 2px;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.3;
 }
 
 .settings-section-head p {
     margin: 0;
     color: var(--vscode-descriptionForeground);
-    font-size: 11px;
+    font-size: 12.5px;
     line-height: 1.4;
 }
 
@@ -5518,7 +5518,7 @@ pre.tool-cmd {
     display: block;
     margin-bottom: 5px;
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 600;
 }
 
@@ -5538,7 +5538,7 @@ pre.tool-cmd {
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     font: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
 }
 
 .settings-select-wrap select:focus {
@@ -5569,7 +5569,7 @@ pre.tool-cmd {
     gap: 5px 10px;
     margin-top: 6px;
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
     line-height: 1.4;
 }
 
@@ -5602,7 +5602,7 @@ pre.tool-cmd {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10px;
+    font-size: 11.5px;
 }
 
 .settings-override-value {
@@ -5611,7 +5611,7 @@ pre.tool-cmd {
     background: var(--xratu-accent-faint);
     color: var(--xratu-accent-strong);
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 9.5px;
+    font-size: 11.5px;
     white-space: nowrap;
 }
 
@@ -5636,7 +5636,7 @@ pre.tool-cmd {
 .settings-empty-inline {
     padding: 10px 11px 4px;
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: 11.5px;
 }
 
 .settings-override-add {
@@ -5658,7 +5658,7 @@ pre.tool-cmd {
     border-radius: var(--xratu-radius-sm);
     border: 1px solid var(--vscode-widget-border);
     font: inherit;
-    font-size: 10px;
+    font-size: 11.5px;
     white-space: nowrap;
 }
 
@@ -5694,7 +5694,7 @@ pre.tool-cmd {
 /* The page's type runs a step larger than the rest of the app: it is dense
    with small figures, and at sidebar width the defaults read as fine print. */
 .usage-page .settings-section-head p {
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .usage-page .mcp-hint {
@@ -5702,12 +5702,12 @@ pre.tool-cmd {
 }
 
 .usage-page .mcp-field-label {
-    font-size: 11px;
+    font-size: 12.5px;
 }
 
 .usage-page .mcp-field input,
 .usage-page .mcp-field .dropdown-trigger {
-    font-size: 12px;
+    font-size: 13px;
 }
 
 .usage-range {
@@ -5718,7 +5718,7 @@ pre.tool-cmd {
     background: transparent;
     color: var(--vscode-descriptionForeground);
     font: inherit;
-    font-size: 11px;
+    font-size: 12.5px;
     cursor: pointer;
 }
 
@@ -5817,7 +5817,7 @@ pre.tool-cmd {
     height: 104px;
     padding-inline-end: 6px;
     border-inline-end: 1px solid var(--vscode-widget-border);
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--vscode-descriptionForeground);
     font-variant-numeric: tabular-nums;
 }
@@ -5912,7 +5912,7 @@ pre.tool-cmd {
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: 12.5px;
     color: var(--vscode-descriptionForeground);
 }
 
@@ -6003,7 +6003,7 @@ pre.tool-cmd {
 }
 
 .prov-name strong {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 650;
     color: var(--vscode-foreground);
     overflow: hidden;
@@ -6012,14 +6012,14 @@ pre.tool-cmd {
 }
 
 .prov-host {
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--vscode-descriptionForeground);
     overflow-wrap: anywhere;
 }
 
 .usage-cost {
     flex: 0 0 auto;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 650;
     font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
@@ -6058,7 +6058,7 @@ pre.tool-cmd {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 12px;
-    font-size: 11px;
+    font-size: 12.5px;
     font-variant-numeric: tabular-nums;
     color: var(--vscode-foreground);
 }
@@ -6317,7 +6317,7 @@ pre.tool-cmd {
     border-radius: var(--xratu-radius-sm);
     background: transparent;
     color: var(--vscode-descriptionForeground);
-    font-size: 11px;
+    font-size: 12.5px;
     font-weight: 600;
     font-family: inherit;
 }
@@ -6389,13 +6389,13 @@ button.settings-nav-row:hover {
 
 .settings-nav-main strong,
 .settings-danger-row strong {
-    font-size: 10.5px;
+    font-size: 12px;
 }
 
 .settings-nav-main span,
 .settings-danger-row span {
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
     line-height: 1.4;
 }
 
@@ -6426,12 +6426,12 @@ button.settings-nav-row:hover {
 
 .settings-confirm-row strong {
     color: var(--vscode-foreground);
-    font-size: 10.5px;
+    font-size: 12px;
 }
 
 .settings-confirm-row span {
     color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
+    font-size: 11.5px;
     line-height: 1.4;
 }
 
@@ -6504,7 +6504,7 @@ button.settings-nav-row:hover {
     align-items: flex-start;
     gap: 7px;
     padding: 0 2px 2px;
-    font-size: 10.5px;
+    font-size: 12px;
     line-height: 1.45;
     color: var(--vscode-descriptionForeground);
     margin-bottom: 4px;
@@ -6986,7 +6986,7 @@ button.mcp-row-main:hover strong {
     background: var(--xratu-accent);
     color: #04201c;
     font: inherit;
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 650;
     white-space: nowrap;
     cursor: pointer;
@@ -7116,7 +7116,7 @@ button.mcp-row-main:hover strong {
 }
 
 .mcp-group-label {
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 600;
     color: var(--vscode-descriptionForeground);
     padding-inline-start: 2px;
@@ -7130,7 +7130,7 @@ button.mcp-row-main:hover strong {
 }
 
 .mcp-form-group-label {
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 600;
     color: var(--vscode-descriptionForeground);
     padding-bottom: 3px;
