@@ -7190,13 +7190,16 @@ button.mcp-row-main:hover strong {
  * placeholders and start-alignment must follow the page direction.
  * ------------------------------------------------------------------------- */
 
-/* Persian placeholders inside LTR-locked key inputs render scrambled word
-   order under the input's LTR base direction - flip the placeholder only
-   (typed values remain LTR: keys, URLs). */
-[dir='rtl'] .cred-secret input::placeholder,
-[dir='rtl'] .saved-edit-row input::placeholder,
-[dir='rtl'] .cred-search-wrap input::placeholder,
-[dir='rtl'] .task-list-edit-input::placeholder {
+/* Persian placeholders inside LTR-locked key/search inputs render scrambled
+   word order under the input's LTR base direction (e.g. "کلید API خود را…"
+   came out reordered). Chromium IGNORES `direction` on ::placeholder, so the
+   fix flips the INPUT while it is empty (`:placeholder-shown`) and it snaps
+   back to LTR the moment a value is typed - keys and URLs stay LTR. */
+[dir='rtl'] .cred-secret input:placeholder-shown,
+[dir='rtl'] .saved-edit-row input:placeholder-shown,
+[dir='rtl'] .cred-search-wrap input:placeholder-shown,
+[dir='rtl'] .task-list-edit-input:placeholder-shown,
+[dir='rtl'] .session-search input:placeholder-shown {
     direction: rtl;
 }
 

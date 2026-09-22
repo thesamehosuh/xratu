@@ -384,7 +384,7 @@ const fa = {
     mcpTargetGlobal: 'سراسری',
     mcpTargetWorkspace: 'این پوشه کاری',
     mcpTargetHint: 'تنظیمات پوشه کاری بر تنظیمات سراسری اولویت دارد.',
-    mcpApplyHint: 'تغییرات ابزار ها در جلسه جدید عامل اعمال میشود.',
+    mcpApplyHint: 'تغییرات ابزار ها در جلسه جدید اعمال میشود.',
     mcpLegacyNote: 'تنظیمات قدیمی xratu.mcpServers در حال استفاده است؛ یک بار ذخیره کنید تا به فایل پیکربندی منتقل شود.',
     mcpArgs: 'آرگومان ها',
     mcpServersSectionDesc: 'سرور های پیکربندی شده و وضعیت اتصال آن ها',
