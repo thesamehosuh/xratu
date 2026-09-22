@@ -1298,9 +1298,19 @@ button {
     border-color: #f85149;
 }
 
-/* Corner brackets carry the accent - no side stripes on bubbles */
+/* Corner brackets carry the accent - no side stripes on bubbles. The
+   assistant turn has no box at all: brackets + content sit on the shell.
+   The user turn is a compact capsule on the end side. */
+.msg.assistant {
+    background: transparent;
+    padding: 2px 0;
+}
+
 .msg.user {
     background: var(--xratu-bubble-user);
+    align-self: flex-end;
+    max-width: 85%;
+    padding: 9px 12px;
 }
 
 .msg.system {
@@ -1681,7 +1691,8 @@ button {
 }
 
 @media (max-width: 420px) {
-    .msg-content {
+    .msg-content,
+    .step-text-seg {
         font-size: 14px;
     }
 
@@ -1770,8 +1781,8 @@ button {
 .steps {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    margin-bottom: 6px;
+    gap: 6px;
+    margin-bottom: 8px;
 }
 
 /* Tool pills sit between the sidebar background and the message bubble -
@@ -1797,7 +1808,7 @@ button {
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 4px 8px;
+    padding: 4px 0;
     cursor: pointer;
     user-select: none;
     color: var(--vscode-descriptionForeground);
@@ -2213,7 +2224,7 @@ button {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 2px 8px 8px;
+    padding: 2px 0 8px;
 }
 
 .step-io-tag {
@@ -2243,7 +2254,7 @@ button {
    wrapper) - re-add the body inset here and give the pill a taller
    scroll window (reasoning blocks read better without cramped paging). */
 .step > pre {
-    padding: 2px 8px 8px;
+    padding: 2px 0 8px;
     max-height: 340px;
 }
 
@@ -2252,7 +2263,7 @@ button {
 .step-think-body {
     max-height: 340px;
     overflow-y: auto;
-    padding: 2px 8px 8px;
+    padding: 2px 0 8px;
     font-size: 12.5px;
     line-height: 1.55;
     color: var(--vscode-editor-foreground);
@@ -2530,9 +2541,9 @@ pre.tool-cmd {
    the thinking/tool rows around it. Raw while streaming, host-rendered
    markdown once the final per-segment HTML arrives. */
 .step-text-seg {
-    padding: 3px 8px;
-    font-size: var(--xratu-fs-md);
-    line-height: 1.55;
+    padding: 4px 0;
+    font-size: 14.5px;
+    line-height: 1.65;
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--vscode-editor-foreground);
