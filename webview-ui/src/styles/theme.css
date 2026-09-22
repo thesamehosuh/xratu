@@ -67,6 +67,36 @@
     box-sizing: border-box;
 }
 
+/* One scrollbar treatment across the whole webview - thin, transparent track,
+   rounded themed thumb (the same look the tool-step dropdowns use). Areas that
+   deliberately hide their scrollbar override this with `scrollbar-width: none`. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2)) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2));
+    border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
+}
+
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
 /* Light themes invert the elevation: the editor is the lightest surface, so
    the assistant turn stays at editor tone and the user turn is a soft step
    toward the foreground. */
@@ -256,7 +286,6 @@ button {
 .session-pop-list {
     overflow-y: auto;
     max-height: 42vh;
-    scrollbar-width: none;
     padding: 0 6px;
 }
 
@@ -506,6 +535,10 @@ button {
        touch, auto-follow) is unaffected; the jump button + edge fade keep
        orientation. */
     scrollbar-width: none;
+}
+
+.messages::-webkit-scrollbar {
+    display: none;
 }
 
 .messages::-webkit-scrollbar {
@@ -2214,7 +2247,6 @@ button {
 .task-list-chip-menu-list {
     overflow-y: auto;
     max-height: 42vh;
-    scrollbar-width: none;
     padding: 0 6px;
 }
 
@@ -2398,7 +2430,6 @@ button {
     overflow-x: auto;
     max-height: 220px;
     padding: 0;
-    scrollbar-width: thin;
 }
 
 .step-io-tag {
@@ -2623,57 +2654,7 @@ pre.tool-cmd {
    a thin themed slider; overscroll containment stops the wheel from chaining
    into the transcript scroller at either end. */
 .term-live {
-    scrollbar-width: thin;
-    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2)) transparent;
     overscroll-behavior: contain;
-}
-
-.term-live::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-.term-live::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.term-live::-webkit-scrollbar-thumb {
-    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2));
-    border-radius: 4px;
-}
-
-.term-live::-webkit-scrollbar-thumb:hover {
-    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
-}
-
-/* Finished terminal output scrolls too - same thin themed scrollbar as live,
-   instead of the browser's default light one. */
-.term-out pre,
-pre.result-tall {
-    scrollbar-width: thin;
-    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2)) transparent;
-}
-
-.term-out pre::-webkit-scrollbar,
-pre.result-tall::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-.term-out pre::-webkit-scrollbar-track,
-pre.result-tall::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.term-out pre::-webkit-scrollbar-thumb,
-pre.result-tall::-webkit-scrollbar-thumb {
-    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2));
-    border-radius: 4px;
-}
-
-.term-out pre::-webkit-scrollbar-thumb:hover,
-pre.result-tall::-webkit-scrollbar-thumb:hover {
-    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
 }
 
 .term-err {
@@ -4202,7 +4183,6 @@ pre.result-tall::-webkit-scrollbar-thumb:hover {
     height: 100%;
     padding: 14px;
     overflow-y: auto;
-    scrollbar-width: none;
 }
 
 /* Children must keep their natural height: flex-shrink would squash the
@@ -5417,7 +5397,6 @@ pre.result-tall::-webkit-scrollbar-thumb:hover {
     display: flex;
     flex-direction: column;
     gap: 9px;
-    scrollbar-width: none;
 }
 
 /* Same as .cred-page > *: without this, flex-shrink squashes cards to the
@@ -6150,8 +6129,6 @@ pre.result-tall::-webkit-scrollbar-thumb:hover {
     padding: 10px;
     /* A tight card caps the height inline; scroll rather than squash. */
     overflow-y: auto;
-    /* Same as the rest of the app: no native scrollbar gutter. */
-    scrollbar-width: none;
     background: var(--xratu-input);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
@@ -6861,8 +6838,6 @@ button.mcp-row-main:hover strong {
     padding: 4px;
     max-height: 190px;
     overflow-y: auto;
-    /* Same as the rest of the app: no native scrollbar gutter. */
-    scrollbar-width: none;
     background: var(--xratu-input);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
