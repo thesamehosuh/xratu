@@ -103,6 +103,58 @@ check('marker-less text still returns [] so the caller keeps its own message', (
     if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
 });
 
+// --- the shape a flattened tool description TEACHES -------------------------
+// The apply_patch description used to join its multi-line example with spaces,
+// so the markers rendered INLINE. A model imitating its own tool description
+// produced exactly this, and the error reported a "missing separator" the model
+// could not see. Name the real fault instead.
+check('markers on ONE line are named as such', () => {
+    throwsWith('<<<<<<< SEARCH old ======= new >>>>>>> REPLACE', /ONE line/i);
+});
+check('the one-line message shows the corrected template', () => {
+    try {
+        parsePatchBlocks('<<<<<<< SEARCH old ======= new >>>>>>> REPLACE');
+        throw new Error('expected refusal');
+    } catch (e) {
+        if (!e.message.includes('<<<<<<< SEARCH\n<current file lines>\n=======')) {
+            throw new Error(`no copyable template in: ${e.message}`);
+        }
+    }
+});
+check('a two-marker one-liner (no separator) is also caught', () => {
+    throwsWith('<<<<<<< SEARCH old >>>>>>> REPLACE', /ONE line/i);
+});
+check('the separator message shows the corrected template too', () => {
+    try {
+        parsePatchBlocks('<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n');
+        throw new Error('expected refusal');
+    } catch (e) {
+        // Assert the COMPLETE copyable shape, not just the '=======' substring
+        // (which the base message already contains): this must fail if the
+        // template is ever dropped from the diagnostic.
+        if (!e.message.includes('<<<<<<< SEARCH\n<current file lines>\n=======\n<replacement lines>\n>>>>>>> REPLACE')) {
+            throw new Error(`no full template in: ${e.message}`);
+        }
+    }
+});
+check('an inline marker line inside a body is not misreported as flattened', () => {
+    // The body contains '<<<<<<< ... =======' but NOT at line start, so the
+    // fault is the missing separator - not a flattened patch. (The detector must
+    // only fire on a line-INITIAL opener.)
+    throwsWith('<<<<<<< SEARCH\nconst s = "a <<<<<<< b ======= c";\n>>>>>>> REPLACE\n', /separator/i);
+});
+check('inline marker-like text alone is not a patch attempt (returns [])', () => {
+    const blocks = parsePatchBlocks('const s = "a <<<<<<< b ======= c";');
+    if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
+});
+// A correct patch must still parse - the new checks must not over-trigger.
+check('a well-formed multi-line patch is unaffected', () => {
+    const blocks = parsePatchBlocks('<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE');
+    if (blocks.length !== 1 || blocks[0].search !== 'a' || blocks[0].replace !== 'b') {
+        throw new Error(JSON.stringify(blocks));
+    }
+});
+
 check('a lone ======= line is prose, not a patch attempt (returns [])', () => {
     // A markdown rule / RST underline must NOT be diagnosed as a broken patch.
     const blocks = parsePatchBlocks('Release notes\n=======\n\n- fixed things');
