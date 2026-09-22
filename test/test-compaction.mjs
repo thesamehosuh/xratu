@@ -34,6 +34,9 @@ const {
     clipForSummary,
     boundToolResults,
     HISTORY_TRUNCATION_MARKER,
+    elideOldToolResults,
+    TOOL_RESULT_ELISION_MARKER,
+    TOOL_RESULT_ELISION_KEEP,
 } = require('../out/local/localAgent.js');
 
 let failed = 0;
@@ -382,6 +385,101 @@ checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
     // comes from the window, so this fix cannot make normal compaction greedy.
     const proactive = compactMessages(build(), wrongWindow, undefined, 0, false);
     check('proactive path refuses far below the window ratio', proactive.length, 0);
+}
+
+// --- CHEAP TIER: eliding old tool results --------------------------------
+// Modelled on Claude Code's model-free micro-compaction. It exists because
+// dropping a whole turn loses the user's request and the model's reasoning as
+// well as the tool output, while this loses only stale tool output - and it
+// costs no model call, so it can run before the expensive summarizer.
+//
+// Local alias: this suite names its boolean assertion helper `checkTrue`.
+const ok = (name, cond) => checkTrue(name, cond);
+{
+    const mkTool = (i) => ({ role: 'tool', tool_call_id: `c${i}`, content: 'x'.repeat(3000) });
+    const msgs = [{ role: 'user', content: 'go' }];
+    for (let i = 0; i < 8; i++) {
+        msgs.push({ role: 'assistant', content: `step ${i}` });
+        msgs.push(mkTool(i));
+    }
+
+    const freed = elideOldToolResults(msgs);
+    ok('elision reclaims tokens', freed > 0, `freed=${freed}`);
+
+    const toolIdx = msgs.map((m, i) => (m.role === 'tool' ? i : -1)).filter((i) => i >= 0);
+    const elided = toolIdx.filter((i) => msgs[i].content === TOOL_RESULT_ELISION_MARKER);
+    const kept = toolIdx.filter((i) => msgs[i].content !== TOOL_RESULT_ELISION_MARKER);
+    check('elides all but the newest N', elided.length, 8 - TOOL_RESULT_ELISION_KEEP);
+    check('keeps exactly N tool results intact', kept.length, TOOL_RESULT_ELISION_KEEP);
+    check(
+        'the NEWEST results are the ones kept',
+        kept[kept.length - 1],
+        toolIdx[toolIdx.length - 1],
+    );
+    ok('the marker says how to recover the output', /re-run the tool/i.test(TOOL_RESULT_ELISION_MARKER));
+    ok('non-tool messages are untouched', msgs[1].content === 'step 0');
+
+    // Idempotent: a second pass has nothing left to do, so it must not report
+    // freeing more tokens (or a caller would loop on it).
+    check('second pass frees nothing', elideOldToolResults(msgs), 0);
+}
+
+// --- elision is a no-op when there is nothing to reclaim -----------------
+{
+    const few = [
+        { role: 'user', content: 'go' },
+        { role: 'tool', tool_call_id: 'c1', content: 'small' },
+    ];
+    check('no-op with fewer than N tool results', elideOldToolResults(few), 0);
+    ok('their content is preserved', few[1].content === 'small');
+    check('empty input is a no-op', elideOldToolResults([]), 0);
+}
+
+// --- THE POINT: the cheap tier avoids dropping turns ----------------------
+// Over the compaction threshold, but eliding stale tool output reclaims
+// enough on its own - so NO turn is dropped and no summarizer call is needed.
+{
+    const window = 100_000;           // threshold 90k, target 60k
+    const msgs = [{ role: 'user', content: 'start' }];
+    for (let i = 0; i < 12; i++) {
+        msgs.push({ role: 'user', content: `turn ${i}` });
+        msgs.push({ role: 'assistant', content: 'working' });
+        msgs.push({ role: 'tool', tool_call_id: `c${i}`, content: 'y'.repeat(30_000) });
+    }
+    const before = estimateRunTokens(msgs);
+    ok('the fixture starts over the threshold', before > window * 0.9, `before=${before}`);
+
+    const lenBefore = msgs.length;
+    const dropped = compactMessages(msgs, window, before, 0, false);
+    check('elision alone means NO turns are dropped', dropped.length, 0);
+    check('no message was removed', msgs.length, lenBefore);
+    ok('the truncation marker was not inserted', !msgs.some((m) => m.content === HISTORY_TRUNCATION_MARKER));
+    ok('occupancy came down', estimateRunTokens(msgs) < before);
+}
+
+// --- a custom ratio moves the gate ---------------------------------------
+{
+    const window = 100_000;
+    // NO tool results on purpose: the cheap tier then cannot reclaim anything,
+    // so the ratio ALONE decides whether whole turns are dropped. (With tool
+    // results present the elision tier reclaims first and no turn is dropped at
+    // either ratio - which is the point of the tier, tested above. Asserting
+    // "a 0.5 ratio drops turns" on that fixture was wrong.)
+    const build = () => {
+        const msgs = [{ role: 'user', content: 'start' }];
+        for (let i = 0; i < 20; i++) {
+            msgs.push({ role: 'user', content: `turn ${i}` });
+            msgs.push({ role: 'assistant', content: 'w'.repeat(12_000) });
+        }
+        return msgs;
+    };
+    // ~80k tokens of content: under a 0.9 gate, over a 0.5 gate.
+    const total = estimateRunTokens(build());
+    ok('fixture sits between the two thresholds', total > window * 0.5 && total < window * 0.9, `total=${total}`);
+
+    check('a 0.9 ratio does not fire', compactMessages(build(), window, undefined, 0, false, 0.9).length, 0);
+    const fired = compactMessages(build(), window, undefined, 0, false, 0.5);
+    ok('a 0.5 ratio drops turns', fired.length > 0, `dropped=${fired.length}`);
 }
 
 console.log(failed === 0 ? '\ncompaction tests: all passed' : `\ncompaction tests: ${failed} FAILED`);

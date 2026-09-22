@@ -49,6 +49,7 @@ import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } 
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { resolveEditMode } from './tooling/editFileArgs';
 import { resolveAgentRounds } from './tooling/agentRounds';
+import { resolveCompactRatio } from './tooling/compactionPolicy';
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
@@ -2765,6 +2766,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // workflows impossible to run and impossible to extend.
                     maxRounds: resolveAgentRounds(
                         vscode.workspace.getConfiguration('xratu').get('maxAgentRounds')),
+                    // Compaction threshold: the user's policy rather than a
+                    // constant. Read per run so a change applies to the next
+                    // turn without a reload.
+                    autoCompactRatio: resolveCompactRatio(
+                        vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
                     // Window for compaction/budget math. Prefer the probed or
                     // override value; the fallback is deliberately CONSERVATIVE
                     // (not 32k): claiming a window larger than the runtime

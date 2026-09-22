@@ -12,6 +12,7 @@
 	"config.providerPricing.desc": "Per-provider gateway rates, keyed by base-URL host, e.g. { \"api.avalai.ir\": { \"tomanPerUsd\": 90000, \"markupPercent\": 10 } }. Toman costs for that host are the USD price table multiplied by this rate. Iranian providers fall back to xratu.tomanPerUsd when no host rate is set.",
 	"config.tomanPerUsd.desc": "Fallback Toman per USD, used only when a provider host has no rate in xratu.providerPricing. 0 = no fallback (Toman costs then show only for providers with a host rate or a model override).",
 	"config.maxAgentRounds.desc": "Optional hard cap on agent-loop rounds per turn. One round = a model request plus the tool calls it makes. **0 (the default) means no cap**: the run continues until the model finishes on its own, which is what long tasks need. Set a positive number only if you want a runaway model on a metered API to stop early.",
+	"config.autoCompactThreshold.desc": "How full the context window may get (in percent) before the agent compacts older history. Compacting keeps long tasks running, but it rewrites history, which costs a prompt-cache miss and a summarization call - so compacting early is not free either. Higher means fewer compactions and more risk of hitting the provider's real limit. Default 90.",
 	"command.category": "Xratu",
 	"command.clearHistory.title": "New Session",
 	"command.setLlmCredentials.title": "Set LLM Credentials",
