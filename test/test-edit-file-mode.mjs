@@ -110,5 +110,25 @@ for (const raw of [{ a: {} }, [null], Number.NaN, Infinity, Symbol('s'), 10n]) {
     ok('never throws on a circular object', !threw);
 }
 
+{
+    // Every string conversion path throws: toJSON (JSON.stringify), then
+    // toString and valueOf (String). The error text must still be produced.
+    const hostile = {
+        toJSON() { throw new Error('toJSON'); },
+        toString() { throw new Error('toString'); },
+        valueOf() { throw new Error('valueOf'); },
+    };
+    let threw = false;
+    let result = null;
+    try {
+        result = resolveEditMode(hostile);
+    } catch {
+        threw = true;
+    }
+    ok('never throws when every string conversion throws', !threw);
+    ok('all-throwing input still errors', isError(result), JSON.stringify(result));
+    ok('all-throwing input prints a placeholder', typeof result?.error === 'string' && result.error.includes('<unprintable>'), result?.error);
+}
+
 console.log(failed === 0 ? '\nedit-file-mode tests: all passed' : `\nedit-file-mode tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

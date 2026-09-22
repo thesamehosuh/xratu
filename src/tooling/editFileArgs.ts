@@ -31,9 +31,14 @@ export type EditModeResolution = { mode: EditFileMode } | { error: string };
 function safeStringify(value: unknown): string {
     try {
         const json = JSON.stringify(value);
-        return typeof json === 'string' ? json : String(value);
+        if (typeof json === 'string') return json;
     } catch {
+        // Fall through to the protected string conversion below.
+    }
+    try {
         return String(value);
+    } catch {
+        return '<unprintable>';
     }
 }
 
