@@ -642,22 +642,32 @@ interface CompletionResult {
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
-/** Append the volatile note to a COPY of the last message (chat transport).
- *  A trailing system message after tool/user turns is rejected by strict
- *  servers, and appending only touches the tail - everything before the last
- *  message stays a cacheable prefix. */
-function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
+/**
+ * Append the volatile note as a SEPARATE trailing message (chat transport).
+ *
+ * It must NOT be merged into the last message's content. Doing that made the
+ * last message's bytes differ from its replayed form on the very next round -
+ * the note is never stored in `messages`, so the follow-up request sent that
+ * message clean - and the cached prefix therefore ended one message EARLY,
+ * every round and every turn.
+ *
+ * Measured effect of the old merge: in a tool-using turn the newest tool result
+ * (usually the largest message in the prompt) could never be read from cache,
+ * and across turns the entire previous turn was re-sent as a miss. That is the
+ * ~50% cache rate, against >98% for a harness that keeps its prefix stable.
+ *
+ * A separate trailing message keeps every previously-sent message byte-exact,
+ * so the cacheable prefix grows monotonically - the "relocate dynamic content
+ * below the cache breakpoint" rule.
+ *
+ * Role is `user`, not `system`: a trailing system message is rejected by strict
+ * OpenAI-compatible servers (which is why the old code merged instead). The
+ * Messages transport already appends the note as a trailing user turn.
+ */
+export function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
     if (!messages.length) return messages;
-    const out = messages.slice();
-    const last = out[out.length - 1];
-    if (typeof last.content === 'string') {
-        out[out.length - 1] = { ...last, content: `${last.content}\n\n${note}` };
-    } else if (Array.isArray(last.content)) {
-        out[out.length - 1] = { ...last, content: [...last.content, { type: 'text', text: note }] };
-    } else {
-        out[out.length - 1] = { ...last, content: note };
-    }
-    return out;
+    if (!note) return messages;
+    return [...messages, { role: 'user', content: note }];
 }
 
 /** Volatile context-awareness note appended as the LAST item of each request.
@@ -1092,13 +1102,14 @@ function toMessagesBody(
         blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
     }
 
-    // Volatile note rides the tail: merged into a trailing user turn so the
-    // cached prefix (tools + system + history) is untouched. tool_result
-    // blocks must stay first, which the sort below already guarantees.
+    // Volatile note rides the tail as its OWN user turn - never merged into
+    // the previous turn. Merging mutated a turn that is replayed on the next
+    // round, so its bytes differed from what was sent and the cached prefix
+    // ended one message early (the same defect as the chat transport; see
+    // appendTailNote). tool_result blocks stay first in their own turn, which
+    // the sort above already guarantees.
     if (tailNote) {
-        const last = out[out.length - 1];
-        if (last && last.role === 'user') last.content.push({ type: 'text', text: tailNote });
-        else out.push({ role: 'user', content: [{ type: 'text', text: tailNote }] });
+        out.push({ role: 'user', content: [{ type: 'text', text: tailNote }] });
     }
 
     const body: Record<string, unknown> = {
@@ -1760,13 +1771,12 @@ function toGoogleBody(
         }
     }
 
-    // Volatile note: Google has no mid-conversation system role, so it rides
-    // the last user content (or a fresh one) - the stable systemInstruction
-    // prefix stays byte-identical for implicit caching.
+    // Volatile note: Google has no mid-conversation system role, so it rides a
+    // trailing user content of its OWN - never merged into the previous turn,
+    // which would change bytes that get replayed and truncate the implicit
+    // cache prefix by one message every round (see appendTailNote).
     if (tailNote) {
-        const last = contents[contents.length - 1];
-        if (last && last.role === 'user') last.parts.push({ text: tailNote });
-        else contents.push({ role: 'user', parts: [{ text: tailNote }] });
+        contents.push({ role: 'user', parts: [{ text: tailNote }] });
     }
 
     const body: Record<string, unknown> = { contents };
