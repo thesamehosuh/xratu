@@ -681,6 +681,22 @@ function TerminalBody({ call, result }: { call: Step; result?: Step }) {
     // must not spin forever.
     const done = !!call.result || !!result;
     const parsed = useMemo(() => (done ? parseTerminalOutput(text) : null), [done, text]);
+    // Live output follows the newest lines while the command runs - but only
+    // while the reader is pinned to the bottom of that output; a manual
+    // scroll-up inside the pill is never yanked back (mirrors the thinking
+    // pill's follow behavior). Without this the output sat at line 1 while the
+    // command streamed, and its own default scrollbar was never repositioned.
+    const liveRef = useRef<HTMLPreElement | null>(null);
+    const livePinned = useRef(true);
+    const live = call.live ?? '';
+    useEffect(() => {
+        const el = liveRef.current;
+        if (!done && el && livePinned.current) el.scrollTop = el.scrollHeight;
+    }, [live, done]);
+    const onLiveScroll = () => {
+        const el = liveRef.current;
+        if (el) livePinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    };
     return (
         <>
             {cmd ? <pre className="tool-cmd" dir="ltr">{cmd}</pre> : <ArgView call={call} />}
@@ -719,7 +735,12 @@ function TerminalBody({ call, result }: { call: Step; result?: Step }) {
                         final result replaces it). Tail-capped so a chatty
                         command cannot grow the DOM without bound. */}
                     {call.live && (
-                        <pre className="term-out result-tall" dir="ltr">{call.live.slice(-20000)}</pre>
+                        <pre
+                            ref={liveRef}
+                            onScroll={onLiveScroll}
+                            className="term-out term-live result-tall"
+                            dir="ltr"
+                        >{call.live.slice(-20000)}</pre>
                     )}
                 </>
             )}
