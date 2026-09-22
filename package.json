@@ -168,6 +168,7 @@
 		"build:webview": "vite build",
 		"test:webview": "node test/run-webview-tests.mjs",
 		"test:e2e": "npm run build:webview && playwright test -c test/e2e/playwright.config.ts",
+		"test:host": "node test/run-host-tests.mjs",
 		"test:sanitizer": "node test/test-sanitizer.mjs",
 		"test:endpoint-guard": "node test/test-endpoint-guard.mjs",
 		"test:base-url": "node test/test-base-url.mjs",
