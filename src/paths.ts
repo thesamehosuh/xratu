@@ -24,7 +24,22 @@ function countMarkerLines(patch: string, re: RegExp): number {
  * syntax slip (an omitted closing marker) became a dead end. Diagnosing here
  * keeps the explanation next to the parser that knows the exact grammar.
  */
+/** Canonical block shape, shown in diagnostics so the model can copy it. */
+const PATCH_TEMPLATE = '<<<<<<< SEARCH\n<current file lines>\n=======\n<replacement lines>\n>>>>>>> REPLACE';
+
 export function diagnosePatchBlocks(patch: string): string | null {
+    // Markers crammed onto ONE line. This is exactly what a model produces when
+    // it imitates a tool description whose multi-line example was flattened onto
+    // a single line - which the apply_patch description literally did. The
+    // parser needs a newline after each marker, so such a patch can never parse;
+    // naming this beats reporting a "missing separator" the model cannot see.
+    const oneLine = patch
+        .split(/\r?\n/)
+        .find((line) => line.includes('<<<<<<<') && (line.includes('=======') || line.includes('>>>>>>>')));
+    if (oneLine) {
+        return `the SEARCH/REPLACE markers are on ONE line: "${oneLine.trim().slice(0, 100)}". `
+            + `Each marker must be ALONE on its own line. Write it as:\n${PATCH_TEMPLATE}`;
+    }
     const opens = countMarkerLines(patch, /^<<<<<<<.*$/gm);
     const seps = countMarkerLines(patch, /^=======\r?$/gm);
     const closes = countMarkerLines(patch, /^>>>>>>>.*$/gm);
@@ -36,14 +51,14 @@ export function diagnosePatchBlocks(patch: string): string | null {
 
     if (opens > 0 && closes === 0) {
         return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) but NO closing `
-            + `'>>>>>>> REPLACE' marker. Every block needs all three lines: '<<<<<<< SEARCH', `
-            + `'=======', '>>>>>>> REPLACE'. The closing marker is the one most often dropped - `
-            + `add it directly after the replacement text and re-send the SAME block unchanged.`;
+            + `'>>>>>>> REPLACE' marker. The closing marker is the one most often dropped - `
+            + `add it directly after the replacement text and re-send the SAME block unchanged. `
+            + `The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (opens > 0 && seps === 0) {
         return `patch has ${opens} '<<<<<<< SEARCH' marker line(s) but no '=======' separator `
-            + `marker line. Each block needs '=======' alone on its own line between the search `
-            + `text and the replacement text.`;
+            + `marker line. '=======' goes ALONE on its own line, between the search text and the `
+            + `replacement text. The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (opens === 0 && closes > 0) {
         return `patch has ${closes} '>>>>>>> REPLACE' marker line(s) but no '<<<<<<< SEARCH' `
