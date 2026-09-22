@@ -54,8 +54,12 @@
     --xratu-fs-xs: 10.5px;
     --xratu-fs-sm: 11px;
     --xratu-fs-md: 12px;
-    --xratu-fs-base: 13px;
+    --xratu-fs-base: 14px;
     --xratu-fs-lg: 15px;
+
+    /* Reading measure for prose - caps line length on wide panels without
+       touching code/tables. Sidebar widths already sit under this. */
+    --xratu-measure: 72ch;
 }
 
 * {
@@ -73,7 +77,7 @@ body {
     font-family: 'Vazirmatn', var(--vscode-font-family);
     color: var(--vscode-editor-foreground);
     background: var(--vscode-sideBar-background);
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.55;
 }
 
@@ -1382,8 +1386,8 @@ button {
 }
 
 .msg-content {
-    font-size: 13.5px;
-    line-height: 1.62;
+    font-size: 14.5px;
+    line-height: 1.65;
     word-wrap: break-word;
     overflow-wrap: anywhere;
     min-width: 0;
@@ -1402,6 +1406,12 @@ button {
 
 .msg-content > :last-child {
     margin-bottom: 0;
+}
+
+/* Long-form prose stops at a comfortable measure on wide panels; fenced code
+   and tables intentionally stay full width. */
+.msg-content :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) {
+    max-width: var(--xratu-measure);
 }
 
 .msg-content p {
@@ -1437,8 +1447,6 @@ button {
 .msg-content h1 {
     font-size: 1.35em;
     margin: 18px 0 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--vscode-widget-border);
 }
 
 .msg-content h2 {
@@ -1509,8 +1517,7 @@ button {
     display: inline;
     padding: 1px 5px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--vscode-textBlockQuote-background, #1e1e1e) 80%, #000);
-    border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 75%, transparent);
+    background: color-mix(in srgb, var(--vscode-textBlockQuote-background, #1e1e1e) 90%, #000);
     color: var(--vscode-foreground);
     white-space: break-spaces;
 }
@@ -1648,7 +1655,7 @@ button {
     overflow-x: auto;
     background: transparent !important;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.55;
     tab-size: 4;
 }
@@ -1675,13 +1682,13 @@ button {
 
 @media (max-width: 420px) {
     .msg-content {
-        font-size: 13px;
+        font-size: 14px;
     }
 
     .code-surface > pre,
     .code-surface > pre.shiki {
         padding: 9px 10px;
-        font-size: 11.5px;
+        font-size: 12px;
     }
 }
 
@@ -1772,7 +1779,7 @@ button {
 .step {
     border-radius: var(--xratu-radius-sm);
     background: color-mix(in srgb, var(--vscode-sideBar-background) 75%, #000);
-    font-size: var(--xratu-fs-md);
+    font-size: 12.5px;
     overflow: hidden;
 }
 
@@ -2221,7 +2228,7 @@ button {
     margin: 0;
     padding: 0;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-md);
+    font-size: 12.5px;
     white-space: pre-wrap;
     overflow-x: auto;
     max-height: 200px;
@@ -2246,7 +2253,7 @@ button {
     max-height: 340px;
     overflow-y: auto;
     padding: 2px 8px 8px;
-    font-size: var(--xratu-fs-md);
+    font-size: 12.5px;
     line-height: 1.55;
     color: var(--vscode-editor-foreground);
 }
@@ -2260,7 +2267,7 @@ button {
 .tool-path,
 pre.tool-cmd {
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-md);
+    font-size: 12.5px;
     color: var(--xratu-accent);
     word-break: break-all;
     text-align: left;
@@ -2346,7 +2353,7 @@ pre.tool-cmd {
 
 .pill-diff-code {
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-md);
+    font-size: 12.5px;
     white-space: pre-wrap;
     word-break: break-word;
     text-align: left;
