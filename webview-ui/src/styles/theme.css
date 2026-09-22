@@ -29,7 +29,10 @@
     /* Bubbles read by elevation, not outline: the assistant turn sits a clear
        step above the shell, the user turn a step below it. */
     --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
-    --xratu-bubble-user: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
+    /* One shared "inset" surface: the user turn, the composer, dropdowns,
+       suggestion cards and icon tiles all sit on the same dark tone. */
+    --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
+    --xratu-bubble-user: var(--xratu-surface-inset);
     --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
 
     /* Sub-page card tone - the composer card's exact color, kept from the
@@ -102,7 +105,8 @@
    toward the foreground. */
 body.vscode-light {
     --xratu-bubble: var(--vscode-editor-background);
-    --xratu-bubble-user: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+    --xratu-surface-inset: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+    --xratu-bubble-user: var(--xratu-surface-inset);
 }
 
 html,
@@ -666,7 +670,7 @@ button {
     margin: 10px 0 2px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 10px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    background: var(--xratu-surface-inset);
     overflow: hidden;
     box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
 }
@@ -1208,7 +1212,7 @@ button {
     font-size: var(--xratu-fs-base);
     text-align: start;
     color: var(--vscode-foreground);
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--xratu-border);
     border-radius: var(--xratu-radius-sm);
     transition: border-color 0.15s ease, background 0.15s ease;
@@ -2924,7 +2928,7 @@ pre.tool-cmd {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius);
     padding: 4px;
@@ -3239,7 +3243,7 @@ pre.tool-cmd {
     flex-direction: column;
     gap: 6px;
     padding: 6px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
@@ -3300,7 +3304,7 @@ pre.tool-cmd {
     padding: 4px 8px;
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius-xs);
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-descriptionForeground);
 }
 
@@ -3968,7 +3972,7 @@ pre.tool-cmd {
     display: flex;
     gap: 2px;
     padding: 2px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 70%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-xs);
 }
@@ -5017,7 +5021,7 @@ pre.tool-cmd {
     justify-content: center;
     border-radius: 7px;
     border: 1px solid var(--vscode-widget-border);
-    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    background: var(--xratu-surface-inset);
     color: var(--xratu-accent);
 }
 
@@ -5462,7 +5466,7 @@ pre.tool-cmd {
     align-items: center;
     justify-content: center;
     color: var(--vscode-descriptionForeground);
-    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: 7px;
 }
@@ -6838,7 +6842,7 @@ button.mcp-row-main:hover strong {
     padding: 4px;
     max-height: 190px;
     overflow-y: auto;
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
