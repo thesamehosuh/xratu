@@ -103,6 +103,11 @@ export interface LocalAgentMessage {
     /** Provider-native assistant content to replay verbatim (see
      *  CompletionResult.providerBlocks). Only set on assistant messages. */
     providerBlocks?: unknown;
+    /** Provider-native reasoning text to replay verbatim on the next request -
+     *  the Chat Completions `reasoning_content` field. Thinking-mode APIs reject
+     *  a replayed tool-call turn that omits it. Only set on assistant messages
+     *  whose response actually streamed reasoning. */
+    reasoningContent?: string;
 }
 
 export interface LocalAgentRequest {
@@ -631,6 +636,9 @@ interface CompletionResult {
      *  Required when a thinking/reasoning turn also calls a tool - without it
      *  the continuation is rejected or loses reasoning state. */
     providerBlocks?: unknown[];
+    /** Captured reasoning text for transports that replay it as a top-level
+     *  field instead of content blocks (Chat Completions `reasoning_content`). */
+    reasoningContent?: string;
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
@@ -656,6 +664,48 @@ function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgent
  *  It is deliberately NOT part of `messages` and NOT in the system prompt:
  *  keeping the prefix byte-stable across rounds is what makes prompt caching
  *  work (Anthropic cache_control, OpenAI/Google automatic prefix caching). */
+/** The thinking-mode rejection that demands reasoning be replayed verbatim. */
+const REASONING_CONTENT_REJECT_RE = /reasoning_content/i;
+
+/**
+ * Re-attach provider-native reasoning to outgoing assistant messages for the
+ * Chat Completions transport.
+ *
+ * Unlike Anthropic/Gemini/Responses - which carry thinking inside content
+ * blocks, served by `providerBlocks` - Chat Completions has no block channel
+ * for it: reasoning rides a top-level `reasoning_content` field, and
+ * thinking-mode APIs reject a replayed tool-call turn that omits it:
+ *
+ *   400 - The `reasoning_content` in the thinking mode must be passed back
+ *   to the API.
+ *
+ * That killed whole turns: the stream parsed `reasoning_content` for display,
+ * accumulated it, and dropped it at the return - so the SECOND round of any
+ * tool-using thinking turn replayed an assistant message with no reasoning.
+ * The field is added ONLY to messages that actually captured reasoning, so a
+ * provider without the concept never sees an unknown field.
+ *
+ * `padMissing` is the recovery path for history persisted before capture
+ * existed: the API demands the field, so send it empty rather than failing the
+ * turn outright.
+ */
+export function withReasoningContent(
+    messages: LocalAgentMessage[],
+    padMissing = false,
+): unknown[] {
+    const needs = messages.some((m) => m.role === 'assistant'
+        && (m.reasoningContent || (padMissing && (m.tool_calls?.length ?? 0) > 0)));
+    if (!needs) return messages;
+    return messages.map((m) => {
+        if (m.role !== 'assistant') return m;
+        if (m.reasoningContent) return { ...m, reasoning_content: m.reasoningContent };
+        // Only tool-call turns need the field: a plain assistant reply has no
+        // reasoning state the API can insist on.
+        if (padMissing && (m.tool_calls?.length ?? 0) > 0) return { ...m, reasoning_content: '' };
+        return m;
+    });
+}
+
 function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -683,11 +733,14 @@ async function requestChatCompletion(
     onThinking?: (thinking: string) => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'chat/completions');
+    // Wire messages are built ONCE so the 400 recovery below can rebuild the
+    // same array (with padding) without reconstructing the tail note.
+    const wireMessages = tailNote ? appendTailNote(messages, tailNote) : messages;
     const body: Record<string, unknown> = {
         model: request.model,
-        // Note appended to the last message (see appendTailNote): safe for
-        // strict servers, and the prefix before it stays cacheable.
-        messages: tailNote ? appendTailNote(messages, tailNote) : messages,
+        // Safe for strict servers, and the prefix before it stays cacheable.
+        // Reasoning is re-attached here (see withReasoningContent).
+        messages: withReasoningContent(wireMessages),
         stream: true,
         stream_options: { include_usage: true },
     };
@@ -755,6 +808,13 @@ async function requestChatCompletion(
                 delete body.stream_options;
             } else if (request.maxTokens == null && body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_tokens;
+            } else if (REASONING_CONTENT_REJECT_RE.test(text)) {
+                // Thinking mode demands the assistant turn's reasoning BACK.
+                // Checked BEFORE the generic reasoning-effort branch, which also
+                // matches this text (it contains "thinking") and would only
+                // delete `reasoning_effort` - a no-op when the level is default,
+                // which let the 400 escape and killed the turn.
+                body.messages = withReasoningContent(wireMessages, true);
             } else if ((body.reasoning_effort != null || body.reasoning != null) && REASONING_REJECT_RE.test(text)) {
                 // The model/gateway does not accept the reasoning effort - drop
                 // it and keep the run instead of failing on a UI convenience.
@@ -892,7 +952,10 @@ async function requestChatCompletion(
         });
     }
 
-    return { text, toolCalls, usage };
+    // `reasoning` MUST ride along: it is the only carrier of the thinking state
+    // for this transport, and the next round has to replay it (see
+    // withReasoningContent). Dropping it here is what caused the 400.
+    return { text, toolCalls, usage, reasoningContent: reasoning || undefined };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal (parity with the
@@ -1960,9 +2023,13 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
     // their tokens count too - otherwise a reasoning-heavy turn is
     // under-counted and the continuation overflows without compaction.
     const provider = message.providerBlocks ? JSON.stringify(message.providerBlocks) : '';
+    // Chat Completions re-sends captured reasoning the same way, so it counts
+    // too - otherwise a thinking-heavy turn is under-counted and the
+    // continuation overflows without compaction noticing.
+    const reasoning = message.reasoningContent ?? '';
     // ~3 chars/token. This errs HIGH (over-budget) - the safe direction, so
     // the model sees slightly more usage than reality and never overruns.
-    return Math.ceil((content.length + calls.length + provider.length) / 3);
+    return Math.ceil((content.length + calls.length + provider.length + reasoning.length) / 3);
 }
 
 export function estimateRunTokens(messages: LocalAgentMessage[]): number {
@@ -2739,6 +2806,9 @@ export async function* runLocalAgent(
             // Replay provider-native reasoning/thinking blocks on the next
             // request (required when a thinking turn also calls a tool).
             ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
+            // Chat Completions carries thinking as a top-level field rather
+            // than content blocks, so it rides its own property.
+            ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
         });
 
         const approvalCalls = finalResult.toolCalls.filter((call) => toolRequiresApproval(call.name, request.tools));
