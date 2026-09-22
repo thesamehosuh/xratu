@@ -251,13 +251,6 @@ export function App() {
     const contentRef = useRef<HTMLDivElement | null>(null);
     const atBottom = useRef(true);
     const lastScrollTop = useRef(0);
-    // Track scrollHeight alongside scrollTop: a CONTENT SHRINKAGE clamps
-    // scrollTop down (browser clamp when the document shrinks under a
-    // bottom-pinned view), and that clamp fires a scroll event with an
-    // upward delta - identical to a user scroll-up. Without the scrollHeight
-    // comparison the clamp latches atBottom=false and the stream follow dies
-    // until the user manually scrolls back down.
-    const lastScrollHeight = useRef(0);
     // A chevron-triggered smooth scroll is in flight - instant pins (stream
     // follow, resize observer) must not compete with it or the animation
     // snaps mid-flight. Cleared on arrival at the bottom or by timeout.
@@ -268,9 +261,15 @@ export function App() {
             // Any upward scroll immediately opts out of auto-follow - content
             // grows at the bottom during streaming, so without this a slow
             // wheel/touchpad scroll up is snapped back on every chunk.
-            // EXCEPT when the document itself shrank: the scrollTop clamp
-            // that follows is bookkeeping, not intent (see lastScrollHeight).
-            const shrunk = el.scrollHeight < lastScrollHeight.current;
+            //
+            // The upward delta must be measured against the CLAMPED position,
+            // not the previous scrollTop: when the content shrinks (a tool pill
+            // collapses) the browser clamps scrollTop down to the new maximum,
+            // which looks like an upward move but is bookkeeping, not intent. A
+            // plain "did it shrink?" veto would instead mask a REAL scroll-up
+            // that happened in the same event as a collapse.
+            const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+            const expectedTop = Math.min(lastScrollTop.current, maxTop);
             // An UPWARD scroll is the ONLY thing that may disarm auto-follow.
             //
             // Deriving `atBottom` from POSITION instead latched it false during
@@ -281,7 +280,7 @@ export function App() {
             // of the trailing page. Caught as an e2e flake - expected 40
             // bubbles, got 50 - and on a long real session that is every message
             // in the DOM.
-            const movedUp = !shrunk && el.scrollTop < lastScrollTop.current - 1;
+            const movedUp = el.scrollTop < expectedTop - 1;
             const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
             if (movedUp) {
                 atBottom.current = false;
@@ -294,7 +293,6 @@ export function App() {
             // Otherwise leave `atBottom` exactly as it was: neither content
             // growth nor a programmatic scroll is a statement of intent.
             lastScrollTop.current = el.scrollTop;
-            lastScrollHeight.current = el.scrollHeight;
             setShowJump(!atBottom.current);
         }
     };
@@ -417,10 +415,9 @@ export function App() {
         if (!el || !adj) return;
         pendingScrollAdjust.current = null;
         el.scrollTop = adj.top + (el.scrollHeight - adj.height);
-        // Keep the scroll bookkeeping in sync so onScroll's shrink detection
-        // does not read this programmatic jump as a user scroll-up.
+        // Keep the scroll bookkeeping in sync so onScroll does not read this
+        // programmatic jump as a user scroll-up.
         lastScrollTop.current = el.scrollTop;
-        lastScrollHeight.current = el.scrollHeight;
     }, [firstVisible]);
 
     /** Reveal the next older page of the transcript window. A no-op when

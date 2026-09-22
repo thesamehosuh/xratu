@@ -118,6 +118,33 @@ test('long history pages: only the tail mounts, show-earlier reveals the rest', 
     await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
 });
 
+test('a tall mixed restore replay stays paged (budget must not grow to the whole transcript)', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 's3', title: null });
+    // Replay a TALL mixed transcript the way _restoreChatUI does (user +
+    // thinking + tool call/result + final text per turn). The tall rows grow the
+    // content under a pinned view - exactly what used to latch atBottom=false
+    // and grow the paging window until the ENTIRE transcript mounted. The plain
+    // text-only test above replays short bubbles and did not reproduce it.
+    const tall = 'lorem ipsum dolor sit amet '.repeat(40);
+    const turns = 25;
+    for (let i = 0; i < turns; i++) {
+        await hostMessage(page, { type: 'restoreUser', value: `turn ${i} ${tall}` });
+        await hostMessage(page, { type: 'startResponse' });
+        await hostMessage(page, { type: 'thinking', value: `reasoning ${i} ${tall}` });
+        await hostMessage(page, { type: 'thinkingHtml', value: `<p>reasoning ${i}</p>` });
+        await hostMessage(page, { type: 'toolCall', tool: 'read_file', args: '{}', callId: `c${i}` });
+        await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: tall, callId: `c${i}` });
+        await hostMessage(page, { type: 'fullResponse', persian: `answer ${i}` });
+    }
+    // 25 turns x (1 user + 1 assistant) = 50 messages; the window is 40.
+    await expect(page.locator('article.msg')).toHaveCount(40);
+    await expect(page.locator('.show-earlier')).toBeVisible();
+    await expect(page.getByText(/turn 0 /)).toHaveCount(0);
+});
+
 test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
