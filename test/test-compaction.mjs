@@ -438,10 +438,14 @@ const ok = (name, cond) => checkTrue(name, cond);
 // --- THE POINT: the cheap tier avoids dropping turns ----------------------
 // Over the compaction threshold, but eliding stale tool output reclaims
 // enough on its own - so NO turn is dropped and no summarizer call is needed.
+//
+// The window is sized so the KEPT residue (the newest TOOL_RESULT_ELISION_KEEP
+// results plus the current turn's, which elision must not touch) sits well
+// under the target: the target scales with the window, the residue does not.
 {
-    const window = 100_000;           // threshold 90k, target 60k
+    const window = 200_000;           // threshold 180k, target 120k
     const msgs = [{ role: 'user', content: 'start' }];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 20; i++) {
         msgs.push({ role: 'user', content: `turn ${i}` });
         msgs.push({ role: 'assistant', content: 'working' });
         msgs.push({ role: 'tool', tool_call_id: `c${i}`, content: 'y'.repeat(30_000) });
@@ -455,6 +459,49 @@ const ok = (name, cond) => checkTrue(name, cond);
     check('no message was removed', msgs.length, lenBefore);
     ok('the truncation marker was not inserted', !msgs.some((m) => m.content === HISTORY_TRUNCATION_MARKER));
     ok('occupancy came down', estimateRunTokens(msgs) < before);
+}
+
+// --- elision NEVER touches the current turn's tool results ----------------
+// A single user turn can call more than TOOL_RESULT_ELISION_KEEP tools. Those
+// results are what the model reasons over next, so eliding them mid-turn is the
+// one thing compaction guarantees it will not do (the turn loop stops at
+// `lastUser`). Elision is bounded the same way.
+{
+    const msgs = [
+        { role: 'user', content: 'start' },
+        { role: 'assistant', content: 'old' },
+        { role: 'tool', tool_call_id: 'old', content: 'o'.repeat(5000) },
+        { role: 'user', content: 'current turn' },
+    ];
+    const lastUser = msgs.length - 1;   // the current turn's first index
+    for (let i = 0; i < 8; i++) {
+        msgs.push({ role: 'assistant', content: `cur ${i}` });
+        msgs.push({ role: 'tool', tool_call_id: `cur${i}`, content: 'x'.repeat(3000) });
+    }
+
+    const freed = elideOldToolResults(msgs, TOOL_RESULT_ELISION_KEEP, lastUser);
+    const currentTools = msgs.slice(lastUser).filter((m) => m.role === 'tool');
+    check('keeps all current-turn tool results', currentTools.length, 8);
+    ok('no current-turn tool result is elided',
+        currentTools.every((m) => m.content !== TOOL_RESULT_ELISION_MARKER));
+    check('nothing elidable below the keep threshold in the droppable range', freed, 0);
+}
+
+// --- a short result must NOT be expanded into the longer marker -----------
+// 'ok' is shorter than the marker: replacing it would RAISE occupancy while the
+// caller subtracts a zero reclaim, leaving its running estimate stale.
+{
+    const msgs = [{ role: 'user', content: 'go' }];
+    for (let i = 0; i < 8; i++) {
+        msgs.push({ role: 'assistant', content: `a${i}` });
+        msgs.push({ role: 'tool', tool_call_id: `c${i}`, content: i === 0 ? 'ok' : 'x'.repeat(4000) });
+    }
+
+    const freed = elideOldToolResults(msgs);
+    ok('a short tool result keeps its original content', msgs[2].content === 'ok');
+    ok('the larger results are still elided and reclaim tokens', freed > 0, `freed=${freed}`);
+    ok('the marker is larger than the short result it must not replace',
+        TOOL_RESULT_ELISION_MARKER.length > 'ok'.length);
 }
 
 // --- a custom ratio moves the gate ---------------------------------------

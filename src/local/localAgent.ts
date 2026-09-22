@@ -2215,7 +2215,10 @@ export function compactMessages(
     // estimate just proved unreliable (the server rejected the prompt), so a
     // turn is still dropped to guarantee progress. Elision simply means less
     // has to go.
-    if (elideOldToolResults(messages)) {
+    // `lastUser` bounds elision to the droppable history: the current turn
+    // (from `lastUser` on) must stay intact, exactly as the turn loop below
+    // guarantees for whole-turn drops.
+    if (elideOldToolResults(messages, TOOL_RESULT_ELISION_KEEP, lastUser)) {
         total = Math.max(0, total - Math.max(0, observed - estimateRunTokens(messages) - toolTokens));
         if (!force && total <= target) return [];
     }
@@ -2266,20 +2269,35 @@ export const TOOL_RESULT_ELISION_MARKER =
  * summarization path. When it reclaims enough, the run skips both the turn
  * drops and the summarizer call entirely (see `compactMessages`).
  *
+ * `beforeIndex` (the caller passes the CURRENT TURN's first index, `lastUser`)
+ * bounds elision to turns that compaction may touch at all: a single user turn
+ * can call more than `keepLast` tools, and eliding those mid-turn would strip
+ * results the model is actively reasoning over - exactly what `compactMessages`
+ * guarantees it will not do.
+ *
+ * A row is only replaced when the marker is genuinely SMALLER: a short result
+ * ('ok') can be shorter than the marker, and growing it would raise occupancy
+ * while the caller subtracts a zero reclaim, leaving its running estimate
+ * stale and its target unmet.
+ *
  * Mutates `messages`; returns the estimated tokens reclaimed.
  */
 export function elideOldToolResults(
     messages: LocalAgentMessage[],
     keepLast = TOOL_RESULT_ELISION_KEEP,
+    beforeIndex = messages.length,
 ): number {
+    const limit = Math.min(beforeIndex, messages.length);
     const idxs: number[] = [];
-    for (let i = 1; i < messages.length; i++) {
+    for (let i = 1; i < limit; i++) {
         if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
     }
     if (idxs.length <= keepLast) return 0;
     const before = estimateRunTokens(messages);
     for (const i of idxs.slice(0, idxs.length - keepLast)) {
-        if (messages[i].content === TOOL_RESULT_ELISION_MARKER) continue;
+        const current = messages[i].content as string;
+        if (current === TOOL_RESULT_ELISION_MARKER) continue;
+        if (TOOL_RESULT_ELISION_MARKER.length >= current.length) continue;
         messages[i] = { ...messages[i], content: TOOL_RESULT_ELISION_MARKER };
     }
     return Math.max(0, before - estimateRunTokens(messages));
