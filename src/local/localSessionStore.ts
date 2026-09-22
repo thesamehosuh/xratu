@@ -1,13 +1,25 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
-import { MAX_STORED_TURNS, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
+import { MAX_STORED_TURNS, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns, serializedWithinCap } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
     role: string;
     content?: string;
     tool_calls?: any[];
     tool_call_id?: string;
+    /** Provider-native assistant payload replayed verbatim on the next request
+     *  (Anthropic thinking blocks with signatures, Responses reasoning items,
+     *  Google model parts). Persisted so a replayed turn is byte-identical to
+     *  what the provider cached - reconstruction is lossy and breaks prefix
+     *  prompt caching from that message onward. Never clipped: an Anthropic
+     *  thinking signature that is truncated is rejected outright. */
+    providerBlocks?: unknown;
+    /** Chat Completions `reasoning_content` replay carrier (same rationale). */
+    reasoningContent?: string;
+    /** Tool-row failure flag. The Messages transport maps it to `is_error`;
+     *  persisting it keeps the replayed tool row byte-stable. */
+    isError?: boolean;
 }
 
 /** An interrupted in-flight turn, persisted mid-run so a host crash can
@@ -241,12 +253,29 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
     // never below the floor, so small sessions are untouched and a reload can
     // only shrink below memory for pathologically large ones.
     const cap = boundedContentCap(contentCap, localRows, uiRows, snapshot.pendingTurn);
-    const localHistory = localRows.map((message) => ({
-        ...message,
-        content: typeof message.content === 'string'
-            ? clipHistoryContent(message.content, cap)
-            : message.content,
-    }));
+    const localHistory = localRows.map((message) => {
+        // Provider-native replay carriers feed the NEXT request, so their bytes
+        // must not be altered (an Anthropic thinking signature that is truncated
+        // is rejected outright). A single pathologically large payload is
+        // dropped instead of clipped: losing thinking state on ONE turn beats an
+        // unbounded snapshot, and the alternative - a truncated signature - fails
+        // the turn outright.
+        //
+        // They are destructured OUT first: spreading `...message` and then an
+        // empty `providerBlocksWithinCap()` result would leave the oversized
+        // carrier in place, silently defeating the drop.
+        const { providerBlocks, reasoningContent, ...rest } = message;
+        return {
+            ...rest,
+            content: typeof message.content === 'string'
+                ? clipHistoryContent(message.content, cap)
+                : message.content,
+            ...(providerBlocks && serializedWithinCap(providerBlocks) ? { providerBlocks } : {}),
+            ...(typeof reasoningContent === 'string' && serializedWithinCap(reasoningContent)
+                ? { reasoningContent }
+                : {}),
+        };
+    });
     const uiHistory = uiRows.map((message: any) => ({
         ...message,
         // Display rows carry their text on `content` (host push shape) or
@@ -264,13 +293,28 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
 }
 
 /**
- * Aggregate content ceiling for one persisted snapshot (chars). Bounds the file
- * written on every turn; when the kept rows exceed it, the per-message cap is
- * scaled down proportionally. The 40k floor still applies, so the hard ceiling
- * is MAX_STORED_TURNS rows x the floor (~12 MB) - this budget's job is to stop
- * the WINDOW-scaled cap (up to 200k) from multiplying that by up to 5x.
+ * Aggregate CONTENT ceiling for one persisted snapshot (chars); provider-native
+ * replay carriers are bounded separately (see `boundedContentCap`). Bounds the
+ * file written on every turn; when the kept rows exceed it, the per-message cap
+ * is scaled down proportionally. The 40k floor still applies, so the hard
+ * ceiling is MAX_STORED_TURNS rows x the floor (~12 MB) - this budget's job is
+ * to stop the WINDOW-scaled cap (up to 200k) from multiplying that by up to 5x.
  */
 const SNAPSHOT_CONTENT_BUDGET = 2_000_000;
+
+/** Serialized size of a row's provider-native replay carriers (chars). */
+function providerPayloadSize(message: any): number {
+    let size = 0;
+    if (typeof message?.reasoningContent === 'string') size += message.reasoningContent.length;
+    if (message?.providerBlocks) {
+        try {
+            size += JSON.stringify(message.providerBlocks)?.length ?? 0;
+        } catch {
+            /* unserializable - counted as zero, it will be dropped anyway */
+        }
+    }
+    return size;
+}
 
 /** Per-message cap adjusted so the snapshot's total content stays near budget. */
 function boundedContentCap(
@@ -286,6 +330,13 @@ function boundedContentCap(
     for (const rows of [localRows, uiRows]) {
         for (const m of rows) { add(m?.content); add(m?.text); }
     }
+    // Provider-native replay carriers count toward the total so the per-message
+    // content cap scales down on a long thinking session. They are NOT cut by
+    // this budget themselves - each is separately bounded by `MAX_CONTENT_CAP`
+    // (keep-whole-or-drop), so the carriers' own worst case is
+    // MAX_STORED_TURNS x MAX_CONTENT_CAP (~12 MB), matching the content ceiling
+    // described above.
+    for (const m of localRows) total += providerPayloadSize(m);
     if (pendingTurn) {
         add(pendingTurn.prompt); add(pendingTurn.text); add(pendingTurn.thinking);
         const events = Array.isArray(pendingTurn.events) ? pendingTurn.events.slice(-40) : [];
@@ -302,8 +353,12 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
             return { ...event, output: clipHistoryContent(event.output, contentCap) };
         }
         if (event?.type === 'assistant_message' && Array.isArray(event.tool_calls)) {
+            // Provider-native carriers are model-ledger data and can be large;
+            // the mid-run crash snapshot keeps only the display-relevant fields
+            // (matching `trimDisplayEvent`).
+            const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
             return {
-                ...event,
+                ...rest,
                 content: typeof event.content === 'string'
                     ? clipHistoryContent(event.content, contentCap)
                     : event.content,

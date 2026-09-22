@@ -118,6 +118,25 @@ export function clipHistoryContent(text: string, cap: number = IN_MEMORY_CONTENT
     return `${text.slice(0, head)}\n[...clipped ${removed} chars...]\n${text.slice(-tail)}`;
 }
 
+/**
+ * True when a value's serialized size fits `cap` (chars). Unserializable
+ * values are rejected.
+ *
+ * Provider-native replay carriers (`providerBlocks`, `reasoningContent`) must
+ * be kept WHOLE - a truncated Anthropic thinking signature is rejected by the
+ * API - so an oversized one is DROPPED rather than clipped. This is the shared
+ * keep-or-drop gate for the in-memory ledger and the persisted snapshot.
+ */
+export function serializedWithinCap(value: unknown, cap: number = MAX_CONTENT_CAP): boolean {
+    if (value == null) return false;
+    try {
+        const size = typeof value === 'string' ? value.length : (JSON.stringify(value)?.length ?? 0);
+        return size <= cap;
+    } catch {
+        return false;
+    }
+}
+
 /** Number of user rows in a ledger (one per turn, steers included). */
 export function countUserRows(rows: ReadonlyArray<HistoryRow>): number {
     let n = 0;

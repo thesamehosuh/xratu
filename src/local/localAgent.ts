@@ -57,7 +57,21 @@ export type LocalAgentEvent =
     | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; id: string; value: string }
-    | { type: 'assistantMessage'; text: string; toolCalls: LocalToolCall[] }
+    /**
+     * A completed assistant round. `providerBlocks`/`reasoningContent` are the
+     * provider-native carriers the NEXT request must replay verbatim (thinking
+     * blocks with signatures, Responses reasoning items, `reasoning_content`).
+     * The host persists them into the model history: replaying a RECONSTRUCTED
+     * assistant turn instead of the bytes the provider saw breaks prefix prompt
+     * caching from that message onward, and drops thinking state entirely.
+     */
+    | {
+        type: 'assistantMessage';
+        text: string;
+        toolCalls: LocalToolCall[];
+        providerBlocks?: unknown[];
+        reasoningContent?: string;
+    }
     | { type: 'steer'; text: string; attachments?: LocalImageAttachment[]; steerId?: string }
     | {
         type: 'needsApproval';
@@ -728,6 +742,35 @@ export function withReasoningContent(
     });
 }
 
+/**
+ * Project internal messages onto the Chat Completions wire.
+ *
+ * This transport passes stored messages through to the provider, so every
+ * internal-only carrier that leaks here becomes part of the request BYTES. The
+ * host rebuilds the next request's history from persisted rows that carry no
+ * `isError`/`providerBlocks`, so a leaked field makes the replayed message
+ * differ from the one the provider just cached - and prefix caching misses
+ * from that message onward. Measured: every turn boundary re-sent the whole
+ * previous turn (51%/75%/83% prefix coverage). `isError` is not part of the
+ * OpenAI schema anyway; the Messages transport reads it off the stored
+ * message (not this projection). `reasoningContent` is deliberately KEPT -
+ * `withReasoningContent` turns it into the wire `reasoning_content` field
+ * thinking-mode APIs require.
+ */
+export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessage[] {
+    return messages.map((m) => {
+        if (m.role === 'tool') {
+            const { isError: _isError, ...wire } = m;
+            return wire;
+        }
+        if (m.role === 'assistant') {
+            const { providerBlocks: _providerBlocks, isError: _isError, ...wire } = m;
+            return wire;
+        }
+        return m;
+    });
+}
+
 function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -757,7 +800,7 @@ async function requestChatCompletion(
     const url = endpointUrl(request.baseUrl, 'chat/completions');
     // Wire messages are built ONCE so the 400 recovery below can rebuild the
     // same array (with padding) without reconstructing the tail note.
-    const wireMessages = tailNote ? appendTailNote(messages, tailNote) : messages;
+    const wireMessages = chatWireMessages(tailNote ? appendTailNote(messages, tailNote) : messages);
     const body: Record<string, unknown> = {
         model: request.model,
         // Safe for strict servers, and the prefix before it stays cacheable.
@@ -2827,13 +2870,23 @@ export async function* runLocalAgent(
 
         if (!finalResult.toolCalls.length) {
             if (finalResult.text) {
-                yield { type: 'assistantMessage', text: finalResult.text, toolCalls: [] };
+                yield {
+                    type: 'assistantMessage', text: finalResult.text, toolCalls: [],
+                    ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
+                    ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
+                };
             }
             yield { type: 'status', value: 'done' };
             return;
         }
 
-        yield { type: 'assistantMessage', text: finalResult.text, toolCalls: finalResult.toolCalls };
+        yield {
+            type: 'assistantMessage', text: finalResult.text, toolCalls: finalResult.toolCalls,
+            // The host persists these so the NEXT request replays the exact
+            // bytes this round sent (see LocalAgentEvent.assistantMessage).
+            ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
+            ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
+        };
 
         messages.push({
             role: 'assistant',
@@ -3056,6 +3109,8 @@ export async function* runLocalAgent(
         text: wrapResult.text
             || `[Round limit reached: the agent used all ${rounds} tool rounds without a final answer. Ask it to continue for the remaining steps.]`,
         toolCalls: [],
+        ...(wrapResult.providerBlocks?.length ? { providerBlocks: wrapResult.providerBlocks } : {}),
+        ...(wrapResult.reasoningContent ? { reasoningContent: wrapResult.reasoningContent } : {}),
     };
     yield { type: 'status', value: 'done' };
 }
