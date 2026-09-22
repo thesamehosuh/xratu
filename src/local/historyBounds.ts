@@ -31,7 +31,8 @@ export const IN_MEMORY_CONTENT_CAP = 40_000;
  *
  * Matches the terminal-output cap upstream tools already apply (200k chars for
  * terminal output, 120k for expansion), so the ledger never clips tighter than
- * the tool that produced the content. ~13k tokens at 4 chars/token.
+ * the tool that produced the content. ~50k tokens at 4 chars/token (the
+ * occupancy ESTIMATE prices it at 3 chars/token, deliberately higher).
  */
 export const MAX_CONTENT_CAP = 200_000;
 

@@ -28,7 +28,11 @@ export function diagnosePatchBlocks(patch: string): string | null {
     const opens = countMarkerLines(patch, /^<<<<<<<.*$/gm);
     const seps = countMarkerLines(patch, /^=======\r?$/gm);
     const closes = countMarkerLines(patch, /^>>>>>>>.*$/gm);
-    if (opens === 0 && seps === 0 && closes === 0) return null;
+    // Only an OPEN or CLOSE marker makes this text look like an attempted
+    // patch. A lone `=======` is ordinary prose (a markdown rule, an RST
+    // underline, diff-ish tool output), so it must still return [] and let the
+    // caller keep its generic message.
+    if (opens === 0 && closes === 0) return null;
 
     if (opens > 0 && closes === 0) {
         return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) but NO closing `

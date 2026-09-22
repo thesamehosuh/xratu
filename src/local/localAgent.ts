@@ -698,11 +698,16 @@ export function withReasoningContent(
     if (!needs) return messages;
     return messages.map((m) => {
         if (m.role !== 'assistant') return m;
-        if (m.reasoningContent) return { ...m, reasoning_content: m.reasoningContent };
+        // Strip the internal camelCase carriers before serializing: spreading
+        // `m` would put BOTH `reasoningContent` AND `reasoning_content` (and
+        // `providerBlocks`) on the wire, and a strict server that rejects the
+        // unknown field returns a 400 whose text never matches this recovery.
+        const { reasoningContent, providerBlocks: _providerBlocks, ...wire } = m;
+        if (reasoningContent) return { ...wire, reasoning_content: reasoningContent };
         // Only tool-call turns need the field: a plain assistant reply has no
         // reasoning state the API can insist on.
-        if (padMissing && (m.tool_calls?.length ?? 0) > 0) return { ...m, reasoning_content: '' };
-        return m;
+        if (padMissing && (m.tool_calls?.length ?? 0) > 0) return { ...wire, reasoning_content: '' };
+        return wire;
     });
 }
 

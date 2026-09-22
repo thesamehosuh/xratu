@@ -65,6 +65,12 @@ const assistantWithTool = (extra = {}) => ({
     eq('captured reasoning is replayed', assistant.reasoning_content, 'I should read the file first.');
     ok('reasoning survives alongside tool_calls', Array.isArray(assistant.tool_calls) && assistant.tool_calls.length === 1);
     ok('the original message object is NOT mutated', msgs[1].reasoning_content === undefined);
+    // The wire object must carry ONLY the snake_case field: spreading the
+    // internal camelCase carrier alongside it puts an unknown field on the
+    // wire, and a strict server's 400 for it would NOT match the reasoning
+    // recovery (the error text has no underscore).
+    ok('internal camelCase carrier is NOT on the wire', !('reasoningContent' in assistant));
+    ok('internal providerBlocks carrier is NOT on the wire', !('providerBlocks' in assistant));
 }
 
 // --- a plain reply (no tool call) that captured reasoning is still replayed --
@@ -85,6 +91,7 @@ const assistantWithTool = (extra = {}) => ({
     const assistant = out.find((m) => m.role === 'assistant');
     // The API demands the field, so an empty string beats failing the turn.
     eq('padMissing: tool-call turn gets an empty reasoning_content', assistant.reasoning_content, '');
+    ok('padMissing wire object has no internal carrier', !('reasoningContent' in assistant));
 }
 {
     const msgs = [{ role: 'assistant', content: 'just text, no tools' }];

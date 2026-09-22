@@ -103,4 +103,10 @@ check('marker-less text still returns [] so the caller keeps its own message', (
     if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
 });
 
+check('a lone ======= line is prose, not a patch attempt (returns [])', () => {
+    // A markdown rule / RST underline must NOT be diagnosed as a broken patch.
+    const blocks = parsePatchBlocks('Release notes\n=======\n\n- fixed things');
+    if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
+});
+
 process.exit(failed ? 1 : 0);
