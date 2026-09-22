@@ -340,5 +340,49 @@ checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
     check('sub-1k window is a no-op', boundToolResults(msgs, 512, 0), false);
 }
 
+// --- Forced recovery must target the OBSERVED size, not a mis-set window ---
+// Regression, measured from the usage ledger: an override far larger than the
+// model's real limit put the window-relative target ABOVE the failing prompt,
+// so recovery dropped exactly ONE turn, re-overflowed on the next request, and
+// dropped again - a sawtooth instead of one decisive trim.
+{
+    const big = (n) => 'x'.repeat(n);
+    const build = () => {
+        const msgs = [{ role: 'system', content: 'sys' }];
+        for (let i = 0; i < 10; i++) {
+            msgs.push({ role: 'user', content: `turn ${i} ${big(1000)}` });
+            msgs.push({ role: 'assistant', content: big(1000) });
+            msgs.push({ role: 'tool', content: big(43_000), tool_call_id: `c${i}` });
+        }
+        return msgs;
+    };
+    const wrongWindow = 1_048_576;   // the bad override
+
+    const msgs = build();
+    const before = estimateRunTokens(msgs);
+    const originalLength = msgs.length;
+    // compactMessages MUTATES its input and RETURNS the dropped turns - measure
+    // the surviving array, not the return value, or every assertion below is
+    // vacuous (it passed on the pre-fix code too).
+    compactMessages(msgs, wrongWindow, undefined, 0, true);
+    const after = estimateRunTokens(msgs);
+
+    checkTrue('forced recovery drops turns', msgs.length < originalLength);
+    checkTrue(
+        'forced recovery lands near 60% of the OBSERVED size, not one turn',
+        after <= Math.floor(before * 0.6) + 2000,
+        `before=${before} after=${after}`,
+    );
+    checkTrue(
+        'forced recovery does not leave the prompt near the failing size',
+        after < before * 0.75,
+        `before=${before} after=${after}`,
+    );
+    // The proactive path must be UNCHANGED: with no overflow the target still
+    // comes from the window, so this fix cannot make normal compaction greedy.
+    const proactive = compactMessages(build(), wrongWindow, undefined, 0, false);
+    check('proactive path refuses far below the window ratio', proactive.length, 0);
+}
+
 console.log(failed === 0 ? '\ncompaction tests: all passed' : `\ncompaction tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
