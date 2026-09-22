@@ -47,6 +47,7 @@ import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
+import { resolveEditMode } from './tooling/editFileArgs';
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
@@ -5310,6 +5311,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // Null kind (shell-composed terminal commands) never records.
             const kind = sessionApprovalKind(toolName, args ?? {});
 
+            if (toolName === 'edit_file') {
+                // Deny an unknown mode BEFORE the preview: otherwise the card
+                // shows an overwrite-style diff for a call that can only fail
+                // at dispatch. Mirrors dispatchTool's check.
+                const resolved = resolveEditMode(approval.args?.mode);
+                if ('error' in resolved) {
+                    preDenied[approval.tool_call_id] = false;
+                    closeItems.push({ tool_call_id: approval.tool_call_id, tool_name: toolName });
+                    this._view?.webview.postMessage({ type: 'error', value: resolved.error });
+                    out.push({ tool_call_id: approval.tool_call_id, tool_name: toolName, args: approval.args, diff: null });
+                    continue;
+                }
+            }
             if (toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'apply_patch') {
                 try {
                     sanitizePath(approval.args?.path || '', workspaceRoot);
