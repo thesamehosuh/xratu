@@ -141,6 +141,68 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrency: same-key reads coalesce, and a stale completion cannot
+// overwrite a newer key (a session/workspace transition racing a pending read).
+// ---------------------------------------------------------------------------
+{
+    const deferred = () => {
+        let resolve;
+        const promise = new Promise((r) => { resolve = r; });
+        return { promise, resolve };
+    };
+
+    // Same key -> one compute, both callers see the value.
+    {
+        const snap = new RulesSnapshot();
+        const d = deferred();
+        let computes = 0;
+        const compute = async () => { computes++; return d.promise; };
+        const p1 = snap.resolve('/ws', compute);
+        const p2 = snap.resolve('/ws', compute);
+        d.resolve('RULES');
+        const [a, b] = await Promise.all([p1, p2]);
+        ok('concurrent same-key reads coalesce onto one compute', computes === 1, `computes=${computes}`);
+        ok('both concurrent callers get the rules', a === 'RULES' && b === 'RULES');
+    }
+
+    // Stale completion must not overwrite a newer key.
+    {
+        const snap = new RulesSnapshot();
+        const dA = deferred();
+        const dB = deferred();
+        let computesA = 0;
+        const pA = snap.resolve('/ws-a', async () => { computesA++; return dA.promise; });
+        const pB = snap.resolve('/ws-b', async () => dB.promise);
+        dA.resolve('A-VALUE');
+        await pA;
+        dB.resolve('B-VALUE');
+        await pB;
+        // The snapshot must still be B (the newer key), so a B read is cached...
+        let bComputes = 0;
+        const bCached = await snap.resolve('/ws-b', async () => { bComputes++; return 'B-AGAIN'; });
+        ok('the newer key stays cached after the stale completion', bCached === 'B-VALUE' && bComputes === 0);
+        // ...and an A read recomputes instead of returning the stale value.
+        let freshCalls = 0;
+        const again = await snap.resolve('/ws-a', async () => { freshCalls++; return 'A-FRESH'; });
+        ok('a stale completion does not overwrite the newer key',
+            again === 'A-FRESH' && freshCalls === 1 && computesA === 1,
+            `again=${again} freshCalls=${freshCalls} computesA=${computesA}`);
+    }
+
+    // reset() invalidates an in-flight read.
+    {
+        const snap = new RulesSnapshot();
+        const d = deferred();
+        const p = snap.resolve('/ws', async () => d.promise);
+        snap.reset();
+        d.resolve('STALE');
+        await p;
+        const fresh = await snap.resolve('/ws', async () => 'FRESH');
+        ok('reset invalidates an in-flight read', fresh === 'FRESH');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The assembly itself: deterministic, and every section lands where expected.
 // ---------------------------------------------------------------------------
 {
