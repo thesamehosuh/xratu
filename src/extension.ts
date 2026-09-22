@@ -44,7 +44,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap } from './local/historyBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
@@ -2393,8 +2393,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // `providerBlocks`/`reasoningContent` are deliberately NOT clipped: the
         // bytes must match what the provider cached, and an Anthropic thinking
         // signature that is truncated is rejected outright. A pathologically
-        // large carrier is DROPPED instead (snapshot sanitization does the
-        // same), so the in-memory ledger and the on-disk snapshot agree.
+        // large (or aggregate-over-budget) carrier is DROPPED instead, via
+        // `serializedWithinCap` here and `boundCarriers` in `_trimLocalHistory`,
+        // so the in-memory ledger and the on-disk snapshot agree.
         const cap = contentCapForWindow(this._contextWindowHint());
         const { providerBlocks, reasoningContent, ...rest } = row;
         this._localHistory.push({
@@ -2420,15 +2421,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return { ...tc, function: { ...tc.function, arguments: clipToolCallArguments(args, cap) } };
     }
 
-    /** Drop the oldest complete turns from the model ledger past the cap.
+    /** Drop the oldest complete turns from the model ledger past the cap, and
+     *  enforce the aggregate provider-carrier budget (a turn-count cap does not
+     *  bound carriers - one turn can run unbounded rounds). Carriers are dropped
+     *  from the OLDEST rows, keeping the newest reasoning whole.
+     *
      *  Only `_localHistory` is evicted - the display ledger stays complete, and
      *  the offset is tracked so a displayed userIndex still resolves to the
      *  right row (see `_findLocalUserEntry`). */
     private _trimLocalHistory(): void {
         const { rows, evicted } = evictOldestTurns(this._localHistory, MAX_IN_MEMORY_TURNS);
-        if (!evicted) return;
-        this._localHistory = rows;
-        this._localEvictedUserTurns += evicted;
+        this._localHistory = boundCarriers(rows);
+        if (evicted) this._localEvictedUserTurns += evicted;
     }
 
     // ---------------------------------------------------------------------------

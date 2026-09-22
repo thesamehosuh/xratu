@@ -137,6 +137,80 @@ export function serializedWithinCap(value: unknown, cap: number = MAX_CONTENT_CA
     }
 }
 
+/** A history row carrying the provider-native replay carriers. Structural, so
+ *  this module stays dependency-free. */
+export interface CarrierRow {
+    providerBlocks?: unknown;
+    reasoningContent?: string;
+}
+
+/**
+ * Aggregate ceiling (chars) for provider-native replay carriers held in ONE
+ * history ledger.
+ *
+ * Each carrier is bounded individually by `MAX_CONTENT_CAP`, but that is not
+ * enough on its own: a single turn can run unbounded rounds (`resolveAgentRounds`
+ * returns 0 for unlimited) and the ledger keeps `MAX_STORED_TURNS` turns, so the
+ * carriers alone could reach tens of MB. 2 MB mirrors `SNAPSHOT_CONTENT_BUDGET`
+ * and sits far above any realistic thinking session, so it only fires on
+ * pathological input.
+ */
+export const CARRIER_BUDGET = 2_000_000;
+
+/**
+ * Serialized size (chars) of a row's ACCEPTED carriers. An oversized carrier is
+ * dropped (see `serializedWithinCap`) and therefore costs nothing here - counting
+ * it would needlessly scale the content cap down and clip unrelated history.
+ */
+export function carrierSize(row: CarrierRow): number {
+    let size = 0;
+    if (typeof row.reasoningContent === 'string' && serializedWithinCap(row.reasoningContent)) {
+        size += row.reasoningContent.length;
+    }
+    if (row.providerBlocks && serializedWithinCap(row.providerBlocks)) {
+        try {
+            size += JSON.stringify(row.providerBlocks)?.length ?? 0;
+        } catch {
+            /* serializedWithinCap already rejected unserializable values */
+        }
+    }
+    return size;
+}
+
+/**
+ * Enforce the aggregate carrier budget by dropping carriers from the OLDEST
+ * rows first: the model needs the newest reasoning most, and a truncated
+ * carrier is rejected, so the only safe unit is keep-whole-or-drop. The rows
+ * themselves stay - only their carriers go. Returns a new array; `rows` is not
+ * mutated (so the in-memory ledger is untouched until the caller adopts it).
+ */
+export function boundCarriers<T extends CarrierRow>(rows: readonly T[], budget: number = CARRIER_BUDGET): T[] {
+    let used = 0;
+    const dropped: number[] = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        const hasCarrier = row.providerBlocks != null || row.reasoningContent != null;
+        if (!hasCarrier) continue;
+        // `carrierSize` is 0 for an UNACCEPTED (oversized/unserializable) carrier
+        // - drop that row's carriers outright rather than leaving them in.
+        const size = carrierSize(row);
+        if (size > 0 && used + size <= budget) {
+            used += size;
+            continue;
+        }
+        dropped.push(i);
+    }
+    // Nothing over budget: return the SAME array so callers on the hot persist
+    // path (every turn, every few seconds mid-run) do not churn references.
+    if (!dropped.length) return rows as T[];
+    const out = rows.slice();
+    for (const i of dropped) {
+        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = rows[i];
+        out[i] = rest as T;
+    }
+    return out;
+}
+
 /** Number of user rows in a ledger (one per turn, steers included). */
 export function countUserRows(rows: ReadonlyArray<HistoryRow>): number {
     let n = 0;

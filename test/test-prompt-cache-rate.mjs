@@ -446,5 +446,40 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
         snapshotBytes < 2_000_000, `bytes=${snapshotBytes}`);
 }
 
+// ---------------------------------------------------------------------------
+// Aggregate carrier budget: a per-message cap cannot bound carriers (one turn
+// can run unbounded rounds), so `boundCarriers` drops carriers from the OLDEST
+// rows, keeping the newest reasoning whole. A carrier that sanitization will
+// drop must not be counted (it would needlessly shrink unrelated content).
+// ---------------------------------------------------------------------------
+{
+    const { boundCarriers, carrierSize, CARRIER_BUDGET } = require('../out/local/historyBounds.js');
+    const big = { type: 'thinking', thinking: 'x'.repeat(400_000) };     // > MAX_CONTENT_CAP
+
+    ok('carrierSize ignores a carrier that will be dropped (accepted-only sizing)',
+        carrierSize({ providerBlocks: big }) === 0);
+    ok('carrierSize counts an accepted string carrier',
+        carrierSize({ reasoningContent: 'ok' }) === 2);
+
+    // 30 rows x ~100k chars => ~3M, over the 2M budget; each payload is under
+    // the per-message cap, so this exercises the AGGREGATE path.
+    const rows = [];
+    for (let i = 0; i < 30; i++) {
+        rows.push({ role: 'assistant', content: `a${i}`, providerBlocks: [{ type: 'thinking', thinking: 'z'.repeat(100_000) }] });
+    }
+    const bounded = boundCarriers(rows);
+    const kept = bounded.filter((row) => row.providerBlocks).length;
+    ok('aggregate carrier budget drops the excess (oldest first)',
+        kept > 0 && kept < rows.length, `kept=${kept} of ${rows.length}`);
+    ok('the NEWEST carrier is kept whole', bounded[bounded.length - 1].providerBlocks !== undefined);
+    ok('the OLDEST carrier is dropped', bounded[0].providerBlocks === undefined);
+    ok('rows themselves survive - only carriers go',
+        bounded.length === rows.length && bounded[0].content === 'a0');
+    const under = rows.slice(0, 5);
+    ok('under budget, the same array is returned (no hot-path churn)',
+        boundCarriers(under) === under && under.every((row) => row.providerBlocks));
+    ok('the budget is the shared CARRIER_BUDGET', CARRIER_BUDGET === 2_000_000);
+}
+
 console.log(failed === 0 ? '\nall prompt-cache-rate checks passed' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

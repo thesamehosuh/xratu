@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
-import { MAX_STORED_TURNS, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns, serializedWithinCap } from './historyBounds';
+import { MAX_STORED_TURNS, boundCarriers, carrierSize, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
     role: string;
@@ -246,36 +246,29 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
         turns === 0 ? rows.slice() : keepLastUserTurns(rows, turns);
     const localRows = trimRows(snapshot.localHistory, keepLocal);
     const uiRows = trimRows(snapshot.uiHistory, keepUi);
+    // Provider-native replay carriers feed the NEXT request, so their bytes must
+    // not be altered (an Anthropic thinking signature that is truncated is
+    // rejected outright). A pathologically large payload is DROPPED, and the
+    // aggregate carrier budget is enforced by dropping from the OLDEST rows -
+    // `boundCarriers` does both, so unbounded rounds/turns cannot grow the
+    // carriers without limit. This is the SAME policy the in-memory ledger
+    // applies (`_trimLocalHistory`), so the two never disagree.
+    const carriersBounded = boundCarriers(localRows);
     // The window-scaled cap is per MESSAGE; a 1M-window session could still
     // hold dozens of messages at the 200k ceiling, and the snapshot is
     // re-serialized on every turn (and every few seconds mid-run) on the main
     // thread. Scale the cap down when the kept rows blow the aggregate budget,
     // never below the floor, so small sessions are untouched and a reload can
-    // only shrink below memory for pathologically large ones.
-    const cap = boundedContentCap(contentCap, localRows, uiRows, snapshot.pendingTurn);
-    const localHistory = localRows.map((message) => {
-        // Provider-native replay carriers feed the NEXT request, so their bytes
-        // must not be altered (an Anthropic thinking signature that is truncated
-        // is rejected outright). A single pathologically large payload is
-        // dropped instead of clipped: losing thinking state on ONE turn beats an
-        // unbounded snapshot, and the alternative - a truncated signature - fails
-        // the turn outright.
-        //
-        // They are destructured OUT first: spreading `...message` and then an
-        // empty `providerBlocksWithinCap()` result would leave the oversized
-        // carrier in place, silently defeating the drop.
-        const { providerBlocks, reasoningContent, ...rest } = message;
-        return {
-            ...rest,
-            content: typeof message.content === 'string'
-                ? clipHistoryContent(message.content, cap)
-                : message.content,
-            ...(providerBlocks && serializedWithinCap(providerBlocks) ? { providerBlocks } : {}),
-            ...(typeof reasoningContent === 'string' && serializedWithinCap(reasoningContent)
-                ? { reasoningContent }
-                : {}),
-        };
-    });
+    // only shrink below memory for pathologically large ones. Sizing runs on
+    // the CARRIER-BOUNDED rows so a dropped carrier cannot clip unrelated
+    // content.
+    const cap = boundedContentCap(contentCap, carriersBounded, uiRows, snapshot.pendingTurn);
+    const localHistory = carriersBounded.map((message) => ({
+        ...message,
+        content: typeof message.content === 'string'
+            ? clipHistoryContent(message.content, cap)
+            : message.content,
+    }));
     const uiHistory = uiRows.map((message: any) => ({
         ...message,
         // Display rows carry their text on `content` (host push shape) or
@@ -294,27 +287,13 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
 
 /**
  * Aggregate CONTENT ceiling for one persisted snapshot (chars); provider-native
- * replay carriers are bounded separately (see `boundedContentCap`). Bounds the
- * file written on every turn; when the kept rows exceed it, the per-message cap
- * is scaled down proportionally. The 40k floor still applies, so the hard
- * ceiling is MAX_STORED_TURNS rows x the floor (~12 MB) - this budget's job is
- * to stop the WINDOW-scaled cap (up to 200k) from multiplying that by up to 5x.
+ * replay carriers have their own aggregate ceiling (`CARRIER_BUDGET`) and are
+ * counted here only so the per-message content cap scales down on a long
+ * thinking session. The 40k floor still applies, so the hard ceiling is
+ * MAX_STORED_TURNS rows x the floor (~12 MB) - this budget's job is to stop the
+ * WINDOW-scaled cap (up to 200k) from multiplying that by up to 5x.
  */
 const SNAPSHOT_CONTENT_BUDGET = 2_000_000;
-
-/** Serialized size of a row's provider-native replay carriers (chars). */
-function providerPayloadSize(message: any): number {
-    let size = 0;
-    if (typeof message?.reasoningContent === 'string') size += message.reasoningContent.length;
-    if (message?.providerBlocks) {
-        try {
-            size += JSON.stringify(message.providerBlocks)?.length ?? 0;
-        } catch {
-            /* unserializable - counted as zero, it will be dropped anyway */
-        }
-    }
-    return size;
-}
 
 /** Per-message cap adjusted so the snapshot's total content stays near budget. */
 function boundedContentCap(
@@ -330,13 +309,12 @@ function boundedContentCap(
     for (const rows of [localRows, uiRows]) {
         for (const m of rows) { add(m?.content); add(m?.text); }
     }
-    // Provider-native replay carriers count toward the total so the per-message
-    // content cap scales down on a long thinking session. They are NOT cut by
-    // this budget themselves - each is separately bounded by `MAX_CONTENT_CAP`
-    // (keep-whole-or-drop), so the carriers' own worst case is
-    // MAX_STORED_TURNS x MAX_CONTENT_CAP (~12 MB), matching the content ceiling
-    // described above.
-    for (const m of localRows) total += providerPayloadSize(m);
+    // ACCEPTED carrier bytes count toward the total so the per-message content
+    // cap scales down on a long thinking session. `carrierSize` ignores a
+    // carrier that will be dropped, so a discarded payload cannot shrink
+    // unrelated content. The rows here are already carrier-bounded, so this can
+    // never exceed CARRIER_BUDGET.
+    for (const m of localRows) total += carrierSize(m);
     if (pendingTurn) {
         add(pendingTurn.prompt); add(pendingTurn.text); add(pendingTurn.thinking);
         const events = Array.isArray(pendingTurn.events) ? pendingTurn.events.slice(-40) : [];
