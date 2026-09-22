@@ -251,10 +251,16 @@ export function App() {
     const contentRef = useRef<HTMLDivElement | null>(null);
     const atBottom = useRef(true);
     const lastScrollTop = useRef(0);
+    // Content height at the previous scroll event - distinguishes a real scroll
+    // from a content change that clamps scrollTop (see onScroll).
+    const lastScrollHeight = useRef(0);
     // A chevron-triggered smooth scroll is in flight - instant pins (stream
     // follow, resize observer) must not compete with it or the animation
     // snaps mid-flight. Cleared on arrival at the bottom or by timeout.
     const smoothJumpInFlight = useRef(false);
+    // Timestamp of the last real scroll gesture (wheel / touch / key) over the
+    // transcript - used to tell a user scroll-up from a content-driven one.
+    const userIntentAt = useRef(0);
     const onScroll = () => {
         const el = containerRef.current;
         if (el) {
@@ -282,17 +288,27 @@ export function App() {
             // in the DOM.
             const movedUp = el.scrollTop < expectedTop - 1;
             const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-            if (movedUp) {
-                atBottom.current = false;
-            } else if (nearBottom) {
+            // An upward scroll only disarms auto-follow when it is a REAL
+            // scroll: either a user gesture (wheel / touch / key) or a scroll
+            // with the content height unchanged (scrollbar drag, programmatic
+            // jump). A content change that clamps scrollTop down - the mounted
+            // window sliding during a tall restore replay, a pill collapsing -
+            // is bookkeeping, and treating it as intent latched atBottom=false
+            // until the paging window grew to the whole transcript.
+            const heightChanged = el.scrollHeight !== lastScrollHeight.current;
+            const userIntent = Date.now() - userIntentAt.current < 500;
+            if (nearBottom) {
                 // Reached, or still sitting at, the bottom - follow stays armed.
                 // This is how a reader who scrolled up re-arms it.
                 atBottom.current = true;
                 smoothJumpInFlight.current = false;
+            } else if (movedUp && (userIntent || !heightChanged)) {
+                atBottom.current = false;
             }
             // Otherwise leave `atBottom` exactly as it was: neither content
             // growth nor a programmatic scroll is a statement of intent.
             lastScrollTop.current = el.scrollTop;
+            lastScrollHeight.current = el.scrollHeight;
             setShowJump(!atBottom.current);
         }
     };
@@ -324,6 +340,26 @@ export function App() {
     useEffect(() => {
         stickToBottom(false);
     }, [chat.messages, stickToBottom]);
+
+    // Record real scroll gestures over the transcript. onScroll only disarms
+    // auto-follow when one of these produced the scroll - see the comment
+    // there. Capture phase so it fires before the container's own handler.
+    useEffect(() => {
+        const markIfInside = (e: Event) => {
+            const el = containerRef.current;
+            if (el && e.target instanceof Node && el.contains(e.target)) {
+                userIntentAt.current = Date.now();
+            }
+        };
+        window.addEventListener('wheel', markIfInside, true);
+        window.addEventListener('touchmove', markIfInside, true);
+        window.addEventListener('keydown', markIfInside, true);
+        return () => {
+            window.removeEventListener('wheel', markIfInside, true);
+            window.removeEventListener('touchmove', markIfInside, true);
+            window.removeEventListener('keydown', markIfInside, true);
+        };
+    }, []);
 
     // Follow layout growth that React state doesn't know about - e.g. the
     // user expanding/collapsing <details> rows inside messages, or a pill
