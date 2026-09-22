@@ -1923,6 +1923,13 @@ button {
     color: #f85149;
 }
 
+/* Keep the failure red on hover: the shared teal hover accent would otherwise
+   repaint a failed pill's icon and erase the state. */
+.step.fail summary:hover .step-icon,
+.step.group-fail summary:hover .step-icon {
+    color: #f85149;
+}
+
 /* A tool GROUP with at least one failed member: red summary, body still
    expandable (members render as failure rows). */
 .step.group-fail summary .step-icon,
