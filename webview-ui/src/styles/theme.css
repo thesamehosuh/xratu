@@ -1846,6 +1846,35 @@ button {
     white-space: nowrap;
 }
 
+/* When the summary also carries the command, the label stops growing so the
+   command (which can be long) takes the remaining space and ellipsizes. */
+.step-label-fixed {
+    flex: 0 0 auto;
+}
+
+.step-cmd {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: ltr;
+    text-align: left;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* While OPEN, the body prints the command in full (wrapped), so the summary
+   copy would be a duplicate - hide it and let the label grow again. */
+.step[open] > summary .step-cmd {
+    display: none;
+}
+
+.step[open] > summary .step-label-fixed {
+    flex: 1 1 auto;
+}
+
 .step.running .step-label {
     color: var(--vscode-foreground);
 }
@@ -2232,8 +2261,8 @@ button {
 .step-body {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 2px 0 8px;
+    gap: 6px;
+    padding: 4px 0 8px;
 }
 
 /* The open body is tied to its pill by one rail that drops straight from the
@@ -2300,15 +2329,12 @@ button {
     border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border) 45%, transparent);
 }
 
-/* One file's diff block; separate files in a run get real breathing room. */
+/* One file's diff block. Same gap as the body itself, so a run of files reads
+   as one continuous list instead of a hole between sections. */
 .edit-file {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-}
-
-.edit-file + .edit-file {
-    margin-top: 6px;
+    gap: 6px;
 }
 
 .edit-file-path {
@@ -2375,13 +2401,6 @@ button {
     scrollbar-width: thin;
 }
 
-.pill-patch-note {
-    margin: 0 0 5px;
-    font-size: var(--xratu-fs-xs);
-    color: var(--vscode-descriptionForeground);
-    opacity: 0.8;
-}
-
 .step-io-tag {
     font-size: var(--xratu-fs-xs);
     color: var(--vscode-descriptionForeground);
@@ -2394,6 +2413,9 @@ button {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 12.5px;
     white-space: pre-wrap;
+    /* Long unbreakable strings (URLs, paths) wrap instead of forcing a
+       horizontal scrollbar on an otherwise wrapped block. */
+    overflow-wrap: anywhere;
     overflow-x: auto;
     max-height: 200px;
     text-align: left;
@@ -2434,7 +2456,9 @@ pre.tool-cmd {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 12.5px;
     color: var(--xratu-accent);
-    word-break: break-all;
+    /* `anywhere` (not break-all): a URL breaks at a sensible point instead of
+       mid-token wherever the box happens to end. */
+    overflow-wrap: anywhere;
     text-align: left;
 }
 
@@ -2619,6 +2643,36 @@ pre.tool-cmd {
 }
 
 .term-live::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
+}
+
+/* Finished terminal output scrolls too - same thin themed scrollbar as live,
+   instead of the browser's default light one. */
+.term-out pre,
+pre.result-tall {
+    scrollbar-width: thin;
+    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2)) transparent;
+}
+
+.term-out pre::-webkit-scrollbar,
+pre.result-tall::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.term-out pre::-webkit-scrollbar-track,
+pre.result-tall::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.term-out pre::-webkit-scrollbar-thumb,
+pre.result-tall::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(255, 255, 255, 0.2));
+    border-radius: 4px;
+}
+
+.term-out pre::-webkit-scrollbar-thumb:hover,
+pre.result-tall::-webkit-scrollbar-thumb:hover {
     background: var(--vscode-scrollbarSlider-hoverBackground, rgba(255, 255, 255, 0.3));
 }
 

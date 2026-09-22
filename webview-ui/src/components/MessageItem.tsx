@@ -120,16 +120,24 @@ function toolRowDone(r: ToolRow): boolean {
     return !!(r.call.result || (r.result && r.result.kind === 'toolCall'));
 }
 
+/** A run of identical calls collapses into ONE pill ("Read file ×8") - EXCEPT
+ *  terminal commands: each command and its output is its own unit, and
+ *  collapsing them nested a second rail under the group. */
+function isGroupableTool(tool: string | undefined): boolean {
+    return toolFamily(tool) !== 'terminal';
+}
+
 /** Consecutive same-tool calls collapse into ONE pill ("Read file ×8") -
  *  a run that reads ten files in a row should read as one action, not ten
  *  identical rows. Thinking steps and other tools break the run. */
 function pushToolRow(rows: Row[], row: ToolRow): void {
     const last = rows[rows.length - 1];
-    if (last?.kind === 'toolGroup' && last.calls[0].call.tool === row.call.tool) {
+    const groupable = isGroupableTool(row.call.tool);
+    if (groupable && last?.kind === 'toolGroup' && last.calls[0].call.tool === row.call.tool) {
         last.calls.push(row);
         return;
     }
-    if (last?.kind === 'tool' && last.call.tool === row.call.tool) {
+    if (groupable && last?.kind === 'tool' && last.call.tool === row.call.tool) {
         rows[rows.length - 1] = { key: last.key, kind: 'toolGroup', calls: [last, row] };
         return;
     }
@@ -522,12 +530,7 @@ function PatchBlocksView({ patch, lang }: { patch: string; lang: string }) {
     }, [patch]);
 
     if (parsed.kind === 'raw') {
-        return (
-            <div className="pill-patch-raw">
-                <p className="pill-patch-note">{t('patchUnparsed')}</p>
-                <pre className="pill-patch-pre" dir="ltr">{truncateArg(patch)}</pre>
-            </div>
-        );
+        return <pre className="pill-patch-pre" dir="ltr">{truncateArg(patch)}</pre>;
     }
     if (parsed.kind === 'unified') {
         return <UnifiedDiffView lines={parsed.unified} />;
@@ -574,12 +577,16 @@ function parseUnifiedDiff(text: string): UnifiedLine[] | null {
 function UnifiedDiffView({ lines }: { lines: UnifiedLine[] }) {
     return (
         <div className="pill-diff" dir="ltr">
-            {lines.map((l, i) => (
-                <div key={i} className={`pill-diff-line${l.kind === 'same' ? '' : ` ${l.kind}`}`}>
-                    <span className="pill-diff-mark">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
-                    <span className="pill-diff-code">{l.text}</span>
-                </div>
-            ))}
+            {/* .pill-diff spaces its children (separate SEARCH/REPLACE blocks);
+                the lines must sit inside ONE block or every line gains that gap. */}
+            <div className="pill-diff-block">
+                {lines.map((l, i) => (
+                    <div key={i} className={`pill-diff-line${l.kind === 'same' ? '' : ` ${l.kind}`}`}>
+                        <span className="pill-diff-mark">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+                        <span className="pill-diff-code">{l.text}</span>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 }
@@ -737,9 +744,10 @@ function ScalarHints({ args, skip }: { args: Record<string, unknown> | null; ski
 /** Labeled key/value args - the generic body (fallback, git, ops, mcp). */
 function ArgView({ call }: { call: Step }) {
     const args = useMemo(() => parseArgs(call.text), [call.text]);
-    if (!args) return <pre dir="ltr">{call.text || t('noArgs')}</pre>;
-    if (Object.keys(args).length === 0)
-        return <pre dir="ltr">{t('noArgs')}</pre>;
+    // No args: render nothing - the pill already names the tool, and
+    // "(no arguments)" is noise under it.
+    if (!args) return call.text ? <pre dir="ltr">{call.text}</pre> : null;
+    if (Object.keys(args).length === 0) return null;
     return (
         <div className="arg-view" dir="ltr">
             {Object.entries(args).map(([k, v]) => {
@@ -1090,6 +1098,12 @@ function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'tool
         if (!toolRowDone({ key: '', call: summaryCall, result: summaryResult })) return null;
         return parseTerminalOutput(resultTextOf(summaryCall, summaryResult))?.exitCode ?? null;
     }, [summaryCall, summaryResult, family]);
+    // Terminal pills show the command in the summary - "Run terminal command"
+    // alone says nothing about what ran.
+    const summaryCmd = useMemo(() => {
+        if (!summaryCall || family !== 'terminal') return null;
+        return argString(parseArgs(summaryCall.text), 'command') ?? null;
+    }, [summaryCall, family]);
 
     if (row.kind === 'thinking') {
         const dur = fmtDur((row.step.endedAt ?? 0) - (row.step.startedAt ?? 0));
@@ -1139,9 +1153,10 @@ function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'tool
         >
             <summary>
                 <Icon size={13} className="step-icon" />
-                <span className="step-label" dir={fa === row.call.tool ? 'ltr' : undefined}>
+                <span className={`step-label${summaryCmd ? ' step-label-fixed' : ''}`} dir={fa === row.call.tool ? 'ltr' : undefined}>
                     {fa}
                 </span>
+                {summaryCmd && <span className="step-cmd" dir="ltr">{summaryCmd}</span>}
                 {done ? (
                     failed ? (
                         <X size={13} className="step-status err" />
