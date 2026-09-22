@@ -330,7 +330,12 @@ export function getLocalToolDefinitions(opts?: {
             description: tool.description,
             inputSchema: tool.inputSchema,
             requiresApproval: yolo ? false : !tool.autoApprove,
-        }));
+        }))
+        // Stable order for prompt caching: tool definitions are the FIRST
+        // cacheable segment of the request, and a reconnecting MCP server can
+        // hand back its tools in a different order, which would rewrite the
+        // cached prefix. Builtin/web/skill order is curated and left as-is.
+        .sort((a, b) => a.name.localeCompare(b.name));
     const skillDefs: LocalToolDefinition[] = [];
     const skills = listableSkills(opts?.skills ?? []);
     if (skills.length > 0) {

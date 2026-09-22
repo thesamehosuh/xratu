@@ -43,9 +43,10 @@ import {
 } from './local/modelMetadata';
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
-import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
+import { buildLocalSystemPrompt } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap } from './local/historyBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
+import { RulesSnapshot } from './local/rulesSnapshot';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { resolveEditMode } from './tooling/editFileArgs';
@@ -769,6 +770,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  The display ledger (`_history`) keeps every turn, so a displayed
      *  userIndex maps to a model-ledger row by subtracting this offset. */
     private _localEvictedUserTurns = 0;
+    /** Session-frozen project rules for the local system prompt. Recomputed
+     *  per turn it rewrote the cacheable prefix on every active-file change
+     *  (see `RulesSnapshot`). */
+    private _localRulesSnapshot = new RulesSnapshot();
     /** Steered user messages waiting to join the LIVE local run. Entries
      *  carry the PROCESSED payload (refs resolved, PDFs extracted, text
      *  attachments fenced into `text`); `carryAttachments` holds image-only
@@ -2332,41 +2337,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  local, so the prompt travels with the extension. Only the
      *  local-operational notes and static context are appended here. */
     private _buildLocalSystemPrompt(rulesContext: string, sessionSummary: string | null, planMode: boolean): string {
-        const parts: string[] = [
-            LOCAL_SYSTEM_PROMPT,
-            "",
-            "Operational notes for local mode:",
-            "- Attached images are part of the current request only.",
-            "- Use local tools (read_file, edit_file, grep_search, etc.) for workspace inspection and changes.",
-            "- web_search and fetch_url access the web directly from this machine; if web_search reports no provider configured, rely on fetch_url or answer from your own knowledge.",
-        ];
-        if (planMode) {
-            // Per-turn plan guidance for the local runtime.
-            parts.push(
-                "",
-                "PLAN MODE (READ-ONLY): mutating tools are unavailable. Draft the implementation plan " +
-                "as a task list with update_task_list (one item per verifiable step, every label ONE SHORT " +
-                "single sentence ~10 words max, all items pending), then call exit_plan_mode ONCE to end " +
-                "plan mode - execution becomes possible in the next turn.",
-            );
-        }
-        if (rulesContext) {
-            parts.push("", "Project Rules (from AGENTS.md):", rulesContext);
-        }
-        if (sessionSummary) {
-            parts.push("", "Conversation summary:", sessionSummary);
-        }
-        if (this._localEvictedUserTurns > 0) {
-            // The model ledger dropped its oldest turns to bound memory; the
-            // display ledger still shows them. Say so (as prompt text, never as
-            // a synthetic history row - a user row would shift turn indexing).
-            parts.push(
-                "",
-                `Note: ${this._localEvictedUserTurns} older turn(s) were dropped from this session's context to bound memory. ` +
-                "If the user refers to earlier work you cannot see, say so and ask them to restate it.",
-            );
-        }
-        return parts.join('\n');
+        return buildLocalSystemPrompt({
+            rulesContext,
+            sessionSummary,
+            planMode,
+            evictedUserTurns: this._localEvictedUserTurns,
+        });
+    }
+
+    /** Project rules for the run, resolved ONCE per session so the system
+     *  prompt stays byte-stable across turns (see `RulesSnapshot`). Recomputing
+     *  them per turn from the active editor's directory chain rewrote the
+     *  cacheable prefix whenever a nested AGENTS.md was crossed, dropping the
+     *  session cache rate under 50%. */
+    private _localRulesContext(): Promise<string> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        return this._localRulesSnapshot.resolve(root, () => collectProjectRules());
     }
 
     /** Convert extension history to local agent message format (no image base64).
@@ -4142,6 +4128,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history = [];
         this._localHistory = [];
         this._localEvictedUserTurns = 0;
+        this._localRulesSnapshot.reset();
         this._sessionSummary = null;
         this._sessionTitle = null;
         // A brand-new session starts its own spend counter.
@@ -4983,7 +4970,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     return;
                 }
 
-                const rulesContext = await collectProjectRules();
+                const rulesContext = await this._localRulesContext();
 
                 if (controller.signal.aborted) {
                     this._abortControllers.delete('chat');
