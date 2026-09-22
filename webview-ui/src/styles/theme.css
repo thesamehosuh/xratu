@@ -1915,12 +1915,9 @@ button {
     color: #f85149;
 }
 
-/* Failed tool call - red-tinted pill, still EXPANDABLE (the error text is
-   the payload): red tint background, red icon/label/X. */
-.step.fail {
-    background: rgba(248, 81, 73, 0.08);
-}
-
+/* Failed tool call - NO fill. The red icon/label/X (and the red rail on the
+   open body, below) carry the state; the row stays EXPANDABLE so the error
+   text remains reachable. */
 .step.fail .step-icon,
 .step.fail summary .step-label {
     color: #f85149;
@@ -2296,6 +2293,14 @@ button {
     margin-inline-start: 6px;
     padding-inline-start: 14px;
     border-inline-start: 1px solid var(--xratu-accent-dim);
+}
+
+/* A FAILED pill (or a group holding one) carries the red on its rail instead
+   of a red fill, matching the icon/label/X. */
+.step.fail[open] > .step-body,
+.step.group-fail[open] > .step-body,
+.step.group-fail[open] > .step-group-body {
+    border-inline-start-color: rgba(248, 81, 73, 0.55);
 }
 
 /* Raw reasoning renders in a `<pre dir="ltr">` (its content is code). The dir
