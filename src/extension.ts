@@ -47,6 +47,7 @@ import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
+import { resolveAgentRounds } from './tooling/agentRounds';
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
@@ -2696,7 +2697,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
                     signal: controller.signal,
-                    maxRounds: 25,
+                    // Read per run so a change takes effect on the next turn
+                    // without a reload. Unset (the default) means UNLIMITED:
+                    // the loop ends when the model stops calling tools, like
+                    // other agent harnesses, rather than at a fixed count. The
+                    // old hardcoded 25 (clamped to 32 by the runtime) made long
+                    // workflows impossible to run and impossible to extend.
+                    maxRounds: resolveAgentRounds(
+                        vscode.workspace.getConfiguration('xratu').get('maxAgentRounds')),
                     // Window for compaction/budget math. Prefer the probed or
                     // override value; the fallback is deliberately CONSERVATIVE
                     // (not 32k): claiming a window larger than the runtime

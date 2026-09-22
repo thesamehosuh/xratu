@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "%ext.displayName%",
 	"description": "%ext.description%",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
@@ -86,6 +86,11 @@
 					"type": "number",
 					"default": 0,
 					"description": "%config.tomanPerUsd.desc%"
+				},
+				"xratu.maxAgentRounds": {
+					"type": "number",
+					"default": 0,
+					"description": "%config.maxAgentRounds.desc%"
 				}
 			},
 			"restrictedConfigurations": [
@@ -187,6 +192,7 @@
 		"test:skills": "node test/test-skills.mjs",
 		"test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",
 		"test:session-store": "node test/test-session-store.mjs",
+		"test:agent-rounds": "node test/test-agent-rounds.mjs",
 		"package": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && node esbuild.js --production && vite build --mode production",
 		"package-vsix": "npx vsce package --no-dependencies",
 		"compile-tests": "tsc -p . --outDir out",

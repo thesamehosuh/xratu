@@ -10,6 +10,7 @@
  */
 
 import { taskListReminderLine, type TaskListItem } from '../taskList';
+import { resolveAgentRounds } from '../tooling/agentRounds';
 import { normalizeBaseUrl } from './baseUrl';
 import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
@@ -124,6 +125,10 @@ export interface LocalAgentRequest {
     /** Reasoning-effort variant; undefined = omit from the body so runtimes
      *  keep their default behavior. `none` explicitly disables reasoning. */
     reasoningEffort?: ThinkingLevel;
+    /** Agent-loop rounds allowed in this turn. Resolved by
+     *  `resolveAgentRounds` (the host reads `xratu.maxAgentRounds`); absent,
+     *  zero or negative means UNLIMITED - the loop then ends when the model
+     *  stops calling tools, not at a fixed count. */
     maxRounds?: number;
     contextWindow?: number | null;
     /** Current session task list (client-echoed, user edits merged) -
@@ -2443,7 +2448,7 @@ export async function* runLocalAgent(
     approvalGate: LocalApprovalGate,
     steerFeed?: LocalSteerFeed,
 ): AsyncGenerator<LocalAgentEvent> {
-    const rounds = Math.max(1, Math.min(request.maxRounds ?? 12, 32));
+    const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
