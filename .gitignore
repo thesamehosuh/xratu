@@ -13,8 +13,8 @@ dist-tests/
 test-results/
 playwright-report/
 
-# Dependencies
-node_modules/
+# Dependencies (no trailing slash: also matches a node_modules symlink)
+node_modules
 
 # Logs
 *.log
