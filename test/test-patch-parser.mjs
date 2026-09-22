@@ -129,8 +129,23 @@ check('the separator message shows the corrected template too', () => {
         parsePatchBlocks('<<<<<<< SEARCH\nold\n>>>>>>> REPLACE\n');
         throw new Error('expected refusal');
     } catch (e) {
-        if (!e.message.includes('=======')) throw new Error(`no template in: ${e.message}`);
+        // Assert the COMPLETE copyable shape, not just the '=======' substring
+        // (which the base message already contains): this must fail if the
+        // template is ever dropped from the diagnostic.
+        if (!e.message.includes('<<<<<<< SEARCH\n<current file lines>\n=======\n<replacement lines>\n>>>>>>> REPLACE')) {
+            throw new Error(`no full template in: ${e.message}`);
+        }
     }
+});
+check('an inline marker line inside a body is not misreported as flattened', () => {
+    // The body contains '<<<<<<< ... =======' but NOT at line start, so the
+    // fault is the missing separator - not a flattened patch. (The detector must
+    // only fire on a line-INITIAL opener.)
+    throwsWith('<<<<<<< SEARCH\nconst s = "a <<<<<<< b ======= c";\n>>>>>>> REPLACE\n', /separator/i);
+});
+check('inline marker-like text alone is not a patch attempt (returns [])', () => {
+    const blocks = parsePatchBlocks('const s = "a <<<<<<< b ======= c";');
+    if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
 });
 // A correct patch must still parse - the new checks must not over-trigger.
 check('a well-formed multi-line patch is unaffected', () => {
