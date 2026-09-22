@@ -47,6 +47,8 @@ import { LOCAL_SYSTEM_PROMPT } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, clipHistoryContent, clipToolCallArguments, countUserRows, evictOldestTurns } from './local/historyBounds';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
+import { resolveEditMode } from './tooling/editFileArgs';
+import { resolveAgentRounds } from './tooling/agentRounds';
 import { MCP_REGISTRY } from './mcpRegistry';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
@@ -861,7 +863,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._contextWindows = this._loadContextWindows();
         this._modelCatalog = readModelCatalog(this._globalState.get<string>('xratu.modelCatalog'));
         this._loadTaskListEdits();
-        setTaskListWriteListener(() => this._noteTaskListWrite());
+        setTaskListWriteListener((tasks) => this._noteTaskListWrite(tasks));
         // exit_plan_mode (agent-initiated): ends plan mode exactly like the
         // user's toolbar toggle - state flips so the NEXT request carries
         // plan_mode=false, and the webview echo keeps the toolbar honest.
@@ -939,6 +941,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private _taskListEdits: Record<string, TaskListItem[]> = {};
 
+    /** Live task list for the IN-FLIGHT run, refreshed on every model write
+     *  (_noteTaskListWrite). The trailing reminder is rebuilt from this each
+     *  round, so the model sees the plan it just changed rather than the
+     *  snapshot frozen when the run started. Null between runs. */
+    private _activeRunTaskList: TaskListItem[] | null = null;
+    /** True while a local run is draining events; a write outside a run must
+     *  only move the session override, never this snapshot. */
+    private _runInFlight = false;
+
     private _loadTaskListEdits(): void {
         try {
             const raw = this._globalState.get<string>('xratu.taskListEdits');
@@ -954,8 +965,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._globalState.update('xratu.taskListEdits', JSON.stringify(this._taskListEdits));
     }
 
-    /** A model write invalidates the session's edit override. */
-    private _noteTaskListWrite(): void {
+    /** A model write invalidates the session's edit override, and refreshes
+     *  the in-flight run so its trailing reminder tracks the new list. */
+    private _noteTaskListWrite(tasks?: TaskListItem[]): void {
+        // The reminder reads this every round. Only a call that actually
+        // carries a parsed list may refresh it - the bare call driven by the
+        // toolCall event fires before execution and must not clobber it.
+        if (this._runInFlight && tasks?.length) {
+            this._activeRunTaskList = tasks;
+        }
         if (this._sessionId && this._taskListEdits[this._sessionId]) {
             delete this._taskListEdits[this._sessionId];
             void this._saveTaskListEdits().catch((e) =>
@@ -2676,6 +2694,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
 
         try {
+            // Seed the live reminder list for this run; model writes refresh it
+            // through the task-list write listener.
+            this._activeRunTaskList = this._currentTaskList();
+            this._runInFlight = true;
             const agent = runLocalAgent(
                 {
                     baseUrl: active.baseUrl,
@@ -2695,8 +2717,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         skills: this._discoverSkillsForRun(workspaceRoot),
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
+                    taskListProvider: () => this._activeRunTaskList ?? undefined,
                     signal: controller.signal,
-                    maxRounds: 25,
+                    // Read per run so a change takes effect on the next turn
+                    // without a reload. Unset (the default) means UNLIMITED:
+                    // the loop ends when the model stops calling tools, like
+                    // other agent harnesses, rather than at a fixed count. The
+                    // old hardcoded 25 (clamped to 32 by the runtime) made long
+                    // workflows impossible to run and impossible to extend.
+                    maxRounds: resolveAgentRounds(
+                        vscode.workspace.getConfiguration('xratu').get('maxAgentRounds')),
                     // Window for compaction/budget math. Prefer the probed or
                     // override value; the fallback is deliberately CONSERVATIVE
                     // (not 32k): claiming a window larger than the runtime
@@ -2768,6 +2798,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 void this._maybeOfferIranianFallback(err);
             }
         } finally {
+            this._runInFlight = false;
+            this._activeRunTaskList = null;
             this._abortControllers.delete('chat');
             // The run is over - committed, aborted or errored. Clear BEFORE
             // the caller's commit persist so the snapshot never carries a
@@ -5287,6 +5319,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // Null kind (shell-composed terminal commands) never records.
             const kind = sessionApprovalKind(toolName, args ?? {});
 
+            if (toolName === 'edit_file') {
+                // Deny an unknown mode BEFORE the preview: otherwise the card
+                // shows an overwrite-style diff for a call that can only fail
+                // at dispatch. Mirrors dispatchTool's check.
+                const resolved = resolveEditMode(approval.args?.mode);
+                if ('error' in resolved) {
+                    preDenied[approval.tool_call_id] = false;
+                    closeItems.push({ tool_call_id: approval.tool_call_id, tool_name: toolName });
+                    this._view?.webview.postMessage({ type: 'error', value: resolved.error });
+                    out.push({ tool_call_id: approval.tool_call_id, tool_name: toolName, args: approval.args, diff: null });
+                    continue;
+                }
+            }
             if (toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'apply_patch') {
                 try {
                     sanitizePath(approval.args?.path || '', workspaceRoot);

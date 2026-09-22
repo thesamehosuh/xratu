@@ -9,7 +9,8 @@
  * integration supplies tool definitions + an executor + approval callback.
  */
 
-import { taskListReminderLine, type TaskListItem } from '../taskList';
+import { reminderTaskList, taskListReminderLine, type TaskListItem } from '../taskList';
+import { resolveAgentRounds } from '../tooling/agentRounds';
 import { normalizeBaseUrl } from './baseUrl';
 import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
@@ -124,12 +125,23 @@ export interface LocalAgentRequest {
     /** Reasoning-effort variant; undefined = omit from the body so runtimes
      *  keep their default behavior. `none` explicitly disables reasoning. */
     reasoningEffort?: ThinkingLevel;
+    /** Agent-loop rounds allowed in this turn. Resolved by
+     *  `resolveAgentRounds` (the host reads `xratu.maxAgentRounds`); absent,
+     *  zero or negative means UNLIMITED - the loop then ends when the model
+     *  stops calling tools, not at a fixed count. */
     maxRounds?: number;
     contextWindow?: number | null;
     /** Current session task list (client-echoed, user edits merged) -
      *  appended to the system message each round so the model stays on-plan
      *  even after compaction dropped the original tool call. */
     taskList?: TaskListItem[];
+    /** LIVE task list for the trailing reminder, consulted EVERY round.
+     *  `taskList` above is captured once when the run starts, so it stays
+     *  frozen for the whole run (up to 32 rounds) and a model that updates its
+     *  plan mid-run would never see its own updates. Only the trailing note
+     *  reflects this - it is volatile by design and never cached - so prompt
+     *  caching is unaffected. Falls back to `taskList` when absent. */
+    taskListProvider?: () => TaskListItem[] | undefined;
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
@@ -2443,7 +2455,7 @@ export async function* runLocalAgent(
     approvalGate: LocalApprovalGate,
     steerFeed?: LocalSteerFeed,
 ): AsyncGenerator<LocalAgentEvent> {
-    const rounds = Math.max(1, Math.min(request.maxRounds ?? 12, 32));
+    const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
@@ -2456,7 +2468,7 @@ export async function* runLocalAgent(
         const systemChars = request.systemPrompt.length;
         // The trailing note ships on every request too - count the task-list
         // reminder (unbounded) plus a fixed allowance for the status/hint.
-        const tailChars = taskListReminderLine(request.taskList ?? []).length + 400;
+        const tailChars = taskListReminderLine(reminderTaskList(request)).length + 400;
         return Math.ceil((systemChars + tailChars) / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
     };
 
@@ -2466,7 +2478,7 @@ export async function* runLocalAgent(
     // must stay byte-stable across rounds or prompt caching (Anthropic
     // cache_control, OpenAI/Google automatic prefix caching) can never hit.
     const tailNoteFor = (usedTokens: number): string =>
-        taskListReminderLine(request.taskList ?? [])
+        taskListReminderLine(reminderTaskList(request))
         + contextStatusLine(usedTokens, windowTokens)
         + contextHint(usedTokens, windowTokens);
 
