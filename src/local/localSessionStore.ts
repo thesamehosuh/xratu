@@ -91,11 +91,21 @@ function transcriptMatches(uiHistory: unknown, needle: string): boolean {
 /**
  * Per-message content ceiling in the PERSISTED snapshot (chars).
  *
- * Intentionally half the in-memory floor (`IN_MEMORY_CONTENT_CAP` = 40_000) to
- * bound the file written on every turn. Consequence: content above this does
- * not survive a reload, so a session can come back shorter than it looked.
+ * Regression (verified from a real snapshot on disk, which contained
+ * `[...clipped 41230 chars...]`): this sat at HALF the in-memory floor
+ * (`IN_MEMORY_CONTENT_CAP` = 40_000), so a message of 61k chars was stored as
+ * 20k. Reloading the window - which happens on every extension reinstall -
+ * restored that shortened history, so the context meter dropped by tens of
+ * thousands of tokens and then slowly climbed back: exactly the sawtooth
+ * reported from dogfooding.
+ *
+ * Matching the in-memory floor removes the worst of it: the snapshot can no
+ * longer lose more per message than memory already holds. The remaining gap is
+ * for large windows, where the in-memory cap scales ABOVE this (see
+ * `contentCapForWindow`); closing it properly means threading the run's window
+ * into `sanitizeSnapshot`, which is the follow-up rather than a guess.
  */
-const MAX_STORED_CONTENT = 20_000;
+const MAX_STORED_CONTENT = 40_000;
 const TITLE_MAX_LEN = 48;
 
 /** Windows transient rename failures: an AV scanner or the search indexer can

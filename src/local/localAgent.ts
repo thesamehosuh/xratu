@@ -2140,6 +2140,10 @@ export function compactMessages(
     // fires on small windows where schemas are a large fraction of the prompt.
     let total = (usedTokens ?? estimateRunTokens(messages)) + toolTokens;
     if (!force && (windowTokens < 4096 || total < windowTokens * AUTO_COMPACT_RATIO)) return [];
+    // The prompt size that triggered this call. On a FORCED recovery this is
+    // ground truth: the server just REJECTED a prompt this big, so the
+    // configured window is demonstrably larger than the model's real limit.
+    const observed = total;
 
     // The LAST user message opens the current turn - everything from there
     // on (assistant tool calls, tool results) must stay intact.
@@ -2149,7 +2153,18 @@ export function compactMessages(
     }
     if (lastUser <= 1) return [];
 
-    const target = Math.max(2048, Math.floor(windowTokens * AUTO_COMPACT_TARGET_RATIO));
+    // Forced recovery targets a fraction of the OBSERVED size, not of the
+    // configured window.
+    //
+    // Regression (measured from the usage ledger): with an override larger than
+    // the model's real limit - 1M configured for a 128k model - the
+    // window-relative target sat far ABOVE the failing prompt, so recovery
+    // dropped exactly ONE turn, re-overflowed on the next request, and dropped
+    // another. The user sees a sawtooth (129k -> 99k -> 58k) and loses turns
+    // repeatedly, when one decisive trim would have cleared the real limit.
+    // Basing the target on what actually failed does that in a single pass.
+    const basis = force ? observed : windowTokens;
+    const target = Math.max(2048, Math.floor(basis * AUTO_COMPACT_TARGET_RATIO));
     let start = 1;
     while (start < lastUser && (total > target || (force && start === 1))) {
         let end = start + 1;
