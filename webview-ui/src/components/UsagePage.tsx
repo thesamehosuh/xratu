@@ -16,6 +16,7 @@ import {
 import { getLocale, t } from '../i18n';
 import { formatCost } from '../cost';
 import { formatCalendarDate, localDayTimestamp, shiftLocalDay } from '../datetime';
+import { totalTokens, uncachedInput } from '../usageTokens';
 import type { LedgerDay, ModelRateView, ProviderUsageView, UsageTotals } from '../types';
 
 type Currency = 'USD' | 'IRT';
@@ -65,6 +66,8 @@ function formatTokens(value: number): string {
     const locale = getLocale() === 'fa' ? 'fa-IR' : 'en-US';
     return Math.max(0, Math.round(value)).toLocaleString(locale);
 }
+
+
 
 /** The month a day belongs to, in the LOCALE's calendar (Jalali for fa). */
 function monthLabel(dayKey: string): string {
@@ -651,7 +654,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
         const totals = new Map<string, number>();
         for (const day of history) {
             for (const cell of day.cells) {
-                totals.set(cell.model, (totals.get(cell.model) ?? 0) + cell.input + cell.output + cell.cached);
+                totals.set(cell.model, (totals.get(cell.model) ?? 0) + totalTokens(cell));
             }
         }
         return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
@@ -683,7 +686,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
         for (const { cell } of filteredCells) {
             totals.USD += cell.USD;
             totals.IRT += cell.IRT;
-            totals.tokens += cell.input + cell.output + cell.cached;
+            totals.tokens += totalTokens(cell);
         }
         return totals;
     }, [filteredCells]);
@@ -708,7 +711,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
             for (const cell of dayCells.get(day)?.cells ?? []) {
                 if (modelFilter !== 'all' && cell.model !== modelFilter) continue;
                 if (hostFilter !== 'all' && cell.host !== hostFilter) continue;
-                tokens += cell.input + cell.output + cell.cached;
+                tokens += totalTokens(cell);
                 const value = currency === 'IRT' ? cell.IRT : cell.USD;
                 if (value <= 0) continue;
                 byModel.set(cell.model, (byModel.get(cell.model) ?? 0) + value);
@@ -948,7 +951,8 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
 
                     <div className="settings-card-body">
                         {providers.length > 0 ? providers.map((p) => {
-                            const tokens = p.input + p.output + p.cached;
+                            const tokens = totalTokens(p);
+                            const uncached = uncachedInput(p.input, p.cached);
                             const share = (value: number) => `${tokens > 0 ? (value / tokens) * 100 : 0}%`;
                             return (
                                 <div className="prov-row" key={p.host}>
@@ -962,13 +966,13 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                                     </div>
                                     {tokens > 0 && (
                                         <span className="prov-bar" dir="ltr" aria-hidden="true">
-                                            {p.input > 0 && <span className="in" style={{ width: share(p.input) }} />}
+                                            {uncached > 0 && <span className="in" style={{ width: share(uncached) }} />}
                                             {p.output > 0 && <span className="out" style={{ width: share(p.output) }} />}
                                             {p.cached > 0 && <span className="cached" style={{ width: share(p.cached) }} />}
                                         </span>
                                     )}
                                     <span className="prov-stats" dir="ltr">
-                                        <span><i className="in" aria-hidden="true" />{t('usageInput')} <b>{formatTokens(p.input)}</b></span>
+                                        <span><i className="in" aria-hidden="true" />{t('usageInput')} <b>{formatTokens(uncached)}</b></span>
                                         <span><i className="out" aria-hidden="true" />{t('usageOutput')} <b>{formatTokens(p.output)}</b></span>
                                         {p.cached > 0 && <span><i className="cached" aria-hidden="true" />{t('usageCached')} <b>{formatTokens(p.cached)}</b></span>}
                                     </span>
@@ -980,7 +984,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
 
                         {allTime && (
                             <p className="usage-alltime">
-                                {t('usageAllTime')}: {formatTokens(allTime.input + allTime.output + allTime.cached)} {t('usageTokens')}
+                                {t('usageAllTime')}: {formatTokens(totalTokens(allTime))} {t('usageTokens')}
                                 {(allTime.USD > 0 || allTime.IRT > 0) && (
                                     <> · {[formatCost({ amount: allTime.USD, currency: 'USD' }), formatCost({ amount: allTime.IRT, currency: 'IRT' })]
                                         .filter((v): v is string => v != null)

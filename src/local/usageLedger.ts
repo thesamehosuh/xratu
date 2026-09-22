@@ -284,7 +284,9 @@ export function modelHosts(entries: readonly UsageEntry[]): ModelHostUse[] {
             use = { model, host, tokens: 0, USD: 0, IRT: 0 };
             byPair.set(key, use);
         }
-        use.tokens += entry.input + entry.output + entry.cached;
+        // `input` is the FULL prompt and `cached` a subset of it, so adding
+        // `cached` again would double-count the cache hits.
+        use.tokens += entry.input + entry.output;
         if (entry.amount != null && entry.currency) use[entry.currency] += entry.amount;
     }
     return [...byPair.values()].sort((a, b) => b.tokens - a.tokens);

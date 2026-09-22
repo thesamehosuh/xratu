@@ -227,6 +227,11 @@ check('USAGE_MAX_ENTRIES is a sane cap', USAGE_MAX_ENTRIES >= 1000, true);
         'gpt-4o@b.ir',
     ]);
     check('pair tokens are summed across rounds', pairs[1].tokens, 20);
+    // `cached` is a SUBSET of `input`, so the pair sort key must not add it
+    // again - that would double-count every cache hit (and reorder the sheet).
+    check('cached is not double-counted in pair tokens', modelHosts([
+        entry({ model: 'y', host: 'h', input: 100, output: 10, cached: 90 }),
+    ])[0].tokens, 110);
     // Cost is summed per currency and never converted between the two.
     check('pair cost keeps its currency', [pairs[1].USD, pairs[1].IRT], [1, 5000]);
     check('same model on another host is its own pair', modelHosts([entry({ model: 'x', host: '' })]), [
