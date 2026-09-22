@@ -271,12 +271,28 @@ export function App() {
             // EXCEPT when the document itself shrank: the scrollTop clamp
             // that follows is bookkeeping, not intent (see lastScrollHeight).
             const shrunk = el.scrollHeight < lastScrollHeight.current;
-            if (!shrunk && el.scrollTop < lastScrollTop.current - 1) atBottom.current = false;
-            else {
-                const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-                atBottom.current = nearBottom;
-                if (nearBottom) smoothJumpInFlight.current = false;
+            // An UPWARD scroll is the ONLY thing that may disarm auto-follow.
+            //
+            // Deriving `atBottom` from POSITION instead latched it false during
+            // a restore replay: the content grows beneath a pinned view, so
+            // scrollTop moves (and sits far from the bottom) with no user intent
+            // at all. The append handler then grows `visibleBudget` by the delta
+            // on every message, until the ENTIRE transcript was mounted instead
+            // of the trailing page. Caught as an e2e flake - expected 40
+            // bubbles, got 50 - and on a long real session that is every message
+            // in the DOM.
+            const movedUp = !shrunk && el.scrollTop < lastScrollTop.current - 1;
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            if (movedUp) {
+                atBottom.current = false;
+            } else if (nearBottom) {
+                // Reached, or still sitting at, the bottom - follow stays armed.
+                // This is how a reader who scrolled up re-arms it.
+                atBottom.current = true;
+                smoothJumpInFlight.current = false;
             }
+            // Otherwise leave `atBottom` exactly as it was: neither content
+            // growth nor a programmatic scroll is a statement of intent.
             lastScrollTop.current = el.scrollTop;
             lastScrollHeight.current = el.scrollHeight;
             setShowJump(!atBottom.current);
