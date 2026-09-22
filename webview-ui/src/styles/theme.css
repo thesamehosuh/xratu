@@ -2232,7 +2232,7 @@ button {
 .step-body {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     padding: 2px 0 8px;
 }
 
@@ -2296,8 +2296,19 @@ button {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding-bottom: 4px;
+    padding: 2px 0 5px;
     border-bottom: 1px solid color-mix(in srgb, var(--vscode-widget-border) 45%, transparent);
+}
+
+/* One file's diff block; separate files in a run get real breathing room. */
+.edit-file {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.edit-file + .edit-file {
+    margin-top: 6px;
 }
 
 .edit-file-path {
@@ -2354,29 +2365,25 @@ button {
     background: var(--xratu-accent-faint);
 }
 
-/* Unparseable patch: NEVER wrap the markers into a wall - a no-wrap scroll
-   box keeps SEARCH/REPLACE blocks legible. */
+/* Unparseable patch: NEVER wrap the markers into a wall. Plain monospace on
+   the message surface (no box), with a no-wrap horizontal scroll. */
 .step pre.pill-patch-pre {
     white-space: pre;
     overflow-x: auto;
     max-height: 220px;
-    padding: 6px 8px;
-    border-radius: var(--xratu-radius-xs);
-    background: color-mix(in srgb, var(--vscode-sideBar-background) 70%, #000);
+    padding: 0;
     scrollbar-width: thin;
 }
 
 .pill-patch-note {
-    margin: 0 0 4px;
+    margin: 0 0 5px;
     font-size: var(--xratu-fs-xs);
     color: var(--vscode-descriptionForeground);
-    opacity: 0.85;
+    opacity: 0.8;
 }
 
 .step-io-tag {
     font-size: var(--xratu-fs-xs);
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
     color: var(--vscode-descriptionForeground);
     opacity: 0.8;
 }
@@ -2478,8 +2485,8 @@ pre.tool-cmd {
 .pill-diff-line {
     display: flex;
     align-items: baseline;
-    min-height: 1.4em;
-    padding: 0 6px 0 0;
+    min-height: 1.55em;
+    padding: 1px 6px 1px 0;
 }
 
 .pill-diff-line.del {
@@ -2579,7 +2586,7 @@ pre.tool-cmd {
 .term-out {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
 }
 
 .term-out pre {

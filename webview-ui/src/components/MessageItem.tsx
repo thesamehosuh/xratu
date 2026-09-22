@@ -509,12 +509,19 @@ function PillDiffBlock({ block, lang }: { block: PatchBlock; lang: string }) {
 }
 
 /** Edit-family diff view: per-line del/add tint with +/− gutter marks and
- *  IDE-style syntax highlighting, full-bleed on the pill background.
- *  Unparseable patch → a no-wrap raw scroll box (never a wrapped wall of
- *  markers) with a short note. */
+ *  IDE-style syntax highlighting, full-bleed on the message surface.
+ *  Tries SEARCH/REPLACE first, then a unified diff (models sometimes emit
+ *  `---`/`+++`/`@@` instead), and only then the raw no-wrap scroll box. */
 function PatchBlocksView({ patch, lang }: { patch: string; lang: string }) {
-    const blocks = useMemo(() => parsePatchBlocks(patch), [patch]);
-    if (!blocks) {
+    const parsed = useMemo(() => {
+        const blocks = parsePatchBlocks(patch);
+        if (blocks) return { kind: 'blocks' as const, blocks };
+        const unified = parseUnifiedDiff(patch);
+        if (unified) return { kind: 'unified' as const, unified };
+        return { kind: 'raw' as const };
+    }, [patch]);
+
+    if (parsed.kind === 'raw') {
         return (
             <div className="pill-patch-raw">
                 <p className="pill-patch-note">{t('patchUnparsed')}</p>
@@ -522,10 +529,56 @@ function PatchBlocksView({ patch, lang }: { patch: string; lang: string }) {
             </div>
         );
     }
+    if (parsed.kind === 'unified') {
+        return <UnifiedDiffView lines={parsed.unified} />;
+    }
     return (
         <div className="pill-diff" dir="ltr">
-            {blocks.map((b, i) => (
+            {parsed.blocks.map((b, i) => (
                 <PillDiffBlock key={i} block={b} lang={lang} />
+            ))}
+        </div>
+    );
+}
+
+type UnifiedLine = { kind: 'same' | 'del' | 'add'; text: string };
+
+/** Unified-diff fallback (`---` / `+++` / `@@` hunks with `-`/`+`/` ` lines).
+ *  Returns null unless there is at least one real +/- change, so plain prose
+ *  still reaches the raw view. */
+function parseUnifiedDiff(text: string): UnifiedLine[] | null {
+    const lines = stripReplayMarkers(text)
+        .replace(/^\uFEFF/, '')
+        .replace(/\r\n/g, '\n')
+        .replace(/… \[\+\d+ chars truncated\][\s\S]*$/, '')
+        .split('\n');
+    const out: UnifiedLine[] = [];
+    let inHunk = false;
+    for (const raw of lines) {
+        const line = raw.replace(/\r$/, '');
+        if (/^@@/.test(line)) {
+            inHunk = true;
+            continue;
+        }
+        if (/^(---|\+\+\+)\s/.test(line)) continue;
+        if (!inHunk) continue;
+        if (line.startsWith('\\')) continue; // "\ No newline at end of file"
+        if (line.startsWith('+')) out.push({ kind: 'add', text: line.slice(1) });
+        else if (line.startsWith('-')) out.push({ kind: 'del', text: line.slice(1) });
+        else if (line.startsWith(' ') || line === '') out.push({ kind: 'same', text: line.slice(1) });
+        else out.push({ kind: 'same', text: line });
+    }
+    return out.some((l) => l.kind === 'add' || l.kind === 'del') ? out : null;
+}
+
+function UnifiedDiffView({ lines }: { lines: UnifiedLine[] }) {
+    return (
+        <div className="pill-diff" dir="ltr">
+            {lines.map((l, i) => (
+                <div key={i} className={`pill-diff-line${l.kind === 'same' ? '' : ` ${l.kind}`}`}>
+                    <span className="pill-diff-mark">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+                    <span className="pill-diff-code">{l.text}</span>
+                </div>
             ))}
         </div>
     );
@@ -536,21 +589,32 @@ interface EditStats {
     del: number;
 }
 
-/** +added / −removed counts for one patch, from the same LCS diff the pill
- *  renders. Oversized blocks return null from diffBlockLines and are skipped. */
-function editStatsOf(patch: string): EditStats {
+/** +added / −removed counts for one patch, from the same diff the pill
+ *  renders (SEARCH/REPLACE blocks, else a unified diff). `null` when neither
+ *  parses, so the caller omits the stats rather than printing "+0 −0".
+ *  Oversized blocks return null from diffBlockLines and are skipped. */
+function editStatsOf(patch: string): EditStats | null {
     const blocks = parsePatchBlocks(patch);
-    const stats: EditStats = { add: 0, del: 0 };
-    if (!blocks) return stats;
-    for (const b of blocks) {
-        const lines = diffBlockLines(b.search, b.replace);
-        if (!lines) continue;
-        for (const l of lines) {
-            if (l.kind === 'add') stats.add++;
-            else if (l.kind === 'del') stats.del++;
+    if (blocks) {
+        const stats: EditStats = { add: 0, del: 0 };
+        for (const b of blocks) {
+            const lines = diffBlockLines(b.search, b.replace);
+            if (!lines) continue;
+            for (const l of lines) {
+                if (l.kind === 'add') stats.add++;
+                else if (l.kind === 'del') stats.del++;
+            }
         }
+        return stats;
     }
-    return stats;
+    const unified = parseUnifiedDiff(patch);
+    if (unified) {
+        return {
+            add: unified.filter((l) => l.kind === 'add').length,
+            del: unified.filter((l) => l.kind === 'del').length,
+        };
+    }
+    return null;
 }
 
 /** Sum of every patch a run of edit calls wrote. */
@@ -561,6 +625,7 @@ function sumEditStats(calls: ToolRow[]): EditStats {
         const patch = argString(args, 'patch') ?? (c.call.text.includes('<<<<<<<') ? c.call.text : undefined);
         if (!patch) continue;
         const s = editStatsOf(patch);
+        if (!s) continue;
         total.add += s.add;
         total.del += s.del;
     }
@@ -577,14 +642,17 @@ function EditStatsText({ stats }: { stats: EditStats }) {
 }
 
 /** Per-file header inside an open edit body: path + change counts. The
- *  open-in-editor affordance lives once on the pill summary, not per file. */
-function EditFileHead({ path, stats }: { path?: string; stats: EditStats }) {
+ *  open-in-editor affordance lives once on the pill summary, not per file.
+ *  Stats are omitted when the patch could not be parsed (no misleading +0 −0). */
+function EditFileHead({ path, stats }: { path?: string; stats: EditStats | null }) {
     return (
         <div className="edit-file-head" dir="ltr">
             <span className="edit-file-path">{path || 'patch'}</span>
-            <span className="edit-file-stat">
-                <span className="a">+{stats.add}</span> <span className="d">−{stats.del}</span>
-            </span>
+            {stats && (
+                <span className="edit-file-stat">
+                    <span className="a">+{stats.add}</span> <span className="d">−{stats.del}</span>
+                </span>
+            )}
         </div>
     );
 }
@@ -596,7 +664,7 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
     const patch = argString(args, 'patch');
     const rawPatch = !patch && call.text.includes('<<<<<<<') ? call.text : undefined;
     const effective = patch ?? rawPatch;
-    const stats = useMemo(() => (effective ? editStatsOf(effective) : { add: 0, del: 0 }), [effective]);
+    const stats = useMemo(() => (effective ? editStatsOf(effective) : null), [effective]);
     const done = !!call.result || !!result;
     const failed = toolRowFailed(call, result);
     return (
@@ -714,7 +782,7 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
                 <>
                     {effectivePatch !== undefined ? (
                         <>
-                            <EditFileHead path={path} stats={stats ?? { add: 0, del: 0 }} />
+                            <EditFileHead path={path} stats={stats} />
                             <PatchBlocksView patch={effectivePatch} lang={extToLang(path ?? '')} />
                         </>
                     ) : content !== undefined ? (
