@@ -64,9 +64,28 @@ export function contentCapForWindow(windowTokens?: number | null): number {
     return Math.max(IN_MEMORY_CONTENT_CAP, Math.min(byWindow, MAX_CONTENT_CAP));
 }
 
-/** Oldest complete turns dropped from the model ledger past this many. */
+/**
+ * Oldest complete turns dropped from the model ledger past this many.
+ *
+ * This is a MEMORY bound, not a context bound - the context window is policed
+ * separately by compaction (90% of the window) and `boundHistory` (72%), both
+ * of which scale with the window. Dropping turns here is irreversible (unlike
+ * compaction, which summarizes first), so it is set well above any realistic
+ * single session.
+ */
 export const MAX_IN_MEMORY_TURNS = 200;
-/** User turns retained in the persisted snapshot (turn-aligned). */
+/**
+ * User turns retained in the persisted snapshot (turn-aligned).
+ *
+ * DELIBERATELY tighter than `MAX_IN_MEMORY_TURNS` (asserted by
+ * test-history-bounds.mjs) so the snapshot written on every turn stays small.
+ * The consequence is worth stating: reloading the window or restarting the
+ * extension host rebuilds the model ledger from this snapshot, so turns past
+ * the 60th are gone and the context meter drops. That is a reload-time loss by
+ * design, NOT the cause of drops mid-conversation - those can only come from
+ * compaction (90% of the window) or `boundHistory` (72%), neither of which can
+ * fire below that fill.
+ */
 export const MAX_STORED_TURNS = 60;
 
 /**

@@ -88,6 +88,13 @@ function transcriptMatches(uiHistory: unknown, needle: string): boolean {
     return false;
 }
 
+/**
+ * Per-message content ceiling in the PERSISTED snapshot (chars).
+ *
+ * Intentionally half the in-memory floor (`IN_MEMORY_CONTENT_CAP` = 40_000) to
+ * bound the file written on every turn. Consequence: content above this does
+ * not survive a reload, so a session can come back shorter than it looked.
+ */
 const MAX_STORED_CONTENT = 20_000;
 const TITLE_MAX_LEN = 48;
 
