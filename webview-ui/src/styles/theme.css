@@ -1303,7 +1303,10 @@ button {
    The user turn is a compact capsule on the end side. */
 .msg.assistant {
     background: transparent;
-    padding: 2px 0;
+    /* The corner brackets are positioned against the article edge, so the
+       content has to start past them - otherwise the first pill's background
+       covers the bracket and it reads as clipped. */
+    padding: 6px 12px;
 }
 
 .msg.user {
