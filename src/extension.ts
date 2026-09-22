@@ -3341,7 +3341,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             await this._handleChatRequest(data.value, data.attachments);
                             break;
                         case 'steerRun':
-                            void this._handleSteer(data.value, data.attachments, data.steerId);
+                            void this._handleSteer(data.value, data.attachments, data.steerId)
+                                // An unexpected throw (e.g. a filesystem read
+                                // before the try) must still release the held
+                                // bubble, or its chip sticks forever.
+                                .catch(() => this._confirmSteer(data.steerId, 'drop'));
                             break;
                         case 'requestFileList':
                             void this._pushFileList();
@@ -4894,6 +4898,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // it accumulated (see the noRun branch). The loop cannot have
         // drained anything before the flag was set.
         const steerQueueFloor = this._localSteerQueue.length;
+        // True once THIS turn actually reached the agent loop. Every pre-flight
+        // early return (attachment resolution/validation/PDF, cancel before the
+        // loop) leaves `false`, and its finally discards the steers that were
+        // queued above the floor - otherwise they linger in the shared queue
+        // and get injected into an unrelated next turn.
+        let agentStarted = false;
         try {
             // Seed the display title (server applies the same truncation rule);
             // an explicit rename always wins because this only fills a null.
@@ -5000,6 +5010,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // The chat cancel controller was registered right after
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
+                agentStarted = true;
                 const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart);
                 this._endLiveMarkdown();
                 // An empty completion (context overflow, degenerate round) must
@@ -5136,6 +5147,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // here would let a steer arriving between carry turns start a
                 // CONCURRENT second turn.
                 if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
+                else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
                 if (!opts?.steerCarry) {
                     this._localRunActive = false;
                     this._settleLocalRun();
@@ -5150,6 +5162,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // Idempotent - the inner finally performs the same bookkeeping
             // once the controller is registered.
             if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
+            else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
             if (!opts?.steerCarry) {
                 this._localRunActive = false;
                 this._settleLocalRun();

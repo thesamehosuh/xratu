@@ -1260,15 +1260,10 @@ button {
     border-color: #bf8700;
 }
 
-/* Steered user turn - sent into a LIVE run (queued at the agent loop's
-   next round). The teal accent (same family as the corner brackets' normal
-   tint) plus an explicit badge, so "the model got this mid-run" is stated,
-   not implied. */
-.msg.user.steered::before,
-.msg.user.steered::after {
-    border-color: var(--xratu-accent);
-}
-
+/* Steered user turn - sent into a LIVE run (queued at the agent loop's next
+   round). The corner brackets keep the base teal accent (a distinct amber was
+   deliberately dropped); the explicit badge is what states "the model got this
+   mid-run". */
 .msg-steered-badge {
     display: flex;
     align-items: flex-start;

@@ -292,6 +292,30 @@ ok(
     'pre-steer text step stays in its own bubble'
 );
 
+// 20c. A steer confirmed AFTER the run settled (cancel/error) renders as a
+//      plain user row with NO orphan streaming bubble - nothing would ever
+//      finalize it, leaving a perpetual typing indicator.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'do a' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('chunk', { value: 'partial' }));
+s = reduceChat(s, M('error', { value: 'boom' }));
+ok(!s.busy && s.streamingId === null, 'error settles the run');
+s = reduceChat(s, M('steerUser', { value: 'late steer' }));
+ok(s.streamingId === null && !s.busy, 'post-settle steer orphans no streaming bubble');
+const lateUsers = s.messages.filter((m) => m.role === 'user');
+ok(
+    lateUsers.length === 2 && lateUsers[1].steered === true && lateUsers[1].text === 'late steer',
+    'post-settle steer still renders its user row'
+);
+
+// 20d. While the run is LIVE a steer still opens the continuation bubble.
+s = createInitialChatState();
+s = reduceChat(s, M('restoreUser', { value: 'a' }));
+s = reduceChat(s, M('startResponse'));
+s = reduceChat(s, M('steerUser', { value: 'steer' }));
+ok(!!s.streamingId && s.busy, 'live steer opens the continuation bubble');
+
 // 21. Mid-run usage events update the meter without ending the stream.
 s = createInitialChatState();
 s = reduceChat(s, M('startResponse'));

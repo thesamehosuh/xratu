@@ -76,8 +76,10 @@ export interface UsageLike {
     cachedTokens?: number | null;
     /** Prompt tokens WRITTEN to the provider's cache this request. They are a
      *  subset of `promptTokens` on every provider whose total counts them
-     *  (OpenAI `cache_write_tokens`, Anthropic `cache_creation_input_tokens`),
-     *  and are billed above the plain input rate. */
+     *  (OpenAI `cache_write_tokens`, Anthropic `cache_creation_input_tokens`).
+     *  Billed at `cachedInputWrite` when the price carries one (Anthropic
+     *  5-minute TTL, GPT-5.6+), otherwise at the plain input rate - automatic
+     *  prefix caching on OpenAI-compatible providers has no write premium. */
     cacheWriteTokens?: number | null;
 }
 
