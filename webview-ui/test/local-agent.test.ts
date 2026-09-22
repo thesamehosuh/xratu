@@ -844,10 +844,14 @@ async function testMidRunCompactionFromServerUsage() {
         assert.ok(round2[1].content.includes('Mid-run summary: earlier turns read configs.'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1') && !serialized.includes('turn2'));
         assert.ok(serialized.includes('turn3') && serialized.includes('contents'));
-        // The current turn's tool result is last, carrying the trailing
-        // volatile note; the system prompt stays byte-stable (cacheable).
-        assert.equal(round2.at(-1)!.role, 'tool');
+        // The current turn's tool result is the last STORED message; the
+        // volatile note rides its own trailing user turn, so the tool result
+        // stays byte-exact for the next round's cache. The system prompt stays
+        // byte-stable (cacheable).
+        assert.equal(round2.at(-2)!.role, 'tool');
+        assert.equal(round2.at(-1)!.role, 'user');
         assert.ok(String(round2.at(-1)!.content).includes('[Context status:'));
+        assert.ok(!String(round2.at(-2)!.content).includes('[Context status:'));
         assert.ok(!round2[0].content.includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;

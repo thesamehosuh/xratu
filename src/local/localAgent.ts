@@ -642,22 +642,39 @@ interface CompletionResult {
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
-/** Append the volatile note to a COPY of the last message (chat transport).
- *  A trailing system message after tool/user turns is rejected by strict
- *  servers, and appending only touches the tail - everything before the last
- *  message stays a cacheable prefix. */
-function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
+/**
+ * Append the volatile note to the outgoing request (chat transport).
+ *
+ * It must NOT be merged into a message that is REPLAYED on the next round:
+ * merging made the last stored message's bytes differ from its replayed form
+ * (the note is never stored), so the cached prefix ended one message EARLY -
+ * every round and every turn. Measured effect: in a tool-using turn the newest
+ * tool result (usually the largest message) could never be read from cache,
+ * and across turns the previous turn was re-sent as a miss. That is the ~50%
+ * cache rate against >98% for a harness that keeps its prefix stable.
+ *
+ * So the note rides its OWN trailing message - but only when that keeps the
+ * turn roles ALTERNATING. Some strict OpenAI-compatible servers and every
+ * Gemini endpoint reject consecutive same-role turns ("roles must alternate"),
+ * and the last stored message is a `user` on the first round of a turn (the
+ * prompt). In that one case the note is merged instead: nothing is cached
+ * before the first request of a turn anyway, so the merge costs no cache hit,
+ * while the tool rounds - where the large tool results live - still get the
+ * separate, byte-stable trailing turn.
+ */
+export function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
+    if (!note) return messages;
     if (!messages.length) return messages;
-    const out = messages.slice();
-    const last = out[out.length - 1];
-    if (typeof last.content === 'string') {
-        out[out.length - 1] = { ...last, content: `${last.content}\n\n${note}` };
-    } else if (Array.isArray(last.content)) {
-        out[out.length - 1] = { ...last, content: [...last.content, { type: 'text', text: note }] };
-    } else {
-        out[out.length - 1] = { ...last, content: note };
+    const last = messages[messages.length - 1];
+    if (last.role === 'user') {
+        const merged: LocalAgentMessage = typeof last.content === 'string'
+            ? { ...last, content: `${last.content}\n\n${note}` }
+            : Array.isArray(last.content)
+                ? { ...last, content: [...last.content, { type: 'text', text: note }] }
+                : { ...last, content: note };
+        return [...messages.slice(0, -1), merged];
     }
-    return out;
+    return [...messages, { role: 'user', content: note }];
 }
 
 /** Volatile context-awareness note appended as the LAST item of each request.
@@ -1093,8 +1110,10 @@ function toMessagesBody(
     }
 
     // Volatile note rides the tail: merged into a trailing user turn so the
-    // cached prefix (tools + system + history) is untouched. tool_result
-    // blocks must stay first, which the sort below already guarantees.
+    // cached prefix (tools + system + history) is untouched. The breakpoint
+    // above already sits on the last STORED block, so the note is outside the
+    // cached prefix and the prefix stays byte-stable across rounds. tool_result
+    // blocks stay first in their own turn, which the sort above guarantees.
     if (tailNote) {
         const last = out[out.length - 1];
         if (last && last.role === 'user') last.content.push({ type: 'text', text: tailNote });
@@ -1761,8 +1780,10 @@ function toGoogleBody(
     }
 
     // Volatile note: Google has no mid-conversation system role, so it rides
-    // the last user content (or a fresh one) - the stable systemInstruction
-    // prefix stays byte-identical for implicit caching.
+    // the last user content (or a fresh one). Gemini REQUIRES alternating
+    // user/model contents, so a separate trailing user turn after an existing
+    // user turn (functionResponse or prompt) is rejected - merge there. The
+    // stable systemInstruction prefix stays byte-identical for implicit caching.
     if (tailNote) {
         const last = contents[contents.length - 1];
         if (last && last.role === 'user') last.parts.push({ text: tailNote });

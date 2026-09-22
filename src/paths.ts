@@ -13,6 +13,9 @@ function countMarkerLines(patch: string, re: RegExp): number {
     return (patch.match(re) ?? []).length;
 }
 
+/** Canonical block shape, shown in diagnostics so the model can copy it. */
+const PATCH_TEMPLATE = '<<<<<<< SEARCH\n<current file lines>\n=======\n<replacement lines>\n>>>>>>> REPLACE';
+
 /**
  * Explain why a marker-based patch produced no blocks, or null when the text
  * holds no marker-like content at all (the caller's generic message is then
@@ -25,6 +28,22 @@ function countMarkerLines(patch: string, re: RegExp): number {
  * keeps the explanation next to the parser that knows the exact grammar.
  */
 export function diagnosePatchBlocks(patch: string): string | null {
+    // Markers crammed onto ONE line. This is exactly what a model produces when
+    // it imitates a tool description whose multi-line example was flattened onto
+    // a single line - which the apply_patch description literally did. The
+    // parser needs a newline after each marker, so such a patch can never parse;
+    // naming this beats reporting a "missing separator" the model cannot see.
+    // The opener must START the line: an inline `... <<<<<<< ...` inside a block
+    // body is legitimate content (a well-formed patch parses it), so it must not
+    // be mistaken for a flattened patch when the patch is malformed for some
+    // other reason.
+    const oneLine = patch
+        .split(/\r?\n/)
+        .find((line) => /^\s*<<<<<<</.test(line) && (line.includes('=======') || line.includes('>>>>>>>')));
+    if (oneLine) {
+        return `the SEARCH/REPLACE markers are on ONE line: "${oneLine.trim().slice(0, 100)}". `
+            + `Each marker must be ALONE on its own line. Write it as:\n${PATCH_TEMPLATE}`;
+    }
     const opens = countMarkerLines(patch, /^<<<<<<<.*$/gm);
     const seps = countMarkerLines(patch, /^=======\r?$/gm);
     const closes = countMarkerLines(patch, /^>>>>>>>.*$/gm);
@@ -36,33 +55,35 @@ export function diagnosePatchBlocks(patch: string): string | null {
 
     if (opens > 0 && closes === 0) {
         return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) but NO closing `
-            + `'>>>>>>> REPLACE' marker. Every block needs all three lines: '<<<<<<< SEARCH', `
-            + `'=======', '>>>>>>> REPLACE'. The closing marker is the one most often dropped - `
-            + `add it directly after the replacement text and re-send the SAME block unchanged.`;
+            + `'>>>>>>> REPLACE' marker. The closing marker is the one most often dropped - `
+            + `add it directly after the replacement text and re-send the SAME block unchanged. `
+            + `The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (opens > 0 && seps === 0) {
         return `patch has ${opens} '<<<<<<< SEARCH' marker line(s) but no '=======' separator `
-            + `marker line. Each block needs '=======' alone on its own line between the search `
-            + `text and the replacement text.`;
+            + `marker line. '=======' goes ALONE on its own line, between the search text and the `
+            + `replacement text. The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (opens === 0 && closes > 0) {
         return `patch has ${closes} '>>>>>>> REPLACE' marker line(s) but no '<<<<<<< SEARCH' `
-            + `opening marker - every block starts with '<<<<<<< SEARCH'.`;
+            + `opening marker - every block starts with '<<<<<<< SEARCH'. `
+            + `The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (opens !== closes) {
         return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) and ${closes} closing `
             + `'>>>>>>> REPLACE' marker line(s) - the counts must match, one closing marker per `
-            + `opened block.`;
+            + `opened block. The exact shape:\n${PATCH_TEMPLATE}`;
     }
     if (seps < opens) {
         return `patch opens ${opens} block(s) but has only ${seps} '=======' separator marker `
-            + `line(s) - each block needs its own '=======' between search and replacement.`;
+            + `line(s) - each block needs its own '=======' between search and replacement. `
+            + `The exact shape:\n${PATCH_TEMPLATE}`;
     }
     // Markers are present in plausible numbers yet no block parsed, so the
     // FORM is off (stray text on a marker line, wrong case, trailing spaces).
     return `patch contains SEARCH/REPLACE marker lines but no block parsed. Each marker must be `
         + `exactly '<<<<<<< SEARCH', '=======' and '>>>>>>> REPLACE', alone on its own line `
-        + `(no trailing text, no leading whitespace).`;
+        + `(no trailing text, no leading whitespace). The exact shape:\n${PATCH_TEMPLATE}`;
 }
 
 /** Parse SEARCH/REPLACE patch blocks. Accepts the standard Cline/Claude-style
