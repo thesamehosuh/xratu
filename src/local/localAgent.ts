@@ -9,7 +9,7 @@
  * integration supplies tool definitions + an executor + approval callback.
  */
 
-import { taskListReminderLine, type TaskListItem } from '../taskList';
+import { reminderTaskList, taskListReminderLine, type TaskListItem } from '../taskList';
 import { normalizeBaseUrl } from './baseUrl';
 import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
@@ -130,6 +130,13 @@ export interface LocalAgentRequest {
      *  appended to the system message each round so the model stays on-plan
      *  even after compaction dropped the original tool call. */
     taskList?: TaskListItem[];
+    /** LIVE task list for the trailing reminder, consulted EVERY round.
+     *  `taskList` above is captured once when the run starts, so it stays
+     *  frozen for the whole run (up to 32 rounds) and a model that updates its
+     *  plan mid-run would never see its own updates. Only the trailing note
+     *  reflects this - it is volatile by design and never cached - so prompt
+     *  caching is unaffected. Falls back to `taskList` when absent. */
+    taskListProvider?: () => TaskListItem[] | undefined;
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
@@ -2456,7 +2463,7 @@ export async function* runLocalAgent(
         const systemChars = request.systemPrompt.length;
         // The trailing note ships on every request too - count the task-list
         // reminder (unbounded) plus a fixed allowance for the status/hint.
-        const tailChars = taskListReminderLine(request.taskList ?? []).length + 400;
+        const tailChars = taskListReminderLine(reminderTaskList(request)).length + 400;
         return Math.ceil((systemChars + tailChars) / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
     };
 
@@ -2466,7 +2473,7 @@ export async function* runLocalAgent(
     // must stay byte-stable across rounds or prompt caching (Anthropic
     // cache_control, OpenAI/Google automatic prefix caching) can never hit.
     const tailNoteFor = (usedTokens: number): string =>
-        taskListReminderLine(request.taskList ?? [])
+        taskListReminderLine(reminderTaskList(request))
         + contextStatusLine(usedTokens, windowTokens)
         + contextHint(usedTokens, windowTokens);
 

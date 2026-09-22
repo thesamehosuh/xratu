@@ -88,3 +88,35 @@ export function taskListReminderLine(items: TaskListItem[]): string {
     );
     return '\n\n' + lines.join('\n');
 }
+
+/** Minimal request shape `reminderTaskList` needs - keeps this module free of
+ *  a dependency on the local-runtime request type. */
+export interface ReminderTaskListSource {
+    taskList?: TaskListItem[];
+    taskListProvider?: () => TaskListItem[] | undefined;
+}
+
+/**
+ * The list the per-turn reminder should render.
+ *
+ * Prefers the host's LIVE provider - it is consulted on every round, so a task
+ * list the model rewrote mid-run shows up immediately. `taskList` alone is a
+ * snapshot captured when the run started, which stays frozen for the whole run
+ * (the loop allows up to 32 rounds), so with only the snapshot the model never
+ * sees the updates it just made to its own plan.
+ *
+ * A throwing provider must never take down the run: it degrades to the
+ * snapshot. (The reminder is the one thing that keeps a long, post-compaction
+ * run on-plan, so losing the reminder silently is the bad outcome.)
+ */
+export function reminderTaskList(request: ReminderTaskListSource): TaskListItem[] {
+    if (request.taskListProvider) {
+        try {
+            const live = request.taskListProvider();
+            if (live) return live;
+        } catch {
+            // fall through to the snapshot
+        }
+    }
+    return request.taskList ?? [];
+}

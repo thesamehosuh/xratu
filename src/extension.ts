@@ -861,7 +861,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._contextWindows = this._loadContextWindows();
         this._modelCatalog = readModelCatalog(this._globalState.get<string>('xratu.modelCatalog'));
         this._loadTaskListEdits();
-        setTaskListWriteListener(() => this._noteTaskListWrite());
+        setTaskListWriteListener((tasks) => this._noteTaskListWrite(tasks));
         // exit_plan_mode (agent-initiated): ends plan mode exactly like the
         // user's toolbar toggle - state flips so the NEXT request carries
         // plan_mode=false, and the webview echo keeps the toolbar honest.
@@ -939,6 +939,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private _taskListEdits: Record<string, TaskListItem[]> = {};
 
+    /** Live task list for the IN-FLIGHT run, refreshed on every model write
+     *  (_noteTaskListWrite). The trailing reminder is rebuilt from this each
+     *  round, so the model sees the plan it just changed rather than the
+     *  snapshot frozen when the run started. Null between runs. */
+    private _activeRunTaskList: TaskListItem[] | null = null;
+    /** True while a local run is draining events; a write outside a run must
+     *  only move the session override, never this snapshot. */
+    private _runInFlight = false;
+
     private _loadTaskListEdits(): void {
         try {
             const raw = this._globalState.get<string>('xratu.taskListEdits');
@@ -954,8 +963,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._globalState.update('xratu.taskListEdits', JSON.stringify(this._taskListEdits));
     }
 
-    /** A model write invalidates the session's edit override. */
-    private _noteTaskListWrite(): void {
+    /** A model write invalidates the session's edit override, and refreshes
+     *  the in-flight run so its trailing reminder tracks the new list. */
+    private _noteTaskListWrite(tasks?: TaskListItem[]): void {
+        // The reminder reads this every round. Only a call that actually
+        // carries a parsed list may refresh it - the bare call driven by the
+        // toolCall event fires before execution and must not clobber it.
+        if (this._runInFlight && tasks?.length) {
+            this._activeRunTaskList = tasks;
+        }
         if (this._sessionId && this._taskListEdits[this._sessionId]) {
             delete this._taskListEdits[this._sessionId];
             void this._saveTaskListEdits().catch((e) =>
@@ -2676,6 +2692,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
 
         try {
+            // Seed the live reminder list for this run; model writes refresh it
+            // through the task-list write listener.
+            this._activeRunTaskList = this._currentTaskList();
+            this._runInFlight = true;
             const agent = runLocalAgent(
                 {
                     baseUrl: active.baseUrl,
@@ -2695,6 +2715,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         skills: this._discoverSkillsForRun(workspaceRoot),
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
+                    taskListProvider: () => this._activeRunTaskList ?? undefined,
                     signal: controller.signal,
                     maxRounds: 25,
                     // Window for compaction/budget math. Prefer the probed or
@@ -2768,6 +2789,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 void this._maybeOfferIranianFallback(err);
             }
         } finally {
+            this._runInFlight = false;
+            this._activeRunTaskList = null;
             this._abortControllers.delete('chat');
             // The run is over - committed, aborted or errored. Clear BEFORE
             // the caller's commit persist so the snapshot never carries a
