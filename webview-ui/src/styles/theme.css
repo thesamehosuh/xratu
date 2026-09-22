@@ -243,7 +243,7 @@ button {
     padding: 4px 8px;
     border: 1px solid var(--vscode-widget-border, transparent);
     border-radius: 6px;
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
 }
 
@@ -422,7 +422,7 @@ button {
     flex: 1 1 auto;
     min-width: 0;
     border: none;
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font-family: inherit;
     font-size: 12px;
@@ -2099,7 +2099,7 @@ button {
     font-size: var(--xratu-fs-md);
     font-family: inherit;
     color: var(--vscode-input-foreground);
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     border: none;
     outline: none;
     border-radius: var(--xratu-radius-sm);
@@ -3000,7 +3000,7 @@ pre.tool-cmd {
     flex-direction: column;
     gap: 2px;
     padding: 5px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -3906,7 +3906,7 @@ pre.tool-cmd {
     flex-direction: column;
     gap: 2px;
     padding: 5px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
@@ -4460,14 +4460,14 @@ pre.tool-cmd {
     justify-content: center;
     border-radius: 7px;
     border: 1px solid var(--vscode-widget-border);
-    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-descriptionForeground);
 }
 
 .provider-mark-popular {
     color: var(--vscode-descriptionForeground);
     border-color: var(--vscode-widget-border);
-    background: color-mix(in srgb, var(--vscode-editor-background) 80%, #000);
+    background: var(--xratu-surface-inset);
 }
 
 .provider-mark-local {
@@ -4598,7 +4598,7 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius-sm);
     outline: none;
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font-family: inherit;
     font-size: 12.5px;
@@ -4745,7 +4745,7 @@ pre.tool-cmd {
     font-family: inherit;
     font-size: 11.5px;
     color: var(--vscode-input-foreground);
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius-sm);
     outline: none;
@@ -5140,7 +5140,7 @@ pre.tool-cmd {
     flex-direction: column;
     gap: 2px;
     padding: 5px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -5257,7 +5257,7 @@ pre.tool-cmd {
     border: 1px solid var(--xratu-accent-dim);
     border-radius: var(--xratu-radius-xs);
     outline: none;
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 12.5px;
@@ -5539,7 +5539,7 @@ pre.tool-cmd {
     padding: 7px 30px 7px 9px;
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font: inherit;
     font-size: 12.5px;
@@ -6133,7 +6133,7 @@ pre.tool-cmd {
     padding: 10px;
     /* A tight card caps the height inline; scroll rather than squash. */
     overflow-y: auto;
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
@@ -6766,7 +6766,7 @@ button.mcp-row-main:hover strong {
 .mcp-field input,
 .mcp-field select,
 .mcp-field textarea {
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     border: 1px solid var(--xratu-border-quiet);
     border-radius: var(--xratu-radius-xs);
@@ -6895,7 +6895,7 @@ button.mcp-row-main:hover strong {
     padding: 5px 8px;
     border: 1px solid var(--xratu-border-quiet);
     border-radius: var(--xratu-radius-xs);
-    background: var(--xratu-input);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font-size: var(--xratu-fs-sm);
 }
