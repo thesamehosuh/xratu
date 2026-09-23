@@ -206,6 +206,16 @@ check('lmstudio: vision', lmstudio[0].supportsVision, true);
 check('lmstudio: tools', lmstudio[0].supportsTools, true);
 check('lmstudio: reasoning', lmstudio[0].supportsReasoning, true);
 
+// LM Studio reports reasoning as an OBJECT ({ allowed_options, default }), not
+// a boolean - a `=== true` check silently dropped the capability.
+const lmstudioReasoning = parseModelList({ models: [{
+    key: 'deepseek-r1', type: 'llm', max_context_length: 131072,
+    capabilities: { trained_for_tool_use: true, reasoning: { allowed_options: ['on'], default: 'on' } },
+}] });
+check('lmstudio: reasoning object -> capability', lmstudioReasoning[0].supportsReasoning, true);
+const lmstudioNoReasoning = parseModelList({ models: [{ key: 'plain', type: 'llm', max_context_length: 8192, capabilities: { vision: false } }] });
+check('lmstudio: absent reasoning stays unknown', lmstudioNoReasoning[0].supportsReasoning, undefined);
+
 // --- Unrecognized payloads ------------------------------------------------
 check('empty payload -> null', parseModelList({ object: 'list', data: [] }), null);
 check('garbage payload -> null', parseModelList({ error: 'nope' }), null);
@@ -220,6 +230,14 @@ check('knownContextWindow helper', knownContextWindow('claude-opus-5'), 200000);
 check('knownMaxOutputTokens helper', knownMaxOutputTokens('gemini-3.1-pro'), 65536);
 check('unknown model -> no knowledge', knownModelKnowledge('totally-unknown'), null);
 check('gpt-5.6 family window', knownContextWindow('gpt-5.6-sol'), 400000);
+
+// MiniMax M3 is the 1M-context generation; the open M2.x checkpoints top out
+// at 196608 (`max_position_embeddings`). A single `/minimax-m/` row claimed 1M
+// for M2.x too - a 5x OVER-estimate that let the run pack context the model
+// cannot accept.
+check('minimax-m3 window', knownContextWindow('minimax-m3'), 1000000);
+check('minimax-m2.5 window', knownContextWindow('minimax-m2.5'), 196608);
+check('minimax-m2.7 window', knownContextWindow('minimax-m2.7'), 196608);
 
 // Provider window must never be replaced by curated.
 const reported = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5', context_length: 123456 }] }));

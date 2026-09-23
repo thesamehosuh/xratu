@@ -81,9 +81,42 @@ function isGoogleGenerativeHost(baseUrl: string): boolean {
     }
 }
 
+/** Google's native list paginates at 50 by default; the maximum is 1000. Ask
+ *  for the maximum in one request so a large catalog is not silently halved. */
 function googleModelsUrl(apiKey?: string | null): string {
-    const base = 'https://generativelanguage.googleapis.com/v1beta/models';
-    return apiKey ? `${base}?key=${encodeURIComponent(apiKey)}` : base;
+    const base = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000';
+    return apiKey ? `${base}&key=${encodeURIComponent(apiKey)}` : base;
+}
+
+/** Origin (`scheme://host[:port]`) of a base URL, or null when unparseable.
+ *  The native runtime endpoints (Ollama `/api/tags`, LM Studio
+ *  `/api/v1/models`) hang off the ORIGIN, never the versioned base path - a
+ *  preset base like `http://localhost:1234/v1` must not produce
+ *  `/v1/api/v1/models`. */
+function originOf(baseUrl: string): string | null {
+    const raw = baseUrl.trim();
+    try {
+        return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`).origin;
+    } catch {
+        return null;
+    }
+}
+
+/** True when the base URL resolves to a loopback host on `port`. Parses the
+ *  URL rather than matching the raw string, so a `localhost:1234` inside a
+ *  path/query (or a port that merely starts with the same digits, e.g.
+ *  12340) cannot hijack a remote endpoint. IPv6 brackets are stripped, as in
+ *  endpointGuard's `isLikelyLocalUrl`. */
+function isLoopbackRuntime(baseUrl: string, port: number): boolean {
+    const origin = originOf(baseUrl);
+    if (!origin) return false;
+    try {
+        const host = new URL(origin);
+        const name = host.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+        return (name === 'localhost' || name === '127.0.0.1' || name === '::1') && host.port === String(port);
+    } catch {
+        return false;
+    }
 }
 
 async function postJson(url: string, body: unknown, signal?: AbortSignal, timeoutMs = 2500, dispatcher?: unknown): Promise<any> {
@@ -174,6 +207,8 @@ export async function probeLocalEndpoint(
     // seconds - e.g. kayaai.ir serves a ~230KB models list that takes
     // 2-3s over a slow international route.
     const probeTimeoutMs = isLikelyLocalUrl(baseUrl) ? 1800 : 10_000;
+    // Native endpoints are rooted at the origin, not the versioned base path.
+    const origin = originOf(rawBase);
 
     // Google's OpenAI-compat root cannot list models; probe the native
     // Generative Language endpoint with the key as a query parameter.
@@ -185,9 +220,11 @@ export async function probeLocalEndpoint(
 
     // LM Studio's native v1 model endpoint exposes max_context_length and
     // per-loaded-instance context/capability metadata that the OpenAI /v1/models
-    // compatibility endpoint often omits. Prefer it when available.
-    if (/localhost:1234|127\.0\.0\.1:1234/.test(rawBase)) {
-        const native = await fetchJson(`${rawBase}/api/v1/models`, signal, probeTimeoutMs, apiKey, proxy);
+    // compatibility endpoint often omits. Prefer it when available. The shipped
+    // LM Studio preset is `http://localhost:1234/v1`, so the native path must be
+    // built from the ORIGIN - `rawBase/api/v1/models` would be `/v1/api/v1/models`.
+    if (origin && isLoopbackRuntime(rawBase, 1234)) {
+        const native = await fetchJson(`${origin}/api/v1/models`, signal, probeTimeoutMs, apiKey, proxy);
         const parsed = parseModelList(native);
         if (parsed) {
             // `type` distinguishes chat models from embedding/reranker entries.
@@ -208,20 +245,12 @@ export async function probeLocalEndpoint(
 
     // Ollama: the native /api/tags + /api/show pair is the only source of real
     // context windows and capabilities - its OpenAI-compat list omits both.
-    if (/localhost:11434|127\.0\.0\.1:11434/.test(rawBase)) {
-        let origin: string | null = null;
-        try {
-            origin = new URL(rawBase).origin;
-        } catch {
-            origin = null;
-        }
-        if (origin) {
-            const tags = await fetchJson(`${origin}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
-            const parsedTags = parseModelList(tags);
-            if (parsedTags) {
-                const enriched = await enrichOllamaModels(origin, parsedTags, signal);
-                return { models: applyModelKnowledge(enriched) };
-            }
+    if (origin && isLoopbackRuntime(rawBase, 11434)) {
+        const tags = await fetchJson(`${origin}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
+        const parsedTags = parseModelList(tags);
+        if (parsedTags) {
+            const enriched = await enrichOllamaModels(origin, parsedTags, signal);
+            return { models: applyModelKnowledge(enriched) };
         }
     }
 
@@ -240,8 +269,12 @@ export async function probeLocalEndpoint(
     const parsed = parseModelList(openai);
     if (parsed) return { models: applyModelKnowledge(parsed) };
 
-    // Fall back to Ollama's native /api/tags endpoint.
-    const ollama = await fetchJson(`${rawBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
+    // Fall back to Ollama's native /api/tags endpoint. A recognized loopback
+    // runtime is rooted at the origin (its native surface never carries the
+    // versioned base path); a REMOTE gateway keeps the configured base path, so
+    // a host that exposes Ollama under a prefix (…/ollama/api/tags) still works.
+    const tagsBase = isLoopbackRuntime(rawBase, 11434) ? (origin ?? rawBase) : rawBase;
+    const ollama = await fetchJson(`${tagsBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
     const parsedOllama = parseModelList(ollama);
     if (parsedOllama) return { models: applyModelKnowledge(parsedOllama) };
 
