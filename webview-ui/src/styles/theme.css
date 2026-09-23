@@ -161,6 +161,82 @@ button {
     min-height: 0;
 }
 
+/* The chat stays MOUNTED while an overlay screen is up (see App.tsx): coming
+   back from Settings used to rebuild the whole transcript (~4.2k DOM nodes ≈
+   91ms, and it grows with the mounted message page). `visibility` keeps the
+   geometry, so the transcript's scroll position and paging budget survive the
+   trip; it also drops the hidden tree out of the tab order and the a11y tree,
+   which unmounting used to handle for free. */
+.app.behind > * {
+    visibility: hidden;
+}
+
+/* Git status under the composer card: plain monochrome text, deliberately
+   unframed - no border and no background - so it reads as ambient information
+   about the workspace rather than another control next to the composer. */
+.git-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    /* Wider side inset than the composer column (12px) on purpose - asked for,
+       and it stops the branch/counts from crowding the panel edges; plus the
+       bottom room the line was missing. */
+    margin: 0;
+    padding: 0 18px 12px;
+    border: none;
+    background: none;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: var(--xratu-fs-xs);
+    /* line-height 1 + align-items: center keeps the icon optically centred
+       against the text; a larger line-height left the icon sitting high. */
+    line-height: 1;
+    cursor: pointer;
+}
+
+.git-status:hover {
+    color: var(--vscode-foreground);
+}
+
+.git-status-side {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
+.git-status-branch {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The folder the status is about, shown before the branch. It is the part that
+   gives way first when the line runs out of room. */
+.git-status-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+
+.git-status-stats {
+    flex: 0 0 auto;
+}
+
+.screen-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--vscode-sideBar-background);
+}
+
 /* ---------------------------------------------------------------------------
    Toolbar - slim header: brand · connection · ghost actions
    --------------------------------------------------------------------------- */
@@ -2933,7 +3009,9 @@ pre.tool-cmd {
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.composer:focus-within {
+/* Teal marks a DRAFT, not attention: focus alone (clicking an empty composer)
+   must not colour the card. */
+.composer.has-draft {
     border-color: color-mix(in srgb, var(--xratu-accent) 40%, var(--vscode-input-border));
     box-shadow: 0 0 0 1px rgba(20, 227, 200, 0.08);
 }
@@ -3453,6 +3531,32 @@ pre.tool-cmd {
 .mention-item-name {
     font-family: var(--xratu-mono, monospace);
     flex-shrink: 0;
+}
+
+/* Branch picker: same popup, so only the filter field and the "current" badge
+   are new. The field sits where the @-picker shows its query, and takes focus
+   on open. */
+.branch-pop .mention-input {
+    flex: 1;
+    min-width: 0;
+    margin-inline-start: auto;
+    padding: 2px 4px;
+    border: none;
+    background: none;
+    color: var(--vscode-foreground);
+    font-family: var(--xratu-mono, monospace);
+    font-size: var(--xratu-fs-sm);
+    text-align: end;
+    outline: none;
+}
+
+.branch-current {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-inline-start: auto;
+    font-size: var(--xratu-fs-xs);
+    color: var(--xratu-accent-strong);
 }
 
 .mention-item-dir {
@@ -6560,13 +6664,243 @@ button.settings-nav-row:hover {
     justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
-    margin: 0 0 8px;
+    margin: 0 0 10px;
 }
 
-/* Registry block: the target row sits under the section-head divider -
-   breathe it away from the header line. */
-.mcp-registry-block .mcp-target-row {
-    margin-top: 10px;
+/* The row label sits beside .lang-chip controls (12.5px/600) and next to
+   12.5px body copy, so it has to be a step ABOVE body text to read as a
+   field label rather than a caption - 12.5px still looked like body copy
+   (measured in the built bundle, then bumped). */
+.mcp-target-row .mcp-field-label {
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--vscode-foreground);
+    opacity: 1;
+}
+
+/* Keep the control it labels on the same step as the label. */
+.mcp-target-row .lang-chip {
+    font-size: 13px;
+}
+
+/* --- Marketplace tab ------------------------------------------------------ */
+
+.mp-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    margin-bottom: 8px;
+    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+}
+
+.mp-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--xratu-fs-sm);
+    outline: none;
+}
+
+.mp-search .icon-btn {
+    flex: 0 0 auto;
+}
+
+/* Filters are two separate decisions - WHICH catalog an entry comes from, and
+   WHAT KIND of server it is. No captions: each chip set is self-evident, so
+   the divider alone keeps them apart (the group aria-labels carry the meaning
+   for screen readers). They used to share one wrapped chip line, which read as
+   a single undifferentiated list. */
+.mp-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.mp-filter-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+/* Separation by structure, not just whitespace, so the grouping survives a
+   narrow sidebar where both groups wrap. */
+.mp-filter-group + .mp-filter-group {
+    padding-top: 8px;
+    border-top: 1px solid var(--xratu-border-quiet);
+}
+
+.mp-filter-group .lang-chip {
+    padding: 3px 9px;
+    font-size: var(--xratu-fs-xs);
+}
+
+.mp-status {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 8px;
+    font-size: 11.5px;
+    opacity: 0.8;
+}
+
+.mp-status-sep {
+    opacity: 0.5;
+}
+
+.mp-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--vscode-descriptionForeground);
+}
+
+.mp-dot.live {
+    background: var(--xratu-accent);
+    box-shadow: 0 0 6px var(--xratu-accent-dim);
+}
+
+.mp-dot.cached {
+    background: #ffb020;
+}
+
+.mp-dot.offline {
+    background: #ff6b6b;
+}
+
+/* Catalog rows stack (title, summary, meta) - top-align against the actions. */
+.mp-row {
+    align-items: flex-start;
+}
+
+.mp-row.armed {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.mp-row .mcp-row-main {
+    cursor: default;
+}
+
+.mp-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 3px;
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+.mp-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+/* The exact command/URL a row would run - always visible before an add. */
+.mp-cmd {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+}
+
+.mcp-badge.verified,
+.mcp-badge.warn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.mcp-badge.verified,
+.mcp-badge.src-curated {
+    color: var(--xratu-accent-strong);
+    border-color: var(--xratu-accent-dim);
+    background: var(--xratu-accent-faint);
+}
+
+.mcp-badge.featured,
+.mcp-badge.warn {
+    color: #ffb020;
+    border-color: rgba(255, 176, 32, 0.4);
+    background: rgba(255, 176, 32, 0.12);
+}
+
+.mp-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 0 8px;
+    padding: 10px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.06));
+}
+
+.mp-confirm-head {
+    font-size: var(--xratu-fs-sm);
+    font-weight: 600;
+}
+
+.mp-confirm-json {
+    margin: 0;
+    padding: 8px;
+    max-height: 160px;
+    overflow: auto;
+    border-radius: var(--xratu-radius-sm);
+    background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+/* Only a window of catalog rows is mounted (see MARKET_PAGE) - this grows it. */
+.mp-more {
+    display: block;
+    width: 100%;
+    margin: 6px 0 2px;
+    padding: 7px 10px;
+    border: 1px dashed var(--vscode-widget-border);
+    border-radius: var(--xratu-radius-sm);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.mp-more:hover {
+    background: var(--vscode-list-hoverBackground);
+    color: var(--vscode-foreground);
+}
+
+.mp-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-textLink-foreground);
+    text-decoration: none;
+}
+
+.mp-link:hover {
+    text-decoration: underline;
 }
 
 .mcp-empty {

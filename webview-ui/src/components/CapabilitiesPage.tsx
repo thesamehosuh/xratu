@@ -2,24 +2,35 @@ import { useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
-    Blocks,
     BookOpen,
     Check,
+    Download,
+    ExternalLink,
     FileJson,
     FolderOpen,
+    Globe,
     Info,
+    KeyRound,
     MoreHorizontal,
     Pencil,
     Plus,
     RefreshCw,
+    Search,
     Server,
+    ShieldCheck,
+    Star,
+    Store,
     Trash2,
     TriangleAlert,
     X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type {
-    McpRegistryEntry,
+    InstallConfidence,
+    MarketplaceEntry,
+    MarketplaceInstall,
+    MarketplaceSource,
+    MarketplaceState,
     McpSaveTarget,
     McpServerPayload,
     McpServerView,
@@ -27,7 +38,7 @@ import type {
     SkillSource,
     SkillView,
 } from '../types';
-import { getLocale, t, tOrRaw, tf } from '../i18n';
+import { getLocale, t, tOrRaw, tf, type StringKey } from '../i18n';
 
 interface CapabilitiesPageProps {
     onBack: () => void;
@@ -35,7 +46,13 @@ interface CapabilitiesPageProps {
     servers: McpServerView[];
     hasWorkspace: boolean;
     legacyInUse: boolean;
-    registry: McpRegistryEntry[];
+    /** Live marketplace (host-fetched); `query` is the request it answers. */
+    marketplace: (MarketplaceState & { query: string }) | null;
+    /** Result of the opt-in README detection for one entry. */
+    marketplaceDetection: { id: string; install: MarketplaceInstall | null; confidence: InstallConfidence } | null;
+    onMarketplaceLoad: (query: string, force: boolean) => void;
+    onMarketplaceDetect: (id: string) => void;
+    onMarketplaceClearDetection: () => void;
     skills: SkillView[];
     onRefreshMcp: () => void;
     onSave: (target: McpSaveTarget, servers: McpServerPayload[]) => void;
@@ -65,6 +82,13 @@ interface Draft {
 }
 
 const TRANSPORTS: McpTransportType[] = ['stdio', 'streamableHttp', 'sse', 'websocket'];
+
+/** Catalog rows mounted at once. A full catalog is ~500 rows / 10k+ DOM nodes,
+ *  which made both the first paint and the unmount on Back visibly slow
+ *  (measured in the built bundle: 115-126ms to leave the page against 33ms
+ *  with a small list). A catalog this size is used by SEARCHING, not by
+ *  scrolling, so only a window is mounted and "show more" grows it. */
+const MARKET_PAGE = 60;
 /** Source display order for skill groups. */
 const SKILL_SOURCES: SkillSource[] = ['project-xratu', 'project-agents', 'project-claude', 'global-agents', 'global-claude'];
 
@@ -202,13 +226,119 @@ function formatChars(n: number): string {
     return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 }
 
+// ---------------------------------------------------------------------------
+// Marketplace helpers
+// ---------------------------------------------------------------------------
+
+/** Display name: curated entries keep their text in i18n, remote ones do not. */
+function entryName(entry: MarketplaceEntry): string {
+    return entry.nameKey ? tf(entry.nameKey) : entry.name;
+}
+
+function entrySummary(entry: MarketplaceEntry): string {
+    if (entry.tagline) return entry.tagline;
+    if (entry.descKey) return tf(entry.descKey);
+    return entry.description;
+}
+
+function marketSourceLabel(source: MarketplaceSource): string {
+    if (source === 'curated') return t('mcpMarketSourceCurated');
+    if (source === 'cline') return t('mcpMarketSourceCline');
+    if (source === 'official') return t('mcpMarketSourceOfficial');
+    return t('mcpMarketSourceRemote');
+}
+
+/** What KIND of catalog an entry came from, shown on hover. The badge says
+ *  "Public" / "Official", never a vendor's brand: Xratu must not read as a
+ *  reskin of the catalog it consumes. The exact source URLs stay one hover
+ *  away (status line) and in the setting that configures them. */
+function marketSourceHint(source: MarketplaceSource): string {
+    if (source === 'curated') return t('mcpMarketHintCurated');
+    if (source === 'cline') return t('mcpMarketHintCline');
+    if (source === 'official') return t('mcpMarketHintOfficial');
+    return t('mcpMarketHintRemote');
+}
+
+/** The tag vocabulary the catalogs use, mapped to our own translations. Ids
+ *  stay the filter key (language-independent); only the label is localized. */
+const TAG_I18N_KEYS: Record<string, StringKey> = {
+    productivity: 'mcpTagProductivity',
+    marketing: 'mcpTagMarketing',
+    research: 'mcpTagResearch',
+    data: 'mcpTagData',
+    software: 'mcpTagSoftware',
+    business: 'mcpTagBusiness',
+    sales: 'mcpTagSales',
+    finance: 'mcpTagFinance',
+    creative: 'mcpTagCreative',
+    memory: 'mcpTagMemory',
+    security: 'mcpTagSecurity',
+    databases: 'mcpTagDatabases',
+};
+
+/** Localized label for a tag id; the catalog's own label covers ids this build
+ *  has no translation for, so a tag is never displayed as a bare id. */
+function tagLabel(id: string, catalogLabels?: Record<string, string>): string {
+    const key = TAG_I18N_KEYS[id];
+    if (key) return t(key);
+    return catalogLabels?.[id] ?? id;
+}
+
+/* Marketplace rows are LTR by design: name, subtitle and command all align
+   left, whatever script the subtitle happens to be written in. */
+
+/** The exact command / URL a row would write into mcp.json - shown BEFORE
+ *  anything is saved, because a remote catalog is not a trusted input. */
+function installPreview(install: MarketplaceInstall | null): string {
+    if (!install) return '';
+    if (install.kind === 'remote') return install.url;
+    return [install.command, ...install.args].join(' ');
+}
+
+function formatCount(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+    return String(n);
+}
+
+/** Most common tags across the loaded catalog (drives the filter chips). */
+function topTags(entries: MarketplaceEntry[], max = 12): string[] {
+    const counts = new Map<string, number>();
+    for (const entry of entries) {
+        for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+        .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+        .slice(0, max)
+        .map(([tag]) => tag);
+}
+
+/** mcp.json payload for a catalog install. `autoApprove` is DELIBERATELY never
+ *  set from a catalog: only the vendored curated list may pre-trust a tool. */
+function payloadFromInstall(name: string, install: MarketplaceInstall): McpServerPayload {
+    if (install.kind === 'remote') {
+        return { name, type: install.type, url: install.url };
+    }
+    return {
+        name,
+        type: 'stdio',
+        command: install.command,
+        args: install.args.length ? install.args : undefined,
+        env: install.env && Object.keys(install.env).length ? install.env : undefined,
+    };
+}
+
 export function CapabilitiesPage({
     onBack,
     onOpenRawSettings,
     servers,
     hasWorkspace,
     legacyInUse,
-    registry,
+    marketplace,
+    marketplaceDetection,
+    onMarketplaceLoad,
+    onMarketplaceDetect,
+    onMarketplaceClearDetection,
     skills,
     onRefreshMcp,
     onSave,
@@ -220,11 +350,24 @@ export function CapabilitiesPage({
     onNewSkill,
     onDeleteSkill,
 }: CapabilitiesPageProps) {
-    const [tab, setTab] = useState<'servers' | 'skills'>('servers');
+    const [tab, setTab] = useState<'servers' | 'marketplace' | 'skills'>('servers');
     const [newServerTarget, setNewServerTarget] = useState<McpSaveTarget>('global');
+    // Marketplace tab: query input, the query the last request carried, the
+    // source/tag filters, and the row awaiting its confirm step.
+    const [marketQuery, setMarketQuery] = useState('');
+    const [marketSource, setMarketSource] = useState<'all' | MarketplaceSource>('all');
+    const [marketTag, setMarketTag] = useState<string | null>(null);
+    /** How many filtered rows are currently mounted. */
+    const [marketLimit, setMarketLimit] = useState(MARKET_PAGE);
+    const [armedAdd, setArmedAdd] = useState<string | null>(null);
+    const [detecting, setDetecting] = useState<string | null>(null);
+    const [detectMiss, setDetectMiss] = useState<string | null>(null);
+    const sentMarketQuery = useRef('');
     const [draft, setDraft] = useState<Draft | null>(null);
     const [draftInitial, setDraftInitial] = useState<Draft | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
+    /** Amber, non-blocking note in the editor (e.g. a guessed install). */
+    const [draftNotice, setDraftNotice] = useState<string | null>(null);
     const [menuFor, setMenuFor] = useState<string | null>(null);
     const [armedDelete, setArmedDelete] = useState<string | null>(null);
     const [pendingRestart, setPendingRestart] = useState<string | null>(null);
@@ -289,6 +432,7 @@ export function CapabilitiesPage({
         setDraft(d);
         setDraftInitial(d);
         setDraftError(null);
+        setDraftNotice(null);
     };
 
     const closeEditor = () => {
@@ -296,6 +440,7 @@ export function CapabilitiesPage({
         setDraft(null);
         setDraftInitial(null);
         setDraftError(null);
+        setDraftNotice(null);
     };
 
     const stripView = (s: McpServerView | McpServerPayload): McpServerPayload => {
@@ -343,17 +488,101 @@ export function CapabilitiesPage({
         commitSource(source, fileMates(source).filter((s) => s.name !== name));
     };
 
-    const addFromRegistry = (entry: McpRegistryEntry) => {
-        // Uniqueness is scoped to the DESTINATION file only - same-name
-        // entries in different files are legal workspace-override semantics.
+    /** Unique name within the DESTINATION file only - same-name entries in
+     *  different files are legal workspace-override semantics. */
+    const uniqueName = (base: string): string => {
         const mates = matesForTarget(newServerTarget);
-        let name = entry.server.name;
+        let name = base;
         let n = 2;
-        while (mates.some((s) => s.name === name)) {
-            name = `${entry.server.name}-${n++}`;
-        }
-        commitNew(newServerTarget, { ...entry.server, name });
+        while (mates.some((s) => s.name === name)) name = `${base}-${n++}`;
+        return name;
     };
+
+    /** Write a marketplace entry straight to config - only ever after the
+     *  user confirmed the exact command in that row's confirm panel. */
+    const addFromMarketplace = (entry: MarketplaceEntry) => {
+        if (!entry.install) return;
+        commitNew(newServerTarget, payloadFromInstall(uniqueName(entry.serverName), entry.install));
+        setArmedAdd(null);
+    };
+
+    /** Open the editor prefilled from a catalog entry. Used whenever a direct
+     *  write would be wrong: the install needs a secret, or it came from
+     *  README detection (guessed), or the catalog shipped no install block. */
+    const openEditorFromEntry = (
+        entry: MarketplaceEntry,
+        install: MarketplaceInstall | null,
+        notice: string | null = null,
+    ) => {
+        const d = emptyDraft();
+        d.name = uniqueName(entry.serverName);
+        if (install && install.kind === 'stdio') {
+            d.type = 'stdio';
+            d.command = install.command;
+            d.argsText = install.args.join('\n');
+            d.envText = install.env ? JSON.stringify(install.env, null, 2) : '';
+        } else if (install && install.kind === 'remote') {
+            d.type = install.type === 'sse' ? 'sse' : 'streamableHttp';
+            d.url = install.url;
+        }
+        setArmedAdd(null);
+        setDetecting(null);
+        setDraft(d);
+        setDraftInitial(d);
+        setDraftError(null);
+        setDraftNotice(notice);
+        // The edit form lives in the servers tab - land the user where the
+        // prefilled draft is actually visible.
+        setTab('servers');
+    };
+
+    const requestDetect = (entry: MarketplaceEntry) => {
+        setDetectMiss(null);
+        setDetecting(entry.id);
+        onMarketplaceDetect(entry.id);
+    };
+
+    // README detection result: open the editor prefilled so the guessed
+    // command is reviewed, or flag the row when nothing runnable was found.
+    useEffect(() => {
+        if (!marketplaceDetection) return;
+        if (marketplaceDetection.id !== detecting) return;
+        const entry = marketplace?.entries.find((e) => e.id === marketplaceDetection.id) ?? null;
+        setDetecting(null);
+        onMarketplaceClearDetection();
+        if (!entry) return;
+        if (marketplaceDetection.install) openEditorFromEntry(entry, marketplaceDetection.install, t('mcpMarketDetectedWarn'));
+        else setDetectMiss(entry.id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [marketplaceDetection]);
+
+    // Load the catalog the first time the tab is opened - never on mount, so
+    // editing servers does not pay for a catalog fetch.
+    useEffect(() => {
+        if (tab !== 'marketplace' || marketplace) return;
+        onMarketplaceLoad('', false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tab, marketplace]);
+
+    // Debounced search: a non-empty query also triggers a live registry query
+    // host-side, so keystrokes must not each become a request.
+    useEffect(() => {
+        if (tab !== 'marketplace') return;
+        const next = marketQuery.trim();
+        if (next === sentMarketQuery.current) return;
+        const handle = setTimeout(() => {
+            sentMarketQuery.current = next;
+            onMarketplaceLoad(next, false);
+        }, 400);
+        return () => clearTimeout(handle);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [marketQuery, tab]);
+
+    // A new query or filter starts a fresh window - otherwise a narrowed list
+    // would inherit the previous "show more" expansion.
+    useEffect(() => {
+        setMarketLimit(MARKET_PAGE);
+    }, [marketQuery, marketSource, marketTag]);
 
     const saveDraft = () => {
         if (!draft) return;
@@ -573,6 +802,12 @@ export function CapabilitiesPage({
                     </div>
                 )}
                 {!draft.original && <p className="mcp-hint-text">{t('mcpTargetHint')}</p>}
+                {draftNotice && (
+                    <div className="mcp-hint warn" role="status">
+                        <TriangleAlert size={12} aria-hidden="true" />
+                        <span>{draftNotice}</span>
+                    </div>
+                )}
                 {draftError && <span className="mcp-field-error">{draftError}</span>}
                 <div className="mcp-form-actions">
                     <button type="button" className="mcp-save" onClick={saveDraft}>
@@ -585,44 +820,142 @@ export function CapabilitiesPage({
         );
     };
 
-    /** Registry rows sit inline at the bottom of the servers card - always
-     *  visible, no toggle. */
-    const renderRegistry = () => (
-        <div className="settings-card-body mcp-registry-block">
-            <div className="settings-section-head">
-                <div className="settings-section-icon" aria-hidden="true">
-                    <Blocks size={15} />
-                </div>
-                <div>
-                    <h3>{t('mcpRegistryTab')}</h3>
-                    <p>{t('mcpRegistrySectionDesc')}</p>
+    /** Confirm step for one row: shows the EXACT payload before it is written.
+     *  A remote catalog is untrusted input, so nothing is saved silently and
+     *  entries needing a secret are routed to the editor instead. */
+    const renderConfirm = (entry: MarketplaceEntry) => {
+        const install = entry.install as MarketplaceInstall;
+        const payload = payloadFromInstall(uniqueName(entry.serverName), install);
+        // A remote entry can need a credential too (it goes in a header we
+        // must not guess), so both kinds are checked before a direct write.
+        const envVars = install.envVars ?? [];
+        const requiredEnv = envVars.filter((v) => v.required);
+        return (
+            <div className="mp-confirm" dir="ltr">
+                <div className="mp-confirm-head">{t('mcpMarketConfirmTitle')}</div>
+                <pre className="mp-confirm-json">{JSON.stringify(payload, null, 2)}</pre>
+                {requiredEnv.length > 0 && (
+                    <div className="mcp-hint warn" role="status">
+                        <KeyRound size={11} aria-hidden="true" />
+                        <span>
+                            {tf('mcpMarketNeedsKeyHint', { name: requiredEnv.map((v) => v.name).join(', ') })}
+                            {requiredEnv[0].url && (
+                                <>
+                                    {' '}
+                                    <a href={requiredEnv[0].url} target="_blank" rel="noreferrer">
+                                        {t('mcpMarketGetKey')}
+                                    </a>
+                                </>
+                            )}
+                        </span>
+                    </div>
+                )}
+                {entry.installConfidence === 'detected' && (
+                    <div className="mcp-hint-text warn-text">{t('mcpMarketDetectedWarn')}</div>
+                )}
+                <div className="mcp-form-actions">
+                    {requiredEnv.length > 0 ? (
+                        <button type="button" className="mcp-save" onClick={() => openEditorFromEntry(entry, install)}>
+                            <Pencil size={13} />
+                            {t('mcpMarketAddAndEdit')}
+                        </button>
+                    ) : (
+                        <button type="button" className="mcp-save" onClick={() => addFromMarketplace(entry)}>
+                            <Check size={13} />
+                            {t('mcpMarketConfirm')}
+                        </button>
+                    )}
+                    <button type="button" className="settings-ghost-action" onClick={() => setArmedAdd(null)}>
+                        {t('mcpCancel')}
+                    </button>
+                    {entry.repoUrl && (
+                        <a className="mp-link" href={entry.repoUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink size={11} />
+                            {t('mcpMarketOpenRepo')}
+                        </a>
+                    )}
                 </div>
             </div>
-            <div className="mcp-target-row">
-                <span className="mcp-field-label">{t('mcpSaveTarget')}</span>
-                <div className="lang-choice">
-                    <button type="button" className={newServerTarget === 'global' ? 'lang-chip active' : 'lang-chip'} onClick={() => setNewServerTarget('global')}>
-                        {t('mcpTargetGlobal')}
-                    </button>
-                    <button
-                        type="button"
-                        className={newServerTarget === 'workspace' ? 'lang-chip active' : 'lang-chip'}
-                        disabled={!hasWorkspace}
-                        onClick={() => setNewServerTarget('workspace')}
-                    >
-                        {t('mcpTargetWorkspace')}
-                    </button>
-                </div>
-            </div>
-            {registry.map((entry) => {
-                const added = matesForTarget(newServerTarget).some((s) => s.name === entry.server.name);
-                return (
-                    <div key={entry.id} className="mcp-row" dir="ltr">
+        );
+    };
+
+    /** The live marketplace: rows come from remote catalogs (fetched host-side)
+     *  plus the vendored curated list, which keeps it usable offline. */
+    const renderMarketplace = () => {
+        const entries = marketplace?.entries ?? [];
+        const matching = entries
+            .filter((entry) => marketSource === 'all' || entry.source === marketSource)
+            .filter((entry) => !marketTag || entry.tags.includes(marketTag));
+        const rows = matching.slice(0, marketLimit);
+        const hiddenRows = matching.length - rows.length;
+        const tags = topTags(entries);
+        const stale = !!marketplace && marketplace.query !== marketQuery.trim();
+        const status = !marketplace
+            ? t('mcpMarketLoading')
+            : marketplace.status === 'live'
+                ? t('mcpMarketStatusLive')
+                : marketplace.status === 'cached'
+                    ? t('mcpMarketStatusCached')
+                    : t('mcpMarketStatusOffline');
+
+        const renderRow = (entry: MarketplaceEntry) => {
+            const added = matesForTarget(newServerTarget).some((s) => s.name === entry.serverName);
+            const armed = armedAdd === entry.id;
+            const busy = detecting === entry.id;
+            const preview = installPreview(entry.install);
+            const needsKey = !!entry.requiresApiKey || !!entry.install?.envVars?.some((v) => v.required);
+            const summary = entrySummary(entry);
+            return (
+                <div key={entry.id}>
+                    <div className={`mcp-row mp-row ${armed ? 'armed' : ''}`} dir="ltr">
                         <div className="mcp-row-main">
                             <span className="mcp-row-title">
-                                <strong>{tf(entry.nameKey)}</strong>
+                                <strong dir="auto">{entryName(entry)}</strong>
+                                <span
+                                    className={`mcp-badge src-${entry.source}`}
+                                    title={marketSourceHint(entry.source)}
+                                >
+                                    {marketSourceLabel(entry.source)}
+                                </span>
+                                {entry.verified && (
+                                    <span className="mcp-badge verified">
+                                        <ShieldCheck size={9} />
+                                        {t('mcpMarketVerified')}
+                                    </span>
+                                )}
+                                {entry.recommended && <span className="mcp-badge featured">{t('mcpMarketRecommended')}</span>}
+                                {needsKey && (
+                                    <span className="mcp-badge warn">
+                                        <KeyRound size={9} />
+                                        {t('mcpMarketNeedsKey')}
+                                    </span>
+                                )}
                             </span>
-                            <span className="mcp-row-meta">{tf(entry.descKey)}</span>
+                            {/* A Persian subtitle still renders its own script
+                                correctly - bidi keeps an RTL run intact - but it
+                                must not re-align to the right edge while the name
+                                above and the command below sit left. */}
+                            {summary && <span className="mcp-row-meta">{summary}</span>}
+                            <span className="mp-meta" dir="ltr">
+                                {entry.author && <span className="mp-meta-item">{entry.author}</span>}
+                                {entry.version && <span className="mp-meta-item">{`v${entry.version}`}</span>}
+                                {entry.stars != null && (
+                                    <span className="mp-meta-item">
+                                        <Star size={10} />
+                                        {formatCount(entry.stars)}
+                                    </span>
+                                )}
+                                {entry.downloads != null && (
+                                    <span className="mp-meta-item">
+                                        <Download size={10} />
+                                        {formatCount(entry.downloads)}
+                                    </span>
+                                )}
+                                {preview && <code className="mp-cmd" title={preview}>{preview}</code>}
+                            </span>
+                            {detectMiss === entry.id && (
+                                <span className="mcp-hint-text warn-text">{t('mcpMarketDetectFailed')}</span>
+                            )}
                         </div>
                         <div className="mcp-row-actions">
                             {added ? (
@@ -630,18 +963,208 @@ export function CapabilitiesPage({
                                     <Check size={11} />
                                     {t('mcpRegExists')}
                                 </span>
-                            ) : (
-                                <button type="button" className="settings-ghost-action" onClick={() => addFromRegistry(entry)}>
+                            ) : entry.install ? (
+                                <button
+                                    type="button"
+                                    className="settings-ghost-action"
+                                    aria-expanded={armed}
+                                    onClick={() => setArmedAdd(armed ? null : entry.id)}
+                                >
                                     <Plus size={12} />
                                     {t('mcpRegAdd')}
                                 </button>
+                            ) : (
+                                <>
+                                    {entry.repoUrl && (
+                                        <button
+                                            type="button"
+                                            className="settings-ghost-action"
+                                            disabled={busy}
+                                            onClick={() => requestDetect(entry)}
+                                        >
+                                            {busy ? <RefreshCw size={12} className="spinning" /> : <Globe size={12} />}
+                                            {busy ? t('mcpMarketDetecting') : t('mcpMarketDetect')}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="settings-ghost-action"
+                                        onClick={() => openEditorFromEntry(entry, null)}
+                                    >
+                                        <Pencil size={12} />
+                                        {t('mcpMarketManual')}
+                                    </button>
+                                </>
                             )}
                         </div>
                     </div>
-                );
-            })}
-        </div>
-    );
+                    {armed && entry.install && renderConfirm(entry)}
+                </div>
+            );
+        };
+
+        return (
+            <section className="settings-card">
+                <div className="settings-section-head">
+                    <div className="settings-section-icon" aria-hidden="true">
+                        <Store size={15} />
+                    </div>
+                    <div>
+                        <h3>{t('mcpMarketTab')}</h3>
+                        <p>{t('mcpMarketSectionDesc')}</p>
+                    </div>
+                    <button
+                        type="button"
+                        className="cred-local-connect"
+                        onClick={() => {
+                            sentMarketQuery.current = marketQuery.trim();
+                            onMarketplaceLoad(marketQuery.trim(), true);
+                        }}
+                    >
+                        <RefreshCw size={13} />
+                        {t('mcpMarketRefresh')}
+                    </button>
+                </div>
+
+                <div className="settings-card-body">
+                    <div className="mp-search">
+                        <Search size={13} aria-hidden="true" />
+                        <input
+                            type="text"
+                            dir={getLocale() === 'fa' ? 'rtl' : 'ltr'}
+                            value={marketQuery}
+                            onChange={(e) => setMarketQuery(e.target.value)}
+                            placeholder={t('mcpMarketSearchPlaceholder')}
+                            aria-label={t('mcpMarketSearchPlaceholder')}
+                        />
+                        {marketQuery !== '' && (
+                            <button
+                                type="button"
+                                className="icon-btn"
+                                title={t('mcpMarketClearSearch')}
+                                aria-label={t('mcpMarketClearSearch')}
+                                onClick={() => setMarketQuery('')}
+                            >
+                                <X size={12} />
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Two separate decisions - WHICH catalog an entry comes from,
+                        and WHAT KIND of server it is. No visible captions: each
+                        chip set is self-evident, and the divider keeps them
+                        apart. The aria-labels carry the meaning for screen
+                        readers, which the captions never did. */}
+                    <div className="mp-filters">
+                        <div className="mp-filter-group" role="group" aria-label={t('mcpMarketFilterSource')}>
+                            <button
+                                type="button"
+                                className={marketSource === 'all' ? 'lang-chip active' : 'lang-chip'}
+                                onClick={() => setMarketSource('all')}
+                            >
+                                {t('mcpMarketSourceAll')}
+                            </button>
+                            {(['curated', 'cline', 'official', 'remote'] as MarketplaceSource[])
+                                .filter((source) => entries.some((entry) => entry.source === source))
+                                .map((source) => (
+                                    <button
+                                        key={source}
+                                        type="button"
+                                        className={marketSource === source ? 'lang-chip active' : 'lang-chip'}
+                                        title={marketSourceHint(source)}
+                                        onClick={() => setMarketSource(source)}
+                                    >
+                                        {marketSourceLabel(source)}
+                                    </button>
+                                ))}
+                        </div>
+                        {tags.length > 0 && (
+                            <div className="mp-filter-group" role="group" aria-label={t('mcpMarketFilterTags')}>
+                                    {tags.map((tag) => (
+                                        <button
+                                            key={tag}
+                                            type="button"
+                                            dir="auto"
+                                            className={marketTag === tag ? 'lang-chip active' : 'lang-chip'}
+                                            onClick={() => setMarketTag(marketTag === tag ? null : tag)}
+                                        >
+                                            {tagLabel(tag, marketplace?.tagLabels)}
+                                        </button>
+                                    ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="mcp-target-row">
+                        <span className="mcp-field-label">{t('mcpSaveTarget')}</span>
+                        <div className="lang-choice">
+                            <button type="button" className={newServerTarget === 'global' ? 'lang-chip active' : 'lang-chip'} onClick={() => setNewServerTarget('global')}>
+                                {t('mcpTargetGlobal')}
+                            </button>
+                            <button
+                                type="button"
+                                className={newServerTarget === 'workspace' ? 'lang-chip active' : 'lang-chip'}
+                                disabled={!hasWorkspace}
+                                onClick={() => setNewServerTarget('workspace')}
+                            >
+                                {t('mcpTargetWorkspace')}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        className="mp-status"
+                        dir="auto"
+                        title={marketplace?.sources.length ? marketplace.sources.join('\n') : undefined}
+                    >
+                        <span className={`mp-dot ${marketplace?.status ?? 'loading'}`} aria-hidden="true" />
+                        <span>{status}</span>
+                        {marketplace && <span className="mp-status-sep">{'\u00b7'}</span>}
+                        {marketplace && <span>{tf('mcpMarketCount', { n: formatCount(matching.length) })}</span>}
+                        {marketplace?.liveSearch && <span className="mp-status-sep">{'\u00b7'}</span>}
+                        {marketplace?.liveSearch && <span>{t('mcpMarketLiveSearch')}</span>}
+                        {stale && <span className="mp-status-sep">{'\u00b7'}</span>}
+                        {stale && <span>{t('mcpMarketSearching')}</span>}
+                    </div>
+                    {marketplace?.error && (
+                        <div className="mcp-hint warn" role="status">
+                            <TriangleAlert size={12} aria-hidden="true" />
+                            <span>{`${t('mcpMarketError')} (${marketplace.error})`}</span>
+                        </div>
+                    )}
+
+                    {!marketplace && (
+                        <div className="mcp-empty">
+                            <RefreshCw size={18} className="spinning" />
+                            <span>{t('mcpMarketLoading')}</span>
+                        </div>
+                    )}
+                    {marketplace && rows.length === 0 && (
+                        <div className="mcp-empty">
+                            <Search size={18} />
+                            <strong>{t('mcpMarketEmpty')}</strong>
+                        </div>
+                    )}
+                    {rows.map(renderRow)}
+
+                    {hiddenRows > 0 && (
+                        <button
+                            type="button"
+                            className="mp-more"
+                            onClick={() => setMarketLimit((n) => n + MARKET_PAGE)}
+                        >
+                            {tf('mcpMarketShowMore', { n: formatCount(hiddenRows) })}
+                        </button>
+                    )}
+
+                    <div className="mcp-hint foot" role="note">
+                        <Info size={12} aria-hidden="true" />
+                        <span>{t('mcpMarketSecurityNote')}</span>
+                    </div>
+                </div>
+            </section>
+        );
+    };
 
     const renderServersTab = () => (
         <>
@@ -682,8 +1205,6 @@ export function CapabilitiesPage({
                     </div>
                     <FileJson size={14} />
                 </button>
-
-                {renderRegistry()}
             </section>
         </>
     );
@@ -815,6 +1336,12 @@ export function CapabilitiesPage({
         setPendingSkillsRefresh(true);
         onRefreshMcp();
         onRefreshSkills();
+        // The marketplace card has its own (force) refresh; this one keeps the
+        // header button honest when the marketplace tab is the active one.
+        if (tab === 'marketplace') {
+            sentMarketQuery.current = marketQuery.trim();
+            onMarketplaceLoad(marketQuery.trim(), true);
+        }
     };
 
     return (
@@ -867,6 +1394,15 @@ export function CapabilitiesPage({
                     <button
                         type="button"
                         role="tab"
+                        aria-selected={tab === 'marketplace'}
+                        className={tab === 'marketplace' ? 'lang-chip active' : 'lang-chip'}
+                        onClick={() => setTab('marketplace')}
+                    >
+                        {t('mcpMarketTab')}
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
                         aria-selected={tab === 'skills'}
                         className={tab === 'skills' ? 'lang-chip active' : 'lang-chip'}
                         onClick={() => setTab('skills')}
@@ -875,12 +1411,14 @@ export function CapabilitiesPage({
                     </button>
                 </div>
 
-                {tab === 'servers' ? renderServersTab() : renderSkillsTab()}
+                {tab === 'servers' && renderServersTab()}
+                {tab === 'marketplace' && renderMarketplace()}
+                {tab === 'skills' && renderSkillsTab()}
 
                 {/* Apply-on-new-session semantics are fine print - footer, not header. */}
                 <div className="mcp-hint foot" role="note">
                     <Info size={12} aria-hidden="true" />
-                    <span>{tab === 'servers' ? t('mcpApplyHint') : t('skillsHint')}</span>
+                    <span>{tab === 'skills' ? t('skillsHint') : t('mcpApplyHint')}</span>
                 </div>
             </div>
         </div>

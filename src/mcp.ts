@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { parsePatchBlocks, sanitizePath } from './paths';
-import { resolveEditMode } from './tooling/editFileArgs';
+import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
+import { resolveEditContent, resolveEditMode } from './tooling/editFileArgs';
 import {
     terminalToolDescription,
     terminalCommandParamDescription,
@@ -379,6 +379,13 @@ async function dispatchTool(
         if ('error' in resolvedMode) {
             return { content: [{ type: 'text', text: resolvedMode.error }], isError: true };
         }
+        // Resolve the CONTENT for the same reason: an omitted key used to reach
+        // preserveEol() unvalidated and crash with a raw TypeError instead of
+        // naming the missing argument.
+        const resolvedContent = resolveEditContent(args.new_content);
+        if ('error' in resolvedContent) {
+            return { content: [{ type: 'text', text: resolvedContent.error }], isError: true };
+        }
         await ensureTurnSnapshot(workspaceRoot, 'before edit');
         const fullPath = sanitizePath(args.path, workspaceRoot);
         fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -391,9 +398,9 @@ async function dispatchTool(
         let next: string;
         if (mode === 'append' && existed) {
             const eol = previous.includes('\r\n') ? '\r\n' : '\n';
-            next = previous + (previous && !previous.endsWith('\n') ? eol : '') + preserveEol(previous, args.new_content);
+            next = previous + (previous && !previous.endsWith('\n') ? eol : '') + preserveEol(previous, resolvedContent.content);
         } else {
-            next = preserveEol(previous, args.new_content);
+            next = preserveEol(previous, resolvedContent.content);
         }
         // Cliff guard: refuse the accidental destruction of a file via
         // whole-file overwrite unless explicitly confirmed. Two cliffs: the
@@ -514,6 +521,9 @@ async function dispatchTool(
                 clearTimeout(killFallback);
                 killFallback = setTimeout(() => finish(null), 5000);
             };
+            // Registered so a user cancel stops this command NOW instead of
+            // waiting out the idle/hard cap.
+            activeTerminalKills.add(kill);
             const resetIdle = () => {
                 clearTimeout(idleTimer);
                 idleTimer = setTimeout(
@@ -524,12 +534,21 @@ async function dispatchTool(
             const finish = (code: number | null, err?: Error) => {
                 if (done) return;
                 done = true;
+                activeTerminalKills.delete(kill);
                 clearTimeout(idleTimer);
                 clearTimeout(hardTimer);
                 clearTimeout(killFallback);
                 child.stdout.removeAllListeners();
                 child.stderr.removeAllListeners();
-                let result = `STDOUT:\n${stdout || '(empty)'}\nSTDERR:\n${stderr || '(empty)'}`;
+                // A command that SUCCEEDED can still write to stderr - git's
+                // "Switched to branch …", curl progress, npm notices. Printing
+                // that under a bare "STDERR:" heading reads as a failure to the
+                // user AND to the model, so a successful run gets one neutral
+                // OUTPUT block; only a FAILED run is split into the two.
+                const succeeded = !killReason && !err && code === 0;
+                let result = succeeded
+                    ? `OUTPUT:\n${[stdout, stderr].filter((part) => part.length > 0).join('\n') || '(no output)'}`
+                    : `STDOUT:\n${stdout || '(empty)'}\nSTDERR:\n${stderr || '(empty)'}`;
                 if (killReason) {
                     result += `\nError: killed (${killReason}). If this was a long quiet build, redirect output to a file and poll it in chunks; the hard cap is 30 minutes.`;
                 } else if (err) {
@@ -717,10 +736,16 @@ async function dispatchTool(
     } else if (name === 'apply_patch') {
         await ensureTurnSnapshot(workspaceRoot, 'before edit');
         const fullPath = sanitizePath(args.path, workspaceRoot);
-        const patch = args.patch;
-        if (!patch) {
+        const rawPatch = args.patch;
+        if (!rawPatch) {
             return { content: [{ type: 'text', text: 'Error: patch cannot be empty' }], isError: true };
         }
+        // Repair the ONE unambiguous marker loss (a dropped final closing
+        // marker) before parsing, and keep the note: silently auto-closing a
+        // possibly-truncated replacement would hide a partial edit behind a
+        // success message, so the model is told to verify that hunk.
+        const { patch, repairs } = repairPatchMarkers(String(rawPatch));
+        const repairNote = repairs.length ? `\n\nNote: ${repairs.join(' ')}` : '';
         if (!fs.existsSync(fullPath)) {
             // New-file creation: a patch whose SEARCH blocks are all empty
             // defines the new file's contents (Cline-style idiom).
@@ -728,7 +753,7 @@ async function dispatchTool(
             if (blocks.length >= 1 && blocks.every((b) => !b.search && b.replace)) {
                 fs.mkdirSync(path.dirname(fullPath), { recursive: true });
                 fs.writeFileSync(fullPath, blocks.map((b) => b.replace).join('\n'), 'utf-8');
-                return { content: [{ type: 'text', text: `Successfully created ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
+                return { content: [{ type: 'text', text: `Successfully created ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) + repairNote }] };
             }
             return { content: [{ type: 'text', text: `Error: file not found: ${args.path}. To create a new file use a single block with an EMPTY SEARCH section, or call edit_file with new_content.` }], isError: true };
         }
@@ -850,7 +875,7 @@ async function dispatchTool(
                   ].filter(Boolean).join('\n')
                 : `Successfully applied ${applied} patch blocks to ${args.path}`;
             const diag = applied > 0 ? await diagnosticsSummary(vscode.Uri.file(fullPath)) : '';
-            return { content: [{ type: 'text', text: msg + diag }], isError: errors.length > 0 && applied === 0 };
+            return { content: [{ type: 'text', text: msg + diag + repairNote }], isError: errors.length > 0 && applied === 0 };
         } catch (e) {
             return { content: [{ type: 'text', text: `Error applying patch: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
         }
@@ -976,6 +1001,23 @@ export async function executeLocalTool(
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
     }
+}
+
+/** Kill handles for terminal commands that are still running, so a user cancel
+ *  can stop one immediately instead of waiting out the idle/hard cap. */
+const activeTerminalKills = new Set<(why: string) => void>();
+
+/** Kill every running terminal command (the composer's stop button). Returns
+ *  how many were signalled. */
+export function killRunningTerminalCommands(why = 'cancelled by the user'): number {
+    let killed = 0;
+    for (const kill of [...activeTerminalKills]) {
+        try {
+            kill(why);
+            killed += 1;
+        } catch { /* already gone */ }
+    }
+    return killed;
 }
 
 /** Bridge-local adapter: wraps executeLocalTool to match the LocalToolExecutor

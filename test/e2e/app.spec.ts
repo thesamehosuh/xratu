@@ -80,6 +80,116 @@ test('the composer cost pill opens the usage page and goes back to chat', async 
     await expect(page.locator('.composer-input')).toBeVisible();
 });
 
+test('composer draft survives leaving and returning to the chat screen', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    const input = page.locator('.composer-input');
+    await input.fill('half-written message');
+
+    // Leaving the chat screen renders a different tree, which UNMOUNTS the
+    // composer - a half-written message used to die with it.
+    await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
+    await page.locator('.session-cost').click();
+    // The chat is no longer unmounted when another screen opens - that rebuild
+    // was the cost of every return. It stays mounted but hidden, so the draft
+    // has nothing left to lose it to.
+    await expect(input).toHaveCount(1);
+    await expect(input).toBeHidden();
+    await page.getByLabel('بازگشت').click();
+    await expect(input).toHaveValue('half-written message');
+
+    // Sending still clears it: the store mirrors the composer's state, it does
+    // not shadow it - a stale draft must never ride into the next message.
+    await input.press('Enter');
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(sent).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'half-written message' }));
+    await page.locator('.session-cost').click();
+    await page.getByLabel('بازگشت').click();
+    await expect(input).toHaveValue('');
+});
+
+test('git status line sits under the composer: branch left, stats right', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    // Outside a repo the line renders nothing at all.
+    await hostMessage(page, { type: 'gitStatusState', root: null, status: { isRepo: false, branch: null, detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
+    await expect(page.locator('.git-status')).toHaveCount(0);
+
+    await hostMessage(page, { type: 'gitStatusState', root: '~/Projects/xratu', status: { isRepo: true, branch: 'main', detached: false, upstream: 'origin/main', ahead: 1, behind: 0, staged: 2, modified: 1, untracked: 3, conflicted: 0 } });
+    const bar = page.locator('.git-status');
+    await expect(bar).toBeVisible();
+    await expect(bar.locator('.git-status-branch')).toHaveText('main');
+    await expect(bar.locator('.git-status-stats')).toContainText('2');
+
+    // Folder BEFORE the branch, branch on the LEFT of the stats: the order you
+    // read them in (which workspace, which branch, what is uncommitted).
+    const pathBox = await bar.locator('.git-status-path').boundingBox();
+    const branchBox = await bar.locator('.git-status-branch').boundingBox();
+    const statsBox = await bar.locator('.git-status-stats').boundingBox();
+    await expect(bar.locator('.git-status-path')).toHaveText('~/Projects/xratu');
+    expect(pathBox!.x).toBeLessThan(branchBox!.x);
+    expect(branchBox!.x).toBeLessThan(statsBox!.x);
+
+    // The line spans the composer's column, and its CONTENT starts at the
+    // composer card's inset (12px) rather than hugging the panel edge. The bar
+    // itself is full width - the padding lives inside its box - so the content
+    // position is the thing to assert.
+    expect(pathBox!.x).toBeGreaterThanOrEqual(11);
+
+    // Below the composer input, and NOT nested inside the composer card.
+    const inputBox = await page.locator('.composer-input').boundingBox();
+    const barBox = await bar.boundingBox();
+    expect(barBox!.y).toBeGreaterThan(inputBox!.y);
+    const nested = await page.evaluate(() => {
+        const barEl = document.querySelector('.git-status');
+        const card = document.querySelector('.composer-input')?.closest('[class*="composer"]');
+        return !!(card && barEl && card.contains(barEl));
+    });
+    expect(nested).toBe(false);
+});
+
+test('clicking the git line opens a branch drop-up above the composer', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'gitStatusState', root: '~/Projects/xratu', status: { isRepo: true, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+    const sent = () => page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<Record<string, unknown>>);
+
+    await page.locator('.git-status').click();
+    // Opening asks the host for the list (and refreshes it).
+    await expect.poll(async () => (await sent()).some((m) => m.type === 'gitBranchesGetState')).toBe(true);
+    await hostMessage(page, { type: 'gitBranchesState', branches: ['chore/a', 'feat/x', 'main'], current: 'main' });
+
+    const pop = page.locator('.branch-pop');
+    await expect(pop).toBeVisible();
+    await expect(pop.locator('.mention-item')).toHaveCount(3);
+    // Reuses the @-mention popup: it floats ABOVE the composer card.
+    const popBox = await pop.boundingBox();
+    const cardBox = await page.locator('.composer').boundingBox();
+    expect(popBox!.y + popBox!.height).toBeLessThanOrEqual(cardBox!.y + 1);
+    // The current branch is marked, and only it.
+    await expect(pop.locator('.branch-current')).toHaveCount(1);
+
+    // The filter narrows the list...
+    await pop.locator('.mention-input').fill('feat');
+    await expect(pop.locator('.mention-item')).toHaveCount(1);
+    // ...and clicking a branch switches to it and closes the popup.
+    await pop.locator('.mention-item').click();
+    expect(await sent()).toContainEqual({ type: 'gitCheckout', branch: 'feat/x' });
+    await expect(page.locator('.branch-pop')).toHaveCount(0);
+
+    // Clicking OUTSIDE discards it too.
+    await page.locator('.git-status').click();
+    await expect(page.locator('.branch-pop')).toBeVisible();
+    await page.locator('article.msg, .composer-input').first().click({ force: true });
+    await expect(page.locator('.branch-pop')).toHaveCount(0);
+
+    // And the line itself toggles it shut.
+    await page.locator('.git-status').click();
+    await expect(page.locator('.branch-pop')).toBeVisible();
+    await page.locator('.git-status').click();
+    await expect(page.locator('.branch-pop')).toHaveCount(0);
+});
+
 test('locale message flips direction rtl -> ltr', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('.app')).toHaveAttribute('dir', 'rtl');
@@ -176,7 +286,7 @@ test('capabilities refresh spinner keeps spinning until EVERY echo arrives', asy
     // Open the capabilities page (fa locale by default) and let the initial
     // mcpGetState / skillsGetState echoes settle.
     await page.getByTitle('سرور ها و مهارت ها').click();
-    await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false, registry: [] });
+    await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await hostMessage(page, { type: 'skillsState', skills: [] });
     const spinner = page.locator('.settings-head .spinning');
     await expect(spinner).toHaveCount(0);
@@ -184,7 +294,7 @@ test('capabilities refresh spinner keeps spinning until EVERY echo arrives', asy
     // skills echo is delayed. The spinner must still be running after the
     // 800ms minimum - it tracks each response, not a shared timer.
     await page.getByTitle('بروزرسانی').click();
-    await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false, registry: [] });
+    await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await page.waitForTimeout(1000);
     await expect(spinner).toBeVisible();
     await hostMessage(page, { type: 'skillsState', skills: [] });

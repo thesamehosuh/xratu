@@ -11,7 +11,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { parsePatchBlocks } = require('../out/paths.js');
+const { parsePatchBlocks, repairPatchMarkers } = require('../out/paths.js');
 
 let failed = 0;
 const check = (name, fn) => {
@@ -159,6 +159,101 @@ check('a lone ======= line is prose, not a patch attempt (returns [])', () => {
     // A markdown rule / RST underline must NOT be diagnosed as a broken patch.
     const blocks = parsePatchBlocks('Release notes\n=======\n\n- fixed things');
     if (blocks.length !== 0) throw new Error(JSON.stringify(blocks));
+});
+
+// --- a patch that stops before its separator is TRUNCATED, not "missing a closer"
+// Regression: hit live many times while dogfooding. The patch arrived as the
+// opener plus its search text and nothing else, and the diagnostic blamed the
+// closing marker - so the (correct) instruction "re-send the SAME block
+// unchanged" pointed at a marker that was never the problem, and every retry
+// was a guess. The fault is truncation: there is no separator, so there is no
+// knowable search/replacement boundary and nothing can be applied.
+check('a patch truncated before its separator is named as truncated', () => {
+    throwsWith('<<<<<<< SEARCH\nimport a from "a";\nimport b from "b";\n', /TRUNCATED/i);
+});
+
+check('the truncated message does not blame the closing marker', () => {
+    try {
+        parsePatchBlocks('<<<<<<< SEARCH\nconst x = 1;\n');
+        throw new Error('expected refusal');
+    } catch (e) {
+        if (/most often dropped/i.test(e.message)) {
+            throw new Error(`misleading closing-marker message: ${e.message}`);
+        }
+        if (!/COMPLETE block/i.test(e.message)) {
+            throw new Error(`no re-send instruction: ${e.message}`);
+        }
+    }
+});
+
+check('a separator with no closer still gets the closer-specific message', () => {
+    // The two shapes must stay distinguishable: this one IS just a lost closer.
+    throwsWith('<<<<<<< SEARCH\nold\n=======\nnew\n', /closing/i);
+});
+
+// --- the one unambiguous repair: the FINAL closer was dropped --------------
+check('repairs a missing final closing marker', () => {
+    const { patch, repairs } = repairPatchMarkers('<<<<<<< SEARCH\nold\n=======\nnew\n');
+    if (repairs.length !== 1) throw new Error(`expected one repair, got ${JSON.stringify(repairs)}`);
+    if (!/closing/i.test(repairs[0])) throw new Error(`repair not named: ${repairs[0]}`);
+    const blocks = parsePatchBlocks(patch);
+    if (blocks.length !== 1 || blocks[0].search !== 'old' || blocks[0].replace !== 'new') {
+        throw new Error(JSON.stringify(blocks));
+    }
+});
+
+check('repairs only the last of several blocks', () => {
+    const { patch, repairs } = repairPatchMarkers(
+        '<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n<<<<<<< SEARCH\nc\n=======\nd\n',
+    );
+    if (repairs.length !== 1) throw new Error(`expected one repair, got ${JSON.stringify(repairs)}`);
+    const blocks = parsePatchBlocks(patch);
+    if (blocks.length !== 2 || blocks[1].replace !== 'd') throw new Error(JSON.stringify(blocks));
+});
+
+check('a complete patch is left untouched', () => {
+    const original = '<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n';
+    const { patch, repairs } = repairPatchMarkers(original);
+    if (patch !== original) throw new Error('complete patch was rewritten');
+    if (repairs.length !== 0) throw new Error(`unexpected repair: ${JSON.stringify(repairs)}`);
+});
+
+check('no separator means no repair (boundary is unknowable)', () => {
+    const { patch, repairs } = repairPatchMarkers('<<<<<<< SEARCH\nold\n');
+    if (repairs.length !== 0 || patch !== '<<<<<<< SEARCH\nold\n') {
+        throw new Error('truncated patch was "repaired"');
+    }
+});
+
+check('a lone separator is prose and is not repaired', () => {
+    const { repairs } = repairPatchMarkers('Release notes\n=======\n\n- fixed things');
+    if (repairs.length !== 0) throw new Error(`unexpected repair: ${JSON.stringify(repairs)}`);
+});
+
+// The dangerous shape: a block lost its closer in the MIDDLE of a patch. The
+// repair must not fire - closing it there would fold the following hunks into
+// this replacement and report success while those hunks never applied.
+check('a mid-patch loss is not repaired and is still refused', () => {
+    const midLoss = '<<<<<<< SEARCH\na\n=======\nb\n<<<<<<< SEARCH\nc\n=======\nd\n>>>>>>> REPLACE\n';
+    const { patch, repairs } = repairPatchMarkers(midLoss);
+    if (repairs.length !== 0) throw new Error(`mid-patch loss was repaired: ${JSON.stringify(repairs)}`);
+    if (patch !== midLoss) throw new Error('mid-patch loss was rewritten');
+    try {
+        parsePatchBlocks(patch);
+        throw new Error('expected refusal, got parsed blocks');
+    } catch (e) {
+        if (!/marker/i.test(e.message)) throw new Error(`wrong error: ${e.message}`);
+    }
+});
+
+check('a repaired patch parses to the same blocks as a hand-closed one', () => {
+    const open = '<<<<<<< SEARCH\nkeep\n=======\nkept\n>>>>>>> REPLACE\n<<<<<<< SEARCH\ndrop\n=======\ndropped\n';
+    const closed = open + '>>>>>>> REPLACE\n';
+    const repaired = parsePatchBlocks(repairPatchMarkers(open).patch);
+    const expected = parsePatchBlocks(closed);
+    if (JSON.stringify(repaired) !== JSON.stringify(expected)) {
+        throw new Error(`${JSON.stringify(repaired)} !== ${JSON.stringify(expected)}`);
+    }
 });
 
 process.exit(failed ? 1 : 0);

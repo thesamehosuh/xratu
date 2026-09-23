@@ -7,7 +7,11 @@ import type {
     ComposerAttachment,
     DiscoveredLocalRuntime,
     FromExtensionMessage,
-    McpRegistryEntry,
+    GitStatusSummary,
+    InstallConfidence,
+    MarketplaceEntry,
+    MarketplaceInstall,
+    MarketplaceState,
     McpSaveTarget,
     McpServerPayload,
     McpServerView,
@@ -31,6 +35,8 @@ import { CapabilitiesPage } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
 import { UsagePage } from './components/UsagePage';
 import { NotificationBanner } from './components/NotificationBanner';
+import { GitStatusBar } from './components/GitStatusBar';
+import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
 import type { LedgerDay, ModelRateView, ProviderUsageView, UsageTotals } from './types';
 
@@ -153,9 +159,23 @@ export function App() {
     const [mcpServers, setMcpServers] = useState<McpServerView[]>([]);
     const [mcpHasWorkspace, setMcpHasWorkspace] = useState(false);
     const [mcpLegacyInUse, setMcpLegacyInUse] = useState(false);
-    const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([]);
+    /** Live marketplace state - host-fetched (webview CSP forbids network),
+     *  pushed on mcpMarketplaceGetState. `query` is the request it answers. */
+    const [marketplace, setMarketplace] = useState<(MarketplaceState & { query: string }) | null>(null);
+    /** Result of the opt-in README detection for one marketplace entry. */
+    const [marketplaceDetection, setMarketplaceDetection] = useState<
+        { id: string; install: MarketplaceInstall | null; confidence: InstallConfidence } | null
+    >(null);
     /** Skills page state - host-owned; pushed on skillsGetState / skillsToggle. */
     const [skills, setSkills] = useState<SkillView[]>([]);
+    /** Workspace git status for the line under the composer (null until the
+     *  host answers; the line hides itself outside a repository). */
+    const [gitStatus, setGitStatus] = useState<GitStatusSummary | null>(null);
+    /** Workspace folder the git status belongs to ($HOME-compacted). */
+    const [gitRoot, setGitRoot] = useState<string | null>(null);
+    /** Branch picker: local branches (null until the host answers) + open state. */
+    const [gitBranches, setGitBranches] = useState<string[] | null>(null);
+    const [gitPickerOpen, setGitPickerOpen] = useState(false);
 
     // Local-scan cosmetics: probing runtimes can finish near-instantly, so
     // keep the spinner alive for at least ~1s - a flashing spinner looks
@@ -647,10 +667,24 @@ export function App() {
                     setMcpServers(msg.servers);
                     setMcpHasWorkspace(msg.hasWorkspace);
                     setMcpLegacyInUse(msg.legacyInUse);
-                    setMcpRegistry(msg.registry);
+                    break;
+                case 'mcpMarketplaceState': {
+                    const { type: _type, ...state } = msg;
+                    setMarketplace(state);
+                    break;
+                }
+                case 'mcpMarketplaceDetected':
+                    setMarketplaceDetection({ id: msg.id, install: msg.install, confidence: msg.confidence });
                     break;
                 case 'skillsState':
                     setSkills(msg.skills);
+                    break;
+                case 'gitStatusState':
+                    setGitStatus(msg.status);
+                    setGitRoot(msg.root);
+                    break;
+                case 'gitBranchesState':
+                    setGitBranches(msg.branches);
                     break;
                 default:
                     dispatch(msg);
@@ -660,6 +694,14 @@ export function App() {
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
     }, [send]);
+
+    // The git line under the composer must reflect what the agent just did, so
+    // it refreshes whenever a run settles - and once on mount, for the first
+    // paint. Cheap: one `git status` in the workspace root.
+    useEffect(() => {
+        if (chat.busy) return;
+        send({ type: 'gitStatusGetState' });
+    }, [chat.busy, send]);
 
     const handleSend = useCallback(
         (text: string, attachments: ComposerAttachment[]) => {
@@ -803,9 +845,15 @@ export function App() {
         <NotificationBanner notifications={notifications} onDismiss={dismissNotification} />
     );
 
+    // Screens that OVERLAY the chat instead of replacing it. The chat stays
+    // mounted underneath (see the wrapper at the end of this function):
+    // unmounting and rebuilding it was the entire cost of coming back from
+    // Settings - measured at ~4.2k DOM nodes ≈ 91ms, scaling with the size of
+    // the mounted transcript.
+    let overlay: JSX.Element | null = null;
+
     if (screen === 'credentials') {
-        return (
-            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        overlay = (
                 <CredentialsPage
                     key={credNonce}
                     reason={credReason}
@@ -832,21 +880,22 @@ export function App() {
                     onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
                     onBack={() => setScreen(credReturnTo)}
                 />
-                {banner}
-            </div>
         );
     }
 
     if (screen === 'capabilities') {
-        return (
-            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        overlay = (
                 <CapabilitiesPage
                     onBack={() => setScreen(capReturnTo)}
                     onOpenRawSettings={() => send({ type: 'openMcpSettings' })}
                     servers={mcpServers}
                     hasWorkspace={mcpHasWorkspace}
                     legacyInUse={mcpLegacyInUse}
-                    registry={mcpRegistry}
+                    marketplace={marketplace}
+                    marketplaceDetection={marketplaceDetection}
+                    onMarketplaceLoad={(query, force) => send({ type: 'mcpMarketplaceGetState', query, force })}
+                    onMarketplaceDetect={(id) => send({ type: 'mcpMarketplaceDetect', id })}
+                    onMarketplaceClearDetection={() => setMarketplaceDetection(null)}
                     skills={skills}
                     onRefreshMcp={() => send({ type: 'mcpGetState' })}
                     onSave={(target: McpSaveTarget, list: McpServerPayload[]) => send({ type: 'mcpSave', target, servers: list })}
@@ -858,14 +907,11 @@ export function App() {
                     onNewSkill={() => send({ type: 'skillsCreate' })}
                     onDeleteSkill={(dirPath) => send({ type: 'skillsDelete', dirPath })}
                 />
-                {banner}
-            </div>
         );
     }
 
     if (screen === 'usage') {
-        return (
-            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        overlay = (
                 <UsagePage
                     state={usage}
                     onBack={() => setScreen(usageReturnTo)}
@@ -873,14 +919,11 @@ export function App() {
                         send({ type: 'usageSaveModel', id, input, output, cachedInput, currency })}
                     onRemoveModel={(id) => send({ type: 'usageRemoveModel', id })}
                 />
-                {banner}
-            </div>
         );
     }
 
     if (screen === 'settings') {
-        return (
-            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        overlay = (
                 <SettingsPage
                     onBack={() => setScreen('chat')}
                     error={byokError}
@@ -912,8 +955,6 @@ export function App() {
                         send({ type: 'clearAllSessions' });
                     }}
                 />
-                {banner}
-            </div>
         );
     }
 
@@ -948,7 +989,15 @@ export function App() {
     }
 
     return (
-        <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <>
+        {/* The chat stays MOUNTED behind an overlay screen: unmounting and
+            rebuilding it was the entire cost of coming back from Settings
+            (measured: ~4.2k DOM nodes ≈ 91ms, scaling with the transcript).
+            `visibility` (not `display`) keeps its geometry, so the transcript's
+            scroll position and mounted page survive the trip - and it drops the
+            hidden tree from the tab order and the a11y tree, which unmounting
+            used to handle for free. */}
+        <div className={`app${overlay ? ' behind' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             <Toolbar
                 conn={conn}
                 yolo={yolo}
@@ -1106,7 +1155,7 @@ export function App() {
             )}
             {/* In-app banners sit above the composer card, same slot as the
                 byok-hint banner. */}
-            {banner}
+            {!overlay && banner}
             {/* Steers sent while busy wait for the current tool call to end.
                 A compact chip keeps each one visible until the host injects
                 it (then the real user bubble takes over). */}
@@ -1183,8 +1232,41 @@ export function App() {
                 onCancelEdit={() => setEditDraft(null)}
                 workspaceFiles={workspaceFiles}
                 onRequestFiles={() => send({ type: 'requestFileList' })}
+                branchPicker={gitPickerOpen ? (
+                    <BranchPicker
+                        branches={gitBranches}
+                        current={gitStatus?.branch ?? null}
+                        onPick={(branch) => {
+                            setGitPickerOpen(false);
+                            send({ type: 'gitCheckout', branch });
+                        }}
+                        onClose={() => setGitPickerOpen(false)}
+                    />
+                ) : null}
+            />
+            {/* OUTSIDE the composer card: ambient workspace status, not part of
+                the input surface. */}
+            <GitStatusBar
+                status={gitStatus}
+                root={gitRoot}
+                onOpenPicker={() => {
+                    // The line is both the opener and the closer; the list request
+                    // is cheap and keeps the branches fresh whenever it opens.
+                    setGitPickerOpen((open) => !open);
+                    send({ type: 'gitBranchesGetState' });
+                }}
             />
         </div>
+        {/* The overlay renders as a SIBLING of the chat, so hiding the chat
+            cannot hide it. The banner rides along: a notification has to stay
+            readable above whatever screen is open. */}
+        {overlay && (
+            <div className="screen-overlay" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+                {overlay}
+                {banner}
+            </div>
+        )}
+        </>
     );
 }
 

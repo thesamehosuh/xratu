@@ -13,6 +13,78 @@ function countMarkerLines(patch: string, re: RegExp): number {
     return (patch.match(re) ?? []).length;
 }
 
+/** Structural marker lines - one definition for counting, diagnosing, repairing. */
+const OPENER_LINE_RE = /^<<<<<<<.*$/gm;
+const SEPARATOR_LINE_RE = /^=======\r?$/gm;
+const CLOSER_LINE_RE = /^>>>>>>>.*$/gm;
+const CLOSER_LINE = '>>>>>>> REPLACE';
+
+interface MarkerCounts { opens: number; seps: number; closes: number; }
+
+function countMarkers(patch: string): MarkerCounts {
+    return {
+        opens: countMarkerLines(patch, OPENER_LINE_RE),
+        seps: countMarkerLines(patch, SEPARATOR_LINE_RE),
+        closes: countMarkerLines(patch, CLOSER_LINE_RE),
+    };
+}
+
+/**
+ * Repair the ONE marker loss that is unambiguous: a patch whose final block
+ * carries its '=======' separator but lost the trailing '>>>>>>> REPLACE' line.
+ * Streamed tool calls and hand-pasted patches drop it constantly, and the
+ * result used to be a hard refusal with a message pointing at the wrong thing.
+ *
+ * Appending the closer at end-of-input cannot mis-slice anything: everything
+ * after the last separator IS the final replacement body. Two shapes stay
+ * REFUSED because closing them would be a guess:
+ *   - no separator at all - there is no knowable search/replacement boundary;
+ *   - an unterminated block followed by another opener - a mid-patch loss,
+ *     where closing it would silently drop the hunks after it.
+ *
+ * Repairs are RETURNED as well as applied: the caller must surface them, since
+ * auto-closing a possibly-truncated replacement would hide a partial edit
+ * behind a success message.
+ */
+export function repairPatchMarkers(patch: string): { patch: string; repairs: string[] } {
+    const repairs: string[] = [];
+    if (!patch) return { patch, repairs };
+    const tokens = markerTokens(patch);
+    if (tokens.length < 2) return { patch, repairs };
+    // The grammar is strictly O S C O S C …, so a missing FINAL closer shows
+    // up as a sequence that stops right after a separator. Counting markers
+    // cannot tell that apart from a closer lost in the MIDDLE of a patch
+    // (`O S O S C`), where appending one would fold the following hunks into
+    // this replacement and report success while they never applied - so the
+    // ORDER is what decides, and anything off-pattern stays refused.
+    const grammar = ['O', 'S', 'C'];
+    for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i] !== grammar[i % 3]) return { patch, repairs };
+    }
+    if (tokens.length % 3 !== 2) return { patch, repairs };
+    // Trailing whitespace/newlines are transport noise here; the closer must
+    // sit on its own line directly after the replacement body.
+    const body = patch.replace(/[\s\uFEFF]+$/, '');
+    repairs.push(
+        `the final block had no closing '${CLOSER_LINE}' marker (a dropped or truncated closer); `
+        + `it was closed at end-of-input - verify that last hunk landed completely.`,
+    );
+    return { patch: `${body}\n${CLOSER_LINE}\n`, repairs };
+}
+
+/** Structural marker lines in document order, as `O`pener / `S`eparator /
+ *  `C`loser. Only line-initial markers count - an inline `... <<<<<<< ...`
+ *  inside a body is content, and a flattened one-liner yields a single `O`. */
+function markerTokens(patch: string): string[] {
+    const tokens: string[] = [];
+    for (const line of patch.split(/\r?\n/)) {
+        if (/^<{7}/.test(line)) tokens.push('O');
+        else if (/^={7}\s*$/.test(line)) tokens.push('S');
+        else if (/^>{7}/.test(line)) tokens.push('C');
+    }
+    return tokens;
+}
+
 /** Canonical block shape, shown in diagnostics so the model can copy it. */
 const PATCH_TEMPLATE = '<<<<<<< SEARCH\n<current file lines>\n=======\n<replacement lines>\n>>>>>>> REPLACE';
 
@@ -44,9 +116,7 @@ export function diagnosePatchBlocks(patch: string): string | null {
         return `the SEARCH/REPLACE markers are on ONE line: "${oneLine.trim().slice(0, 100)}". `
             + `Each marker must be ALONE on its own line. Write it as:\n${PATCH_TEMPLATE}`;
     }
-    const opens = countMarkerLines(patch, /^<<<<<<<.*$/gm);
-    const seps = countMarkerLines(patch, /^=======\r?$/gm);
-    const closes = countMarkerLines(patch, /^>>>>>>>.*$/gm);
+    const { opens, seps, closes } = countMarkers(patch);
     // Only an OPEN or CLOSE marker makes this text look like an attempted
     // patch. A lone `=======` is ordinary prose (a markdown rule, an RST
     // underline, diff-ish tool output), so it must still return [] and let the
@@ -54,6 +124,18 @@ export function diagnosePatchBlocks(patch: string): string | null {
     if (opens === 0 && closes === 0) return null;
 
     if (opens > 0 && closes === 0) {
+        // A patch with no separator AND no closer never got past its search
+        // text: it is TRUNCATED, not merely missing a closer. Reporting "the
+        // closing marker is the one most often dropped" here sent the model
+        // looking for a marker that was never the problem (hit live, many
+        // times, while dogfooding). Name the actual fault.
+        if (seps === 0) {
+            return `patch looks TRUNCATED: it has ${opens} '<<<<<<< SEARCH' marker line(s) but no `
+                + `'=======' separator and no closing '>>>>>>> REPLACE' marker, so the block stops `
+                + `before it is complete and there is nothing to apply. The tool cannot guess where `
+                + `the search text ends and the replacement begins - re-send the COMPLETE block `
+                + `(splitting it into smaller patches is fine). The exact shape:\n${PATCH_TEMPLATE}`;
+        }
         return `patch has ${opens} opening '<<<<<<< SEARCH' marker line(s) but NO closing `
             + `'>>>>>>> REPLACE' marker. The closing marker is the one most often dropped - `
             + `add it directly after the replacement text and re-send the SAME block unchanged. `

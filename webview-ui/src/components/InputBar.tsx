@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
@@ -247,6 +247,18 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
     }
 }
 
+/**
+ * Composer draft that OUTLIVES the component instance.
+ *
+ * Navigating to Settings / Capabilities / Usage makes App render a different
+ * screen tree, which unmounts InputBar - so a half-written message used to be
+ * discarded by navigation alone. Module scope survives the unmount, the store
+ * is mirrored on every change, and the normal send path (which already resets
+ * both pieces of state) clears it for free.
+ */
+let draftText = '';
+let draftAttachments: ComposerAttachment[] = [];
+
 interface InputBarProps {
     busy: boolean;
     onSend: (text: string, attachments: ComposerAttachment[]) => void;
@@ -286,6 +298,9 @@ interface InputBarProps {
      *  conversation already occupies. */
     defaultContextWindow?: number | null;
     planMode?: boolean;
+    /** Slot for the git branch drop-up: rendered in the composer's popup layer
+     *  so `.model-pop` anchors it above the card like the @-mention picker. */
+    branchPicker?: ReactNode;
     /** Heuristic vision support of the selected model (null = unknown). */
     modelVisionCapable?: boolean | null;
     /** The host rejected the last send - restore its value + attachments. */
@@ -345,13 +360,16 @@ export function InputBar({
     onCancelEdit,
     workspaceFiles,
     onRequestFiles,
+    branchPicker,
 }: InputBarProps) {
-    const [value, setValue] = useState('');
+    // Seeded from the module-level draft store: a remount (navigating back
+    // from another screen) restores exactly what the user had typed.
+    const [value, setValue] = useState(draftText);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [filter, setFilter] = useState('');
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-    const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+    const [attachments, setAttachments] = useState<ComposerAttachment[]>(draftAttachments);
     const [attachError, setAttachError] = useState<string | null>(null);
     // Attachment errors auto-dismiss - they describe a single rejected file,
     // so lingering forever is noise (the chips themselves persist).
@@ -360,6 +378,15 @@ export function InputBar({
         const timer = setTimeout(() => setAttachError(null), 5000);
         return () => clearTimeout(timer);
     }, [attachError]);
+    // Mirror the draft into module scope on every change, so unmounting the
+    // composer (any screen switch) cannot drop it. Sending clears both states,
+    // which clears the store through these same effects.
+    useEffect(() => {
+        draftText = value;
+    }, [value]);
+    useEffect(() => {
+        draftAttachments = attachments;
+    }, [attachments]);
     // @-mention popup state: a live `@token` under the caret opens the
     // workspace-file picker; the textarea itself is the search field.
     const [mention, setMention] = useState<MentionState | null>(null);
@@ -888,7 +915,7 @@ export function InputBar({
     return (
         <div className="input-bar">
             <div
-                className={`composer${typing ? ' is-typing' : ''}${editDraft ? ' is-editing' : ''}${attachments.length > 0 ? ' has-attachments' : ''}`}
+                className={`composer${typing ? ' is-typing' : ''}${editDraft ? ' is-editing' : ''}${attachments.length > 0 ? ' has-attachments' : ''}${value.trim() ? ' has-draft' : ''}`}
                 ref={composerRef}
             >
                 {editDraft && (
@@ -1293,6 +1320,7 @@ export function InputBar({
                         </div>
                     </div>
                 )}
+                {branchPicker}
             </div>
         </div>
     );

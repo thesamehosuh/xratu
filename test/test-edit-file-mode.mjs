@@ -18,7 +18,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { resolveEditMode, EDIT_FILE_MODES, EDIT_FILE_DEFAULT_MODE } = require('../out/tooling/editFileArgs.js');
+const { resolveEditMode, resolveEditContent, EDIT_FILE_MODES, EDIT_FILE_DEFAULT_MODE } = require('../out/tooling/editFileArgs.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -128,6 +128,59 @@ for (const raw of [{ a: {} }, [null], Number.NaN, Infinity, Symbol('s'), 10n]) {
     ok('never throws when every string conversion throws', !threw);
     ok('all-throwing input still errors', isError(result), JSON.stringify(result));
     ok('all-throwing input prints a placeholder', typeof result?.error === 'string' && result.error.includes('<unprintable>'), result?.error);
+}
+
+// --- `new_content` resolution ----------------------------------------------
+// Regression: a call that omitted `new_content` reached
+// `preserveEol(previous, undefined)` and died with a raw
+// `TypeError: Cannot read properties of undefined (reading 'replace')` - a
+// crash naming neither the parameter nor the fix (it reads as a harness fault,
+// not a malformed call). The schema marks the key required, but required keys
+// get dropped constantly, so this must refuse clearly.
+check('accepts content', resolveEditContent('hello').content, 'hello');
+check('accepts multi-line content', resolveEditContent('a\nb').content, 'a\nb');
+check('accepts an EMPTY string (truncate / empty file)', resolveEditContent('').content, '');
+ok('valid content is not an error', !isError(resolveEditContent('x')));
+
+for (const raw of [undefined, null]) {
+    const r = resolveEditContent(raw);
+    ok(`missing ${String(raw)} is refused`, isError(r), JSON.stringify(r));
+}
+for (const raw of [1, 0, true, false, {}, [], ['a'], { content: 'a' }, () => {}]) {
+    const r = resolveEditContent(raw);
+    ok(`non-string ${typeof raw === 'object' ? JSON.stringify(raw) : String(raw)} is refused`, isError(r), JSON.stringify(r));
+}
+
+const contentErr = resolveEditContent(undefined).error;
+ok('names the parameter', contentErr.includes('new_content'), contentErr);
+ok('states what to send instead', contentErr.includes('complete file content'), contentErr);
+ok('points at apply_patch for partial edits', contentErr.includes('apply_patch'), contentErr);
+ok('single-line (no raw newline)', !contentErr.includes('\n'), contentErr);
+ok('reads as an error the model can act on', /^Error: /.test(contentErr), contentErr);
+ok('non-string error echoes the value', resolveEditContent({ content: 'a' }).error.includes('{"content":"a"}'), resolveEditContent({ content: 'a' }).error);
+
+for (const raw of [Symbol('s'), 10n, Number.NaN, Infinity]) {
+    let threw = false;
+    let result = null;
+    try {
+        result = resolveEditContent(raw);
+    } catch {
+        threw = true;
+    }
+    ok(`never throws on ${String(raw)}`, !threw);
+    ok(`hostile content still errors: ${String(raw)}`, isError(result), JSON.stringify(result));
+}
+
+{
+    const circular = {};
+    circular.self = circular;
+    let threw = false;
+    try {
+        resolveEditContent(circular);
+    } catch {
+        threw = true;
+    }
+    ok('never throws on a circular content value', !threw);
 }
 
 console.log(failed === 0 ? '\nedit-file-mode tests: all passed' : `\nedit-file-mode tests: ${failed} FAILED`);
