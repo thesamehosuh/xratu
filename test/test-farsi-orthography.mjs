@@ -26,6 +26,11 @@ const EXEMPT = [join('assets', 'skills', 'natural-farsi', 'SKILL.md')];
 
 const BAD = [
     { name: 'ZWNJ (half-space)', re: /\u200c/g },
+    // Alef madda never attaches to the letter before it: the me-prefix needs a
+    // space or a half-space before it (gluing them is the one wrong form). The
+    // pattern is spelled with code points, and this comment deliberately avoids
+    // the literal - this file is scanned like any other.
+    { name: 'me-prefix glued to alef madda - write "mi avarad" with a space or a half-space', re: /\u0645\u06cc\u0622/g },
     // Spelled with code points so this file itself stays clean.
     { name: 'Arabic yeh U+064A - use Persian yeh U+06CC', re: /\u064a/g },
     { name: 'Arabic kaf U+0643 - use Persian kaf U+06A9', re: /\u0643/g },
