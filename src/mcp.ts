@@ -4,6 +4,12 @@ import * as path from 'path';
 import * as cp from 'child_process';
 import { parsePatchBlocks, sanitizePath } from './paths';
 import { resolveEditMode } from './tooling/editFileArgs';
+import {
+    terminalToolDescription,
+    terminalCommandParamDescription,
+    terminalFailureHint,
+    appendHintToResult,
+} from './tooling/shellPlatform';
 import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
 import { executeWebTool } from './webTools';
@@ -159,17 +165,14 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
     },
     {
         name: 'run_terminal_command',
-        description: [
-            'Runs one shell command in the workspace root (bash, or cmd on Windows).',
-            'Pipes, redirection and chaining work; each call starts fresh at the workspace root.',
-            'stdin is closed (immediate EOF) - the command must not wait for interactive input; use flags like `yes`/`-y` or `</dev/null` semantics instead.',
-            'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for watchers, start them detached with `&` and return.',
-            'In PLAN MODE only read-only enumeration commands are allowed (version probes like `python --version && pip --version`, git status/log/diff/show/blame, ls/cat/grep/rg/find/jq) - everything that can mutate the workspace is blocked server-side; inspect files with read_file/grep_search/glob_search/list_files instead, and use run_tests for test runs.',
-        ].join(' '),
+        // States the shell THIS host actually uses (cmd.exe vs bash). The old
+        // generic "bash, or cmd on Windows" line, paired with a POSIX-only
+        // example, is what made the model open with grep/ls on Windows.
+        description: terminalToolDescription(process.platform),
         inputSchema: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: 'Shell command, e.g. "python test.py" or "cat data.csv | wc -l"' }
+                command: { type: 'string', description: terminalCommandParamDescription(process.platform) }
             },
             required: ['command']
         }
@@ -534,7 +537,17 @@ async function dispatchTool(
                 } else if (code !== 0) {
                     result += `\nExit code: ${code}`;
                 }
-                resolve({ content: [{ type: 'text', text: result.slice(0, 200000) }], isError: !!killReason || !!err || code !== 0 });
+                // Dialect correction ON the failure. "is not recognized as an
+                // internal or external command" does not tell the model which
+                // of its habits to drop; naming the replacement (built-in tool
+                // or cmd.exe equivalent) ends it in one round instead of five.
+                const hint = !killReason && !err && code !== 0
+                    ? terminalFailureHint(process.platform, stderr)
+                    : null;
+                resolve({
+                    content: [{ type: 'text', text: appendHintToResult(result, hint) }],
+                    isError: !!killReason || !!err || code !== 0,
+                });
             };
             resetIdle();
             child.stdout.on('data', (d: Buffer) => {
