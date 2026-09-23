@@ -18,7 +18,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { killTree } from './xratu_mcp_tools';
+import { killTree } from './tooling/processTree';
 import { mcpCleartextHeadersError } from './endpointGuard';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
@@ -75,13 +75,21 @@ interface ServerState {
 
 /** Close one external server's client, then make sure its stdio process
  *  tree is gone (a no-op for already-exited processes and for remote
- *  transports without a pid). */
+ *  transports without a pid).
+ *
+ *  ORDER IS LOAD-BEARING: kill the tree BEFORE `client.close()`. On Windows
+ *  `npx`/`uvx` run through a cmd.exe shim, so the real server is a
+ *  GRANDCHILD; `taskkill /T` can only find it while the shim is still alive.
+ *  The SDK's close() only signals the DIRECT child (and may wait on pipes the
+ *  grandchild still holds), so closing first orphans the server - it keeps
+ *  running and holding ports/files. Same reasoning as codex/opencode, which
+ *  terminate the process group before closing the transport. */
 async function closeState(state: ServerState | null | undefined): Promise<void> {
     if (!state) return;
+    if (state.pid) killTree(state.pid);
     try {
         await state.client.close();
     } catch { /* already dead */ }
-    if (state.pid) killTree(state.pid);
 }
 
 export class ExternalMcpManager {

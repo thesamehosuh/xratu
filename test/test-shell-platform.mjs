@@ -181,6 +181,25 @@ const ok = (name, cond, detail = '') => {
     check('a short result is untouched', appendHintToResult('abc', 'HINT'), 'abc\nHint: HINT');
 }
 
+// --- a chatty failure must keep its TAIL (stderr + exit code) --------------
+// The terminal result puts STDERR, the `Exit code:` line and any kill reason
+// AFTER a potentially huge STDOUT block. A head-only cut dropped exactly the
+// part that explains the failure, so the model saw only the head of stdout.
+
+{
+    const chatty = 'STDOUT:\n' + 'o'.repeat(300_000) + '\nSTDERR:\nboom: the real error\nExit code: 2';
+    const out = appendHintToResult(chatty, null);
+    ok('chatty failure keeps the stderr tail', out.includes('boom: the real error'));
+    ok('chatty failure keeps the exit code', out.endsWith('Exit code: 2'));
+    ok('chatty failure still shows the head', out.startsWith('STDOUT:\n' + 'o'.repeat(64)));
+    ok('chatty failure is bounded to the limit', out.length === 200000);
+    ok('the cut is marked', out.includes('output truncated'));
+
+    const withHint = appendHintToResult(chatty, 'HINT');
+    ok('the hint still trails a chatty failure', withHint.endsWith('\nHint: HINT'));
+    ok('a chatty failure with a hint stays bounded', withHint.length === 200000 + '\nHint: HINT'.length);
+}
+
 // --- ordinary failures must NOT be blamed on the shell --------------------
 
 {

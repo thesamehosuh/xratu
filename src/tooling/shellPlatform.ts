@@ -203,10 +203,29 @@ export function terminalFailureHint(platform: NodeJS.Platform, stderr: string): 
  * cut on any chatty failure, so exactly the runs that needed the correction
  * most arrived with no hint at all. The hint is a fixed short line, so it does
  * not need to count against the output budget.
+ *
+ * The truncation keeps BOTH ends. A head-only cut dropped the tail, and for a
+ * terminal result the tail is where the diagnosis lives: `STDERR`, the
+ * `Exit code:` line and the kill reason all sit AFTER a large `STDOUT` block,
+ * so a chatty failed command arrived with its error and exit code sliced
+ * away - the model saw only the head of stdout. The body still measures
+ * exactly `limit` chars (marker included).
  */
 export function appendHintToResult(result: string, hint: string | null, limit = 200000): string {
-    const head = result.slice(0, limit);
+    const head = clipResult(result, limit);
     return hint ? `${head}\nHint: ${hint}` : head;
+}
+
+/** Bound `text` to `limit` chars, keeping the head and the tail. */
+function clipResult(text: string, limit: number): string {
+    if (text.length <= limit) return text;
+    const marker = '\n… [output truncated] …\n';
+    const budget = limit - marker.length;
+    // Too small to split: a plain head cut is the only bounded answer.
+    if (budget <= 0) return text.slice(0, limit);
+    const head = Math.floor(budget * 0.6);
+    const tail = budget - head;
+    return text.slice(0, head) + marker + text.slice(-tail);
 }
 
 /**

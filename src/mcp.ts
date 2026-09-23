@@ -17,9 +17,9 @@ import {
     XRATU_EXPANSION_TOOLS,
     handleExpansionTool,
     EXPANSION_MUTATING_TOOL_NAMES,
-    killTree,
     type ExpansionToolRuntime,
 } from './xratu_mcp_tools';
+import { killTree } from './tooling/processTree';
 import type { LocalToolDefinition } from './local/localAgent';
 import {
     buildSkillToolDescription,

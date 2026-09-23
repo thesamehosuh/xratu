@@ -5,6 +5,8 @@ import * as vscode from 'vscode';
 import { promisify } from 'util';
 import crossSpawn from 'cross-spawn';
 import { findManifestDir, pythonWorkspace, PYTHON_MANIFESTS } from './tooling/pythonWorkspace';
+import { detectFramework } from './tooling/testFramework';
+import { killTree } from './tooling/processTree';
 import { TASK_LIST_MAX_ITEMS, TASK_LIST_MAX_LABEL, TASK_LIST_STATUSES, taskListLabelOf, type TaskListItem } from './taskList';
 
 const execFile = promisify(cp.execFile);
@@ -222,31 +224,6 @@ function commandForFramework(framework: string, target: string, pattern: string,
     }
 }
 
-async function detectFramework(root: string): Promise<string> {
-    const exists = (p: string) => fs.existsSync(path.join(root, p));
-    // Python manifests often live one level down (this repo: src/pyproject.toml);
-    // without the subdir scan this fell through to the unittest fallback.
-    if (exists('pytest.ini') || exists('pyproject.toml') || exists('tox.ini') || exists('tests')
-        || findManifestDir(root, PYTHON_MANIFESTS)) return 'pytest';
-    if (exists('package.json')) {
-        try {
-            const p = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-            const deps = { ...(p.dependencies || {}), ...(p.devDependencies || {}) };
-            if (deps.vitest) return 'vitest';
-            if (deps.jest) return 'jest';
-        } catch { /* fall through */ }
-    }
-    if (exists('Cargo.toml')) return 'cargo';
-    if (exists('go.mod')) return 'go';
-    if (exists('pom.xml')) return 'maven';
-    if (exists('build.gradle') || exists('build.gradle.kts')) return 'gradle';
-    if (exists('*.sln') || fs.readdirSync(root).some(x => x.endsWith('.sln') || x.endsWith('.csproj'))) return 'dotnet';
-    if (exists('Gemfile') && exists('spec')) return 'rspec';
-    if (exists('composer.json')) return 'phpunit';
-    if (exists('Package.swift')) return 'swift';
-    return 'unittest';
-}
-
 async function runProcess(runtime: ExpansionToolRuntime, argv: string[], timeoutSeconds: number, cwd?: string) {
     const timeout = Math.max(1, Math.min(timeoutSeconds || 120, 600)) * 1000;
     return new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
@@ -269,17 +246,6 @@ async function runProcess(runtime: ExpansionToolRuntime, argv: string[], timeout
         child.on('close', code => finish(code));
     });
 }
-
-/** Kill a process AND its children (cmd shims, package managers) on Windows. */
-export function killTree(pid: number | undefined): void {
-    if (!pid) return;
-    if (process.platform === 'win32') {
-        crossSpawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-    } else {
-        try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ }
-    }
-}
-
 
 function dependencyManager(root: string, ecosystem: string): string {
     const has = (name: string) => fs.existsSync(path.join(root, name));
