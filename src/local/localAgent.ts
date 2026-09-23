@@ -2832,7 +2832,8 @@ export function carryCompactionSummary(
  * Compaction WITH summarization: mechanically drops the oldest turns, then
  * asks the local model to summarize what was removed and bakes the summary
  * into the truncation marker. Returns the summary (null when compaction did
- * not trigger or summarization failed - the plain marker stands either way).
+ * not trigger or summarization failed - in the failure case the drop is
+ * REVERTED, see below).
  */
 async function compactWithSummary(
     messages: LocalAgentMessage[],
@@ -2844,8 +2845,15 @@ async function compactWithSummary(
     protectFromIndex?: number,
     gateRatio?: number,
 ): Promise<string | null> {
+    // Compact a COPY and commit only on success. `compactMessages` drops turns
+    // as a side effect, so summarizing the live array would leave a failed
+    // summarizer (timeout / provider error / empty reply) with turns that are
+    // neither summarized NOR replayed - silently lost for the rest of the run.
+    // It also elides old tool results, but it REPLACES array elements and never
+    // mutates a shared message object, so a shallow array copy isolates both.
+    const working = messages.slice();
     const dropped = compactMessages(
-        messages, windowTokens, usedTokens, toolTokens, false,
+        working, windowTokens, usedTokens, toolTokens, false,
         gateRatio ?? request.autoCompactRatio ?? AUTO_COMPACT_RATIO,
         protectFromIndex,
     );
@@ -2855,11 +2863,17 @@ async function compactWithSummary(
     // summarizer reads (see `summarizableDroppedTurns`).
     const droppedTurns = summarizableDroppedTurns(dropped);
     const summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
-    // Carry the ROLLING summary forward: the freshly merged one when the
-    // summarizer succeeded, else the previous one - so a failed or skipped
-    // summarizer (all-dropped-was-marker, timeout, provider error) cannot erase
-    // the summary the marker was already carrying.
-    carryCompactionSummary(messages, summary ?? existingSummary);
+    if (!summary) {
+        // Nothing to carry: leave `messages` untouched so forced recovery
+        // (deterministic) or the next compaction handles it. The previous
+        // rolling summary - if any - is still in the caller's `existingSummary`
+        // and in the system prompt, so it is not lost either.
+        return null;
+    }
+    // Commit the compacted copy (in place: callers hold this reference), then
+    // bake the merged summary into its marker.
+    messages.splice(0, messages.length, ...working);
+    carryCompactionSummary(messages, summary);
     return summary;
 }
 

@@ -69,13 +69,19 @@ function makeHistory(turns = TURNS) {
     return rows;
 }
 
-function mockFetch(requests) {
+function mockFetch(requests, summarizerMode = 'ok') {
     return async (input, init) => {
         const url = String(input);
         const body = JSON.parse(String(init.body));
         requests.push({ url, ...body });
         const budget = body.max_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
         if (budget === summaryMaxTokens(WINDOW)) {
+            if (summarizerMode === 'fail') {
+                return { ok: false, status: 500, json: async () => ({}), text: async () => 'upstream failed' };
+            }
+            if (summarizerMode === 'empty') {
+                return jsonResponse({ choices: [{ message: { content: '   ' } }] });
+            }
             // Summarizer: answer in the shape of the endpoint it hit.
             if (url.endsWith('/messages')) {
                 return jsonResponse({ content: [{ type: 'text', text: SUMMARY_TEXT }] });
@@ -105,10 +111,10 @@ function mockFetch(requests) {
     };
 }
 
-async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat' } = {}) {
+async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok' } = {}) {
     const requests = [];
     const original = globalThis.fetch;
-    globalThis.fetch = mockFetch(requests);
+    globalThis.fetch = mockFetch(requests, summarizerMode);
     const events = [];
     try {
         for await (const event of runLocalAgent(
@@ -234,6 +240,26 @@ const turn2 = await drive(replayed, compaction.value);
         && summarizer.max_output_tokens === summaryMaxTokens(WINDOW));
     ok('summary extracted from the Responses output shape',
         !!comp && comp.value.includes('probe goal'));
+}
+
+// ---------------------------------------------------------------------------
+// A FAILED summarizer must not COMMIT an unsummarized drop.
+// Regression: `compactMessages` dropped the turns as a side effect before the
+// summarizer ran, so a timeout / provider error / empty reply left the run with
+// turns that were neither summarized nor replayed, plus a stale marker. The
+// drop is now reverted; sizing falls to the deterministic `boundHistory`
+// fallback, and because NO event is emitted the host keeps replaying the turns
+// next turn (no PERMANENT loss).
+// ---------------------------------------------------------------------------
+for (const mode of ['fail', 'empty']) {
+    const r = await drive(makeHistory(), null, { summarizerMode: mode });
+    ok(`${mode} summarizer: no compaction event (host keeps replaying)`,
+        !r.events.some((e) => e.type === 'compactionSummary'));
+    const mainReq = r.requests[r.requests.length - 1];
+    ok(`${mode} summarizer: no unsummarized truncation marker is committed`,
+        !!mainReq?.messages && !isHistoryTruncationMarker(mainReq.messages[1]),
+        JSON.stringify(mainReq?.messages?.[1]?.content ?? '').slice(0, 80));
+    ok(`${mode} summarizer: run still completed`, r.events.some((e) => e.type === 'assistantMessage'));
 }
 
 if (failed) {
