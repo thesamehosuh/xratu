@@ -66,6 +66,26 @@ function descendantsOf(rootPid: number): number[] {
 }
 
 /**
+ * `rootPid` and every live descendant, captured as a snapshot. POSIX only:
+ * Windows has no cheap pre-close descendant enumeration, so it returns [] and
+ * callers must kill the tree while the parent is still alive instead.
+ *
+ * Used to reap survivors AFTER a graceful transport close, when the parent
+ * may already be gone and the tree link with it.
+ */
+export function snapshotTree(pid: number | undefined): number[] {
+    if (!pid || pid <= 0 || process.platform === 'win32') return [];
+    return [pid, ...descendantsOf(pid)];
+}
+
+/** SIGKILL each pid; already-gone pids are ignored. */
+export function killPids(pids: readonly number[]): void {
+    for (const pid of pids) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+}
+
+/**
  * Kill a process AND its whole descendant tree.
  *
  * ASYNC on purpose: on Windows `taskkill /T` must finish ENUMERATING the tree

@@ -91,6 +91,26 @@ try {
     check('composer.json -> phpunit', await detectFramework(newRoot({ 'composer.json': '' })), 'phpunit');
     check('Package.swift -> swift', await detectFramework(newRoot({ 'Package.swift': '' })), 'swift');
     check('nothing -> unittest', await detectFramework(newRoot({ 'src/main.py': '' })), 'unittest');
+
+    // --- a `tests/` dir must not shadow ANOTHER ecosystem either -------------
+    // Rust integration tests conventionally live in tests/, and Go/Java/etc.
+    // projects use it too - the weak heuristic must lose to every manifest.
+    check('Cargo.toml + tests/ -> cargo',
+        await detectFramework(newRoot({ 'Cargo.toml': '', 'tests/a.rs': '' })), 'cargo');
+    check('go.mod + tests/ -> go',
+        await detectFramework(newRoot({ 'go.mod': '', 'tests/a_test.go': '' })), 'go');
+    check('pom.xml + tests/ -> maven',
+        await detectFramework(newRoot({ 'pom.xml': '', 'tests/A.java': '' })), 'maven');
+    check('build.gradle + tests/ -> gradle',
+        await detectFramework(newRoot({ 'build.gradle': '', 'tests/A.java': '' })), 'gradle');
+    check('App.csproj + tests/ -> dotnet',
+        await detectFramework(newRoot({ 'App.csproj': '', 'tests/A.cs': '' })), 'dotnet');
+    check('Gemfile + spec/ + tests/ -> rspec',
+        await detectFramework(newRoot({ Gemfile: '', 'spec/a_spec.rb': '', 'tests/x.rb': '' })), 'rspec');
+    check('composer.json + tests/ -> phpunit',
+        await detectFramework(newRoot({ 'composer.json': '', 'tests/A.php': '' })), 'phpunit');
+    check('Package.swift + tests/ -> swift',
+        await detectFramework(newRoot({ 'Package.swift': '', 'tests/A.swift': '' })), 'swift');
 } finally {
     for (const dir of roots) {
         try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }

@@ -20,7 +20,7 @@ import { createRequire } from 'module';
 import { spawn } from 'child_process';
 
 const require = createRequire(import.meta.url);
-const { killTree } = require('../out/tooling/processTree.js');
+const { killTree, snapshotTree } = require('../out/tooling/processTree.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -99,6 +99,26 @@ const cleanup = async (tree) => {
     let threw = false;
     try { await killTree(undefined); await killTree(0); await killTree(-1); } catch { threw = true; }
     ok('killTree tolerates missing/invalid pids', !threw);
+    ok('snapshotTree of no pid is empty', snapshotTree(undefined).length === 0);
+}
+
+// --- snapshotTree captures the whole tree before a graceful close ----------
+
+{
+    let tree = null;
+    try {
+        tree = await spawnTree(false);
+        if (process.platform === 'win32') {
+            // Windows has no cheap pre-close descendant enumeration by design.
+            ok('snapshotTree is empty on Windows', snapshotTree(tree.parentPid).length === 0);
+        } else {
+            const snap = snapshotTree(tree.parentPid);
+            ok('snapshotTree includes the parent', snap.includes(tree.parentPid));
+            ok('snapshotTree includes the grandchild', snap.includes(tree.childPid));
+        }
+    } finally {
+        await cleanup(tree);
+    }
 }
 
 // --- the regression: a NON-group-leader tree ------------------------------

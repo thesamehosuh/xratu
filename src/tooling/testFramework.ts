@@ -35,9 +35,6 @@ export async function detectFramework(root: string): Promise<string> {
             if (deps.jest) return 'jest';
         } catch { /* fall through */ }
     }
-    // Weak signal: a tests/ directory with nothing above to identify the
-    // project - historically Python (pytest) more often than not.
-    if (exists('tests')) return 'pytest';
     if (exists('Cargo.toml')) return 'cargo';
     if (exists('go.mod')) return 'go';
     if (exists('pom.xml')) return 'maven';
@@ -46,5 +43,9 @@ export async function detectFramework(root: string): Promise<string> {
     if (exists('Gemfile') && exists('spec')) return 'rspec';
     if (exists('composer.json')) return 'phpunit';
     if (exists('Package.swift')) return 'swift';
+    // Weak signal, checked LAST before the fallback: a `tests/` directory is
+    // not Python-specific (Rust integration tests, Go, Node, ... all use it),
+    // so it only decides when no ecosystem above identified the project.
+    if (exists('tests')) return 'pytest';
     return 'unittest';
 }
