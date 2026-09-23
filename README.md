@@ -76,6 +76,26 @@ Format is Cline-compatible: `command`/`args`/`env` for stdio, `url` for
 remote. Tools surface to the agent as `mcp__<server>__<tool>` and follow the
 same approval flow as built-ins.
 
+### Marketplace
+
+The MCP page also has a **Marketplace** tab, so you are not limited to servers
+you type in by hand:
+
+- **Sources** are configurable (`xratu.mcpMarketplaceSources`). Defaults are the
+  public catalog published by the Cline project (Apache-2.0) and the official
+  MCP registry; any http(s) catalog URL works, and an empty list turns remote
+  catalogs off.
+- Catalogs are fetched **host-side, through your proxy**, cached for 24 hours,
+  and always merged with a curated list that ships inside the extension, so the
+  tab keeps working offline.
+- Adding is **never silent**: the row shows the exact command or URL, and the
+  confirm step shows the config that will be written. Entries that need a
+  credential open the edit form instead. Tool auto-approval is never taken from
+  a catalog.
+- An entry a catalog ships without install metadata can be resolved from its
+  README on request; anything guessed that way is labelled and reviewed before
+  it is saved.
+
 ## Agent Skills
 
 A skill is a folder with a `SKILL.md` file - YAML frontmatter
