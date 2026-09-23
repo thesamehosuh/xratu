@@ -1049,9 +1049,19 @@ function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
     // A run of edits is ONE "N files edited" pill whose body is a per-file
     // diff list - not N stacked edit pills.
     const isEdit = toolFamily(tool) === 'edit';
+    // Edit groups start OPEN, exactly like a single edit pill (see
+    // DEFAULT_OPEN_FAMILIES): the diff IS the payload, so a collapsed
+    // "N files edited" makes the user click for the thing they came to read.
+    // Non-edit runs stay collapsed - for reads/searches/terminal spam the
+    // count genuinely is the summary.
+    const [open, setOpen] = useState(isEdit);
     const stats = useMemo(() => (isEdit ? sumEditStats(row.calls) : null), [isEdit, row.calls]);
     return (
-        <details className={`step${allDone ? '' : ' running'}${anyFailed ? ' group-fail' : ''}`}>
+        <details
+            className={`step${allDone ? '' : ' running'}${anyFailed ? ' group-fail' : ''}`}
+            open={open}
+            onToggle={(e) => setOpen(e.currentTarget.open)}
+        >
             <summary>
                 <Icon size={13} className="step-icon" />
                 <span className="step-label" dir={isEdit ? undefined : fa === tool ? 'ltr' : undefined}>

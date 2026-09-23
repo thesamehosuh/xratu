@@ -42,6 +42,37 @@ function safeStringify(value: unknown): string {
     }
 }
 
+export type EditContentResolution = { content: string } | { error: string };
+
+/**
+ * Resolve the `new_content` argument.
+ *
+ * Regression: a call that omitted it reached `preserveEol(previous, undefined)`
+ * and died with a raw `TypeError: Cannot read properties of undefined (reading
+ * 'replace')` - a crash that names neither the parameter nor the fix, and looks
+ * like a harness fault rather than a malformed call. The schema marks
+ * `new_content` required, but required keys get dropped constantly, so this has
+ * to be a clear refusal.
+ *
+ * An EMPTY string is VALID: it is how a caller truncates a file (overwrite) or
+ * creates an empty one.
+ */
+export function resolveEditContent(raw: unknown): EditContentResolution {
+    if (typeof raw === 'string') return { content: raw };
+    if (raw === undefined || raw === null) {
+        return {
+            error: 'Error: new_content is required and was missing - send the complete file '
+                + 'content for mode "overwrite"/"create", or the text to add for "append". '
+                + 'To change PART of an existing file, use apply_patch instead of edit_file.',
+        };
+    }
+    return {
+        error: `Error: new_content must be a string, got ${safeStringify(raw)} - send the file `
+            + 'content as text (the complete content for "overwrite"/"create", the text to add '
+            + 'for "append").',
+    };
+}
+
 /**
  * Resolve a raw `mode` argument.
  *

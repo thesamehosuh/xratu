@@ -3,10 +3,12 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
-import { sanitizePath } from './paths';
+import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
 import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
@@ -57,7 +59,8 @@ import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './tas
 import { resolveEditMode } from './tooling/editFileArgs';
 import { resolveAgentRounds } from './tooling/agentRounds';
 import { resolveCompactRatio } from './tooling/compactionPolicy';
-import { MCP_REGISTRY } from './mcpRegistry';
+import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type GitStatusSummary } from './tooling/gitStatus';
+import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
 import { isGeoBlockedError } from './providerErrors';
@@ -65,10 +68,14 @@ import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type Gat
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
 
+/** Shared promisified runner for the git status line. */
+const execFileAsync = promisify(execFile);
+
 /** External MCP manager + config store - module-level so deactivate() can
  *  shut the stdio children down and the provider can serve the MCP page. */
 let externalMcpInstance: ExternalMcpManager | null = null;
 let mcpConfigStoreInstance: McpConfigStore | null = null;
+let mcpMarketplaceInstance: McpMarketplaceStore | null = null;
 
 interface ApprovalDiff {
     file: string;
@@ -2857,7 +2864,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const externalTools = externalMcpInstance
             ? await externalMcpInstance.listTools().catch(() => [])
             : [];
-        const executor = createLocalToolExecutor(
+        const rawExecutor = createLocalToolExecutor(
             workspaceRoot,
             (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
             externalMcpInstance ?? undefined,
@@ -2871,6 +2878,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 new Set(this._disabledSkillIds()),
             ),
         );
+
+        // The git line under the composer must not wait for the whole run to
+        // settle: any tool can touch the working tree (an edit, or a git
+        // command run through the terminal). Wrapped generically so the
+        // executor's own signature stays the single source of truth.
+        const executor: typeof rawExecutor = {
+            execute: async (call, onOutput) => {
+                try {
+                    return await rawExecutor.execute(call, onOutput);
+                } finally {
+                    this._scheduleGitStatusPush();
+                }
+            },
+        };
 
         // Text attachments ride the prompt as fenced blocks (no vision
         // needed) - PDFs arrive here ALREADY text-extracted by the caller;
@@ -3500,6 +3521,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({ type: 'yoloMode', enabled: this._yoloMode });
                             this._view?.webview.postMessage({ type: 'planMode', enabled: this._planMode });
                             this._pushTaskListState();
+                            // The git line under the composer must be correct on
+                            // the first paint after a webview reload too.
+                            void this._sendGitStatus();
                             this._resetLiveSegments();
                             // Reconcile the local multi-session index with the
                             // on-disk directories (+ legacy one-shot import)
@@ -3692,6 +3716,24 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             await externalMcpInstance?.restart(String(data.name ?? ''));
                             await this._sendMcpState();
                             break;
+                        case 'mcpMarketplaceGetState':
+                            await this._sendMarketplaceState({
+                                query: typeof data.query === 'string' ? data.query : '',
+                                force: data.force === true,
+                            });
+                            break;
+                        case 'mcpMarketplaceDetect':
+                            await this._sendMarketplaceDetection(String(data.id ?? ''));
+                            break;
+                        case 'gitStatusGetState':
+                            await this._sendGitStatus();
+                            break;
+                        case 'gitBranchesGetState':
+                            await this._sendGitBranches();
+                            break;
+                        case 'gitCheckout':
+                            await this._gitCheckout(String(data.branch ?? ''));
+                            break;
                         case 'usageGetState':
                             await this._sendUsageState();
                             break;
@@ -3820,9 +3862,114 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         );
     }
 
-    /** Push the MCP page's complete view: merged config + live statuses +
-     *  the curated registry. Header values are included (the page is the
-     *  single editing surface - masking them would make saves destructive). */
+    /** Local branches from the last listing - also the ALLOWLIST `_gitCheckout`
+     *  validates against, so a webview-supplied string never reaches git. */
+    private _gitBranches: string[] = [];
+
+    /** Read the workspace's git status, plus the folder it belongs to compacted
+     *  against $HOME (a long absolute path would crowd out the branch and the
+     *  counts). */
+    private async _readGitStatus(): Promise<{ status: GitStatusSummary; root: string | null }> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        let status = emptyGitStatus();
+        if (root) {
+            try {
+                const { stdout } = await execFileAsync(
+                    'git',
+                    ['-C', root, 'status', '--porcelain=v1', '--branch'],
+                    { timeout: 8000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+                );
+                status = parseGitStatus(String(stdout ?? ''));
+            } catch {
+                status = emptyGitStatus();
+            }
+        }
+        const home = os.homedir();
+        const displayRoot = root
+            ? (home && (root === home || root.startsWith(home + path.sep)) ? `~${root.slice(home.length)}` : root)
+            : null;
+        return { status, root: displayRoot };
+    }
+
+    /** Debounce handle for the git line's post-tool refresh. */
+    private _gitStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+    /** Refresh the git line soon, coalescing bursts: tools touch the working
+     *  tree far faster than `git status` is worth running. */
+    private _scheduleGitStatusPush(): void {
+        if (this._gitStatusTimer) return;
+        this._gitStatusTimer = setTimeout(() => {
+            this._gitStatusTimer = null;
+            void this._sendGitStatus();
+        }, 500);
+    }
+
+    /** Push the git status for the line under the composer. A non-repo (or a
+     *  missing git) reports `isRepo: false` and the UI renders nothing - a
+     *  status line that guesses is worse than no line. */
+    private async _sendGitStatus(): Promise<void> {
+        if (!this._view) return;
+        const { status, root } = await this._readGitStatus();
+        this._view.webview.postMessage({ type: 'gitStatusState', status, root });
+    }
+
+    /** Push the branch list for the picker. The CURRENT branch comes from the
+     *  status the line is already showing - one source of truth, not a second
+     *  git call that could disagree with the line the user just clicked. */
+    private async _sendGitBranches(): Promise<void> {
+        if (!this._view) return;
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        let branches: string[] = [];
+        if (root) {
+            try {
+                const { stdout } = await execFileAsync(
+                    'git',
+                    ['-C', root, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+                    { timeout: 8000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+                );
+                branches = parseBranchList(String(stdout ?? ''));
+            } catch {
+                branches = [];
+            }
+        }
+        this._gitBranches = branches;
+        const { status } = await this._readGitStatus();
+        this._view.webview.postMessage({ type: 'gitBranchesState', branches, current: status.branch });
+    }
+
+    /** Switch the workspace to another branch.
+     *
+     *  The name must be one we just LISTED, not merely well-formed: the picker
+     *  is the only caller, so an arbitrary string from the webview must never
+     *  reach git's argv. `git checkout` refuses on its own when the switch
+     *  would overwrite local changes (no -f here, deliberately), and a failure
+     *  is REPORTED - a picker that silently does nothing reads as broken. */
+    private async _gitCheckout(branch: string): Promise<void> {
+        if (!this._view) return;
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (root && isSafeBranchName(branch) && this._gitBranches.includes(branch)) {
+            try {
+                await execFileAsync('git', ['-C', root, 'checkout', branch], {
+                    timeout: 15_000,
+                    maxBuffer: 4 * 1024 * 1024,
+                    windowsHide: true,
+                });
+            } catch (err) {
+                const detail = String((err as { stderr?: unknown })?.stderr || (err as Error)?.message || err)
+                    .split('\n')
+                    .map((line) => line.trim())
+                    .filter(Boolean)[0] ?? '';
+                this.notifyBanner('error', 'gitCheckoutFailed', { error: detail.slice(0, 200) });
+            }
+        }
+        await this._sendGitStatus();
+        await this._sendGitBranches();
+    }
+
+    /** Push the MCP page's complete view: merged config + live statuses.
+     *  Header values are included (the page is the single editing surface -
+     *  masking them would make saves destructive). The addable catalog now
+     *  rides `mcpMarketplaceState` instead of this payload. */
     private async _sendMcpState(): Promise<void> {
         if (!externalMcpInstance || !mcpConfigStoreInstance || !this._view) return;
         const config = await mcpConfigStoreInstance.load();
@@ -3840,8 +3987,56 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             servers,
             hasWorkspace: !!config.workspacePath,
             legacyInUse: config.legacyInUse,
-            registry: MCP_REGISTRY,
         });
+    }
+
+    /** Push the live marketplace. The fetch happens HERE, never in the
+     *  webview: its CSP is `connect-src 'none'`, and the host is where the
+     *  proxy, timeouts and size caps live. `query` echoes back so the webview
+     *  can drop a stale response that lost the debounce race. */
+    private async _sendMarketplaceState(options: { query?: string; force?: boolean } = {}): Promise<void> {
+        if (!mcpMarketplaceInstance || !this._view) return;
+        const query = options.query ?? '';
+        let state: MarketplaceState;
+        try {
+            state = await mcpMarketplaceInstance.load({ query, force: options.force === true });
+        } catch (err) {
+            console.error('xratu: MCP marketplace load failed', err);
+            state = {
+                entries: [],
+                tagLabels: {},
+                sources: [],
+                status: 'offline',
+                fetchedAt: null,
+                error: err instanceof Error ? err.message : String(err),
+                liveSearch: false,
+            };
+        }
+        this._view.webview.postMessage({ type: 'mcpMarketplaceState', ...state, query });
+    }
+
+    /** Opt-in README detection for an entry a catalog shipped without install
+     *  metadata. The entry is looked up in the LAST LOADED catalog by id - a
+     *  webview-supplied URL would let the page make the host fetch anything. */
+    private async _sendMarketplaceDetection(id: string): Promise<void> {
+        if (!mcpMarketplaceInstance || !this._view) return;
+        const entry = id ? mcpMarketplaceInstance.findEntry(id) : null;
+        if (!entry) {
+            this._view.webview.postMessage({ type: 'mcpMarketplaceDetected', id, install: null, confidence: 'none' });
+            return;
+        }
+        try {
+            const detected = await mcpMarketplaceInstance.detectFromReadme(entry);
+            this._view.webview.postMessage({
+                type: 'mcpMarketplaceDetected',
+                id,
+                install: detected.install,
+                confidence: detected.installConfidence,
+            });
+        } catch (err) {
+            console.error('xratu: MCP marketplace README detection failed', err);
+            this._view.webview.postMessage({ type: 'mcpMarketplaceDetected', id, install: null, confidence: 'none' });
+        }
     }
 
     /** MCP page saves are dispatched concurrently by the webview message
@@ -5500,11 +5695,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  approval cards show a real diff for apply_patch payloads. Returns
      *  null when no block matches (the preview degrades gracefully). */
     private _applyMarkerPatch(content: string, patch: string): string | null {
-        const stdRe = /<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n>>>>>>> REPLACE/g;
-        const blocks: Array<{ search: string; replace: string }> = [];
-        let m: RegExpExecArray | null;
-        while ((m = stdRe.exec(patch)) !== null) {
-            blocks.push({ search: m[1], replace: m[2] });
+        // Shared parser, not a private copy of the regex: the approval card
+        // must preview exactly what apply_patch will do - including the
+        // dropped-final-closer repair - or the diff shown and the edit
+        // applied can disagree. A refusal (marker-like content inside a body)
+        // degrades to null; the preview is advisory, the tool reports.
+        let blocks: Array<{ search: string; replace: string }>;
+        try {
+            blocks = parsePatchBlocks(repairPatchMarkers(patch).patch);
+        } catch {
+            return null;
         }
         if (blocks.length === 0) return null;
         let out = content;
@@ -5838,6 +6038,7 @@ export function activate(context: vscode.ExtensionContext) {
     const externalMcp = new ExternalMcpManager(() => mcpConfigStore.load());
     externalMcpInstance = externalMcp;
     mcpConfigStoreInstance = mcpConfigStore;
+    mcpMarketplaceInstance = new McpMarketplaceStore(context);
 
     // Ship with the DuckDuckGo search MCP active (first run only - the seed
     // is skipped as soon as the global config file exists). Fire-and-forget:
@@ -5974,4 +6175,5 @@ export function deactivate() {
     void externalMcpInstance?.stopAll();
     externalMcpInstance = null;
     mcpConfigStoreInstance = null;
+    mcpMarketplaceInstance = null;
 }

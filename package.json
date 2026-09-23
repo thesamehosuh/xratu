@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "%ext.displayName%",
 	"description": "%ext.description%",
-	"version": "1.1.7",
+	"version": "1.2.0",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
@@ -72,6 +72,17 @@
 					"default": "",
 					"description": "%config.noProxy.desc%"
 				},
+				"xratu.mcpMarketplaceSources": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [
+						"https://cline.github.io/marketplace/catalog.json",
+						"https://registry.modelcontextprotocol.io/v0/servers"
+					],
+					"markdownDescription": "%config.mcpMarketplaceSources.desc%"
+				},
 				"xratu.modelPricing": {
 					"type": "object",
 					"default": {},
@@ -101,7 +112,8 @@
 			"restrictedConfigurations": [
 				"xratu.mcpServers",
 				"xratu.proxyUrl",
-				"xratu.noProxy"
+				"xratu.noProxy",
+				"xratu.mcpMarketplaceSources"
 			]
 		},
 		"commands": [
@@ -183,6 +195,8 @@
 		"test:endpoint-guard": "node test/test-endpoint-guard.mjs",
 		"test:base-url": "node test/test-base-url.mjs",
 		"test:proxy": "node test/test-proxy.mjs",
+		"test:mcp-marketplace": "node test/test-mcp-marketplace.mjs",
+		"test:git-status": "node test/test-git-status.mjs",
 		"test:provider-identity": "node test/test-provider-identity.mjs",
 		"test:api-style": "node test/test-api-style.mjs",
 		"test:pricing": "node test/test-pricing.mjs",

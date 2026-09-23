@@ -60,6 +60,18 @@ export type ToExtensionMessage =
     | { type: 'mcpSave'; target: McpSaveTarget; servers: McpServerPayload[] }
     /** MCP page: drop one server's cached connection and reconnect. */
     | { type: 'mcpRestart'; name: string }
+    /** Marketplace tab: load the live catalog (`query` runs a debounced
+     *  search, `force` bypasses the 24h cache). */
+    | { type: 'mcpMarketplaceGetState'; query?: string; force?: boolean }
+    /** Marketplace tab: opt-in README detection for one catalog entry. */
+    | { type: 'mcpMarketplaceDetect'; id: string }
+    /** Refresh the git status line under the composer. */
+    | { type: 'gitStatusGetState' }
+    /** Branch picker: request the local branch list. */
+    | { type: 'gitBranchesGetState' }
+    /** Branch picker: switch the workspace to `branch`. The host validates it
+     *  against the list it just served, so this is not a free-form command. */
+    | { type: 'gitCheckout'; branch: string }
     /** Skills page: request the discovered skill list + enabled flags. */
     | { type: 'skillsGetState' }
     /** Skills page: enable/disable one skill (persisted host-side). */
@@ -305,9 +317,22 @@ export type FromExtensionMessage =
     | { type: 'fileList'; files: string[] }
     /** Response to mcpGetState / mcpSave / mcpRestart - the MCP page's
      *  complete view: merged config + live statuses + curated registry. */
-    | { type: 'mcpState'; servers: McpServerView[]; hasWorkspace: boolean; legacyInUse: boolean; registry: McpRegistryEntry[] }
+    | { type: 'mcpState'; servers: McpServerView[]; hasWorkspace: boolean; legacyInUse: boolean }
+    /** Response to mcpMarketplaceGetState - the live marketplace. `query`
+     *  echoes the request so a stale (debounce-losing) response can be
+     *  dropped instead of overwriting fresher results. */
+    | ({ type: 'mcpMarketplaceState'; query: string } & MarketplaceState)
+    /** Response to mcpMarketplaceDetect - the README-derived install, or null
+     *  when nothing runnable was found. */
+    | { type: 'mcpMarketplaceDetected'; id: string; install: MarketplaceInstall | null; confidence: InstallConfidence }
     /** Response to skillsGetState / skillsToggle - the Skills page's view. */
     | { type: 'skillsState'; skills: SkillView[] }
+    /** Response to gitStatusGetState / the host's own refresh - the workspace's
+     *  git status for the line under the composer (`isRepo: false` outside a
+     *  repository, where the line renders nothing). */
+    | { type: 'gitStatusState'; status: GitStatusSummary; root: string | null }
+    /** Response to gitBranchesGetState - local branches + the current one. */
+    | { type: 'gitBranchesState'; branches: string[]; current: string | null }
     /** Host-echoed current task list (user override merged; null when the
      *  session has none). Drives the interactive checklist + progress chip. */
     | { type: 'taskListState'; tasks: TaskListItem[] | null }
@@ -414,13 +439,95 @@ export interface McpServerView extends McpServerPayload {
     source: 'global' | 'workspace' | 'legacy';
 }
 
-/** One curated registry entry (offline "mini marketplace"). */
-export interface McpRegistryEntry {
+// ---------------------------------------------------------------------------
+// Marketplace tab model (mirrors src/mcpMarketplace.ts - the host is the only
+// thing that fetches catalogs; the webview just renders what it receives)
+// ---------------------------------------------------------------------------
+
+/** Workspace git status (mirrors src/tooling/gitStatus.ts). */
+export interface GitStatusSummary {
+    isRepo: boolean;
+    branch: string | null;
+    detached: boolean;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+    staged: number;
+    modified: number;
+    untracked: number;
+    conflicted: number;
+}
+
+export type MarketplaceSource = 'official' | 'cline' | 'remote' | 'curated';
+export type InstallConfidence = 'registry' | 'curated' | 'detected' | 'none';
+
+export interface MarketplaceEnvVar {
+    name: string;
+    description?: string;
+    url?: string;
+    secret?: boolean;
+    required?: boolean;
+}
+
+export interface MarketplaceStdioInstall {
+    kind: 'stdio';
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    envVars?: MarketplaceEnvVar[];
+    runtime: 'node' | 'python' | 'docker' | 'binary';
+}
+
+export interface MarketplaceRemoteInstall {
+    kind: 'remote';
+    type: 'streamableHttp' | 'sse';
+    url: string;
+    /** Credentials the server expects (usually an auth header). Remote entries
+     *  carry these too - a token cannot be guessed from a URL, so such an
+     *  entry is routed to the editor instead of a direct add. */
+    envVars?: MarketplaceEnvVar[];
+}
+
+export type MarketplaceInstall = MarketplaceStdioInstall | MarketplaceRemoteInstall;
+
+/** One catalog entry, normalized across every supported source. */
+export interface MarketplaceEntry {
     id: string;
-    nameKey: string;
-    descKey: string;
-    docsUrl?: string;
-    server: McpServerPayload;
+    source: MarketplaceSource;
+    serverName: string;
+    name: string;
+    /** i18n keys for vendored curated entries. */
+    nameKey?: string;
+    descKey?: string;
+    tagline?: string;
+    description: string;
+    author?: string;
+    authorUrl?: string;
+    version?: string;
+    category?: string;
+    tags: string[];
+    homepageUrl?: string;
+    repoUrl?: string;
+    stars?: number;
+    downloads?: number;
+    requiresApiKey?: boolean;
+    verified?: boolean;
+    recommended?: boolean;
+    install: MarketplaceInstall | null;
+    installConfidence: InstallConfidence;
+}
+
+/** Payload of mcpMarketplaceState (minus the echoed query). */
+export interface MarketplaceState {
+    entries: MarketplaceEntry[];
+    /** Catalog-published tag labels (id → human label), used as the fallback
+     *  for tag ids this build has no translation for. */
+    tagLabels?: Record<string, string>;
+    sources: string[];
+    status: 'live' | 'cached' | 'offline';
+    fetchedAt: number | null;
+    error: string | null;
+    liveSearch: boolean;
 }
 
 // ---------------------------------------------------------------------------
