@@ -7,8 +7,9 @@
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
 import { isLikelyLocalUrl } from '../endpointGuard';
+import { providerIdForUrl } from '../providerIdentity';
 import { normalizeBaseUrl } from './baseUrl';
-import { applyModelKnowledge, parseModelList } from './modelMetadata';
+import { applyModelKnowledge, applyModelsDev, normalizeModelsDevDoc, parseModelList, type ModelsDevCatalog } from './modelMetadata';
 
 export interface DiscoveredLocalModel {
     connection: LocalModelConnection;
@@ -35,6 +36,51 @@ export const LOCAL_RUNTIME_PRESETS: LocalRuntimePreset[] = [
     { runtime: 'vllm', name: 'vLLM', baseUrl: 'http://localhost:8000' },
     { runtime: 'llama.cpp', name: 'llama.cpp', baseUrl: 'http://localhost:8080' },
 ];
+
+// ---------------------------------------------------------------------------
+// models.dev catalog
+// ---------------------------------------------------------------------------
+
+/** Public catalog with per-provider context/output limits and capabilities.
+ *  This is the source opencode/Cline/Goose build their model lists from. */
+export const MODELS_DEV_URL = 'https://models.dev/api.json';
+/** The catalog changes slowly; a day keeps the picker accurate without a
+ *  request per refresh. A stale cache is still served when the fetch fails. */
+export const MODELS_DEV_TTL_MS = 24 * 60 * 60 * 1000;
+/** After a failed fetch, wait before trying again (offline should not stall
+ *  every model refresh). */
+export const MODELS_DEV_RETRY_MS = 10 * 60 * 1000;
+/** The document is ~5 MB; give it room, but never block the picker for long. */
+export const MODELS_DEV_TIMEOUT_MS = 8_000;
+
+/** Fetch and normalize the models.dev catalog. Returns null on any failure
+ *  (the caller then serves its cached copy, or the curated fallback). */
+export async function fetchModelsDevCatalog(
+    signal?: AbortSignal,
+    timeoutMs = MODELS_DEV_TIMEOUT_MS,
+    dispatcher?: unknown,
+): Promise<ModelsDevCatalog | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+        const init: RequestInit = {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal,
+        };
+        const response = await fetch(MODELS_DEV_URL, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
+        if (!response.ok) return null;
+        const catalog = normalizeModelsDevDoc(await response.json());
+        return Object.keys(catalog).length ? catalog : null;
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Discovery
@@ -191,17 +237,26 @@ async function enrichOllamaModels(
 /**
  * Probe a single base URL for available models.
  * Returns null if the endpoint is unreachable.
+ *
+ * `modelsDev` is the optional models.dev catalog: provider-reported values win,
+ * models.dev fills the gaps, and the curated table covers whatever is left.
  */
 export async function probeLocalEndpoint(
     baseUrl: string,
     signal?: AbortSignal,
     apiKey?: string | null,
     dispatcher?: unknown,
+    modelsDev?: ModelsDevCatalog | null,
 ): Promise<{ models: LocalModelInfo[] } | null> {
     const rawBase = baseUrl.trim().replace(/\/+$/, '');
     // Never proxy on-machine runtimes: a proxy would break localhost and is
     // pointless for local traffic.
     const proxy = isLikelyLocalUrl(baseUrl) ? undefined : dispatcher;
+    // Resolve the provider once: models.dev is keyed by provider, and the
+    // curated table is the last resort for whatever neither source knew.
+    const providerId = providerIdForUrl(baseUrl);
+    const withFallbacks = (models: LocalModelInfo[]): LocalModelInfo[] =>
+        applyModelKnowledge(applyModelsDev(models, modelsDev, providerId));
 
     // Localhost runtimes get the tight 1.8s deadline; remote gateways need
     // seconds - e.g. kayaai.ir serves a ~230KB models list that takes
@@ -215,7 +270,7 @@ export async function probeLocalEndpoint(
     if (isGoogleGenerativeHost(baseUrl)) {
         const google = await fetchJson(googleModelsUrl(apiKey), signal, probeTimeoutMs, null, proxy);
         const parsed = parseModelList(google);
-        if (parsed) return { models: applyModelKnowledge(parsed) };
+        if (parsed) return { models: withFallbacks(parsed) };
     }
 
     // LM Studio's native v1 model endpoint exposes max_context_length and
@@ -236,9 +291,9 @@ export async function probeLocalEndpoint(
                 const llms = native.models.filter((m: any) => !m?.type || m.type === 'llm');
                 const ids = new Set(llms.map((m: any) => m?.key ?? m?.id));
                 const chatOnly = parsed.filter((m) => ids.has(m.id));
-                if (chatOnly.length) return { models: applyModelKnowledge(chatOnly) };
+                if (chatOnly.length) return { models: withFallbacks(chatOnly) };
             } else {
-                return { models: applyModelKnowledge(parsed) };
+                return { models: withFallbacks(parsed) };
             }
         }
     }
@@ -250,7 +305,7 @@ export async function probeLocalEndpoint(
         const parsedTags = parseModelList(tags);
         if (parsedTags) {
             const enriched = await enrichOllamaModels(origin, parsedTags, signal);
-            return { models: applyModelKnowledge(enriched) };
+            return { models: withFallbacks(enriched) };
         }
     }
 
@@ -267,7 +322,7 @@ export async function probeLocalEndpoint(
     }
     const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey, proxy);
     const parsed = parseModelList(openai);
-    if (parsed) return { models: applyModelKnowledge(parsed) };
+    if (parsed) return { models: withFallbacks(parsed) };
 
     // Fall back to Ollama's native /api/tags endpoint. A recognized loopback
     // runtime is rooted at the origin (its native surface never carries the
@@ -276,7 +331,7 @@ export async function probeLocalEndpoint(
     const tagsBase = isLoopbackRuntime(rawBase, 11434) ? (origin ?? rawBase) : rawBase;
     const ollama = await fetchJson(`${tagsBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
     const parsedOllama = parseModelList(ollama);
-    if (parsedOllama) return { models: applyModelKnowledge(parsedOllama) };
+    if (parsedOllama) return { models: withFallbacks(parsedOllama) };
 
     return null;
 }
@@ -312,8 +367,9 @@ export async function probeCustomEndpoint(
     signal?: AbortSignal,
     apiKey?: string | null,
     dispatcher?: unknown,
+    modelsDev?: ModelsDevCatalog | null,
 ): Promise<DiscoveredLocalModel | null> {
-    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey, dispatcher);
+    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey, dispatcher, modelsDev);
     if (!probed) return null;
 
     const connection: LocalModelConnection = {

@@ -369,6 +369,242 @@ export function applyModelKnowledge(models: LocalModelInfo[]): LocalModelInfo[] 
 }
 
 // ---------------------------------------------------------------------------
+// models.dev fallback layer
+// ---------------------------------------------------------------------------
+//
+// Providers rarely report a context window on their model list - OpenCode
+// Zen/Go answer with ids only - so the bundled `modelKnowledge` table is the
+// only fallback and it drifts as models update. models.dev publishes one
+// public JSON document (`api.json`) with per-provider `limit.context`,
+// `limit.output`, capability flags and reasoning options, which is what
+// opencode, Cline and Goose build their catalogs from. This layer sits
+// BETWEEN the provider's own report and the curated table:
+//   provider payload  >  models.dev  >  modelKnowledge.
+
+/** Our provider id -> models.dev provider key. Providers absent here
+ *  (Iranian, custom, on-machine) fall straight through to the curated table. */
+const MODELS_DEV_PROVIDERS: Readonly<Record<string, string>> = {
+    openai: 'openai',
+    anthropic: 'anthropic',
+    google: 'google',
+    deepseek: 'deepseek',
+    openrouter: 'openrouter',
+    mistral: 'mistral',
+    xai: 'xai',
+    zai: 'zai',
+    groq: 'groq',
+    cerebras: 'cerebras',
+    nvidia: 'nvidia',
+    huggingface: 'huggingface',
+    cohere: 'cohere',
+    perplexity: 'perplexity',
+    together: 'togetherai',
+    fireworks: 'fireworks-ai',
+    moonshot: 'moonshotai-cn',
+    opencode: 'opencode',
+    'opencode-go': 'opencode-go',
+};
+
+const MODELS_DEV_PROVIDER_KEYS = new Set(Object.values(MODELS_DEV_PROVIDERS));
+
+/** models.dev provider key for one of our provider ids, or null when the
+ *  catalog does not cover it. */
+export function modelsDevProviderKey(providerId: string | null | undefined): string | null {
+    const id = (providerId ?? '').trim().toLowerCase();
+    return MODELS_DEV_PROVIDERS[id] ?? null;
+}
+
+/** One models.dev model, reduced to the fields we merge. Deliberately no
+ *  pricing: models.dev prices are per-provider, and the host-scoped catalog
+ *  cache cannot yet tell two providers that share a host apart, so importing
+ *  them here would let Zen's price overwrite Go's. */
+export interface ModelsDevModel {
+    displayName?: string;
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    supportsVision?: boolean;
+    supportsTools?: boolean;
+    supportsReasoning?: boolean;
+    reasoningLevels?: ThinkingLevel[];
+}
+
+/** models.dev provider key -> lowercased model id -> normalized model. */
+export type ModelsDevCatalog = Record<string, Record<string, ModelsDevModel>>;
+
+/** models.dev effort options -> our canonical levels. Only `effort`-typed
+ *  options carry levels; a `toggle`/`budget_tokens` model has none, which the
+ *  picker already reads as "offer the default set". */
+function modelsDevEfforts(value: unknown): ThinkingLevel[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    for (const option of value) {
+        if (!option || typeof option !== 'object') continue;
+        if (String((option as any).type).toLowerCase() !== 'effort') continue;
+        const normalized = normalizeEfforts((option as any).values);
+        if (normalized) return normalized;
+    }
+    return undefined;
+}
+
+/** Validate one already-normalized model (a cached entry or a freshly built
+ *  candidate) so a corrupt/hand-edited cache can never inject a bogus window
+ *  or an unknown effort level. Returns null when nothing usable remains. */
+function sanitizeModelsDevModel(entry: unknown): ModelsDevModel | null {
+    if (!entry || typeof entry !== 'object') return null;
+    const m = entry as Record<string, unknown>;
+    const model: ModelsDevModel = {};
+    const contextWindow = toWindow(m.contextWindow);
+    if (contextWindow !== undefined) model.contextWindow = contextWindow;
+    const maxOutputTokens = toWindow(m.maxOutputTokens);
+    if (maxOutputTokens !== undefined) model.maxOutputTokens = maxOutputTokens;
+    if (typeof m.displayName === 'string' && m.displayName.trim()) model.displayName = m.displayName.trim();
+    if (typeof m.supportsVision === 'boolean') model.supportsVision = m.supportsVision;
+    if (typeof m.supportsTools === 'boolean') model.supportsTools = m.supportsTools;
+    if (typeof m.supportsReasoning === 'boolean') model.supportsReasoning = m.supportsReasoning;
+    const levels = normalizeEfforts(m.reasoningLevels);
+    if (levels) model.reasoningLevels = levels;
+    return Object.keys(model).length ? model : null;
+}
+
+/** Map one raw models.dev model to the normalized shape (then validate it). */
+function normalizeModelsDevModel(raw: any, id: string): ModelsDevModel | null {
+    const candidate: Record<string, unknown> = {
+        contextWindow: raw?.limit?.context,
+        maxOutputTokens: raw?.limit?.output,
+    };
+    if (typeof raw?.name === 'string' && raw.name.trim() && raw.name.trim() !== id) {
+        candidate.displayName = raw.name.trim();
+    }
+    const input = raw?.modalities?.input;
+    if (Array.isArray(input)) {
+        candidate.supportsVision = input.some((v: unknown) => String(v).toLowerCase() === 'image');
+    }
+    if (typeof raw?.tool_call === 'boolean') candidate.supportsTools = raw.tool_call;
+    if (typeof raw?.reasoning === 'boolean') candidate.supportsReasoning = raw.reasoning;
+    const levels = modelsDevEfforts(raw?.reasoning_options);
+    if (levels) candidate.reasoningLevels = levels;
+    return sanitizeModelsDevModel(candidate);
+}
+
+/** Normalize a raw models.dev `api.json` document. Only mapped providers are
+ *  kept. Never throws. */
+export function normalizeModelsDevDoc(raw: unknown): ModelsDevCatalog {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const catalog: ModelsDevCatalog = {};
+    for (const [providerKey, provider] of Object.entries<any>(raw)) {
+        if (!MODELS_DEV_PROVIDER_KEYS.has(providerKey) || !provider || typeof provider !== 'object') continue;
+        const models = provider.models;
+        if (!models || typeof models !== 'object' || Array.isArray(models)) continue;
+        const out: Record<string, ModelsDevModel> = {};
+        for (const [modelId, entry] of Object.entries<any>(models)) {
+            const id = modelId.trim().toLowerCase();
+            if (!id || !entry || typeof entry !== 'object') continue;
+            const normalized = normalizeModelsDevModel(entry, modelId);
+            if (normalized) out[id] = normalized;
+        }
+        if (Object.keys(out).length) catalog[providerKey] = out;
+    }
+    return catalog;
+}
+
+/** Validate a persisted models.dev catalog. Never throws. */
+function sanitizeModelsDevCatalog(value: unknown): ModelsDevCatalog {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const catalog: ModelsDevCatalog = {};
+    for (const [providerKey, table] of Object.entries<any>(value)) {
+        if (!MODELS_DEV_PROVIDER_KEYS.has(providerKey) || !table || typeof table !== 'object' || Array.isArray(table)) continue;
+        const models: Record<string, ModelsDevModel> = {};
+        for (const [modelId, entry] of Object.entries<any>(table)) {
+            const id = modelId.trim().toLowerCase();
+            const model = sanitizeModelsDevModel(entry);
+            if (id && model) models[id] = model;
+        }
+        if (Object.keys(models).length) catalog[providerKey] = models;
+    }
+    return catalog;
+}
+
+export interface ModelsDevCache {
+    /** Epoch ms of the successful fetch that produced `catalog`. */
+    fetchedAt: number;
+    catalog: ModelsDevCatalog;
+}
+
+/** A `fetchedAt` further ahead than this is a hand-edit or clock skew, not a
+ *  real fetch; treating it as fresh would suppress refresh indefinitely. */
+const MODELS_DEV_FUTURE_SLACK_MS = 5 * 60 * 1000;
+
+/** Parse a persisted models.dev cache (tolerating a UTF-8 BOM and corruption),
+ *  or null when nothing usable is present. Never throws. */
+export function readModelsDevCache(raw: unknown, now: number = Date.now()): ModelsDevCache | null {
+    let parsed: any = raw;
+    if (typeof raw === 'string') {
+        try {
+            parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        } catch {
+            return null;
+        }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const catalog = sanitizeModelsDevCatalog(parsed.catalog);
+    if (!Object.keys(catalog).length) return null;
+    const stored = Number.isFinite(parsed.fetchedAt) ? Number(parsed.fetchedAt) : 0;
+    // A future timestamp must read as expired, not as "fresh forever".
+    const fetchedAt = stored > now + MODELS_DEV_FUTURE_SLACK_MS ? 0 : stored;
+    return { fetchedAt, catalog };
+}
+
+export function serializeModelsDevCache(cache: ModelsDevCache): string {
+    return JSON.stringify(cache);
+}
+
+/** The models.dev entry for one provider+model, or null. Exact (lowercased)
+ *  id match: models.dev uses the provider's own wire ids for OpenCode, and
+ *  the rest fall through to the curated table. */
+export function modelsDevModelInfo(
+    catalog: ModelsDevCatalog | null | undefined,
+    providerId: string | null | undefined,
+    modelId: string | null | undefined,
+): ModelsDevModel | null {
+    if (!catalog) return null;
+    const key = modelsDevProviderKey(providerId);
+    const id = (modelId ?? '').trim().toLowerCase();
+    if (!key || !id) return null;
+    return catalog[key]?.[id] ?? null;
+}
+
+/**
+ * Fill missing metadata from models.dev for `providerId`. Provider-reported
+ * values always win (including an explicit `false` capability), so this runs
+ * BEFORE `applyModelKnowledge` and the curated table only fills what neither
+ * the provider nor models.dev knew.
+ */
+export function applyModelsDev(
+    models: LocalModelInfo[],
+    catalog: ModelsDevCatalog | null | undefined,
+    providerId: string | null | undefined,
+): LocalModelInfo[] {
+    if (!catalog) return models;
+    const key = modelsDevProviderKey(providerId);
+    const table = key ? catalog[key] : undefined;
+    if (!table) return models;
+    return models.map((model) => {
+        const known = table[model.id.trim().toLowerCase()];
+        if (!known) return model;
+        const merged: LocalModelInfo = { ...model };
+        if (merged.contextWindow === undefined) merged.contextWindow = known.contextWindow;
+        if (merged.maxOutputTokens === undefined) merged.maxOutputTokens = known.maxOutputTokens;
+        if (merged.supportsVision === undefined) merged.supportsVision = known.supportsVision;
+        if (merged.supportsTools === undefined) merged.supportsTools = known.supportsTools;
+        if (merged.supportsReasoning === undefined) merged.supportsReasoning = known.supportsReasoning;
+        if (!merged.reasoningLevels?.length && known.reasoningLevels?.length && merged.supportsReasoning !== false) {
+            merged.reasoningLevels = [...known.reasoningLevels];
+        }
+        if (merged.displayName === undefined && known.displayName) merged.displayName = known.displayName;
+        return merged;
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Host-scoped cache
 // ---------------------------------------------------------------------------
 

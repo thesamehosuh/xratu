@@ -15,7 +15,7 @@ import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from '.
 import { runLocalAgent, type LocalAgentEvent, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
 import type { LocalToolExecutor } from './local/localAgent';
 import { extractPdfAttachments } from './pdfExtract';
-import { LocalSessionStore, resolveSessionTitle, type LocalSessionHistoryMessage } from './local/localSessionStore';
+import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage } from './local/localSessionStore';
 import {
     UsageLedgerStore,
     aggregateByDayAndModel,
@@ -29,17 +29,22 @@ import {
     type UsageEntry,
     type UsageTotals,
 } from './local/usageLedger';
-import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
+import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, fetchModelsDevCatalog, MODELS_DEV_URL, MODELS_DEV_TTL_MS, MODELS_DEV_RETRY_MS, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
 import type { LocalModelInfo } from './local/localTypes';
 import { THINKING_LEVELS, type ThinkingLevel } from './local/localTypes';
 import {
     cachedModelInfo,
     catalogEntryFor,
+    modelsDevModelInfo,
+    modelsDevProviderKey,
     readModelCatalog,
+    readModelsDevCache,
     serializeModelCatalog,
+    serializeModelsDevCache,
     setCatalogEntry,
     type ModelCatalog,
+    type ModelsDevCatalog,
 } from './local/modelMetadata';
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
@@ -755,6 +760,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _contextWindows: Record<string, Record<string, number>> = {};
     /** Cached, normalized model metadata per host (see modelMetadata.ts). */
     private _modelCatalog: ModelCatalog = {};
+    /** models.dev fallback catalog (per-provider windows/capabilities), loaded
+     *  from disk at startup so an offline start still has accurate metadata. */
+    private _modelsDevCatalog: ModelsDevCatalog | null = null;
+    private _modelsDevFetchedAt = 0;
+    private _modelsDevNextAttemptAt = 0;
+    private _modelsDevLoading: Promise<ModelsDevCatalog | null> | null = null;
+    private _modelsDevLoaded: Promise<void> | null = null;
+    private readonly _modelsDevFile: string;
     /** Pending local approvals - resolver keyed by approvalId. */
     private _localApprovalResolvers: Record<string, {
         resolve: (decisions: Record<string, boolean>) => void;
@@ -894,6 +907,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         setUiLocale(this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa');
         this._contextWindows = this._loadContextWindows();
         this._modelCatalog = readModelCatalog(this._globalState.get<string>('xratu.modelCatalog'));
+        this._modelsDevFile = path.join(localStorageUri.fsPath, 'models-dev.json');
+        void this._initModelsDev();
         this._loadTaskListEdits();
         setTaskListWriteListener((tasks) => this._noteTaskListWrite(tasks));
         // exit_plan_mode (agent-initiated): ends plan mode exactly like the
@@ -940,6 +955,92 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private async _saveModelCatalog(): Promise<void> {
         await this._globalState.update('xratu.modelCatalog', serializeModelCatalog(this._modelCatalog));
+    }
+
+    /** Load the on-disk models.dev catalog, then refresh it in the background
+     *  ONLY when a saved credential uses a provider the catalog covers - a
+     *  local-only or Iranian-provider install never makes the request. */
+    private async _initModelsDev(): Promise<void> {
+        await this._ensureModelsDevLoaded();
+        try {
+            const credentials = await this._getSavedCredentials();
+            if (credentials.some((c) => modelsDevProviderKey(providerIdForUrl(c.baseUrl)))) {
+                void this._ensureModelsDevCatalog();
+            }
+        } catch {
+            // Credentials unavailable at startup: the fetch happens lazily.
+        }
+    }
+
+    /** The one-time disk load, shared so a concurrent fetch cannot race it. */
+    private _ensureModelsDevLoaded(): Promise<void> {
+        return (this._modelsDevLoaded ??= this._loadModelsDevCache());
+    }
+
+    /** Load the persisted models.dev catalog. Best-effort: a missing or
+     *  corrupt file is the normal first-run state and simply means the next
+     *  refresh fetches a fresh copy. */
+    private async _loadModelsDevCache(): Promise<void> {
+        try {
+            const cache = readModelsDevCache(await fs.promises.readFile(this._modelsDevFile, 'utf8'));
+            if (!cache) return;
+            // A fetch that somehow finished first wins over the older disk copy.
+            if (this._modelsDevCatalog) return;
+            this._modelsDevCatalog = cache.catalog;
+            this._modelsDevFetchedAt = cache.fetchedAt;
+        } catch {
+            // Missing cache - the next _ensureModelsDevCatalog() fetches it.
+        }
+    }
+
+    /** Persist the models.dev catalog atomically (temp + rename). A failed
+     *  write must never break model discovery, so it is swallowed. */
+    private async _saveModelsDevCache(): Promise<void> {
+        if (!this._modelsDevCatalog) return;
+        try {
+            await fs.promises.mkdir(path.dirname(this._modelsDevFile), { recursive: true });
+            const temp = `${this._modelsDevFile}.tmp`;
+            await fs.promises.writeFile(
+                temp,
+                serializeModelsDevCache({ fetchedAt: this._modelsDevFetchedAt, catalog: this._modelsDevCatalog }),
+                'utf8',
+            );
+            await renameWithRetry(temp, this._modelsDevFile);
+        } catch {
+            // Best-effort cache.
+        }
+    }
+
+    /** The models.dev catalog, refreshed at most once per TTL. A failed fetch
+     *  serves the stale copy (offline/degraded) instead of nothing, backs off
+     *  before retrying, and concurrent callers share one in-flight request.
+     *  Never throws. */
+    private async _ensureModelsDevCatalog(): Promise<ModelsDevCatalog | null> {
+        // Never fetch before the disk load has settled, or the load could
+        // clobber a just-fetched catalog with the older persisted copy.
+        await this._ensureModelsDevLoaded();
+        if (this._modelsDevCatalog && Date.now() - this._modelsDevFetchedAt < MODELS_DEV_TTL_MS) {
+            return this._modelsDevCatalog;
+        }
+        if (Date.now() < this._modelsDevNextAttemptAt) return this._modelsDevCatalog;
+        if (this._modelsDevLoading) return this._modelsDevLoading;
+        const load = (async (): Promise<ModelsDevCatalog | null> => {
+            try {
+                const fetched = await fetchModelsDevCatalog(undefined, undefined, getProxyDispatcher(MODELS_DEV_URL));
+                if (!fetched) {
+                    this._modelsDevNextAttemptAt = Date.now() + MODELS_DEV_RETRY_MS;
+                    return this._modelsDevCatalog;
+                }
+                this._modelsDevCatalog = fetched;
+                this._modelsDevFetchedAt = Date.now();
+                void this._saveModelsDevCache();
+                return fetched;
+            } finally {
+                this._modelsDevLoading = null;
+            }
+        })();
+        this._modelsDevLoading = load;
+        return load;
     }
 
     /** Provider-reported windows for one host (empty when none). */
@@ -2286,7 +2387,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 best = { len: needle.length, win };
             }
         }
-        return best ? best.win : knownContextWindow(model);
+        if (best) return best.win;
+        // models.dev's exact per-model window beats the curated family fallback
+        // (and a stale catalog cache persisted by an older version).
+        const baseUrl = this._runBaseUrl ?? '';
+        const modelsDev = modelsDevModelInfo(this._modelsDevCatalog, providerIdForUrl(baseUrl), model)?.contextWindow;
+        if (typeof modelsDev === 'number' && modelsDev >= 1024) return modelsDev;
+        // Exact metadata for THIS model - provider-reported, else models.dev,
+        // else curated - beats the curated family fallback below.
+        const exact = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model)?.contextWindow;
+        if (typeof exact === 'number' && exact >= 1024) return exact;
+        return knownContextWindow(model);
     }
 
     // --- Thinking-level (reasoning effort) selection ----------------------
@@ -2550,10 +2661,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // applies here too: skip credentials that would leak their key over
         // remote HTTP (the credentials page blocks saving new ones).
         const credentials = await this._getSavedCredentials();
+        const modelsDev = credentials.some((c) => modelsDevProviderKey(providerIdForUrl(c.baseUrl)))
+            ? await this._ensureModelsDevCatalog()
+            : null;
         for (const cred of credentials) {
             if (cred.providerId === 'custom') {
                 if (insecureRemoteHttpError(cred.baseUrl, cred.apiKey)) continue;
-                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey, getProxyDispatcher(cred.baseUrl));
+                const probed = await probeCustomEndpoint(cred.baseUrl, signal, cred.apiKey, getProxyDispatcher(cred.baseUrl), modelsDev);
                 if (probed) {
                     discovered.push(probed);
                 }
@@ -3183,7 +3297,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const fetchCredId = await this._resolveActiveCredentialId();
         this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
         try {
-            let probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl));
+            // Only providers the catalog covers trigger the request.
+            const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl))
+                ? await this._ensureModelsDevCatalog()
+                : null;
+            let probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev);
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }
@@ -3228,11 +3346,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             }
 
             // What the picker/meter sees: provider-reported windows for this
-            // host, backfilled with the curated knowledge table.
+            // host, then the best window each probed model carries - which is
+            // provider-reported, else models.dev, else curated.
             const servedWindows: Record<string, number> = { ...this._contextWindowsFor(host) };
             for (const m of probed.models) {
                 if (!m.id || servedWindows[m.id]) continue;
-                const win = m.contextWindowReported ? m.contextWindow : knownContextWindow(m.id);
+                const win = m.contextWindow ?? knownContextWindow(m.id);
                 if (win) servedWindows[m.id] = win;
             }
 
