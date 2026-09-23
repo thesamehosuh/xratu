@@ -66,22 +66,39 @@ function descendantsOf(rootPid: number): number[] {
 }
 
 /**
- * Kill a process AND its whole descendant tree. Synchronous and best-effort:
- * a pid that is already gone is a no-op, never a throw.
+ * Kill a process AND its whole descendant tree.
+ *
+ * ASYNC on purpose: on Windows `taskkill /T` must finish ENUMERATING the tree
+ * before anything else can terminate the parent, or the link is lost and the
+ * grandchild is orphaned. Callers that need that guarantee (MCP teardown)
+ * must await; fire-and-forget callers may ignore the promise. Best-effort: a
+ * pid that is already gone is a no-op, never a rejection.
  */
-export function killTree(pid: number | undefined): void {
-    if (!pid || pid <= 0) return;
+export function killTree(pid: number | undefined): Promise<void> {
+    if (!pid || pid <= 0) return Promise.resolve();
     if (process.platform === 'win32') {
-        // /T walks the live tree, /F forces. Fire-and-forget: the caller is a
-        // teardown path that must not block on taskkill.
-        crossSpawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-        return;
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = () => { if (settled) return; settled = true; resolve(); };
+            try {
+                const child = crossSpawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
+                    windowsHide: true,
+                    stdio: 'ignore',
+                });
+                child.on('close', finish);
+                child.on('error', finish);
+                // A wedged taskkill must never block teardown forever.
+                setTimeout(finish, 10_000).unref?.();
+            } catch {
+                finish();
+            }
+        });
     }
     // A group kill reaches the leader and every member in one shot. It only
     // works when `pid` leads its own group; otherwise `-pid` is ESRCH.
     try {
         process.kill(-pid, 'SIGKILL');
-        return;
+        return Promise.resolve();
     } catch { /* not a process-group leader */ }
     // Enumerate BEFORE killing the parent: once it exits, its children are
     // reparented and the tree link is lost.
@@ -89,4 +106,5 @@ export function killTree(pid: number | undefined): void {
         try { process.kill(child, 'SIGKILL'); } catch { /* already gone */ }
     }
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    return Promise.resolve();
 }

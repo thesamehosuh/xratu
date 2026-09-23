@@ -87,9 +87,9 @@ function spawnTree(detached = false) {
     });
 }
 
-const cleanup = (tree) => {
+const cleanup = async (tree) => {
     if (!tree) return;
-    try { if (alive(tree.parentPid)) killTree(tree.parentPid); } catch { /* best effort */ }
+    try { if (alive(tree.parentPid)) await killTree(tree.parentPid); } catch { /* best effort */ }
     try { if (alive(tree.childPid)) process.kill(tree.childPid, 'SIGKILL'); } catch { /* best effort */ }
 };
 
@@ -97,7 +97,7 @@ const cleanup = (tree) => {
 
 {
     let threw = false;
-    try { killTree(undefined); killTree(0); killTree(-1); } catch { threw = true; }
+    try { await killTree(undefined); await killTree(0); await killTree(-1); } catch { threw = true; }
     ok('killTree tolerates missing/invalid pids', !threw);
 }
 
@@ -110,12 +110,12 @@ const cleanup = (tree) => {
         ok('parent and grandchild are both alive before the kill',
             alive(tree.parentPid) && alive(tree.childPid));
 
-        killTree(tree.parentPid);
+        await killTree(tree.parentPid);
 
         ok('killTree kills the direct child', await waitExit(tree.proc), `pid ${tree.parentPid} survived`);
         ok('killTree kills the grandchild', await waitDead(tree.childPid), `pid ${tree.childPid} survived`);
     } finally {
-        cleanup(tree);
+        await cleanup(tree);
     }
 }
 
@@ -125,11 +125,11 @@ const cleanup = (tree) => {
     let tree = null;
     try {
         tree = await spawnTree(true);
-        killTree(tree.parentPid);
+        await killTree(tree.parentPid);
         ok('detached tree: direct child dies', await waitExit(tree.proc));
         ok('detached tree: grandchild dies', await waitDead(tree.childPid));
     } finally {
-        cleanup(tree);
+        await cleanup(tree);
     }
 }
 

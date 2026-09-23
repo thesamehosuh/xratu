@@ -73,9 +73,9 @@ interface ServerState {
     pid?: number;
 }
 
-/** Close one external server's client, then make sure its stdio process
- *  tree is gone (a no-op for already-exited processes and for remote
- *  transports without a pid).
+/** Kill one external server's stdio process tree BEFORE closing its client
+ *  (a no-op for already-exited processes and for remote transports without a
+ *  pid).
  *
  *  ORDER IS LOAD-BEARING: kill the tree BEFORE `client.close()`. On Windows
  *  `npx`/`uvx` run through a cmd.exe shim, so the real server is a
@@ -83,10 +83,11 @@ interface ServerState {
  *  The SDK's close() only signals the DIRECT child (and may wait on pipes the
  *  grandchild still holds), so closing first orphans the server - it keeps
  *  running and holding ports/files. Same reasoning as codex/opencode, which
- *  terminate the process group before closing the transport. */
+ *  terminate the process group before closing the transport. The kill is
+ *  AWAITED so taskkill has finished enumerating the tree first. */
 async function closeState(state: ServerState | null | undefined): Promise<void> {
     if (!state) return;
-    if (state.pid) killTree(state.pid);
+    if (state.pid) await killTree(state.pid);
     try {
         await state.client.close();
     } catch { /* already dead */ }

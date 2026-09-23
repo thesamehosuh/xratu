@@ -236,7 +236,7 @@ async function runProcess(runtime: ExpansionToolRuntime, argv: string[], timeout
         const timer = setTimeout(() => {
             try {
                 if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
-                else killTree(child.pid);
+                else void killTree(child.pid);
             } catch { /* already exited */ }
             finish(null, true);
         }, timeout);
