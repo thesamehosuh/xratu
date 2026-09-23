@@ -200,6 +200,7 @@
 		"test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",
 		"test:session-store": "node test/test-session-store.mjs",
 		"test:python-workspace": "node test/test-python-workspace.mjs",
+		"test:shell-platform": "node test/test-shell-platform.mjs",
 		"test:edit-file-mode": "node test/test-edit-file-mode.mjs",
 		"test:task-list": "node test/test-task-list.mjs",
 		"test:agent-rounds": "node test/test-agent-rounds.mjs",
