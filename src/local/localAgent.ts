@@ -2985,17 +2985,13 @@ export async function* runLocalAgent(
         return index > 1 ? index : undefined;
     };
     // How many user turns the run has folded into the rolling summary so far.
-    // The baseline is the history present at the last REPORTING point: every
-    // drop that goes through the summarizing compaction counts; the mechanical
-    // fallback below resets the baseline because its drops are unsummarized and
-    // must NOT be reported (the host would stop replaying them without a
-    // summary covering them).
     const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
-    // Only a summarized PREFIX can be expressed as the host's suffix replay
-    // count. After any UNSUMMARIZED drop (forced recovery / mechanical
-    // fallback) a later summarized drop is no longer a prefix, so freeze the
-    // reported value at that point: the host then replays the unsummarized
-    // turns too, and a duplicate is safer than an omission.
+    // How many user turns the run has folded into the rolling summary, as a
+    // count the host can map to its suffix replay boundary. Only a summarized
+    // PREFIX can be expressed that way: after any UNSUMMARIZED drop (forced
+    // recovery / mechanical fallback) a later summarized drop is no longer a
+    // prefix, so freeze the report at that point. The host then replays the
+    // unsummarized turns too - a duplicate is safer than an omission.
     let unsummarizedDrop = false;
     let reportedTurns = 0;
     const compactedUserTurns = (): number => {
