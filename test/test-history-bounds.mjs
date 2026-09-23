@@ -27,6 +27,7 @@ const {
     countUserRows,
     keepLastUserTurns,
     evictOldestTurns,
+    skipLeadingUserTurns,
 } = require('../out/local/historyBounds.js');
 
 let failed = 0;
@@ -187,6 +188,45 @@ for (const w of [undefined, null, NaN, Infinity, -Infinity, -1, 'x', {}, [], 0, 
     }
 }
 check('cap resolution never throws or leaves bounds', badCap, 0);
+
+// --- skipLeadingUserTurns: compaction replay boundary ----------------------
+// The rows stay in the ledger (rewind/eviction stay aligned); only REPLAY
+// starts after the skipped turns, so the model is not re-sent turns the
+// rolling summary already covers.
+const turnWithId = (id) => ([
+    { role: 'user', content: `u${id}` },
+    { role: 'assistant', content: '', tool_calls: [{ id, type: 'function', function: { name: 'x', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: id, content: `t${id}` },
+]);
+const ledger = [...turnWithId('a'), ...turnWithId('b'), ...turnWithId('c')];
+
+check('skip 0 returns the same rows', skipLeadingUserTurns(ledger, 0), ledger);
+check('skip 0 is the identity (same reference)', skipLeadingUserTurns(ledger, 0) === ledger, true);
+
+{
+    const out = skipLeadingUserTurns(ledger, 1);
+    check('skip 1 starts at the second user turn', out[0].content, 'ub');
+    check('skip 1 keeps the remaining rows', out.length, 6);
+    checkFalse('skipped turn is gone', out.some((m) => m.content === 'ua'));
+    checkTrue('tool row of the kept turn is present', out.some((m) => m.tool_call_id === 'b'));
+}
+{
+    const out = skipLeadingUserTurns(ledger, 2);
+    check('skip 2 starts at the third user turn', out[0].content, 'uc');
+    check('skip 2 leaves exactly the last turn', out.length, 3);
+}
+check('skip all returns empty', skipLeadingUserTurns(ledger, 3).length, 0);
+check('skip beyond the end returns empty', skipLeadingUserTurns(ledger, 99).length, 0);
+check('negative skip replays everything', skipLeadingUserTurns(ledger, -1).length, ledger.length);
+
+// The suffix count (what the snapshot stores) round-trips: replay = total - skip.
+{
+    const total = countUserRows(ledger);
+    for (const skip of [0, 1, 2, 3]) {
+        const replayed = skipLeadingUserTurns(ledger, skip);
+        check(`replay count matches total-skip (skip=${skip})`, countUserRows(replayed), total - skip);
+    }
+}
 
 if (failed) {
     console.error(`\n${failed} check(s) failed`);

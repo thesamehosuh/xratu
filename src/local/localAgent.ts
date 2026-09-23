@@ -92,7 +92,11 @@ export type LocalAgentEvent =
     // response streams - the host must never record them as the turn's
     // real usage (the round-end event carries the authoritative copy).
     | { type: 'usage'; usage: LocalUsage; estimated?: boolean }
-    | { type: 'compactionSummary'; value: string }
+    /** `droppedUserTurns` is the CUMULATIVE number of user turns the run has
+     *  folded into the rolling summary (relative to the history it was given).
+     *  The host advances its replay boundary by this so the next turn does not
+     *  re-send turns the summary already covers. */
+    | { type: 'compactionSummary'; value: string; droppedUserTurns?: number }
     | { type: 'error'; value: string };
 
 export interface LocalAgentMessage {
@@ -132,6 +136,13 @@ export interface LocalAgentRequest {
     userText: string;
     attachments?: LocalImageAttachment[];
     history?: LocalAgentMessage[];
+    /** Rolling compaction summary carried from PREVIOUS turns (the host
+     *  persists it and injects it into the system prompt). Seeding it here
+     *  lets the pre-request compaction MERGE the newly dropped turns into the
+     *  accumulated summary instead of starting from scratch and overwriting
+     *  it - without this, a session that compacts once per turn keeps only the
+     *  latest turn's summary and silently loses everything summarized before. */
+    sessionSummary?: string | null;
     tools: LocalToolDefinition[];
     signal?: AbortSignal;
     maxTokens?: number;
@@ -2127,13 +2138,18 @@ export function estimateToolTokens(tools: LocalToolDefinition[]): number {
 }
 
 // --- Context-window auto-compaction ---
-// The overflow guard in boundHistory only caps history at ~72% of the window.
 // Local models often run 4k–16k windows, so compaction must trigger
 // PROACTIVELY: once a request would fill >= 90% of the window, oldest turns
 // are dropped until occupancy is back near 60% - keeping headroom below the
 // hint thresholds instead of scraping the ceiling every turn.
 const AUTO_COMPACT_RATIO = 0.9;
 const AUTO_COMPACT_TARGET_RATIO = 0.6;
+// Hard memory ceiling for the pre-request pass, matching `boundHistory`'s 72%
+// budget. The pre-request compaction gates at min(user threshold, this), so it
+// fires at least as early as the old mechanical trim did - but WITH a summary.
+// `boundHistory` ran BEFORE compaction, so the turns it ate were already gone
+// by the time the summarizer could preserve them: a silent, permanent loss.
+const HISTORY_BOUND_RATIO = 0.72;
 
 // While a response streams, an estimated cumulative usage event is emitted
 // once per this many NEW estimated output tokens - the context meter ticks
@@ -2207,6 +2223,13 @@ export function compactMessages(
     toolTokens = 0,
     force = false,
     ratio: number = AUTO_COMPACT_RATIO,
+    /** Index of the CURRENT TURN's opening user message. Nothing at or after
+     *  it is dropped, and its tool results are never elided. Callers that use
+     *  STEERING must pass it: a steer is a user row appended AFTER the turn
+     *  opener, so the default (the last user row) would protect the steer and
+     *  let compaction drop the user's actual request. Defaults to the last
+     *  user row, which is correct when no steering occurred. */
+    protectFromIndex?: number,
 ): LocalAgentMessage[] {
     // Proactive compaction keeps its 4k-window floor; forced recovery (the
     // server just rejected the prompt as too long) runs on ANY real window.
@@ -2226,13 +2249,15 @@ export function compactMessages(
     // window, is what clears the real limit in one pass.
     const observed = total;
 
-    // The LAST user message opens the current turn - everything from there
-    // on (assistant tool calls, tool results) must stay intact.
+    // The current turn opens at `protectFromIndex` when the caller knows it
+    // (steering-safe), else at the last user row. Everything from there on -
+    // the user's request, assistant tool calls, tool results - stays intact.
     let lastUser = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'user') { lastUser = i; break; }
     }
-    if (lastUser <= 1) return [];
+    const turnStart = protectFromIndex != null && protectFromIndex > 1 ? protectFromIndex : lastUser;
+    if (turnStart <= 1) return [];
 
     // Forced recovery targets a fraction of the OBSERVED size, not of the
     // configured window.
@@ -2258,17 +2283,28 @@ export function compactMessages(
     // estimate just proved unreliable (the server rejected the prompt), so a
     // turn is still dropped to guarantee progress. Elision simply means less
     // has to go.
-    // `lastUser` bounds elision to the droppable history: the current turn
-    // (from `lastUser` on) must stay intact, exactly as the turn loop below
+    // `turnStart` bounds elision to the droppable history: the current turn
+    // (from `turnStart` on) must stay intact, exactly as the turn loop below
     // guarantees for whole-turn drops.
-    if (elideOldToolResults(messages, TOOL_RESULT_ELISION_KEEP, lastUser)) {
-        total = Math.max(0, total - Math.max(0, observed - estimateRunTokens(messages) - toolTokens));
+    const beforeElision = estimateRunTokens(messages);
+    if (elideOldToolResults(messages, TOOL_RESULT_ELISION_KEEP, turnStart)) {
+        // Reclaim is measurable only in ESTIMATE units, so subtract it from
+        // `total` rather than re-deriving `total` from the estimate. The old
+        // formula subtracted `observed - estimate(messages) - toolTokens`,
+        // which algebraically RESETS total to `estimate(messages) + toolTokens`
+        // whenever `usedTokens` was supplied - silently discarding the
+        // server-reported occupancy exactly when it matters most (the estimate
+        // undercounts dense content, which is why `usedTokens` was passed).
+        // Keeping `total`'s units is what makes the cheap tier safe to run
+        // before the turn-drop loop on the mid-run, server-confirmed path.
+        const reclaimed = Math.max(0, beforeElision - estimateRunTokens(messages));
+        total = Math.max(0, total - reclaimed);
         if (!force && total <= target) return [];
     }
     let start = 1;
-    while (start < lastUser && (total > target || (force && start === 1))) {
+    while (start < turnStart && (total > target || (force && start === 1))) {
         let end = start + 1;
-        while (end < lastUser && messages[end].role !== 'user') end++;
+        while (end < turnStart && messages[end].role !== 'user') end++;
         const groupCost = estimateRunTokens(messages.slice(start, end));
         if (!force && total - groupCost < target) break;
         total -= groupCost;
@@ -2476,6 +2512,17 @@ export function serializeForSummary(messages: LocalAgentMessage[]): string {
 }
 
 /**
+ * Cap on the summarizer's OUTPUT budget. Reasoning models can spend a tight
+ * budget on thinking and return NO summary text at all, which silently skips
+ * compaction entirely - Cline raised their equivalent default to 8192 for
+ * exactly this reason. The window-derived formula below keeps small windows
+ * safe (a 4k model is never handed a 4k-token request it cannot satisfy), and
+ * the cap only binds on large windows, where the summarizer's INPUT is already
+ * capped at SUMMARY_MAX_TOTAL_CHARS so the extra headroom costs nothing.
+ */
+const SUMMARY_MAX_OUTPUT_CAP = 8192;
+
+/**
  * Output budget for the summarizer call: a cap, not a target. Reasoning
  * models need headroom beyond their thinking output or no summary text ever
  * arrives and compaction is skipped (Cline's rule); deriving it from the
@@ -2486,7 +2533,7 @@ export function summaryMaxTokens(windowTokens?: number | null): number {
     const derived = windowTokens && windowTokens > 0
         ? Math.floor(windowTokens * 0.15)
         : 2048;
-    return Math.min(2048, Math.max(512, derived));
+    return Math.min(SUMMARY_MAX_OUTPUT_CAP, Math.max(512, derived));
 }
 
 const SUMMARY_PROMPT_TEMPLATE = (
@@ -2568,6 +2615,108 @@ export function clippedConversationForSummary(
     return conversation;
 }
 
+/**
+ * Run the compaction summarizer on the request's RESOLVED wire API.
+ *
+ * The summarizer MUST use the same API as the main request: OpenCode Zen/Go
+ * route some model families ONLY to `/messages` or `/responses` (grok/gpt
+ * return 503 on `/chat/completions`, and `/messages` rejects them as "not
+ * supported for format anthropic"), so a hardcoded chat call would fail and
+ * compaction would silently degrade to the bare marker on exactly the gateway
+ * Xratu supports. Non-streaming; returns the extracted text or null.
+ */
+async function requestSummaryCompletion(
+    request: LocalAgentRequest,
+    prompt: string,
+    maxTokens: number,
+    signal: AbortSignal,
+): Promise<string | null> {
+    const style = request.apiStyle ?? 'chat';
+    const endpoint = style === 'messages' ? 'messages'
+        : style === 'responses' ? 'responses'
+            : style === 'google' ? `models/${encodeURIComponent(request.model)}:generateContent`
+                : 'chat/completions';
+    const headers = style === 'messages' ? makeMessagesHeaders(request.apiKey, request.sessionId)
+        : style === 'google' ? makeGoogleHeaders(request.apiKey, request.sessionId)
+            : makeHeaders(request.apiKey, request.sessionId);
+    // This is a non-streaming JSON call; the SSE `Accept` from makeHeaders is
+    // wrong here and some gateways branch on it.
+    headers.set('Accept', 'application/json');
+
+    let body: Record<string, unknown>;
+    if (style === 'messages') {
+        body = {
+            model: request.model,
+            max_tokens: maxTokens,
+            temperature: 0.2,
+            messages: [{ role: 'user', content: prompt }],
+        };
+    } else if (style === 'responses') {
+        body = {
+            model: request.model,
+            input: prompt,
+            max_output_tokens: maxTokens,
+            temperature: 0.2,
+        };
+    } else if (style === 'google') {
+        body = {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: maxTokens, temperature: 0.2 },
+        };
+    } else {
+        body = {
+            model: request.model,
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: maxTokens,
+            temperature: 0.2,
+            stream: false,
+        };
+    }
+
+    const resp = await fetch(endpointUrl(request.baseUrl, endpoint), withDispatcher({
+        method: 'POST',
+        headers,
+        signal,
+        body: JSON.stringify(body),
+    }, request.dispatcher));
+    if (!resp.ok) return null;
+    const data = await resp.json() as any;
+    const text = extractSummaryText(style, data);
+    return text && text.trim() ? text.trim() : null;
+}
+
+/** Pull the assistant text out of a non-streaming response for each wire API. */
+export function extractSummaryText(style: string, data: any): string | null {
+    if (style === 'messages') {
+        if (!Array.isArray(data?.content)) return null;
+        return data.content
+            .filter((block: any) => block?.type === 'text' && typeof block.text === 'string')
+            .map((block: any) => block.text)
+            .join('') || null;
+    }
+    if (style === 'responses') {
+        if (!Array.isArray(data?.output)) return null;
+        let text = '';
+        for (const item of data.output) {
+            if (item?.type !== 'message' || !Array.isArray(item.content)) continue;
+            for (const block of item.content) {
+                if (block?.type === 'output_text' && typeof block.text === 'string') text += block.text;
+            }
+        }
+        return text || null;
+    }
+    if (style === 'google') {
+        const parts = data?.candidates?.[0]?.content?.parts;
+        if (!Array.isArray(parts)) return null;
+        return parts
+            .filter((part: any) => typeof part?.text === 'string')
+            .map((part: any) => part.text)
+            .join('') || null;
+    }
+    const content = data?.choices?.[0]?.message?.content;
+    return typeof content === 'string' && content ? content : null;
+}
+
 async function summarizeDroppedTurns(
     request: LocalAgentRequest,
     dropped: LocalAgentMessage[],
@@ -2594,6 +2743,9 @@ async function summarizeDroppedTurns(
             + 'your output seamlessly; keep anything still relevant, drop what '
             + 'the newer turns supersede):\n'
             + existingSummary
+            + '\n\nThe dropped turns below may OVERLAP with that earlier '
+            + 'summary. Emit each fact, file, or decision exactly ONCE - merge '
+            + 'duplicates into a single entry rather than repeating them.'
         );
     }
     prompt += `\n\nDropped turns:\n${conversation}\n\nSummary:`;
@@ -2609,33 +2761,71 @@ async function summarizeDroppedTurns(
         else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     }
     try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (request.apiKey) headers['Authorization'] = `Bearer ${request.apiKey}`;
-        const resp = await fetch(`${normalizeBaseUrl(request.baseUrl)}/chat/completions`, withDispatcher({
-            method: 'POST',
-            headers,
-            signal: controller.signal,
-            body: JSON.stringify({
-                model: request.model,
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: summaryMaxTokens(windowTokens),
-                temperature: 0.2,
-                stream: false,
-            }),
-        }, request.dispatcher));
-        if (!resp.ok) return null;
-        const data = await resp.json() as {
-            choices?: Array<{ message?: { content?: unknown } }>;
-        };
-        const summary = data.choices?.[0]?.message?.content;
-        if (typeof summary === 'string' && summary.trim()) return summary.trim();
-        return null;
+        // Never ask for more than the model can actually emit: the provider/
+        // curated output limit only ever LOWERS the window-derived budget (same
+        // rule as the main request's cap). `requestSummaryCompletion` picks the
+        // endpoint/body/parse for the request's resolved wire API.
+        return await requestSummaryCompletion(
+            request,
+            prompt,
+            Math.min(
+                summaryMaxTokens(windowTokens),
+                request.maxOutputLimit ?? Number.POSITIVE_INFINITY,
+            ),
+            controller.signal,
+        );
     } catch {
         return null;
     } finally {
         clearTimeout(timer);
         outerSignal?.removeEventListener('abort', onOuterAbort);
     }
+}
+
+/**
+ * True for the synthetic marker row that carries the rolling compaction
+ * summary. After compaction it sits at index 1 and its content is either the
+ * bare `HISTORY_TRUNCATION_MARKER` or that marker followed by the summary.
+ */
+export function isHistoryTruncationMarker(message: LocalAgentMessage): boolean {
+    return message.role === 'user'
+        && typeof message.content === 'string'
+        && message.content.startsWith(HISTORY_TRUNCATION_MARKER);
+}
+
+/**
+ * The dropped turns a summarizer should actually read. The truncation marker
+ * is EXCLUDED: it is a synthetic carrier whose content is the rolling summary,
+ * which the caller already passes as `existingSummary`. Feeding it back would
+ * duplicate the previous summary (plus its "messages were removed" boilerplate)
+ * in the compaction prompt, weighting the summarizer toward the old summary and
+ * drifting it on every re-compaction.
+ */
+export function summarizableDroppedTurns(dropped: LocalAgentMessage[]): LocalAgentMessage[] {
+    return dropped.filter((message) => !isHistoryTruncationMarker(message));
+}
+
+/**
+ * Write the rolling summary into the history's truncation marker at index 1,
+ * replacing any summary already carried there. No-op when the marker is absent
+ * (nothing was compacted) or the summary is empty. Exported so the carry
+ * contract is unit-testable without a model call.
+ */
+export function carryCompactionSummary(
+    messages: LocalAgentMessage[],
+    summary: string | null | undefined,
+): boolean {
+    if (!summary) return false;
+    const marker = messages[1];
+    if (!marker || marker.role !== 'user' || typeof marker.content !== 'string'
+        || !marker.content.startsWith(HISTORY_TRUNCATION_MARKER)) {
+        return false;
+    }
+    messages[1] = {
+        role: 'user',
+        content: `${HISTORY_TRUNCATION_MARKER}\n\n[Summary of the removed turns, written by the model itself:]\n${summary}`,
+    };
+    return true;
 }
 
 /**
@@ -2651,22 +2841,25 @@ async function compactWithSummary(
     usedTokens: number | undefined,
     existingSummary: string | null,
     toolTokens = 0,
+    protectFromIndex?: number,
+    gateRatio?: number,
 ): Promise<string | null> {
     const dropped = compactMessages(
         messages, windowTokens, usedTokens, toolTokens, false,
-        request.autoCompactRatio ?? AUTO_COMPACT_RATIO,
+        gateRatio ?? request.autoCompactRatio ?? AUTO_COMPACT_RATIO,
+        protectFromIndex,
     );
     if (!dropped.length) return null;
-    const summary = await summarizeDroppedTurns(request, dropped, existingSummary, windowTokens);
-    if (summary) {
-        const marker = messages[1];
-        if (marker?.role === 'user' && marker.content === HISTORY_TRUNCATION_MARKER) {
-            messages[1] = {
-                role: 'user',
-                content: `${HISTORY_TRUNCATION_MARKER}\n\n[Summary of the removed turns, written by the model itself:]\n${summary}`,
-            };
-        }
-    }
+    // The marker carries the rolling summary and the caller passes that same
+    // summary as `existingSummary`, so strip the marker from what the
+    // summarizer reads (see `summarizableDroppedTurns`).
+    const droppedTurns = summarizableDroppedTurns(dropped);
+    const summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
+    // Carry the ROLLING summary forward: the freshly merged one when the
+    // summarizer succeeded, else the previous one - so a failed or skipped
+    // summarizer (all-dropped-was-marker, timeout, provider error) cannot erase
+    // the summary the marker was already carrying.
+    carryCompactionSummary(messages, summary ?? existingSummary);
     return summary;
 }
 
@@ -2678,10 +2871,12 @@ export function boundHistory(
     if (!contextWindow || contextWindow < 4096 || history.length < 4) return history;
     const budget = Math.max(2048, Math.floor(contextWindow * 0.72));
     // Tool schemas ride on every request - count them against the budget.
-    // The system prompt is deliberately NOT counted here: this is the coarse
-    // pre-trim, and eating turns here would silently discard material the
-    // SUMMARIZING proactive compaction (which does count the assembled
-    // system message) could still preserve as a summary.
+    // The system prompt is deliberately NOT counted here: this is a pure
+    // HISTORY bound, applied only as the LAST-RESORT fallback after the
+    // summarizing ceiling pass (which does count the assembled system message)
+    // could not bring the request under the bound. It drops turns without a
+    // summary, so the runtime only reaches it when the summarizer failed or
+    // nothing was droppable.
     let total = history.reduce((n, m) => n + estimateMessageTokens(m), 0) + toolTokens;
     if (total <= budget) return history;
 
@@ -2732,34 +2927,104 @@ export async function* runLocalAgent(
         + contextStatusLine(usedTokens, windowTokens)
         + contextHint(usedTokens, windowTokens, compactRatio);
 
-    const history = boundHistory(request.history ?? [], request.contextWindow, toolTokens);
+    // The FULL history. `boundHistory` used to trim it mechanically to 72%
+    // BEFORE the summarizing compaction could run, so the turns it ate were
+    // lost without ever reaching the summary. The pre-request compaction (gated
+    // at the 72% ceiling) now does the bounding, WITH summarization.
+    const history = request.history ?? [];
     let imageFormat: ImageUrlFormat = 'data-uri';
     let imageFormatSwapped = false;
     // Overflow recovery is a one-shot per run: if the mechanically compacted
     // retry ALSO overflows, the request itself cannot fit - fail the turn.
     let overflowRecovered = false;
+    // The current turn's opening user message is held by REFERENCE so the
+    // steering-safe compaction boundary can be recovered after turns are
+    // spliced out. A steer is a user row appended AFTER this one, so scanning
+    // for the last user row would wrongly protect the steer and let compaction
+    // drop the user's actual request.
+    let currentTurnMessage: LocalAgentMessage = {
+        role: 'user',
+        content: toUserContent(request, imageFormat),
+    };
     const buildMessages = (): LocalAgentMessage[] => [
         { role: 'system', content: request.systemPrompt },
         ...history,
-        {
-            role: 'user',
-            content: toUserContent(request, imageFormat),
-        },
+        currentTurnMessage,
     ];
     let messages: LocalAgentMessage[] = buildMessages();
-    // Rolling compaction summary: each compaction's summary is merged into
-    // the next one and reported to the host so it survives across requests.
-    let sessionSummary: string | null = null;
+    /** Index of the current turn's opener in `messages` (undefined when absent
+     *  or at the system boundary), for `compactMessages`' protectFromIndex. */
+    const turnStartIndex = (): number | undefined => {
+        const index = messages.indexOf(currentTurnMessage);
+        return index > 1 ? index : undefined;
+    };
+    // How many user turns the run has folded into the rolling summary so far.
+    // The baseline is the history present at the last REPORTING point: every
+    // drop that goes through the summarizing compaction counts; the mechanical
+    // fallback below resets the baseline because its drops are unsummarized and
+    // must NOT be reported (the host would stop replaying them without a
+    // summary covering them).
+    let historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+    const compactedUserTurns = (): number => {
+        const ts = turnStartIndex();
+        if (ts == null) return 0;
+        let remaining = 0;
+        for (let i = 1; i < ts; i++) {
+            const m = messages[i];
+            if (m.role === 'user' && !isHistoryTruncationMarker(m)) remaining++;
+        }
+        return Math.max(0, historyUserTurns - remaining);
+    };
+    // Rolling compaction summary: each compaction's summary is merged into the
+    // next one and reported to the host so it survives across requests. Seed
+    // from the summary the host carried over from earlier turns so the
+    // pre-request compaction merges into it rather than overwriting it.
+    let sessionSummary: string | null = request.sessionSummary ?? null;
 
-    // Proactive auto-compact BEFORE the first request.
-    const preSummary = await compactWithSummary(messages, request, windowTokens, undefined, null, toolTokens);
+    // Proactive auto-compact BEFORE the first request. The gate is the LOWER of
+    // the user's threshold and the 72% hard memory ceiling: the old
+    // `boundHistory` dropped at 72% mechanically, so gating the summarizing
+    // compaction at the same point preserves that timing while making every
+    // dropped turn land in the summary. A single pass also avoids the
+    // double-failure window a separate ceiling pass would open (first
+    // summarizer fails, second succeeds, first pass's drops never summarized).
+    const preSummary = await compactWithSummary(
+        messages, request, windowTokens, undefined, sessionSummary, toolTokens, turnStartIndex(),
+        Math.min(request.autoCompactRatio ?? AUTO_COMPACT_RATIO, HISTORY_BOUND_RATIO),
+    );
     if (preSummary) {
         sessionSummary = preSummary;
-        yield { type: 'compactionSummary', value: preSummary };
+        yield { type: 'compactionSummary', value: preSummary, droppedUserTurns: compactedUserTurns() };
     }
     // Occupancy shown to the model in the trailing note. Seeded from the
     // estimate, then replaced with server-reported ground truth each round.
     let noteUsed = estimateUsed();
+    // Last resort: the summarizing ceiling could not bring the request under
+    // the bound (summarizer failed, or nothing was droppable). Fall back to the
+    // mechanical `boundHistory` trim so it still fits - unsummarized by
+    // necessity, and NOT reported, so the host keeps replaying those turns
+    // instead of treating them as compacted. The truncation marker is preserved.
+    if (windowTokens && noteUsed > Math.max(2048, Math.floor(windowTokens * HISTORY_BOUND_RATIO))) {
+        const historyEnd = turnStartIndex() ?? messages.length;
+        const historyRows = messages.slice(1, historyEnd).filter((m) => !isHistoryTruncationMarker(m));
+        const bounded = boundHistory(historyRows, windowTokens, toolTokens);
+        if (bounded.length !== historyRows.length) {
+            const marker = isHistoryTruncationMarker(messages[1]) ? messages[1] : null;
+            messages.splice(
+                0, messages.length,
+                { role: 'system', content: request.systemPrompt },
+                ...(marker ? [marker] : []),
+                ...bounded,
+                currentTurnMessage,
+            );
+            // Re-anchor the reporting baseline: these drops are unsummarized,
+            // so a later successful compaction must count only ITS drops.
+            historyUserTurns = messages
+                .slice(1, turnStartIndex() ?? messages.length)
+                .filter((m) => m.role === 'user' && !isHistoryTruncationMarker(m)).length;
+            noteUsed = estimateUsed();
+        }
+    }
 
     yield { type: 'status', value: 'connecting' };
 
@@ -2900,7 +3165,18 @@ export async function* runLocalAgent(
             ) {
                 imageFormatSwapped = true;
                 imageFormat = 'base64';
-                messages = buildMessages();
+                // Replace the opener IN PLACE rather than rebuilding from
+                // `history`: a rebuild would discard any compaction already
+                // applied to `messages` (and re-add the turns it dropped). The
+                // image lives in the CURRENT turn, which compaction never
+                // touches, so swapping it here is safe and keeps the protect
+                // boundary (`currentTurnMessage`) pointing at the array member.
+                {
+                    const openerIndex = messages.indexOf(currentTurnMessage);
+                    currentTurnMessage = { role: 'user', content: toUserContent(request, imageFormat) };
+                    if (openerIndex >= 0) messages[openerIndex] = currentTurnMessage;
+                    else messages = buildMessages();
+                }
                 requestError = null;
                 round--;
                 continue;
@@ -2911,8 +3187,8 @@ export async function* runLocalAgent(
             // must be DETERMINISTIC (Cline's rule): the estimate just proved
             // wrong, so a summarizer call riding on the same window could
             // overflow too. Drop the oldest turns mechanically (forced: the
-            // ratio gate and estimate are exactly what failed here), keep
-            // the bare truncation marker, and retry ONCE.
+            // ratio gate and estimate are exactly what failed here), keep the
+            // truncation marker, and retry ONCE.
             if (
                 !overflowRecovered
                 && windowTokens
@@ -2920,7 +3196,12 @@ export async function* runLocalAgent(
                 && CONTEXT_OVERFLOW_RE.test(requestError.message)
             ) {
                 overflowRecovered = true;
-                if (compactMessages(messages, windowTokens, undefined, toolTokens, true).length) {
+                if (compactMessages(messages, windowTokens, undefined, toolTokens, true, undefined, turnStartIndex()).length) {
+                    // Forced recovery inserts a BARE marker (no summarizer call
+                    // - deterministic by design), which would erase the rolling
+                    // summary the marker was carrying. Re-attach the best-known
+                    // summary without a model call so the retry keeps it.
+                    carryCompactionSummary(messages, sessionSummary);
                     noteUsed = estimateUsed();
                     requestError = null;
                     round--;
@@ -2944,11 +3225,15 @@ export async function* runLocalAgent(
             let used = finalResult.usage.promptTokens + (finalResult.usage.completionTokens ?? 0);
             if (windowTokens && used >= windowTokens * compactRatio) {
                 const summary = await compactWithSummary(
-                    messages, request, windowTokens, used, sessionSummary,
+                    // `used` is the server-reported prompt size and already
+                    // includes the tool schemas, so toolTokens stays 0 here
+                    // (passing it would double-count). `turnStartIndex()` keeps
+                    // the steering-safe boundary.
+                    messages, request, windowTokens, used, sessionSummary, 0, turnStartIndex(),
                 );
                 if (summary) {
                     sessionSummary = summary;
-                    yield { type: 'compactionSummary', value: summary };
+                    yield { type: 'compactionSummary', value: summary, droppedUserTurns: compactedUserTurns() };
                 }
                 used = Math.min(used, estimateUsed());
             }
@@ -3186,8 +3471,11 @@ export async function* runLocalAgent(
             || !windowTokens
             || !(wrapError instanceof Error)
             || !CONTEXT_OVERFLOW_RE.test(wrapError.message)
-            || !compactMessages(wrapMessages, windowTokens, undefined, toolTokens, true).length
         ) break;
+        if (!compactMessages(wrapMessages, windowTokens, undefined, toolTokens, true, undefined, turnStartIndex()).length) break;
+        // Same as the main loop: forced recovery leaves a bare marker, so
+        // re-attach the rolling summary before the one retry.
+        carryCompactionSummary(wrapMessages, sessionSummary);
         wrapRecovered = true;
     }
     if (wrapError) throw request.signal?.aborted ? abortError() : describeNetworkError(wrapError);

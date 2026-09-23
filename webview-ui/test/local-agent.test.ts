@@ -779,13 +779,15 @@ async function testMidRunCompactionFromServerUsage() {
     const originalFetch = globalThis.fetch;
     let call = 0;
 
-    // History estimates stay under the 90% line, but the server REPORTS
-    // 7.7k/8k prompt tokens (tool schemas inflate the real request) - the
-    // agent must compact mid-turn from ground truth, not estimates.
+    // History estimates stay under BOTH pre-request gates (the user threshold
+    // and the 72% ceiling), but the server REPORTS 7.6k/8k prompt tokens (tool
+    // schemas inflate the real request) - the agent must compact mid-turn from
+    // ground truth, not estimates. The pre-request passes must NOT fire here,
+    // or this test would no longer isolate the mid-run path.
     const history: LocalAgentMessage[] = [];
-    for (let i = 0; i < 4; i++) {
-        history.push({ role: 'user', content: `turn${i} ` + 'A'.repeat(4000) });
-        history.push({ role: 'assistant', content: `reply${i} ` + 'B'.repeat(4000) });
+    for (let i = 0; i < 3; i++) {
+        history.push({ role: 'user', content: `turn${i} ` + 'A'.repeat(2000) });
+        history.push({ role: 'assistant', content: `reply${i} ` + 'B'.repeat(2000) });
     }
 
     globalThis.fetch = (async (_input, init) => {
@@ -831,19 +833,19 @@ async function testMidRunCompactionFromServerUsage() {
         assert.ok(events.some((e: any) => e.type === 'assistantMessage'));
         assert.ok(events.some((e: any) => e.type === 'compactionSummary'));
         // The summarizer call sat between the two chat rounds and saw exactly
-        // what the mid-run compaction dropped (boundHistory already removed
-        // the very oldest turns before round 1).
+        // what the mid-run compaction dropped (the pre-request passes did not
+        // fire, so the oldest turns were still present for round 1).
         assert.equal(requests[1].stream, false);
-        assert.ok(JSON.stringify(requests[1].messages).includes('turn2'));
-        assert.ok(JSON.stringify(requests[1].messages).includes('reply2'));
+        assert.ok(JSON.stringify(requests[1].messages).includes('turn0'));
+        assert.ok(JSON.stringify(requests[1].messages).includes('reply0'));
         const round2: LocalAgentMessage[] = requests[2].messages;
         const serialized = JSON.stringify(round2);
         // Oldest pairs dropped mid-run; assistant→tool pair of the current
         // turn untouched at the tail.
         assert.ok(round2[1].content.includes('Earlier messages in this conversation were removed'));
         assert.ok(round2[1].content.includes('Mid-run summary: earlier turns read configs.'));
-        assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1') && !serialized.includes('turn2'));
-        assert.ok(serialized.includes('turn3') && serialized.includes('contents'));
+        assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1'));
+        assert.ok(serialized.includes('turn2') && serialized.includes('contents'));
         // The current turn's tool result is the last STORED message; the
         // volatile note rides its own trailing user turn, so the tool result
         // stays byte-exact for the next round's cache. The system prompt stays

@@ -211,6 +211,27 @@ export function boundCarriers<T extends CarrierRow>(rows: readonly T[], budget: 
     return out;
 }
 
+/**
+ * Drop the first `k` complete user turns (a `role: 'user'` row plus every
+ * following row up to the next user row) and return the rest.
+ *
+ * Used to skip turns already folded into the rolling compaction summary: the
+ * rows stay in `_localHistory` (so rewind and the eviction offset stay
+ * aligned), but the REPLAYED history starts after them so the model is not
+ * re-sent turns the summary already covers. Fewer than `k` user turns yields
+ * an empty array (everything is skipped).
+ */
+export function skipLeadingUserTurns<T extends HistoryRow>(rows: readonly T[], k: number): T[] {
+    if (k <= 0) return rows as T[];
+    let seen = 0;
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i]?.role !== 'user') continue;
+        if (seen === k) return rows.slice(i);
+        seen++;
+    }
+    return [];
+}
+
 /** Number of user rows in a ledger (one per turn, steers included). */
 export function countUserRows(rows: ReadonlyArray<HistoryRow>): number {
     let n = 0;

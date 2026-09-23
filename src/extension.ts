@@ -44,7 +44,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { buildLocalSystemPrompt } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { RulesSnapshot } from './local/rulesSnapshot';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
@@ -770,6 +770,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  The display ledger (`_history`) keeps every turn, so a displayed
      *  userIndex maps to a model-ledger row by subtracting this offset. */
     private _localEvictedUserTurns = 0;
+    /** Number of leading user turns of `_localHistory` the model should still
+     *  REPLAY, or null for all. Compaction folds older turns into the rolling
+     *  summary, so they must not be re-sent (and re-summarized) every turn.
+     *  Their rows stay in `_localHistory` - only replay skips them - so rewind
+     *  and the eviction offset above stay aligned. Stored as a SUFFIX count so
+     *  it survives the snapshot's front-trim (`MAX_STORED_TURNS`). */
+    private _localReplayUserTurns: number | null = null;
+    /** `_localReplayUserTurns` captured when the current run started; the run
+     *  reports its CUMULATIVE dropped count against this baseline. */
+    private _compactionRunReplayBase: number | null = null;
     /** Session-frozen project rules for the local system prompt. Recomputed
      *  per turn it rewrote the cacheable prefix on every active-file change
      *  (see `RulesSnapshot`). */
@@ -1333,9 +1343,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (localIdx === -2) {
             this._localHistory = [];
             this._localEvictedUserTurns = Math.max(0, userIndex);
+            this._localReplayUserTurns = null;
             return;
         }
-        if (localIdx >= 0) this._localHistory = this._localHistory.slice(0, localIdx);
+        if (localIdx >= 0) {
+            this._localHistory = this._localHistory.slice(0, localIdx);
+            // The user is deliberately going back: replay the retained turns so
+            // the model sees what they are editing, even if the rolling summary
+            // still covers some of them (a harmless duplicate beats a silent
+            // omission).
+            this._localReplayUserTurns = null;
+        }
     }
 
     /** The model ledger is always a SUFFIX of the display turns (eviction only
@@ -1348,6 +1366,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             0,
             countUserRows(this._history) - countUserRows(this._localHistory),
         );
+    }
+
+    /** Restore the compaction replay boundary from a snapshot. Stored as a
+     *  SUFFIX count, so the snapshot's front-trim can only ever shrink it -
+     *  clamp to the restored ledger and normalize "replay everything" to null. */
+    private _restoreReplayBoundary(stored: number | null | undefined): void {
+        const total = countUserRows(this._localHistory);
+        this._localReplayUserTurns = stored == null
+            ? null
+            : Math.max(0, Math.min(stored, total));
+        if (this._localReplayUserTurns != null && this._localReplayUserTurns >= total) {
+            this._localReplayUserTurns = null;
+        }
+        this._compactionRunReplayBase = null;
     }
 
     /** Shared rewind primitive behind message edit and response regenerate:
@@ -2371,7 +2403,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  `function.arguments`. The normalizer also repairs turns persisted by
      *  older builds that stored the `argumentsJson` key or dropped content. */
     private _buildLocalHistory(): Array<import('./local/localAgent').LocalAgentMessage> {
-        return buildReplayHistory(this._localHistory);
+        // Skip turns already folded into the rolling compaction summary (they
+        // live in the system prompt instead). The rows stay in `_localHistory`
+        // for display/rewind; only the REPLAYED history starts after them.
+        const total = countUserRows(this._localHistory);
+        const replay = this._localReplayUserTurns == null
+            ? total
+            : Math.max(0, Math.min(this._localReplayUserTurns, total));
+        return buildReplayHistory(skipLeadingUserTurns(this._localHistory, total - replay));
     }
 
     /** Append to the model ledger with the in-memory content cap applied.
@@ -2427,7 +2466,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _trimLocalHistory(): void {
         const { rows, evicted } = evictOldestTurns(this._localHistory, MAX_IN_MEMORY_TURNS);
         this._localHistory = boundCarriers(rows);
-        if (evicted) this._localEvictedUserTurns += evicted;
+        if (evicted) {
+            this._localEvictedUserTurns += evicted;
+            // Eviction drops from the FRONT, which only eats the already-
+            // skipped prefix first; the replay suffix shrinks only once that
+            // prefix is exhausted.
+            const total = countUserRows(this._localHistory);
+            if (this._localReplayUserTurns != null) {
+                this._localReplayUserTurns = Math.min(this._localReplayUserTurns, total);
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -2744,6 +2792,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // through the task-list write listener.
             this._activeRunTaskList = this._currentTaskList();
             this._runInFlight = true;
+            // Baseline for the run's cumulative dropped-user-turn report.
+            this._compactionRunReplayBase = this._localReplayUserTurns;
             const agent = runLocalAgent(
                 {
                     baseUrl: active.baseUrl,
@@ -2753,6 +2803,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     userText: localUserText,
                     attachments: localAttachments,
                     history: this._buildLocalHistory(),
+                    // Carry the rolling compaction summary into the run so the
+                    // pre-request compaction MERGES newly dropped turns into
+                    // the accumulated summary instead of overwriting it.
+                    sessionSummary: this._sessionSummary,
                     tools: getLocalToolDefinitions({
                         yolo: this._yoloMode,
                         plan: runPlanMode,
@@ -3006,12 +3060,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     } : null,
                 });
                 break;
-            case 'compactionSummary':
+            case 'compactionSummary': {
                 // Local compaction summarized the dropped turns with the
                 // user's model - keep it rolling: the next local request's
                 // system prompt and the session snapshot carry it forward.
+                // Advance the replay boundary so the next turn does not re-send
+                // (and re-summarize) the turns the summary now covers. The run
+                // reports a CUMULATIVE count against the baseline captured at
+                // run start; the current turn's row is not in `_localHistory`
+                // yet, so `total` is the prior-turn count.
                 this._sessionSummary = event.value;
+                const total = countUserRows(this._localHistory);
+                const base = this._compactionRunReplayBase ?? total;
+                const dropped = typeof event.droppedUserTurns === 'number'
+                    ? Math.max(0, event.droppedUserTurns)
+                    : 0;
+                const replay = Math.max(0, Math.min(base - dropped, total));
+                this._localReplayUserTurns = replay >= total ? null : replay;
                 break;
+            }
             case 'retrying':
                 // Transient transport drop. Display-only: patch the streaming
                 // bubble with the countdown so a slow re-dial does not look
@@ -4136,6 +4203,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history = [];
         this._localHistory = [];
         this._localEvictedUserTurns = 0;
+        this._localReplayUserTurns = null;
+        this._compactionRunReplayBase = null;
         this._localRulesSnapshot.reset();
         this._sessionSummary = null;
         this._sessionTitle = null;
@@ -4220,6 +4289,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
+        this._restoreReplayBoundary(snapshot.replayUserTurns);
         // Restore the session's cumulative spend (reset by _resetSessionLedgers
         // above) - switching sessions must not zero an existing total.
         this._sessionCost = {
@@ -4317,6 +4387,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._history = [];
             this._localHistory = [];
             this._localEvictedUserTurns = 0;
+            this._localReplayUserTurns = null;
+            this._compactionRunReplayBase = null;
             this._localRulesSnapshot.reset();
             this._sessionSummary = null;
             this._sessionTitle = null;
@@ -4331,6 +4403,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._history = [];
             this._localHistory = [];
             this._localEvictedUserTurns = 0;
+            this._localReplayUserTurns = null;
+            this._compactionRunReplayBase = null;
             this._localRulesSnapshot.reset();
             this._sessionSummary = null;
             this._sessionTitle = null;
@@ -4341,6 +4415,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
+        this._restoreReplayBoundary(snapshot.replayUserTurns);
         this._sessionId = snapshot.sessionId;
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {
@@ -4472,6 +4547,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 model: this._selectedModel,
                 summary: this._sessionSummary,
                 localHistory: this._localHistory,
+                replayUserTurns: this._localReplayUserTurns,
                 uiHistory: this._history,
                 totalCostUsd: this._sessionCost.USD,
                 totalCostIrt: this._sessionCost.IRT,
