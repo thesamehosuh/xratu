@@ -2673,12 +2673,24 @@ async function requestSummaryCompletion(
         };
     }
 
-    const resp = await fetch(endpointUrl(request.baseUrl, endpoint), withDispatcher({
+    const send = (): Promise<Response> => fetch(endpointUrl(request.baseUrl, endpoint), withDispatcher({
         method: 'POST',
         headers,
         signal,
         body: JSON.stringify(body),
     }, request.dispatcher));
+    let resp = await send();
+    // Some reasoning models reject ANY non-default temperature (the gpt-5
+    // family: "Unsupported parameter: 'temperature' is not supported with this
+    // model"). Drop it and retry once rather than letting compaction degrade to
+    // a bare marker - the temperature is a nicety, the summary is not.
+    if (!resp.ok && resp.status === 400) {
+        const text = await resp.text().catch(() => '');
+        if (/temperature/i.test(text) && 'temperature' in body) {
+            delete body.temperature;
+            resp = await send();
+        }
+    }
     if (!resp.ok) return null;
     const data = await resp.json() as any;
     const text = extractSummaryText(style, data);
@@ -2978,16 +2990,25 @@ export async function* runLocalAgent(
     // fallback below resets the baseline because its drops are unsummarized and
     // must NOT be reported (the host would stop replaying them without a
     // summary covering them).
-    let historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+    const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+    // Only a summarized PREFIX can be expressed as the host's suffix replay
+    // count. After any UNSUMMARIZED drop (forced recovery / mechanical
+    // fallback) a later summarized drop is no longer a prefix, so freeze the
+    // reported value at that point: the host then replays the unsummarized
+    // turns too, and a duplicate is safer than an omission.
+    let unsummarizedDrop = false;
+    let reportedTurns = 0;
     const compactedUserTurns = (): number => {
+        if (unsummarizedDrop) return reportedTurns;
         const ts = turnStartIndex();
-        if (ts == null) return 0;
+        if (ts == null) return reportedTurns;
         let remaining = 0;
         for (let i = 1; i < ts; i++) {
             const m = messages[i];
             if (m.role === 'user' && !isHistoryTruncationMarker(m)) remaining++;
         }
-        return Math.max(0, historyUserTurns - remaining);
+        reportedTurns = Math.max(0, historyUserTurns - remaining);
+        return reportedTurns;
     };
     // Rolling compaction summary: each compaction's summary is merged into the
     // next one and reported to the host so it survives across requests. Seed
@@ -3031,11 +3052,10 @@ export async function* runLocalAgent(
                 ...bounded,
                 currentTurnMessage,
             );
-            // Re-anchor the reporting baseline: these drops are unsummarized,
-            // so a later successful compaction must count only ITS drops.
-            historyUserTurns = messages
-                .slice(1, turnStartIndex() ?? messages.length)
-                .filter((m) => m.role === 'user' && !isHistoryTruncationMarker(m)).length;
+            // These drops are unsummarized: freeze the reported replay count so
+            // a later summarized drop cannot advance the host boundary past
+            // turns no summary covers.
+            unsummarizedDrop = true;
             noteUsed = estimateUsed();
         }
     }
@@ -3216,6 +3236,8 @@ export async function* runLocalAgent(
                     // summary the marker was carrying. Re-attach the best-known
                     // summary without a model call so the retry keeps it.
                     carryCompactionSummary(messages, sessionSummary);
+                    // Unsummarized drop: freeze the reported replay count.
+                    unsummarizedDrop = true;
                     noteUsed = estimateUsed();
                     requestError = null;
                     round--;
@@ -3488,8 +3510,10 @@ export async function* runLocalAgent(
         ) break;
         if (!compactMessages(wrapMessages, windowTokens, undefined, toolTokens, true, undefined, turnStartIndex()).length) break;
         // Same as the main loop: forced recovery leaves a bare marker, so
-        // re-attach the rolling summary before the one retry.
+        // re-attach the rolling summary before the one retry. Unsummarized
+        // drop - freeze the reported replay count.
         carryCompactionSummary(wrapMessages, sessionSummary);
+        unsummarizedDrop = true;
         wrapRecovered = true;
     }
     if (wrapError) throw request.signal?.aborted ? abortError() : describeNetworkError(wrapError);

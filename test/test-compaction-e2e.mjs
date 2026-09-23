@@ -69,18 +69,28 @@ function makeHistory(turns = TURNS) {
     return rows;
 }
 
-function mockFetch(requests, summarizerMode = 'ok') {
+function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
+    let summaryCalls = 0;
     return async (input, init) => {
         const url = String(input);
         const body = JSON.parse(String(init.body));
         requests.push({ url, ...body });
         const budget = body.max_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
         if (budget === summaryMaxTokens(WINDOW)) {
-            if (summarizerMode === 'fail') {
+            summaryCalls++;
+            if (summarizerMode === 'fail' || (summarizerMode === 'fail-first' && summaryCalls === 1)) {
                 return { ok: false, status: 500, json: async () => ({}), text: async () => 'upstream failed' };
             }
             if (summarizerMode === 'empty') {
                 return jsonResponse({ choices: [{ message: { content: '   ' } }] });
+            }
+            if (summarizerMode === 'temperature-400' && body.temperature !== undefined) {
+                return {
+                    ok: false,
+                    status: 400,
+                    json: async () => ({}),
+                    text: async () => "Unsupported parameter: 'temperature' is not supported with this model.",
+                };
             }
             // Summarizer: answer in the shape of the endpoint it hit.
             if (url.endsWith('/messages')) {
@@ -107,14 +117,17 @@ function mockFetch(requests, summarizerMode = 'ok') {
                 }),
             ]);
         }
-        return sse([frame({ choices: [{ delta: { content: 'final answer' } }] }), 'data: [DONE]\n\n']);
+        const chatFrames = [frame({ choices: [{ delta: { content: 'final answer' } }] })];
+        if (mainUsage) chatFrames.push(frame({ usage: mainUsage }));
+        chatFrames.push('data: [DONE]\n\n');
+        return sse(chatFrames);
     };
 }
 
-async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok' } = {}) {
+async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok', mainUsage = null } = {}) {
     const requests = [];
     const original = globalThis.fetch;
-    globalThis.fetch = mockFetch(requests, summarizerMode);
+    globalThis.fetch = mockFetch(requests, summarizerMode, mainUsage);
     const events = [];
     try {
         for await (const event of runLocalAgent(
@@ -260,6 +273,41 @@ for (const mode of ['fail', 'empty']) {
         !!mainReq?.messages && !isHistoryTruncationMarker(mainReq.messages[1]),
         JSON.stringify(mainReq?.messages?.[1]?.content ?? '').slice(0, 80));
     ok(`${mode} summarizer: run still completed`, r.events.some((e) => e.type === 'assistantMessage'));
+}
+
+// ---------------------------------------------------------------------------
+// Unsummarized drops FREEZE the reported replay count.
+// A summarized drop after an unsummarized one is not a prefix, so a suffix
+// count cannot represent it. Reporting it would make the host skip turns no
+// summary covers (permanent loss); freezing replays them instead (a safe
+// duplicate). Here the pre-request summarizer fails (mechanical fallback drops
+// unsummarized) and a later mid-run compaction succeeds - its report must stay
+// at 0, not count the fallback's drops.
+// ---------------------------------------------------------------------------
+{
+    const r = await drive(makeHistory(10), null, {
+        summarizerMode: 'fail-first',
+        mainUsage: { prompt_tokens: WINDOW, completion_tokens: 10 },
+    });
+    const comp = r.events.find((e) => e.type === 'compactionSummary');
+    ok('freeze: a later summarized compaction still fires', !!comp);
+    ok('freeze: unsummarized drops are NOT reported', !!comp && comp.droppedUserTurns === 0,
+        `dropped=${comp?.droppedUserTurns}`);
+}
+
+// ---------------------------------------------------------------------------
+// A temperature-rejecting reasoning model must not break compaction.
+// gpt-5 on /responses returns 400 "Unsupported parameter: 'temperature'"; the
+// summarizer drops it and retries once instead of degrading to a bare marker.
+// ---------------------------------------------------------------------------
+{
+    const r = await drive(makeHistory(), null, { summarizerMode: 'temperature-400' });
+    const comp = r.events.find((e) => e.type === 'compactionSummary');
+    ok('temperature-400: compaction still fires', !!comp);
+    const summarizers = r.requests.filter((q) => (q.max_tokens ?? q.max_output_tokens) === summaryMaxTokens(WINDOW));
+    ok('temperature-400: retried once', summarizers.length === 2, `calls=${summarizers.length}`);
+    ok('temperature-400: the retry dropped temperature', summarizers[1] && summarizers[1].temperature === undefined);
+    ok('temperature-400: summary extracted after the retry', !!comp && comp.value.includes('probe goal'));
 }
 
 if (failed) {
