@@ -105,13 +105,15 @@ function originOf(baseUrl: string): string | null {
 /** True when the base URL resolves to a loopback host on `port`. Parses the
  *  URL rather than matching the raw string, so a `localhost:1234` inside a
  *  path/query (or a port that merely starts with the same digits, e.g.
- *  12340) cannot hijack a remote endpoint. */
+ *  12340) cannot hijack a remote endpoint. IPv6 brackets are stripped, as in
+ *  endpointGuard's `isLikelyLocalUrl`. */
 function isLoopbackRuntime(baseUrl: string, port: number): boolean {
     const origin = originOf(baseUrl);
     if (!origin) return false;
     try {
         const host = new URL(origin);
-        return (host.hostname === 'localhost' || host.hostname === '127.0.0.1') && host.port === String(port);
+        const name = host.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+        return (name === 'localhost' || name === '127.0.0.1' || name === '::1') && host.port === String(port);
     } catch {
         return false;
     }

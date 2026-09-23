@@ -78,6 +78,14 @@ async function withFetch(routes, fn) {
     check('lmstudio: bare origin still probed natively', calls[0], 'http://localhost:1234/api/v1/models');
 }
 
+// IPv6 loopback (brackets in URL.hostname) is a loopback runtime too.
+{
+    const { calls } = await withFetch([
+        ['/api/v1/models', { models: [{ type: 'llm', key: 'm', max_context_length: 8192 }] }],
+    ], () => probeLocalEndpoint('http://[::1]:1234/v1'));
+    check('lmstudio: IPv6 loopback probed natively', calls[0], 'http://[::1]:1234/api/v1/models');
+}
+
 // --- A loopback-looking REMOTE url must not hijack the native probe ---------
 {
     const { calls } = await withFetch([
