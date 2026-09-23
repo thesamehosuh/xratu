@@ -37,6 +37,10 @@ const {
     elideOldToolResults,
     TOOL_RESULT_ELISION_MARKER,
     TOOL_RESULT_ELISION_KEEP,
+    isHistoryTruncationMarker,
+    summarizableDroppedTurns,
+    carryCompactionSummary,
+    extractSummaryText,
 } = require('../out/local/localAgent.js');
 
 let failed = 0;
@@ -195,7 +199,9 @@ checkTrue('cuts land on user boundaries', boundedNoSystem.length === 0 || bounde
 
 // --- summaryMaxTokens: window-derived, floored, capped ---
 check('summaryMaxTokens 8k window', summaryMaxTokens(8192), 1228);
-check('summaryMaxTokens huge window capped', summaryMaxTokens(1_000_000), 2048);
+check('summaryMaxTokens huge window capped at 8192 (reasoning headroom)', summaryMaxTokens(1_000_000), 8192);
+check('summaryMaxTokens large window scales then caps', summaryMaxTokens(32768), 4915);
+checkTrue('summaryMaxTokens cap only binds on large windows', summaryMaxTokens(8192) < 8192);
 check('summaryMaxTokens tiny window floored', summaryMaxTokens(2048), 512);
 check('summaryMaxTokens null window default', summaryMaxTokens(null), 2048);
 check('summaryMaxTokens undefined default', summaryMaxTokens(undefined), 2048);
@@ -528,6 +534,217 @@ const ok = (name, cond) => checkTrue(name, cond);
     const fired = compactMessages(build(), window, undefined, 0, false, 0.5);
     ok('a 0.5 ratio drops turns', fired.length > 0, `dropped=${fired.length}`);
 }
+
+// --- elision must NOT discard server-reported occupancy ------------------
+// Regression: the cheap tier computed its reclaim as
+// `observed - estimate(messages) - toolTokens`. When `usedTokens` was supplied
+// (the server-confirmed occupancy), that algebraically RESET `total` to
+// `estimate(messages) + toolTokens`, throwing away the ground truth exactly
+// when the estimate undercounts dense content. The tier then believed it had
+// reclaimed enough and skipped the turn-drop loop, so the next request
+// overflowed anyway.
+{
+    const window = 100_000;                 // trigger 90k, target 60k
+    const mkTurn = (i) => ([
+        { role: 'user', content: `turn ${i}` },
+        {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+        },
+        { role: 'tool', tool_call_id: `c${i}`, content: 'x'.repeat(3000) }, // ~1000 tokens
+    ]);
+    const build = () => {
+        const msgs = [{ role: 'system', content: 'sys' }];
+        for (let i = 0; i < 20; i++) msgs.push(...mkTurn(i));
+        msgs.push({ role: 'user', content: 'current turn' });
+        return msgs;
+    };
+
+    // The estimate alone sits far under the trigger, so it cannot fire...
+    check('estimate-only stays under the trigger', compactMessages(build(), window, undefined, 0).length, 0);
+
+    // ...but the server says the real prompt is 95k, and elision only reclaims
+    // ~14.5k (estimate units). The post-elision occupancy is still ~80k > the
+    // 60k target, so whole turns MUST still be dropped.
+    const dropped = compactMessages(build(), window, 95_000, 0);
+    checkTrue('server-seeded occupancy still compacts after elision', dropped.length > 0, `dropped=${dropped.length}`);
+}
+
+// --- rolling-summary carrier: never feed the marker back to the summarizer,
+// --- and never let a failed summarizer erase the summary it carries --------
+// The marker at index 1 carries the rolling summary, which the caller ALSO
+// passes as `existingSummary`. Re-summarizing the marker duplicates the prior
+// summary in the compaction prompt; a null summary (timeout / provider error /
+// nothing-but-the-marker dropped) used to leave a BARE marker, losing it.
+check('bare marker recognized',
+    isHistoryTruncationMarker({ role: 'user', content: HISTORY_TRUNCATION_MARKER }), true);
+check('summary-carrying marker recognized',
+    isHistoryTruncationMarker({ role: 'user', content: `${HISTORY_TRUNCATION_MARKER}\n\nsummary` }), true);
+check('normal user message is not a marker',
+    isHistoryTruncationMarker({ role: 'user', content: 'hello' }), false);
+check('marker text on an assistant row is not a marker',
+    isHistoryTruncationMarker({ role: 'assistant', content: HISTORY_TRUNCATION_MARKER }), false);
+
+{
+    const mixed = [
+        { role: 'user', content: `${HISTORY_TRUNCATION_MARKER}\n\nold summary` },
+        { role: 'user', content: 'real request' },
+        { role: 'assistant', content: 'real answer' },
+    ];
+    const filtered = summarizableDroppedTurns(mixed);
+    check('marker excluded from summarizer input', filtered.length, 2);
+    check('real dropped turns preserved', filtered[0].content, 'real request');
+}
+
+{
+    const msgs = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: HISTORY_TRUNCATION_MARKER },
+        { role: 'user', content: 'tail' },
+    ];
+    check('carry writes the summary into the marker', carryCompactionSummary(msgs, 'merged summary'), true);
+    checkTrue('summary present', msgs[1].content.includes('merged summary'));
+    checkTrue('marker prefix preserved', msgs[1].content.startsWith(HISTORY_TRUNCATION_MARKER));
+
+    // Replacing an already-carried summary must not stack a second copy.
+    carryCompactionSummary(msgs, 'newer summary');
+    check('exactly one summary block', (msgs[1].content.match(/Summary of the removed turns/g) || []).length, 1);
+    checkTrue('newer summary wins', msgs[1].content.includes('newer summary'));
+    checkFalse('superseded summary is gone', msgs[1].content.includes('merged summary'));
+
+    check('carry is a no-op without a marker',
+        carryCompactionSummary([{ role: 'system', content: 'sys' }], 'x'), false);
+    check('carry is a no-op for an empty summary',
+        carryCompactionSummary([
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: HISTORY_TRUNCATION_MARKER },
+        ], null), false);
+}
+
+// --- integration: a second compaction drops the marker but the summarizer
+// --- must not see it ------------------------------------------------------
+{
+    const msgs = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: `${HISTORY_TRUNCATION_MARKER}\n\nold summary` },
+        ...pairTurn('t1', 3000),
+        ...pairTurn('t2', 3000),
+        { role: 'user', content: BIG },
+    ];
+    const dropped = compactMessages(msgs, 8192, undefined, 0, true);
+    checkTrue('the marker is among the dropped rows', dropped.some(isHistoryTruncationMarker));
+    checkFalse('but it is excluded from the summarizer input',
+        summarizableDroppedTurns(dropped).some(isHistoryTruncationMarker));
+    checkTrue('real dropped turns remain', summarizableDroppedTurns(dropped).length > 0);
+}
+
+// --- forced recovery must NOT erase the rolling summary -------------------
+// Forced recovery inserts a bare marker without calling the summarizer
+// (deterministic by design). The runtime re-attaches the rolling summary
+// afterwards via `carryCompactionSummary`; without it the summary vanishes
+// from the in-run context for every remaining round.
+{
+    const msgs = [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: `${HISTORY_TRUNCATION_MARKER}\n\nprior summary` },
+        ...pairTurn('t1', 3000),
+        ...pairTurn('t2', 3000),
+        { role: 'user', content: BIG },
+    ];
+    const dropped = compactMessages(msgs, 8192, undefined, 0, true);
+    checkTrue('forced recovery dropped turns', dropped.length > 0);
+    check('forced recovery leaves a BARE marker (pre-carry)',
+        msgs[1].role === 'user' && msgs[1].content === HISTORY_TRUNCATION_MARKER, true);
+    checkTrue('carry re-attaches the rolling summary', carryCompactionSummary(msgs, 'prior summary'));
+    checkTrue('summary survives forced recovery', msgs[1].content.includes('prior summary'));
+    checkTrue('carried marker keeps the recovery notice', msgs[1].content.startsWith(HISTORY_TRUNCATION_MARKER));
+}
+
+// --- steering: the boundary is the TURN OPENER, not the last user row ------
+// A steer is a user row appended AFTER the current turn's opener, so the
+// default boundary (the last user row) would protect the steer and let
+// compaction drop the user's actual request - and let elision touch the
+// current turn's tool results.
+{
+    const live = { role: 'user', content: 'THE ACTUAL REQUEST' };
+    // The current turn must be LARGE relative to history for the hazard to
+    // bite: the loop drops oldest-first until occupancy <= target, so it only
+    // reaches the opener when history alone is not enough (current > 1.5x
+    // history). A big current-turn tool result models exactly that.
+    const curTool = { role: 'tool', tool_call_id: 'cur', content: 'CURRENT TURN RESULT '.repeat(500) };
+    const msgs = [
+        { role: 'system', content: 'sys' },
+        ...pairTurn('t1', 1000),
+        live,
+        { role: 'assistant', content: '', tool_calls: [{ id: 'cur', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+        curTool,
+        { role: 'user', content: 'a steer' },
+    ];
+    const liveIndex = msgs.indexOf(live);
+    checkTrue('fixture: opener is not the last user row', liveIndex < msgs.length - 1);
+
+    // The hazard: with the default boundary (last user row = the steer), the
+    // loop is free to drop the opener's whole group.
+    const hazard = msgs.map((m) => ({ ...m }));
+    compactMessages(hazard, 8192, undefined, 0, true);
+    checkFalse('without the boundary the request CAN be dropped (the hazard)',
+        hazard.some((m) => m.content === 'THE ACTUAL REQUEST'));
+
+    const dropped = compactMessages(msgs, 8192, undefined, 0, true, undefined, liveIndex);
+    checkTrue('steering-safe compaction still drops history', dropped.length > 0);
+    checkTrue('the user request survives', msgs.includes(live));
+    checkTrue('the current-turn tool result survives', msgs.includes(curTool));
+    checkTrue('the current-turn tool result is intact', curTool.content.startsWith('CURRENT TURN RESULT'));
+    checkTrue('the steer survives', msgs.some((m) => m.role === 'user' && m.content === 'a steer'));
+    checkFalse('no history turn survives before the opener',
+        msgs.slice(1, msgs.indexOf(live)).some((m) => m.role === 'user' && m.content.startsWith('t1')));
+}
+
+// --- steering: elision must not touch the current turn's tool results ------
+{
+    const live = { role: 'user', content: 'request' };
+    const curTool = { role: 'tool', tool_call_id: 'cur', content: 'z'.repeat(5000) };
+    const msgs = [{ role: 'system', content: 'sys' }];
+    for (let i = 0; i < 8; i++) msgs.push(...pairTurn('h' + i, 3000));
+    msgs.push(live);
+    msgs.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'cur', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+    });
+    msgs.push(curTool);
+    msgs.push({ role: 'user', content: 'steer' });
+
+    const liveIndex = msgs.indexOf(live);
+    elideOldToolResults(msgs, TOOL_RESULT_ELISION_KEEP, liveIndex);
+    checkTrue('current-turn tool result not elided', curTool.content === 'z'.repeat(5000));
+    checkTrue('history tool results ARE elided',
+        msgs.some((m) => m.role === 'tool' && m.content === TOOL_RESULT_ELISION_MARKER));
+}
+
+// --- extractSummaryText: one parser per wire API --------------------------
+// The summarizer must read the shape of the endpoint it actually called; a
+// chat-only parser returned null on /responses and /messages, silently
+// degrading compaction to the bare marker on OpenCode Go.
+check('chat: choices[0].message.content',
+    extractSummaryText('chat', { choices: [{ message: { content: 'summary text' } }] }), 'summary text');
+check('messages: concatenated text blocks',
+    extractSummaryText('messages', { content: [{ type: 'text', text: 'a' }, { type: 'thinking', thinking: 'x' }, { type: 'text', text: 'b' }] }), 'ab');
+check('responses: message item output_text',
+    extractSummaryText('responses', {
+        output: [
+            { type: 'reasoning', summary: [{ type: 'summary_text', text: 'ignore me' }] },
+            { type: 'message', content: [{ type: 'output_text', text: 'the summary' }] },
+        ],
+    }), 'the summary');
+check('google: candidates[0].content.parts[].text',
+    extractSummaryText('google', { candidates: [{ content: { parts: [{ text: 'g1' }, { inlineData: {} }, { text: 'g2' }] } }] }), 'g1g2');
+check('unknown shape yields null', extractSummaryText('chat', { choices: [] }), null);
+check('empty text yields null', extractSummaryText('chat', { choices: [{ message: { content: '' } }] }), null);
+check('missing body yields null', extractSummaryText('responses', {}), null);
+check('messages with no text block yields null',
+    extractSummaryText('messages', { content: [{ type: 'thinking', thinking: 'x' }] }), null);
 
 console.log(failed === 0 ? '\ncompaction tests: all passed' : `\ncompaction tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

@@ -38,6 +38,10 @@ export interface LocalSessionSnapshot {
     model: string | null;
     summary: string | null;
     localHistory: LocalSessionHistoryMessage[];
+    /** Leading user turns of `localHistory` already folded into `summary`, as a
+     *  SUFFIX count of turns still to replay (null/absent = replay all). Stored
+     *  as a suffix so the snapshot's front-trim can only shrink it. */
+    replayUserTurns?: number | null;
     uiHistory: any[];
     pendingTurn?: LocalPendingTurn | null;
     /** Cumulative spend for this session in USD. Monotonic: rewinding the
@@ -583,6 +587,9 @@ export class LocalSessionStore {
                 model: parsed?.model ?? null,
                 summary: parsed?.summary ?? null,
                 localHistory: parsed?.localHistory ?? [],
+                replayUserTurns: typeof parsed?.replayUserTurns === 'number' && Number.isFinite(parsed.replayUserTurns)
+                    ? parsed.replayUserTurns
+                    : null,
                 uiHistory: parsed?.uiHistory ?? [],
                 pendingTurn: parsed?.pendingTurn ?? null,
                 // Clamp: a malformed/negative/overflowing value must not
