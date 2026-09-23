@@ -521,6 +521,9 @@ async function dispatchTool(
                 clearTimeout(killFallback);
                 killFallback = setTimeout(() => finish(null), 5000);
             };
+            // Registered so a user cancel stops this command NOW instead of
+            // waiting out the idle/hard cap.
+            activeTerminalKills.add(kill);
             const resetIdle = () => {
                 clearTimeout(idleTimer);
                 idleTimer = setTimeout(
@@ -531,6 +534,7 @@ async function dispatchTool(
             const finish = (code: number | null, err?: Error) => {
                 if (done) return;
                 done = true;
+                activeTerminalKills.delete(kill);
                 clearTimeout(idleTimer);
                 clearTimeout(hardTimer);
                 clearTimeout(killFallback);
@@ -997,6 +1001,23 @@ export async function executeLocalTool(
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
     }
+}
+
+/** Kill handles for terminal commands that are still running, so a user cancel
+ *  can stop one immediately instead of waiting out the idle/hard cap. */
+const activeTerminalKills = new Set<(why: string) => void>();
+
+/** Kill every running terminal command (the composer's stop button). Returns
+ *  how many were signalled. */
+export function killRunningTerminalCommands(why = 'cancelled by the user'): number {
+    let killed = 0;
+    for (const kill of [...activeTerminalKills]) {
+        try {
+            kill(why);
+            killed += 1;
+        } catch { /* already gone */ }
+    }
+    return killed;
 }
 
 /** Bridge-local adapter: wraps executeLocalTool to match the LocalToolExecutor

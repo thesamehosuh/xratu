@@ -7,7 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
-import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
+import { getLocalToolDefinitions, createLocalToolExecutor, killRunningTerminalCommands } from './mcp';
 import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
@@ -3566,6 +3566,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             this._resolveNotification(data.id, data.action ?? null);
                             break;
                         case 'cancelRequest':
+                            // Stop a running terminal command NOW. The loop's
+                            // abort only takes effect at a round boundary, so
+                            // without this a long command keeps running (and
+                            // keeps holding its ports/files) until the idle cap.
+                            killRunningTerminalCommands();
                             this._cancelActiveRequests();
                             break;
                         case 'restoreCheckpoint':

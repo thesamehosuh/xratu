@@ -1408,7 +1408,6 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
                             aria-label={item.status === 'completed' ? t('taskListMarkPending') : t('taskListMarkDone')}
                             onClick={() => setStatus(i, item.status === 'completed' ? 'pending' : 'completed')}
                         >
-                            {item.status === 'completed' && <Check size={12} />}
                         </button>
                         {editingIdx === i ? (
                             <input
