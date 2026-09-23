@@ -529,9 +529,13 @@ export interface ModelsDevCache {
     catalog: ModelsDevCatalog;
 }
 
+/** A `fetchedAt` further ahead than this is a hand-edit or clock skew, not a
+ *  real fetch; treating it as fresh would suppress refresh indefinitely. */
+const MODELS_DEV_FUTURE_SLACK_MS = 5 * 60 * 1000;
+
 /** Parse a persisted models.dev cache (tolerating a UTF-8 BOM and corruption),
  *  or null when nothing usable is present. Never throws. */
-export function readModelsDevCache(raw: unknown): ModelsDevCache | null {
+export function readModelsDevCache(raw: unknown, now: number = Date.now()): ModelsDevCache | null {
     let parsed: any = raw;
     if (typeof raw === 'string') {
         try {
@@ -543,11 +547,29 @@ export function readModelsDevCache(raw: unknown): ModelsDevCache | null {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     const catalog = sanitizeModelsDevCatalog(parsed.catalog);
     if (!Object.keys(catalog).length) return null;
-    return { fetchedAt: Number.isFinite(parsed.fetchedAt) ? Number(parsed.fetchedAt) : 0, catalog };
+    const stored = Number.isFinite(parsed.fetchedAt) ? Number(parsed.fetchedAt) : 0;
+    // A future timestamp must read as expired, not as "fresh forever".
+    const fetchedAt = stored > now + MODELS_DEV_FUTURE_SLACK_MS ? 0 : stored;
+    return { fetchedAt, catalog };
 }
 
 export function serializeModelsDevCache(cache: ModelsDevCache): string {
     return JSON.stringify(cache);
+}
+
+/** The models.dev entry for one provider+model, or null. Exact (lowercased)
+ *  id match: models.dev uses the provider's own wire ids for OpenCode, and
+ *  the rest fall through to the curated table. */
+export function modelsDevModelInfo(
+    catalog: ModelsDevCatalog | null | undefined,
+    providerId: string | null | undefined,
+    modelId: string | null | undefined,
+): ModelsDevModel | null {
+    if (!catalog) return null;
+    const key = modelsDevProviderKey(providerId);
+    const id = (modelId ?? '').trim().toLowerCase();
+    if (!key || !id) return null;
+    return catalog[key]?.[id] ?? null;
 }
 
 /**

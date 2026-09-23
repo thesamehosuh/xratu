@@ -13,6 +13,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
     modelsDevProviderKey,
+    modelsDevModelInfo,
     normalizeModelsDevDoc,
     applyModelsDev,
     applyModelKnowledge,
@@ -105,6 +106,14 @@ check('cache: corrupt JSON', readModelsDevCache('{oops'), null);
 check('cache: wrong shape', readModelsDevCache('[1,2,3]'), null);
 check('cache: empty catalog', readModelsDevCache(JSON.stringify({ fetchedAt: 1, catalog: {} })), null);
 check('cache: bad fetchedAt clamped', readModelsDevCache(JSON.stringify({ fetchedAt: 'x', catalog })).fetchedAt, 0);
+// A future timestamp (hand-edit/clock skew) must expire, not suppress refresh.
+check('cache: future fetchedAt expires', readModelsDevCache(JSON.stringify({ fetchedAt: 9e15, catalog }), 1000).fetchedAt, 0);
+check('cache: recent fetchedAt kept', readModelsDevCache(JSON.stringify({ fetchedAt: 1000, catalog }), 2000).fetchedAt, 1000);
+// Single-model lookup used by the run's context-window hint.
+check('modelsDevModelInfo: exact match', modelsDevModelInfo(catalog, 'opencode-go', 'deepseek-v4-pro').contextWindow, 1000000);
+check('modelsDevModelInfo: case-insensitive', modelsDevModelInfo(catalog, 'opencode-go', 'DeepSeek-V4-Pro').contextWindow, 1000000);
+check('modelsDevModelInfo: unmapped provider', modelsDevModelInfo(catalog, 'kayaai', 'deepseek-v4-pro'), null);
+check('modelsDevModelInfo: unknown model', modelsDevModelInfo(catalog, 'opencode-go', 'nope'), null);
 // A hand-edited cache cannot inject a bogus window or an unknown effort level.
 const tampered = readModelsDevCache(JSON.stringify({
     fetchedAt: 1,

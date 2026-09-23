@@ -36,6 +36,7 @@ import { THINKING_LEVELS, type ThinkingLevel } from './local/localTypes';
 import {
     cachedModelInfo,
     catalogEntryFor,
+    modelsDevModelInfo,
     modelsDevProviderKey,
     readModelCatalog,
     readModelsDevCache,
@@ -765,6 +766,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _modelsDevFetchedAt = 0;
     private _modelsDevNextAttemptAt = 0;
     private _modelsDevLoading: Promise<ModelsDevCatalog | null> | null = null;
+    private _modelsDevLoaded: Promise<void> | null = null;
     private readonly _modelsDevFile: string;
     /** Pending local approvals - resolver keyed by approvalId. */
     private _localApprovalResolvers: Record<string, {
@@ -959,7 +961,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  ONLY when a saved credential uses a provider the catalog covers - a
      *  local-only or Iranian-provider install never makes the request. */
     private async _initModelsDev(): Promise<void> {
-        await this._loadModelsDevCache();
+        await this._ensureModelsDevLoaded();
         try {
             const credentials = await this._getSavedCredentials();
             if (credentials.some((c) => modelsDevProviderKey(providerIdForUrl(c.baseUrl)))) {
@@ -970,6 +972,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /** The one-time disk load, shared so a concurrent fetch cannot race it. */
+    private _ensureModelsDevLoaded(): Promise<void> {
+        return (this._modelsDevLoaded ??= this._loadModelsDevCache());
+    }
+
     /** Load the persisted models.dev catalog. Best-effort: a missing or
      *  corrupt file is the normal first-run state and simply means the next
      *  refresh fetches a fresh copy. */
@@ -977,6 +984,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         try {
             const cache = readModelsDevCache(await fs.promises.readFile(this._modelsDevFile, 'utf8'));
             if (!cache) return;
+            // A fetch that somehow finished first wins over the older disk copy.
+            if (this._modelsDevCatalog) return;
             this._modelsDevCatalog = cache.catalog;
             this._modelsDevFetchedAt = cache.fetchedAt;
         } catch {
@@ -1007,6 +1016,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  before retrying, and concurrent callers share one in-flight request.
      *  Never throws. */
     private async _ensureModelsDevCatalog(): Promise<ModelsDevCatalog | null> {
+        // Never fetch before the disk load has settled, or the load could
+        // clobber a just-fetched catalog with the older persisted copy.
+        await this._ensureModelsDevLoaded();
         if (this._modelsDevCatalog && Date.now() - this._modelsDevFetchedAt < MODELS_DEV_TTL_MS) {
             return this._modelsDevCatalog;
         }
@@ -2376,9 +2388,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             }
         }
         if (best) return best.win;
+        // models.dev's exact per-model window beats the curated family fallback
+        // (and a stale catalog cache persisted by an older version).
+        const baseUrl = this._runBaseUrl ?? '';
+        const modelsDev = modelsDevModelInfo(this._modelsDevCatalog, providerIdForUrl(baseUrl), model)?.contextWindow;
+        if (typeof modelsDev === 'number' && modelsDev >= 1024) return modelsDev;
         // Exact metadata for THIS model - provider-reported, else models.dev,
         // else curated - beats the curated family fallback below.
-        const exact = cachedModelInfo(this._modelCatalog, baseUrlHost(this._runBaseUrl ?? ''), model)?.contextWindow;
+        const exact = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model)?.contextWindow;
         if (typeof exact === 'number' && exact >= 1024) return exact;
         return knownContextWindow(model);
     }
