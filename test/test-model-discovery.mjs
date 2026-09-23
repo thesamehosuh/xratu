@@ -111,6 +111,16 @@ async function withFetch(routes, fn) {
     check('ollama: capabilities enriched', result.models[0].supportsTools, true);
 }
 
+// --- A remote gateway exposing Ollama under a path prefix keeps that path ---
+{
+    const { result, calls } = await withFetch([
+        ['/ollama/api/tags', { models: [{ name: 'llama3:latest', digest: 'x', size: 1, modified_at: 'now', details: {} }] }],
+    ], () => probeLocalEndpoint('https://gateway.example/ollama'));
+    check('remote ollama: OpenAI probe first', calls[0], 'https://gateway.example/ollama/models');
+    check('remote ollama: fallback keeps the base path', calls[1], 'https://gateway.example/ollama/api/tags');
+    check('remote ollama: models found', result.models.length, 1);
+}
+
 // --- Google asks for the maximum page size ---------------------------------
 {
     const { result, calls } = await withFetch([

@@ -269,9 +269,12 @@ export async function probeLocalEndpoint(
     const parsed = parseModelList(openai);
     if (parsed) return { models: applyModelKnowledge(parsed) };
 
-    // Fall back to Ollama's native /api/tags endpoint (rooted at the origin,
-    // like the rest of the native surface).
-    const ollama = await fetchJson(`${origin ?? rawBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
+    // Fall back to Ollama's native /api/tags endpoint. A recognized loopback
+    // runtime is rooted at the origin (its native surface never carries the
+    // versioned base path); a REMOTE gateway keeps the configured base path, so
+    // a host that exposes Ollama under a prefix (…/ollama/api/tags) still works.
+    const tagsBase = isLoopbackRuntime(rawBase, 11434) ? (origin ?? rawBase) : rawBase;
+    const ollama = await fetchJson(`${tagsBase}/api/tags`, signal, probeTimeoutMs, apiKey, proxy);
     const parsedOllama = parseModelList(ollama);
     if (parsedOllama) return { models: applyModelKnowledge(parsedOllama) };
 

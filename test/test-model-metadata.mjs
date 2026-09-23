@@ -231,12 +231,13 @@ check('knownMaxOutputTokens helper', knownMaxOutputTokens('gemini-3.1-pro'), 655
 check('unknown model -> no knowledge', knownModelKnowledge('totally-unknown'), null);
 check('gpt-5.6 family window', knownContextWindow('gpt-5.6-sol'), 400000);
 
-// MiniMax M3 is the 1M-context generation; M2.5/M2.7 top out near 200k
-// (models.dev 2026-09). A single `/minimax-m/` row claimed 1M for M2.x too -
-// a 5x OVER-estimate that let the run pack context the model cannot accept.
+// MiniMax M3 is the 1M-context generation; the open M2.x checkpoints top out
+// at 196608 (`max_position_embeddings`). A single `/minimax-m/` row claimed 1M
+// for M2.x too - a 5x OVER-estimate that let the run pack context the model
+// cannot accept.
 check('minimax-m3 window', knownContextWindow('minimax-m3'), 1000000);
-check('minimax-m2.5 window', knownContextWindow('minimax-m2.5'), 204800);
-check('minimax-m2.7 window', knownContextWindow('minimax-m2.7'), 204800);
+check('minimax-m2.5 window', knownContextWindow('minimax-m2.5'), 196608);
+check('minimax-m2.7 window', knownContextWindow('minimax-m2.7'), 196608);
 
 // Provider window must never be replaced by curated.
 const reported = applyModelKnowledge(parseModelList({ data: [{ id: 'claude-sonnet-5', context_length: 123456 }] }));
