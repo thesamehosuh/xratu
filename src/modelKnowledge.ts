@@ -92,7 +92,13 @@ const KNOWLEDGE_TABLE: ReadonlyArray<readonly [RegExp, ModelKnowledge]> = [
     [/kimi-k3/, { contextWindow: 256_000, maxOutputTokens: 32_000, supportsVision: true, supportsTools: true, supportsReasoning: true, reasoningLevels: ['max'] }],
     [/kimi-k2\.(5|6|7)/, { contextWindow: 256_000, maxOutputTokens: 32_000, supportsVision: true, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'high'] }],
     // --- MiniMax ---------------------------------------------------------
-    [/minimax-m/, { contextWindow: 1_000_000, maxOutputTokens: 40_000, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'high'] }],
+    // M3 is the 1M-context generation; M2.x tops out near 200k (models.dev,
+    // 2026-09: M2.5/M2.7 = 196608-204800). A single `/minimax-m/` row claimed
+    // 1M for M2.x too - a 5x OVER-estimate, the harmful direction (the run
+    // packs context the model cannot accept). Keep the generic row at the
+    // real M2.x size.
+    [/minimax-m3/, { contextWindow: 1_000_000, maxOutputTokens: 40_000, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'high'] }],
+    [/minimax-m/, { contextWindow: 204_800, maxOutputTokens: 40_000, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'high'] }],
     // --- Qwen ------------------------------------------------------------
     [/qwen3\.8-flash/, { contextWindow: 262_144, maxOutputTokens: 32_000, supportsVision: true, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'xhigh'] }],
     [/qwen3\.[5-8]/, { contextWindow: 262_144, maxOutputTokens: 32_000, supportsVision: true, supportsTools: true, supportsReasoning: true, reasoningLevels: ['low', 'medium', 'high'] }],

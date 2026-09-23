@@ -247,7 +247,11 @@ function parseLmStudioItem(m: any): LocalModelInfo | null {
     );
     if (m.capabilities?.vision === true) model.supportsVision = true;
     if (m.capabilities?.trained_for_tool_use === true) model.supportsTools = true;
-    if (m.capabilities?.reasoning === true) model.supportsReasoning = true;
+    // LM Studio reports reasoning as an OBJECT (`{ allowed_options, default }`),
+    // not a boolean - a `=== true` check never fired, so every reasoning-capable
+    // LM Studio model lost its capability flag (and the thinking selector).
+    const reasoning = m.capabilities?.reasoning;
+    if (reasoning === true || (reasoning && typeof reasoning === 'object')) model.supportsReasoning = true;
     return model;
 }
 
