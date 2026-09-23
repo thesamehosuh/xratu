@@ -54,6 +54,15 @@ independent words get a plain space. When mechanical replacement, keep an
 exclusion list of standalone words, and remember a suffix at the very end of
 a string needs a boundary check too.
 
+**آ never attaches.** Alef madda does not join the letter before it, so the
+می-prefix rule here means "drop the half-space", NOT "glue the letters":
+
+- `می آورد` (space) or `میاورد` (ZWNJ) — both fine
+- `میآورد` (attached) — wrong
+
+Same for `نمی آید` / `نمیآید`, `می آید`, `برمی آورد`. The rule of thumb:
+prefixes attach, but آ is a letter that starts a word and keeps its boundary.
+
 ### 2. No Arabic diacritics or hamza
 
 Strip every harakat and hamza mark. Persian letters (including آ) stay.
