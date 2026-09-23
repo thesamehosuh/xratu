@@ -18,7 +18,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { killTree } from './xratu_mcp_tools';
+import { killTree, snapshotTree, killPids } from './tooling/processTree';
 import { mcpCleartextHeadersError } from './endpointGuard';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
@@ -73,15 +73,37 @@ interface ServerState {
     pid?: number;
 }
 
-/** Close one external server's client, then make sure its stdio process
- *  tree is gone (a no-op for already-exited processes and for remote
- *  transports without a pid). */
+/** Close one external server's stdio process tree and client (a no-op for
+ *  already-exited processes and for remote transports without a pid).
+ *
+ *  The real server is a GRANDCHILD when the command is `npx`/`uvx` (a
+ *  cmd.exe shim on Windows, a launcher elsewhere), and the SDK's close()
+ *  signals only the DIRECT child. The two failure modes must both be avoided:
+ *  orphaned servers (they keep running and holding ports/files) and killing a
+ *  well-behaved server before it can shut down gracefully (stdin EOF is the
+ *  MCP spec's shutdown signal).
+ *
+ *  - POSIX: snapshot the descendant tree, run the graceful close (stdin EOF,
+ *    then SIGTERM/SIGKILL escalation), then reap anything that outlived it.
+ *  - Windows: `taskkill /T` can only find the grandchild while the shim is
+ *    alive, and close() force-kills the shim, so the tree must be killed
+ *    BEFORE close. Windows offers no cheap pre-close snapshot and taskkill
+ *    cannot gracefully stop a console app, so a hard kill is the only
+ *    reliable orphan-free option here. */
 async function closeState(state: ServerState | null | undefined): Promise<void> {
     if (!state) return;
+    if (!state.pid) {
+        try { await state.client.close(); } catch { /* already dead */ }
+        return;
+    }
+    const tree = snapshotTree(state.pid);
+    if (process.platform === 'win32') {
+        await killTree(state.pid);
+    }
     try {
         await state.client.close();
     } catch { /* already dead */ }
-    if (state.pid) killTree(state.pid);
+    killPids(tree);
 }
 
 export class ExternalMcpManager {

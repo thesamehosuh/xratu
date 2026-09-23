@@ -17,9 +17,9 @@ import {
     XRATU_EXPANSION_TOOLS,
     handleExpansionTool,
     EXPANSION_MUTATING_TOOL_NAMES,
-    killTree,
     type ExpansionToolRuntime,
 } from './xratu_mcp_tools';
+import { killTree } from './tooling/processTree';
 import type { LocalToolDefinition } from './local/localAgent';
 import {
     buildSkillToolDescription,
@@ -504,7 +504,7 @@ async function dispatchTool(
                     // cmd.exe (/c) and bash (-c) spawn grandchildren; killing
                     // only the direct child would leave them running (servers
                     // started by the command keep holding ports/files).
-                    if (isWindows) killTree(child.pid);
+                    if (isWindows) void killTree(child.pid);
                     else if (child.pid) process.kill(-child.pid, 'SIGKILL');
                 } catch { /* gone */ }
                 // 'close' normally fires once the killed process group's stdio
