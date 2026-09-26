@@ -1,7 +1,7 @@
 import { forwardRef, type Ref } from 'react';
 import { Bug, ChevronUp, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Unlink, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { ChatMessage, ConnectionStatus } from '../types';
+import type { ChatMessage, ConnectionStatus, OpenDiffEdit } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
 import { getLocale, t } from '../i18n';
 
@@ -21,6 +21,8 @@ interface MessageListProps {
     onEditMessage?: (userIndex: number, value: string) => void;
     /** Restore workspace files to a turn's shadow checkpoint. */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
+    /** Open the native diff editor for a completed edit step. */
+    onOpenDiff?: (edits: OpenDiffEdit[]) => void;
     /** A run is in flight - footer actions hide while true. */
     busy?: boolean;
     /** Connection status - drives corner-bracket color on bubbles. */
@@ -55,7 +57,7 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; fileP
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -159,6 +161,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onRegenerate={onRegenerate}
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
+                    onOpenDiff={onOpenDiff}
                     userIndex={userIndexOf.get(m.id)}
                     isLastAssistant={m.id === lastAssistantId}
                     busy={busy}
