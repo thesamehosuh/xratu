@@ -255,6 +255,51 @@ test('a tall mixed restore replay stays paged (budget must not grow to the whole
     await expect(page.getByText(/turn 0 /)).toHaveCount(0);
 });
 
+test('returning to the tail collapses the reveal window', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 's9', title: null });
+    for (let i = 0; i < 50; i++) {
+        await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
+    }
+    const bubbles = page.locator('article.msg.user');
+    await expect(bubbles).toHaveCount(40);
+    await expect(page.locator('.show-earlier')).toBeVisible();
+    // Reveal an earlier page: the window grows, and the sticky control keeps
+    // the reader pinned at the tail while it grows.
+    await page.locator('.show-earlier').click();
+    await expect(bubbles).toHaveCount(50);
+    // Leave the tail and return: the mounted window collapses back to one page
+    // so a long session cannot keep every revealed bubble in the DOM forever.
+    await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
+    await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(bubbles).toHaveCount(40);
+    await expect(page.locator('.show-earlier')).toBeVisible();
+    await expect(page.getByText('msg 49', { exact: true })).toBeVisible();
+});
+
+test('the edit pill open-diff button posts the call to the host', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Edit a file' });
+    await hostMessage(page, { type: 'startResponse' });
+    const args = JSON.stringify({ path: 'src/a.ts', patch: '<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' });
+    await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args, callId: 'c-open' });
+    await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', output: 'done', callId: 'c-open' });
+    const button = page.locator('button[title="Open diff in editor"]').first();
+    await expect(button).toBeVisible();
+    await button.click();
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
+    // The click ships the whole call (id + args + result) for the host to
+    // resolve; preventDefault keeps it from toggling the pill's <details>.
+    expect(sent).toContainEqual({
+        type: 'openDiff',
+        edits: [{ tool: 'apply_patch', args, callId: 'c-open', result: 'done' }],
+    });
+});
+
 test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });

@@ -39,6 +39,8 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     checkpointEmptySeed: { fa: 'این نوبت با ورک اسپیس خالی شروع شده بود؛ فایلی برای بازیابی نیست.', en: 'This turn started with an empty workspace; there are no files to restore.' },
     checkpointTurnGone: { fa: 'این نوبت دیگر در تاریخچه نیست؛ بازیابی انجام نشد.', en: 'That turn is no longer in the history; nothing was restored.' },
     sessionSwitchBusy: { fa: 'صبر کنید کار فعلی تمام شود', en: 'Wait for the current run to finish' },
+    openDiffFailed: { fa: 'diff برای این ویرایش قابل نمایش نیست.', en: 'No diff to show for this edit.' },
+    openDiffPick: { fa: 'کدوم فایل؟', en: 'Which file?' },
     planModeLiveNote: { fa: 'تغییر حالت برنامه ریزی روی پاسخ در حال اجرا اعمال نمیشود؛ از پیام بعد اعمال میشود.', en: 'Plan mode changes do not affect the response in progress; it applies from the next message.' },
     sessionLoadFailed: { fa: 'بارگذاری گفتگو ناموفق بود.', en: 'Could not load the conversation.' },
     geoBlockedHint: { fa: 'این ارائه دهنده از IP شما پاسخ نمی دهد. به یک ارائه دهنده ایرانی سوئیچ کنید؟', en: 'This provider refuses your region/IP. Switch to an Iranian provider?' },
