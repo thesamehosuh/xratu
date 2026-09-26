@@ -147,6 +147,15 @@ checkTrue('last allowed resume', resume({ resumesUsed: NETWORK_MAX_RESUMES - 1 }
 checkFalse('does not resume past the deadline', resume({ now: 1000 }));
 checkFalse('empty-string text is not a resume', resume({ emittedOutput: false }));
 check('resume cap', NETWORK_MAX_RESUMES, 2);
+// An offline link gets the larger resume budget (the round deadline still caps it).
+checkTrue(
+    'offline resumes use the offline cap',
+    resume({ resumesUsed: NETWORK_MAX_RESUMES, maxResumes: OFFLINE_MAX_RETRIES }),
+);
+checkFalse(
+    'offline resumes still stop at their cap',
+    resume({ resumesUsed: OFFLINE_MAX_RETRIES, maxResumes: OFFLINE_MAX_RETRIES }),
+);
 
 console.log(failed === 0 ? '\nnetwork-retry tests: all passed' : `\nnetwork-retry tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

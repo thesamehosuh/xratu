@@ -3270,8 +3270,11 @@ export async function* runLocalAgent(
         // of restarting (which would duplicate visible text) or failing the
         // turn. A continuation carries the partial answer as an assistant turn
         // plus a "continue exactly here" note, so it also works for providers
-        // that reject assistant prefill.
+        // that reject assistant prefill. Offline links earn the larger offline
+        // resume budget - an offline drop resumes (never restarts) until the
+        // link is back, bounded by the round deadline.
         const transient = isTransientNetworkError(requestError);
+        const offline = transient && isOfflineNetworkError(requestError);
         if (shouldResumeStream({
             emittedOutput: attemptText.length > 0,
             sawToolCall,
@@ -3279,6 +3282,7 @@ export async function* runLocalAgent(
             aborted: !!request.signal?.aborted,
             resumesUsed,
             deadlineMs: retryDeadline,
+            maxResumes: offline ? OFFLINE_MAX_RETRIES : NETWORK_MAX_RESUMES,
         })) {
             resumesUsed++;
             resumedText += attemptText;
@@ -3287,6 +3291,13 @@ export async function* runLocalAgent(
                 { role: 'assistant', content: resumedText },
                 { role: 'user', content: STREAM_RESUME_NOTE },
             ];
+            // Offline: give the link a beat before re-dialing - an immediate
+            // continuation on a dead link fails in milliseconds and would burn
+            // the whole resume budget before connectivity returns.
+            if (offline) {
+                await sleepAbortable(networkRetryDelayMs(resumesUsed), request.signal);
+                if (request.signal?.aborted || Date.now() >= retryDeadline) break;
+            }
             continue;
         }
 
@@ -3296,7 +3307,6 @@ export async function* runLocalAgent(
         // earn a larger attempt budget so a link blip does not kill the turn.
         // Everything else - HTTP rejections, overflow, a user cancel,
         // mid-content death - falls through to the error/recovery path below.
-        const offline = transient && isOfflineNetworkError(requestError);
         const maxAttempts = offline ? OFFLINE_MAX_RETRIES + 1 : NETWORK_MAX_RETRIES + 1;
         const canRetry = !emittedOutput
             && !request.signal?.aborted
