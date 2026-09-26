@@ -39,11 +39,14 @@ import {
     Wrench,
     X,
 } from 'lucide-react';
-import type { ApprovalPayload, ChatMessage, ConnectionStatus, Step, TaskListItem, TaskListStatus } from '../types';
+import type { ApprovalPayload, ChatMessage, ConnectionStatus, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { t, tf } from '../i18n';
 import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
+
+/** Open the native diff editor for completed edit call(s). */
+type OpenDiffHandler = (edits: OpenDiffEdit[]) => void;
 
 function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage['retryStatus']> }) {
     const [seconds, setSeconds] = useState(Math.ceil(retryStatus.nextRetryInMs / 1000));
@@ -1040,7 +1043,7 @@ function ToolBody({ call, result }: { call: Step; result?: Step }) {
 
 /** A run of identical consecutive tool calls: one summary pill with an
  *  "×N" badge; expanding reveals each call as its own pill. */
-function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
+function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGroup' }>; onOpenDiff?: OpenDiffHandler }) {
     const tool = row.calls[0].call.tool;
     const Icon = toolIcon(tool);
     const { fa } = toolLabel(tool);
@@ -1076,7 +1079,22 @@ function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
                 )}
                 {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
                 {isEdit && (
-                    <button type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}>
+                    <button
+                        type="button"
+                        className="icon-btn-mini"
+                        title={t('openDiff')}
+                        aria-label={t('openDiff')}
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onOpenDiff?.(row.calls.map((c) => ({
+                                tool: c.call.tool,
+                                args: c.call.text,
+                                callId: c.call.callId,
+                                result: c.call.result,
+                            })));
+                        }}
+                    >
                         <ExternalLink size={12} />
                     </button>
                 )}
@@ -1099,7 +1117,7 @@ function ToolGroupRow({ row }: { row: Extract<Row, { kind: 'toolGroup' }> }) {
     );
 }
 
-function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' }>; running: boolean; isLast: boolean }) {
+function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
@@ -1214,7 +1232,22 @@ function ActivityRow({ row, running, isLast }: { row: Exclude<Row, { kind: 'tool
                     </span>
                 )}
                 {family === 'edit' && (
-                    <button type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}>
+                    <button
+                        type="button"
+                        className="icon-btn-mini"
+                        title={t('openDiff')}
+                        aria-label={t('openDiff')}
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onOpenDiff?.([{
+                                tool: row.call.tool,
+                                args: row.call.text,
+                                callId: row.call.callId,
+                                result: row.call.result,
+                            }]);
+                        }}
+                    >
                         <ExternalLink size={12} />
                     </button>
                 )}
@@ -1933,7 +1966,7 @@ function ApprovalCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr' }: MessageItemProps) {
+function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr' }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2022,13 +2055,13 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                 <div className="steps" aria-label={t('stepsAria')}>
                     {rows.map((row) =>
                         row.kind === 'toolGroup' ? (
-                            <ToolGroupRow key={row.key} row={row} />
+                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} />
                         ) : row.kind === 'text' ? (
                             <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
                         ) : row.kind === 'taskList' ? (
                             <TaskListRow key={row.key} row={row} view={taskList} streaming={streamingContent} />
                         ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} />
+                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} />
                         )
                     )}
                     {showWorking && (
@@ -2223,6 +2256,8 @@ interface MessageItemProps {
     /** Restore workspace files to this turn's shadow checkpoint (the host
      *  confirms the scope: files only, or files + rewind the conversation). */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
+    /** Open the native diff editor for a completed edit step (or group). */
+    onOpenDiff?: OpenDiffHandler;
     /** 0-based index among USER messages; undefined for non-user bubbles. */
     userIndex?: number;
     isLastAssistant?: boolean;
@@ -2249,6 +2284,7 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.onRegenerate === b.onRegenerate &&
     a.onEditMessage === b.onEditMessage &&
     a.onRestoreCheckpoint === b.onRestoreCheckpoint &&
+    a.onOpenDiff === b.onOpenDiff &&
     a.userIndex === b.userIndex &&
     a.isLastAssistant === b.isLastAssistant &&
     a.busy === b.busy &&

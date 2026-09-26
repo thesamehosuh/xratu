@@ -17,6 +17,7 @@ import type {
     McpServerView,
     ModelCapability,
     NotificationItem,
+    OpenDiffEdit,
     SessionMeta,
     SkillView,
     TaskListItem,
@@ -281,6 +282,10 @@ export function App() {
     // Timestamp of the last real scroll gesture (wheel / touch / key) over the
     // transcript - used to tell a user scroll-up from a content-driven one.
     const userIntentAt = useRef(0);
+    // Paged message window: number of trailing bubbles mounted. Declared here
+    // (before the scroll handlers below) because they read it.
+    const [visibleBudget, setVisibleBudget] = useState(HISTORY_PAGE_SIZE);
+    const pendingScrollAdjust = useRef<{ height: number; top: number } | null>(null);
     const onScroll = () => {
         const el = containerRef.current;
         if (el) {
@@ -317,11 +322,30 @@ export function App() {
             // until the paging window grew to the whole transcript.
             const heightChanged = el.scrollHeight !== lastScrollHeight.current;
             const userIntent = Date.now() - userIntentAt.current < 500;
+            // Captured BEFORE the branch below latches it: only a genuine
+            // return from away-from-tail may collapse a reveal window.
+            const wasAtBottom = atBottom.current;
             if (nearBottom) {
                 // Reached, or still sitting at, the bottom - follow stays armed.
                 // This is how a reader who scrolled up re-arms it.
                 atBottom.current = true;
                 smoothJumpInFlight.current = false;
+                // Collapse an expanded reveal window once the reader is back at
+                // the tail: the paging budget only ever GREW (show-earlier
+                // pages + append-while-scrolled-up anchor growth) and never
+                // shrank, so a long session kept every revealed bubble mounted
+                // for the rest of the session. Unmounting from the TOP while
+                // pinned at the bottom leaves the visible tail untouched.
+                // `!wasAtBottom` requires a real return: show-earlier is
+                // sticky, so revealing while pinned keeps the reader at the
+                // bottom (and its own scroll adjustment fires events with no
+                // user intent) - collapsing there would undo the reveal.
+                if (!wasAtBottom
+                    && visibleBudget > HISTORY_PAGE_SIZE
+                    && el.scrollHeight > el.clientHeight
+                    && !pendingScrollAdjust.current) {
+                    setVisibleBudget(HISTORY_PAGE_SIZE);
+                }
             } else if (movedUp && (userIntent || !heightChanged)) {
                 atBottom.current = false;
             }
@@ -414,6 +438,9 @@ export function App() {
             el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
             atBottom.current = true;
             setShowJump(false);
+            // An explicit return to the tail collapses an expanded reveal
+            // window (the scroll handler cannot: atBottom is already latched).
+            if (visibleBudget > HISTORY_PAGE_SIZE) setVisibleBudget(HISTORY_PAGE_SIZE);
             // Fallback: if the animation is interrupted (interrupting user
             // scroll, content reflow past the target) the near-bottom scroll
             // handler may never fire - don't leave the flag latched.
@@ -421,17 +448,16 @@ export function App() {
                 smoothJumpInFlight.current = false;
             }, 800);
         }
-    }, []);
+    }, [visibleBudget]);
 
     // --- Paged message window -------------------------------------------------
     // The transcript itself stays complete (see the host's model-ledger
     // eviction); only the MOUNTED window is bounded. `visibleBudget` is the
     // number of trailing bubbles rendered, so the newest message is always in
     // the window and a scrolled-up reader keeps their anchor when a new turn
-    // appends (the budget grows by the delta).
-    const [visibleBudget, setVisibleBudget] = useState(HISTORY_PAGE_SIZE);
+    // appends (the budget grows by the delta). The budget state lives above
+    // (before onScroll); this derives the window and owns the adjustments.
     const firstVisible = Math.max(0, chat.messages.length - visibleBudget);
-    const pendingScrollAdjust = useRef<{ height: number; top: number } | null>(null);
 
     // One layout effect owns both concerns: a session switch restarts at the
     // tail, and a message appended WHILE the reader is scrolled up must not
@@ -776,6 +802,13 @@ export function App() {
         (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
         [send]
     );
+    // "Open diff in editor" on an edit step: the host resolves the exact
+    // before/after (edit-time snapshot, else the tool args) and opens the
+    // native VS Code diff editor.
+    const handleOpenDiff = useCallback(
+        (edits: OpenDiffEdit[]) => send({ type: 'openDiff', edits }),
+        [send]
+    );
 
     // Task-list edit: optimistic local update + host persistence (the host
     // stores the per-session override and echoes taskListState back).
@@ -1113,6 +1146,7 @@ export function App() {
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
+                    onOpenDiff={handleOpenDiff}
                     taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
                     firstVisible={firstVisible}
                     onShowEarlier={showEarlier}

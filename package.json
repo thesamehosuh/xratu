@@ -224,6 +224,7 @@
 		"test:agent-rounds": "node test/test-agent-rounds.mjs",
 		"test:vsix-contents": "node test/test-vsix-contents.mjs",
 		"test:patch-parser": "node test/test-patch-parser.mjs",
+		"test:edit-diff": "node test/test-edit-diff.mjs",
 		"test:reasoning-replay": "node test/test-reasoning-replay.mjs",
 		"test:prompt-cache-shape": "node test/test-prompt-cache-shape.mjs",
 		"test:prompt-cache-rate": "node test/test-prompt-cache-rate.mjs",

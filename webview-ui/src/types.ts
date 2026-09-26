@@ -1,6 +1,16 @@
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
+/** One completed edit call to diff: the raw tool args text (JSON as the
+ *  tool sent it), the server-side tool_call id for snapshot lookup, and the
+ *  tool's result text (distinguishes a create from an overwrite). */
+export interface OpenDiffEdit {
+    tool?: string;
+    args: string;
+    callId?: string;
+    result?: string;
+}
+
 export type ToExtensionMessage =
     | { type: 'webviewReady' }
     | { type: 'askQuestion'; value: string; attachments?: ComposerAttachment[] }
@@ -103,7 +113,13 @@ export type ToExtensionMessage =
     | { type: 'usageRemoveModel'; id: string }
     /** Copy a code block to the OS clipboard via the host (webview clipboard
      *  permissions are unreliable). */
-    | { type: 'copyToClipboard'; value: string };
+    | { type: 'copyToClipboard'; value: string }
+    /** Open the native side-by-side diff for one or more completed edit tool
+     *  calls. `callId` keys the before/after snapshot the host captured when
+     *  the edit ran; without one the host reconstructs the diff from `args`
+     *  (what restored history offers). A group pill sends every call so the
+     *  host can QuickPick the file. */
+    | { type: 'openDiff'; edits: OpenDiffEdit[] };
 
 export type DiscoveredLocalRuntime = {
     id: string;

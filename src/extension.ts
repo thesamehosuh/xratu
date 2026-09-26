@@ -9,6 +9,8 @@ import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor, killRunningTerminalCommands } from './mcp';
 import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
+import { editDiffFromArgs } from './editDiff';
+import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
 import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
@@ -712,6 +714,14 @@ interface UsageRateRow {
     IRT: number;
 }
 
+/** Edit-family tools whose file target the "open diff" button serves. */
+const EDIT_DIFF_TOOLS = new Set(['edit_file', 'apply_patch', 'replace_in_file', 'write_file', 'create_file']);
+/** Per-side cap for captured edit snapshots. Larger files would hold two
+ *  giant strings per edit in memory; they fall back to the args-derived diff. */
+const EDIT_SNAPSHOT_MAX_CHARS = 200_000;
+/** Bounded FIFO of captured snapshots (one entry per edit call). */
+const EDIT_SNAPSHOT_MAX_ENTRIES = 60;
+
 class XratuChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'xratu-chat-view';
     private _view?: vscode.WebviewView;
@@ -891,10 +901,104 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _onDidChangeVirtualDoc = new vscode.EventEmitter<vscode.Uri>();
     readonly onDidChange = this._onDidChangeVirtualDoc.event;
     private _virtualDocuments = new Map<string, string>();
+    /** Exact before/after file content captured around edit-family tool
+     *  calls, keyed by tool_call id - the source for the webview's
+     *  "open diff in editor" button while the session is live. Bounded FIFO
+     *  (see _endEditSnapshot); restored history falls back to args-derived
+     *  reconstruction in editDiff.ts. */
+    private readonly _editSnapshots = new Map<string, { path: string; before: string; after: string }>();
     private _webviewSubscriptions: vscode.Disposable[] = [];
 
     public provideTextDocumentContent(uri: vscode.Uri): string {
         return this._virtualDocuments.get(uri.toString()) || '';
+    }
+
+    /** Capture the target file's content just before an edit-family tool runs.
+     *  Returns null when there is nothing sensible to snapshot (non-edit tool,
+     *  missing/unsafe path, or a file too large to hold in memory twice). */
+    private _beginEditSnapshot(
+        call: { name: string; arguments: Record<string, unknown> },
+        workspaceRoot: string
+    ): { path: string; full: string; before: string } | null {
+        if (!EDIT_DIFF_TOOLS.has(call.name)) return null;
+        const raw = typeof call.arguments?.path === 'string' ? call.arguments.path : '';
+        if (!raw) return null;
+        let full: string;
+        try {
+            full = sanitizePath(raw, workspaceRoot);
+        } catch {
+            return null;
+        }
+        let before: string;
+        try {
+            if (fs.statSync(full).size > EDIT_SNAPSHOT_MAX_CHARS) return null;
+            before = fs.readFileSync(full, 'utf-8');
+        } catch {
+            // Missing file = creation; '' is the correct before side.
+            before = '';
+        }
+        return { path: raw, full, before };
+    }
+
+    /** Pair a snapshot with the post-edit content and retain it (bounded FIFO).
+     *  The webview's "open diff" button looks snapshots up by tool_call id;
+     *  restored sessions (empty map) reconstruct from args instead. */
+    private _endEditSnapshot(
+        callId: string,
+        snap: { path: string; full: string; before: string }
+    ): void {
+        let after: string;
+        try {
+            if (fs.statSync(snap.full).size > EDIT_SNAPSHOT_MAX_CHARS) return;
+            after = fs.readFileSync(snap.full, 'utf-8');
+        } catch {
+            return;
+        }
+        this._editSnapshots.set(callId, { path: snap.path, before: snap.before, after });
+        while (this._editSnapshots.size > EDIT_SNAPSHOT_MAX_ENTRIES) {
+            const oldest = this._editSnapshots.keys().next();
+            if (oldest.done) break;
+            this._editSnapshots.delete(oldest.value);
+        }
+    }
+
+    /** Webview's "open diff in editor": resolve each completed edit call to a
+     *  before/after pair (exact snapshot first, args reconstruction second) and
+     *  open the host's native diff editor. */
+    private async _openEditDiff(
+        edits: Array<{ tool?: string; args?: string; callId?: string; result?: string }>
+    ): Promise<void> {
+        const resolved: Array<{ path: string; before: string; after: string }> = [];
+        for (const edit of Array.isArray(edits) ? edits : []) {
+            if (!edit || typeof edit.args !== 'string') continue;
+            const snap = typeof edit.callId === 'string' ? this._editSnapshots.get(edit.callId) : undefined;
+            if (snap) {
+                resolved.push({ path: snap.path, before: snap.before, after: snap.after });
+                continue;
+            }
+            const built = editDiffFromArgs(
+                typeof edit.tool === 'string' ? edit.tool : undefined,
+                edit.args,
+                typeof edit.result === 'string' ? edit.result : undefined
+            );
+            if (built) resolved.push(built);
+        }
+        if (resolved.length === 0) {
+            this.notifyBanner('error', 'openDiffFailed');
+            return;
+        }
+        let chosen = resolved[0];
+        if (resolved.length > 1) {
+            const pick = await vscode.window.showQuickPick(
+                resolved.map((r, i) => ({ label: r.path || `#${i + 1}`, index: i })),
+                { placeHolder: ui('openDiffPick') }
+            );
+            if (!pick) return;
+            chosen = resolved[pick.index];
+        }
+        if (!openEditDiff(this._virtualDocuments, chosen.path, chosen.before, chosen.after)) {
+            this.notifyBanner('error', 'openDiffFailed');
+        }
     }
 
     constructor(
@@ -2885,8 +2989,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // executor's own signature stays the single source of truth.
         const executor: typeof rawExecutor = {
             execute: async (call, onOutput) => {
+                // Snapshot file state around edit-family calls so the
+                // webview's "open diff" button can show the exact before/after
+                // of THIS call later (restored sessions fall back to args).
+                const snap = this._beginEditSnapshot(call, workspaceRoot);
                 try {
-                    return await rawExecutor.execute(call, onOutput);
+                    const result = await rawExecutor.execute(call, onOutput);
+                    if (snap && !result.isError) this._endEditSnapshot(call.id, snap);
+                    return result;
                 } finally {
                     this._scheduleGitStatusPush();
                 }
@@ -3664,6 +3774,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             break;
                         case 'copyToClipboard':
                             void vscode.env.clipboard.writeText(data.value);
+                            break;
+                        case 'openDiff':
+                            void this._openEditDiff(data.edits).catch((e) =>
+                                console.error('xratu: open diff failed:', e));
                             break;
                         case 'taskListEdit': {
                             // User edit of the checklist (webview is the single
@@ -4536,6 +4650,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._approvalCloseItems = {};
         this._sessionApprovedKinds.clear();
         this._virtualDocuments.clear();
+        // Edit snapshots are per-session: the new session's ids never collide,
+        // and the args fallback covers anything restored later.
+        this._editSnapshots.clear();
     }
 
     private async _reloadWebviewChat(): Promise<void> {
