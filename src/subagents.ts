@@ -233,7 +233,13 @@ function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, 
     let entries: fs.Dirent[];
     try {
         entries = fs.readdirSync(baseDir, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+        // A missing directory is the normal case (most users have none);
+        // anything else (EACCES, ENOTDIR, …) must not silently drop the
+        // user's custom agents.
+        if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+            console.error(`xratu: agents dir unreadable: ${baseDir}`, e);
+        }
         return;
     }
     for (const entry of entries) {
