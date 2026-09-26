@@ -16,8 +16,10 @@ import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
 import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
 import { ExternalMcpManager } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
-import { runLocalAgent, type LocalAgentEvent, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
+import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
 import type { LocalToolExecutor } from './local/localAgent';
+import { createSubagentRunner } from './local/subagentRunner';
+import { discoverSubagents, filterToolsForSubagent } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage } from './local/localSessionStore';
 import {
@@ -52,7 +54,7 @@ import {
 } from './local/modelMetadata';
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
-import { buildLocalSystemPrompt } from './systemPrompt';
+import { buildLocalSystemPrompt, buildSubagentSystemPrompt } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { RulesSnapshot } from './local/rulesSnapshot';
@@ -2968,6 +2970,98 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const externalTools = externalMcpInstance
             ? await externalMcpInstance.listTools().catch(() => [])
             : [];
+
+        // The turn's plan mode was captured by the caller BEFORE any await -
+        // a mid-preflight toggle must not expose mutating tools in an
+        // already-started plan turn. (Declared up here, before the executor:
+        // no awaits sit between this point and its old home below, and the
+        // subagent runner needs it.)
+        const runPlanMode = planMode ?? this._planMode;
+
+        // Stable per-conversation identity, used for two provider needs: OpenCode
+        // Go REQUIRES it as `x-opencode-session` (MissingSessionID otherwise),
+        // and OpenAI-family hosts use it as `prompt_cache_key` to route a
+        // conversation's requests to the same prompt cache. Prefer the persisted
+        // session id; fall back to one stable id per live chat.
+        const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
+
+        // One approval gate for the whole run tree: a child tool call that
+        // needs consent surfaces as the same webview approval card. YOLO is
+        // consulted LIVE per call (mid-run toggles apply from the next call).
+        const localApprovalGate: LocalApprovalGate = {
+            requestApproval: (id, calls) => {
+                if (this._yoloMode && !runPlanMode) {
+                    return Promise.resolve(
+                        Object.fromEntries(calls.map((c) => [c.id, true]))
+                    );
+                }
+                return this._requestLocalApproval(
+                    id,
+                    calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments }))
+                );
+            },
+        };
+
+        // Subagent delegation (the `task` tool): named agent profiles, run as
+        // nested agent loops in a fresh context. Discovery is per run like
+        // skills; children share the parent's model/transport but never its
+        // history, conversation identity, or round budget.
+        const subagentDefs = discoverSubagents({ workspaceRoot: workspaceRoot || undefined });
+        const subagentConversationId = `${conversationId}::subagent-${crypto.randomUUID()}`;
+        const subagentRunner = createSubagentRunner(
+            {
+                request: {
+                    baseUrl: active.baseUrl,
+                    apiKey: active.apiKey || null,
+                    model,
+                    signal: controller.signal,
+                    maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
+                    reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
+                    autoCompactRatio: resolveCompactRatio(
+                        vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
+                    contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
+                    dispatcher: getProxyDispatcher(active.baseUrl),
+                    apiStyle: resolveApiStyle(active.baseUrl, model),
+                    ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
+                    cacheKey: subagentConversationId,
+                },
+                tools: (def) => filterToolsForSubagent(
+                    getLocalToolDefinitions({
+                        yolo: this._yoloMode,
+                        plan: runPlanMode,
+                        external: externalTools,
+                        skills: this._discoverSkillsForRun(workspaceRoot),
+                    }),
+                    def,
+                ),
+                systemPrompt: (def) => buildSubagentSystemPrompt({
+                    agentPrompt: def.prompt,
+                    rulesContext,
+                    planMode: runPlanMode,
+                }),
+                // Child executor WITHOUT the subagent runner: `task` is
+                // unexecutable in a child even if the model hallucinates it.
+                executor: createLocalToolExecutor(
+                    workspaceRoot,
+                    (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
+                    externalMcpInstance ?? undefined,
+                    (skillName) => resolveSkillForRun(
+                        workspaceRoot || undefined,
+                        skillName,
+                        new Set(this._disabledSkillIds()),
+                    ),
+                ),
+                approvalGate: localApprovalGate,
+                onUsage: (usage) => {
+                    // Delegated rounds are real spend on the same account:
+                    // fold them into the turn/session/global ledgers exactly
+                    // like parent rounds.
+                    this._handleLocalAgentEvent({ type: 'usage', usage, estimated: false }, outcome);
+                },
+            },
+            subagentDefs,
+        );
+
         const rawExecutor = createLocalToolExecutor(
             workspaceRoot,
             (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
@@ -2981,6 +3075,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 skillName,
                 new Set(this._disabledSkillIds()),
             ),
+            subagentRunner,
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -3017,20 +3112,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         // The turn's plan mode was captured by the caller BEFORE any await -
         // a mid-preflight toggle must not expose mutating tools in an
-        // already-started plan turn.
-        const runPlanMode = planMode ?? this._planMode;
+        // already-started plan turn. (Resolved above, next to the executor.)
         const systemPrompt = this._buildLocalSystemPrompt(rulesContext, this._sessionSummary, runPlanMode);
 
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
         this._setCostCurrencyFor(active.baseUrl);
-
-        // Stable per-conversation identity, used for two provider needs: OpenCode
-        // Go REQUIRES it as `x-opencode-session` (MissingSessionID otherwise),
-        // and OpenAI-family hosts use it as `prompt_cache_key` to route a
-        // conversation's requests to the same prompt cache. Prefer the persisted
-        // session id; fall back to one stable id per live chat.
-        const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
 
         try {
             // Seed the live reminder list for this run; model writes refresh it
@@ -3060,6 +3147,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         // snapshot at session start); disabled ones are
                         // filtered out host-side.
                         skills: this._discoverSkillsForRun(workspaceRoot),
+                        // Subagent profiles: adds the `task` delegation tool.
+                        subagents: subagentDefs,
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
                     taskListProvider: () => this._activeRunTaskList ?? undefined,
@@ -3102,24 +3191,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     cacheKey: conversationId,
                 },
                 executor,
-                {
-                    requestApproval: (id, calls) => {
-                        // YOLO is consulted LIVE per call, so toggling it
-                        // mid-response takes effect from the next tool call
-                        // without restarting the run. Plan mode keeps its
-                        // read-only enforcement (mutating tools were already
-                        // dropped from the toolset at loop start).
-                        if (this._yoloMode && !runPlanMode) {
-                            return Promise.resolve(
-                                Object.fromEntries(calls.map((c) => [c.id, true]))
-                            );
-                        }
-                        return this._requestLocalApproval(
-                            id,
-                            calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments }))
-                        );
-                    },
-                },
+                // Shared with nested subagent runs (same live YOLO check).
+                localApprovalGate,
                 {
                     // Mid-run steering: the loop drains this at every round
                     // boundary (after tool results, before the next model

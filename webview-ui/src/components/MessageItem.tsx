@@ -5,6 +5,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExt
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 import { createJavaScriptRegexEngine, getSingletonHighlighter } from 'shiki';
 import {
+    Bot,
     Brain,
     BookOpen,
     Check,
@@ -157,6 +158,7 @@ function pushToolRow(rows: Row[], row: ToolRow): void {
 
 const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^update_task_list$/, icon: ListChecks },
+    { re: /^task$/, icon: Bot },
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
     { re: /^skill$/, icon: BookOpen },
     { re: /terminal|command/, icon: SquareTerminal },
@@ -187,6 +189,7 @@ const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
+    { re: /^task$/, key: 'toolTask' },
     { re: /^read_file$/, key: 'toolReadFile' },
     { re: /^read_files$/, key: 'toolReadFiles' },
     { re: /^file_info$/, key: 'toolFileInfo' },
@@ -305,11 +308,11 @@ function buildRows(steps: Step[]): Row[] {
 // sits directly on the pill background (no inner boxes/borders).
 // ---------------------------------------------------------------------------
 
-type ToolFamily = 'edit' | 'terminal' | 'read' | 'search' | 'git' | 'web' | 'ops' | 'mcp' | 'generic';
+type ToolFamily = 'edit' | 'terminal' | 'read' | 'search' | 'git' | 'web' | 'ops' | 'mcp' | 'subagent' | 'generic';
 
 /** Edit/terminal dropdowns open by default - the diff/command IS the payload
  *  the user cares about; everything else stays collapsed. */
-const DEFAULT_OPEN_FAMILIES: readonly ToolFamily[] = ['edit', 'terminal'];
+const DEFAULT_OPEN_FAMILIES: readonly ToolFamily[] = ['edit', 'terminal', 'subagent'];
 
 /** Regex-ordered, first match wins - mirrors TOOL_ICONS/TOOL_LABELS style. */
 function toolFamily(tool?: string): ToolFamily {
@@ -323,6 +326,7 @@ function toolFamily(tool?: string): ToolFamily {
     if (/^git_/.test(tool)) return 'git';
     if (/fetch_url|web_search/.test(tool)) return 'web';
     if (/^run_tests$|^get_diagnostics$|^check_dependencies$|^install_dependency$|^copy_file$|^move_file$|^delete_file$/.test(tool)) return 'ops';
+    if (/^task$/.test(tool)) return 'subagent';
     return 'generic';
 }
 
@@ -1015,6 +1019,36 @@ function WebBody({ call, result }: { call: Step; result?: Step }) {
     );
 }
 
+function SubagentBody({ call, result }: { call: Step; result?: Step }) {
+    // The task pill IS the subagent's window: args (type/description/prompt),
+    // a live tool trace while it runs, and the final report when it settles.
+    const text = resultTextOf(call, result);
+    const done = !!call.result || !!result;
+    return (
+        <>
+            <ArgView call={call} />
+            {done ? (
+                text && (
+                    <>
+                        <span className="step-io-tag">{t('resultTag')}</span>
+                        <pre className="result-tall" dir="auto">{text}</pre>
+                    </>
+                )
+            ) : (
+                <>
+                    <div className="tool-loading">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>{t('toolRunning')}</span>
+                    </div>
+                    {call.live && (
+                        <pre className="term-out term-live result-tall" dir="ltr">{call.live.slice(-20000)}</pre>
+                    )}
+                </>
+            )}
+        </>
+    );
+}
+
 function GenericBody({ call, result }: { call: Step; result?: Step }) {
     const text = resultTextOf(call, result);
     return (
@@ -1037,6 +1071,7 @@ function ToolBody({ call, result }: { call: Step; result?: Step }) {
         case 'read': return <ReadBody call={call} result={result} />;
         case 'search': return <SearchBody call={call} result={result} />;
         case 'web': return <WebBody call={call} result={result} />;
+        case 'subagent': return <SubagentBody call={call} result={result} />;
         default: return <GenericBody call={call} result={result} />;
     }
 }
