@@ -30,13 +30,17 @@ import {
 } from '../subagents';
 
 export interface SubagentHostContext {
-    /** Model/transport identity shared with the parent run. The runner fills
-     *  in the per-agent pieces (systemPrompt, userText, history, tools,
-     *  maxRounds) - `maxRounds`/`sessionSummary`/`taskList`/`toolChoice`
-     *  from the parent must NOT leak into the child. */
-    request: Omit<
+    /** Model/transport identity shared with the parent run - called ONCE PER
+     *  TASK so every child gets a fresh conversation identity (cacheKey /
+     *  OpenCode sessionId): two delegated tasks are two different
+     *  conversations and must not share a provider-side session. The runner
+     *  fills in the per-agent pieces (systemPrompt, userText, history, tools,
+     *  maxRounds) - `maxRounds`/`sessionSummary`/`taskList`/`toolChoice`/
+     *  `attachments` from the parent must NOT leak into the child (the
+     *  delegation prompt is text-only). */
+    baseRequest(): Omit<
         LocalAgentRequest,
-        'systemPrompt' | 'userText' | 'history' | 'tools'
+        'systemPrompt' | 'userText' | 'history' | 'tools' | 'attachments'
         | 'maxRounds' | 'sessionSummary' | 'taskList' | 'taskListProvider' | 'toolChoice'
     >;
     /** Build the child toolset (host applies plan/yolo/external/skills, this
@@ -105,8 +109,9 @@ export async function runSubagentTask(
     allowed.delete(SUBAGENT_TOOL_NAME);
     onOutput?.(`▶ ${def.name}\n`);
 
+    const base = ctx.baseRequest();
     const request: LocalAgentRequest = {
-        ...ctx.request,
+        ...base,
         systemPrompt: ctx.systemPrompt(def),
         userText: req.prompt,
         // Fresh context by contract: the prompt must be self-contained.
@@ -151,9 +156,9 @@ export async function runSubagentTask(
         }
     } catch (err) {
         // A cancelled parent run aborts the child via the shared signal;
-        // fetch/droppped-stream aborts surface as AbortError or
+        // fetch/dropped-stream aborts surface as AbortError or
         // ResponseAborted. Either way the tool call must settle.
-        if (ctx.request.signal?.aborted
+        if (base.signal?.aborted
             || (err instanceof Error && (err.name === 'AbortError' || err.name === 'ResponseAborted'))) {
             return { output: 'Subagent run cancelled.', isError: true };
         }

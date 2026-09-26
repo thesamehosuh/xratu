@@ -3005,25 +3005,29 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // Subagent delegation (the `task` tool): named agent profiles, run as
         // nested agent loops in a fresh context. Discovery is per run like
         // skills; children share the parent's model/transport but never its
-        // history, conversation identity, or round budget.
+        // history, conversation identity, or round budget. The base request
+        // is a factory: every task call gets its OWN cacheKey / OpenCode
+        // session id, because two delegated tasks are two conversations.
         const subagentDefs = discoverSubagents({ workspaceRoot: workspaceRoot || undefined });
-        const subagentConversationId = `${conversationId}::subagent-${crypto.randomUUID()}`;
         const subagentRunner = createSubagentRunner(
             {
-                request: {
-                    baseUrl: active.baseUrl,
-                    apiKey: active.apiKey || null,
-                    model,
-                    signal: controller.signal,
-                    maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
-                    reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
-                    autoCompactRatio: resolveCompactRatio(
-                        vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
-                    contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
-                    dispatcher: getProxyDispatcher(active.baseUrl),
-                    apiStyle: resolveApiStyle(active.baseUrl, model),
-                    ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
-                    cacheKey: subagentConversationId,
+                baseRequest: () => {
+                    const subagentConversationId = `${conversationId}::subagent-${crypto.randomUUID()}`;
+                    return {
+                        baseUrl: active.baseUrl,
+                        apiKey: active.apiKey || null,
+                        model,
+                        signal: controller.signal,
+                        maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
+                        reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
+                        autoCompactRatio: resolveCompactRatio(
+                            vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
+                        contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
+                        dispatcher: getProxyDispatcher(active.baseUrl),
+                        apiStyle: resolveApiStyle(active.baseUrl, model),
+                        ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
+                        cacheKey: subagentConversationId,
+                    };
                 },
                 tools: (def) => filterToolsForSubagent(
                     getLocalToolDefinitions({

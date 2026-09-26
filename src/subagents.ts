@@ -31,6 +31,13 @@ import * as path from 'path';
 /** Model-facing name of the delegation tool. */
 export const SUBAGENT_TOOL_NAME = 'task';
 
+/** Tools that write PARENT-session state through host listeners
+ *  (xratu_mcp_tools.ts: the shared task checklist and the plan-mode flag).
+ *  A nested run must not reach them even if a profile allow-lists them -
+ *  the checklist is the parent's plan artifact and plan mode is the user's
+ *  gate, both meaningless (and dangerous) one level down. */
+export const SESSION_CONTROL_TOOLS = new Set(['update_task_list', 'exit_plan_mode']);
+
 /** Default child loop budget. The parent loop is unlimited by design; a
  *  delegated task must be FINITE - a runaway child cannot be steered or
  *  interrupted from the UI mid-run without cancelling the parent too. */
@@ -217,9 +224,11 @@ function buildFileDefinition(
     };
 }
 
-/** Scan one agents/ directory of flat `*.md` files. First valid winner per
- *  name across the whole discovery wins; lower-priority duplicates are
- *  dropped. Invalid files are kept with `error` set. */
+/** Scan one agents/ directory of flat `*.md` files. First VALID winner per
+ *  name across the whole discovery wins; an invalid/unreadable entry never
+ *  shadows a valid lower-priority copy (same rule as skills.ts) and both
+ *  invalid keeps the higher-priority error. Invalid files are kept with
+ *  `error` set. */
 function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, SubagentDefinition>): void {
     let entries: fs.Dirent[];
     try {
@@ -232,8 +241,11 @@ function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, 
         if (!entry.isFile() && !entry.isSymbolicLink()) continue;
         if (!entry.name.toLowerCase().endsWith('.md')) continue;
         const baseName = entry.name.slice(0, -3);
-        if (out.has(baseName)) continue;
-        out.set(baseName, buildFileDefinition(path.join(baseDir, entry.name), baseName, source));
+        const existing = out.get(baseName);
+        if (existing && !existing.error) continue;
+        const def = buildFileDefinition(path.join(baseDir, entry.name), baseName, source);
+        if (existing && existing.error && def.error) continue;
+        out.set(baseName, def);
     }
 }
 
@@ -262,18 +274,27 @@ export function discoverSubagents(opts?: {
         || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const customByName = new Map(custom.map((d) => [d.name, d]));
     const merged: SubagentDefinition[] = [];
+    const deferredErrors: SubagentDefinition[] = [];
     for (const builtin of builtinSubagents()) {
         const override = customByName.get(builtin.name);
-        if (override) {
-            customByName.delete(builtin.name);
-            merged.push(override);
-        } else {
+        if (!override) {
             merged.push(builtin);
+            continue;
+        }
+        customByName.delete(builtin.name);
+        if (override.error) {
+            // A broken file must not shadow the working builtin; keep the
+            // error entry at the tail for diagnostics only.
+            merged.push(builtin);
+            deferredErrors.push(override);
+        } else {
+            merged.push(override);
         }
     }
     for (const def of custom) {
         if (customByName.has(def.name)) merged.push(def);
     }
+    merged.push(...deferredErrors);
     return merged.slice(0, MAX_SUBAGENT_DEFINITIONS);
 }
 
@@ -291,13 +312,17 @@ export function resolveSubagent(
 
 /** Filter a tool list down to one subagent's capability surface. The `task`
  *  tool is ALWAYS removed: recursion is denied structurally (in the toolset
- *  AND again at child-executor level), never as a prompt hint. */
+ *  AND again at child-executor level), never as a prompt hint. The parent's
+ *  session-control tools are removed for the same reason - they write state
+ *  one level up. Both strips hold even when a profile's allow-list names
+ *  them. */
 export function filterToolsForSubagent<T extends { name: string }>(
     tools: readonly T[],
     def: Pick<SubagentDefinition, 'tools'> | null | undefined,
 ): T[] {
     const allow = def?.tools ? new Set(def.tools) : null;
     return tools.filter((tool) => tool.name !== SUBAGENT_TOOL_NAME
+        && !SESSION_CONTROL_TOOLS.has(tool.name)
         && (allow === null || allow.has(tool.name)));
 }
 

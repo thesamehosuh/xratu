@@ -105,6 +105,18 @@ fs.writeFileSync(
     path.join(tmpWs, '.xratu', 'agents', 'general.md'),
     '---\ndescription: Custom general\ntools: read_file\n---\nCustom general body',
     'utf-8');
+fs.writeFileSync(
+    path.join(tmpWs, '.xratu', 'agents', 'ghost.md'),
+    '---\nbody without description\n---\nBody',
+    'utf-8');
+fs.writeFileSync(
+    path.join(tmpHome, '.agents', 'agents', 'ghost.md'),
+    '---\ndescription: Ghost global\ntools: read_file\n---\nGhost global body',
+    'utf-8');
+fs.writeFileSync(
+    path.join(tmpWs, '.xratu', 'agents', 'explore.md'),
+    '---\nname: wrong\ndescription: Broken explore override\n---\nBody',
+    'utf-8');
 {
     const defs = discoverSubagents({ workspaceRoot: tmpWs, homedir: tmpHome });
     const names = listableSubagents(defs).map((d) => d.name);
@@ -123,6 +135,14 @@ fs.writeFileSync(
     const broken = defs.find((d) => d.name === 'broken');
     ok('empty body kept with error', broken?.error === 'prompt body is missing', String(broken?.error));
     check('subagent_type resolution is case-exact', resolveSubagent(defs, 'Reviewer'), null);
+    // Invalid files never shadow valid lower-priority copies (skills rule).
+    const ghost = resolveSubagent(defs, 'ghost');
+    check('invalid project file does not shadow valid global', ghost?.description, 'Ghost global');
+    check('shadow winner keeps its source', ghost?.source, 'global-agents');
+    const explore = resolveSubagent(defs, 'explore');
+    check('invalid override does not shadow the builtin explore', explore?.source, 'builtin');
+    const badExplore = defs.find((d) => d.name === 'explore' && d.error);
+    ok('invalid builtin-override kept with error', !!badExplore?.error, String(badExplore?.error));
 }
 {
     const defs = discoverSubagents({ workspaceRoot: path.join(tmpRoot, 'nows'), homedir: tmpHome });
@@ -131,20 +151,25 @@ fs.writeFileSync(
     check('global source recorded', reviewer.source, 'global-agents');
 }
 
-// --- filterToolsForSubagent (recursion deny + allow-list) ---
+// --- filterToolsForSubagent (recursion + session-control deny, allow-list) ---
 {
     const all = [
         { name: 'read_file' }, { name: 'edit_file' }, { name: 'grep_search' },
-        { name: 'run_terminal_command' }, { name: 'task' }, { name: 'skill' },
+        { name: 'run_terminal_command' }, { name: SUBAGENT_TOOL_NAME }, { name: 'skill' },
+        { name: 'update_task_list' }, { name: 'exit_plan_mode' },
     ];
     const general = filterToolsForSubagent(all, { tools: undefined });
     ok('task NEVER passes the filter', !general.some((t) => t.name === SUBAGENT_TOOL_NAME));
+    ok('update_task_list NEVER passes the filter', !general.some((t) => t.name === 'update_task_list'));
+    ok('exit_plan_mode NEVER passes the filter', !general.some((t) => t.name === 'exit_plan_mode'));
     check('no allow-list keeps everything else', general.length, 5);
     const explore = filterToolsForSubagent(all, { tools: ['read_file', 'grep_search', 'skill'] });
     check('allow-list enforced', JSON.stringify(explore.map((t) => t.name)),
         JSON.stringify(['read_file', 'grep_search', 'skill']));
-    const withTask = filterToolsForSubagent(all, { tools: ['read_file', 'task'] });
+    const withTask = filterToolsForSubagent(all, { tools: ['read_file', 'task', 'update_task_list', 'exit_plan_mode'] });
     ok('allow-list cannot re-enable task', !withTask.some((t) => t.name === 'task'));
+    ok('allow-list cannot re-enable session-control tools',
+        !withTask.some((t) => t.name === 'update_task_list' || t.name === 'exit_plan_mode'));
 }
 
 // --- parseTaskToolArgs ---

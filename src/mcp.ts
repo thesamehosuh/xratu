@@ -25,6 +25,7 @@ import {
     SUBAGENT_TOOL_NAME,
     buildTaskToolDescription,
     buildTaskToolSchema,
+    listableSubagents,
     parseTaskToolArgs,
     type SubagentDefinition,
     type SubagentRunner,
@@ -408,9 +409,10 @@ export function getLocalToolDefinitions(opts?: {
     // `task` (subagent delegation): NOT in MUTATING_TOOLS on purpose - a
     // read-only explore delegation is valid in plan mode too, and the child
     // inherits the plan-filtered toolset so it cannot mutate either.
+    // Advertised only when at least one VALID profile can be launched.
     const taskDefs: LocalToolDefinition[] = [];
     const subagents = opts?.subagents;
-    if (subagents && subagents.length > 0) {
+    if (subagents && listableSubagents(subagents).length > 0) {
         taskDefs.push({
             name: SUBAGENT_TOOL_NAME,
             description: buildTaskToolDescription(subagents),

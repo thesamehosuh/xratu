@@ -122,6 +122,8 @@ const ALL_TOOLS = [
     { name: 'edit_file', description: 'e', inputSchema: { type: 'object' }, requiresApproval: true },
     { name: 'grep_search', description: 'g', inputSchema: { type: 'object' }, requiresApproval: false },
     { name: SUBAGENT_TOOL_NAME, description: 't', inputSchema: { type: 'object' }, requiresApproval: false },
+    { name: 'update_task_list', description: 'l', inputSchema: { type: 'object' }, requiresApproval: false },
+    { name: 'exit_plan_mode', description: 'p', inputSchema: { type: 'object' }, requiresApproval: false },
 ];
 
 const DEFS = builtinSubagents();
@@ -130,16 +132,22 @@ const GENERAL = DEFS.find((d) => d.name === 'general');
 
 function childContext(extra = {}) {
     const usageEvents = [];
+    let requestCount = 0;
     return {
         usageEvents,
+        requestCount: () => requestCount,
         ctx: {
-            request: {
-                baseUrl: 'https://example.invalid/v1',
-                apiKey: 'k',
-                model: 'test-model',
-                apiStyle: 'chat',
-                contextWindow: 100000,
-                ...(extra.request ?? {}),
+            // Factory: one invocation per task (fresh conversation identity).
+            baseRequest: () => {
+                requestCount++;
+                return {
+                    baseUrl: 'https://example.invalid/v1',
+                    apiKey: 'k',
+                    model: 'test-model',
+                    apiStyle: 'chat',
+                    contextWindow: 100000,
+                    ...(extra.baseRequest ?? {}),
+                };
             },
             tools: (def) => filterToolsForSubagent(ALL_TOOLS, def),
             systemPrompt: (def) => buildSubagentSystemPrompt({
@@ -223,6 +231,9 @@ function childContext(extra = {}) {
     check('child usage forwarded once per round', usageEvents.length, 2);
     const firstTools = seen[0].body.tools.map((t) => t.function?.name ?? t.name);
     ok('child toolset excludes task', !firstTools.includes(SUBAGENT_TOOL_NAME), JSON.stringify(firstTools));
+    ok('child toolset excludes parent session-control tools',
+        !firstTools.includes('update_task_list') && !firstTools.includes('exit_plan_mode'),
+        JSON.stringify(firstTools));
     ok('child toolset respects the explore allow-list',
         firstTools.includes('read_file') && !firstTools.includes('edit_file'), JSON.stringify(firstTools));
     const messages = seen[0].body.messages;
@@ -259,12 +270,12 @@ function childContext(extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Cancel settles the tool call.
+// 5. Cancel settles the tool call; per-task baseRequest identity.
 // ---------------------------------------------------------------------------
 {
     const controller = new AbortController();
     controller.abort();
-    const { ctx } = childContext({ request: { signal: controller.signal } });
+    const { ctx } = childContext({ baseRequest: { signal: controller.signal } });
     const { result, seen } = await withMockFetch([], () => runSubagentTask(ctx, DEFS, {
         subagentType: 'explore',
         description: 'cancelled',
@@ -273,6 +284,18 @@ function childContext(extra = {}) {
     ok('cancelled run reports cancellation', result.isError === true
         && result.output.includes('cancelled'), result.output);
     check('cancelled run never dials out', seen.length, 0);
+}
+{
+    const { ctx, requestCount } = childContext();
+    const handlers = [
+        () => textReply('ONE'),
+        () => textReply('TWO'),
+    ];
+    await withMockFetch(handlers, async () => {
+        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'a', prompt: 'task one' });
+        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'b', prompt: 'task two' });
+    });
+    check('baseRequest is built once per task', requestCount(), 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,13 +332,7 @@ function childContext(extra = {}) {
                     { role: 'user', content: 'earlier turn' },
                     { role: 'assistant', content: 'earlier answer' },
                 ],
-                tools: filterToolsForSubagent(ALL_TOOLS, { tools: undefined })
-                    .concat([{
-                        name: SUBAGENT_TOOL_NAME,
-                        description: 'delegate',
-                        inputSchema: { type: 'object' },
-                        requiresApproval: false,
-                    }]),
+                tools: ALL_TOOLS,
                 apiStyle: 'chat',
                 contextWindow: 100000,
             },
