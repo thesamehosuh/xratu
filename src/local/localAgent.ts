@@ -3170,9 +3170,6 @@ export async function* runLocalAgent(
 
         for (;;) {
         const queue = new AsyncPushQueue<StreamDelta>();
-        // True once this attempt streamed anything the webview already
-        // rendered - retrying after that would duplicate it.
-        let emittedOutput = false;
         // Text emitted by THIS attempt (the resume prefix on the next try).
         let attemptText = '';
         // A tool-call delta landed this attempt - its arguments may be
@@ -3221,11 +3218,10 @@ export async function* runLocalAgent(
             continuationMessages ?? messages,
             continuationMessages ? '' : tailNoteFor(noteUsed),
             (delta) => {
-                emittedOutput = true;
                 attemptText += delta;
                 queue.push({ kind: 'text', value: delta });
             },
-            (thinking) => { emittedOutput = true; queue.push({ kind: 'thinking', value: thinking }); },
+            (thinking) => { queue.push({ kind: 'thinking', value: thinking }); },
             () => { sawToolCall = true; },
         )
             .then((value) => { result = value; return value; })
@@ -3302,13 +3298,17 @@ export async function* runLocalAgent(
         }
 
         // Retry ONLY a transient transport drop (terminated / socket reset /
-        // timeout) that happened before any output reached the user, while
-        // attempts and the total-time budget allow. Offline (DNS/route) errors
-        // earn a larger attempt budget so a link blip does not kill the turn.
-        // Everything else - HTTP rejections, overflow, a user cancel,
-        // mid-content death - falls through to the error/recovery path below.
+        // timeout) that happened before any ANSWER text or tool call reached
+        // the user, while attempts and the total-time budget allow. A
+        // thinking-only attempt is restartable: no answer text is duplicated,
+        // the fresh attempt simply opens another thinking pill. Offline
+        // (DNS/route) errors earn a larger attempt budget so a link blip does
+        // not kill the turn. Everything else - HTTP rejections, overflow, a
+        // user cancel, mid-content death - falls through to the error/recovery
+        // path below.
         const maxAttempts = offline ? OFFLINE_MAX_RETRIES + 1 : NETWORK_MAX_RETRIES + 1;
-        const canRetry = !emittedOutput
+        const canRetry = !attemptText
+            && !sawToolCall
             && !request.signal?.aborted
             && roundRetries + 1 < maxAttempts
             && Date.now() < retryDeadline

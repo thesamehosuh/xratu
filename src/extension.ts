@@ -3223,6 +3223,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     attempt: event.attempt,
                     maxAttempts: event.maxAttempts,
                     nextRetryInMs: event.nextRetryInMs,
+                    // Offline (DNS/route) failures label the countdown
+                    // differently so the user knows it is their link.
+                    offline: event.offline,
                 });
                 break;
             case 'attempting':

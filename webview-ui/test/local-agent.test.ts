@@ -1592,6 +1592,55 @@ async function testTransientStreamDropRetriesOnce() {
     }
 }
 
+async function testThinkingOnlyDropRetriesFromScratch() {
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    globalThis.fetch = (async () => {
+        call++;
+        if (call === 1) {
+            const encoder = new TextEncoder();
+            let reads = 0;
+            return {
+                ok: true,
+                status: 200,
+                body: new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        reads++;
+                        if (reads === 1) {
+                            controller.enqueue(encoder.encode(
+                                `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'thinking...' } }] })}\n\n`,
+                            ));
+                            return;
+                        }
+                        // Dies after reasoning but BEFORE any answer text.
+                        controller.error(deadConnection());
+                    },
+                }),
+                text: async () => '',
+            } as MockResponse;
+        }
+        return sse(textSse(['answer']));
+    }) as typeof fetch;
+
+    try {
+        const events = await collect(
+            runLocalAgent(baseRequest(), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
+        );
+        // Reasoning alone is not answer text: the round restarts rather than
+        // failing (there is nothing to resume from, and no answer text to
+        // duplicate - the fresh attempt opens another thinking pill).
+        assert.equal(call, 2, 'a thinking-only drop is retried from scratch');
+        const final = events.filter((e: any) => e.type === 'assistantMessage').pop();
+        assert.equal(final.text, 'answer');
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
 async function testMidContentDropResumesWithContinuation() {
     const requests: any[] = [];
     const originalFetch = globalThis.fetch;
@@ -2275,6 +2324,7 @@ async function main() {
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();
     await testTransientStreamDropRetriesOnce();
+    await testThinkingOnlyDropRetriesFromScratch();
     await testMidContentDropResumesWithContinuation();
     await testWrapupRetriesTransientDrop();
     await testCancelDuringRetryBackoffIsAbortError();
