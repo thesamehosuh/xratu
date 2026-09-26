@@ -411,8 +411,11 @@ export function CredentialsPage({
                 ))}
             </div>
 
+            {/* Both texts (label + hint) sit ABOVE the chips: the group must
+                not be sandwiched between them. */}
             <div className="cred-provider-section">
                 <span className="cred-provider-section-label">{t('credIranian')}</span>
+                <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
                 <div className="cred-providers-inline" role="radiogroup" aria-label={t('credIranian')}>
                     {IRANIAN.map((p) => (
                         <button
@@ -427,7 +430,6 @@ export function CredentialsPage({
                         </button>
                     ))}
                 </div>
-                <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
             </div>
 
             {/* Inherit the card's RTL: the hint is a Persian sentence and must
