@@ -43,57 +43,92 @@ const MUTATING_TOOLS = new Set([
 
 /**
  * Locate a ripgrep binary: PATH first, then VS Code's own bundled copy
- * (exposed to extension hosts via VSCODE_RIPGREP_PATH).
+ * (exposed to extension hosts via VSCODE_RIPGREP_PATH). The probe is ASYNC
+ * and cached as a promise: the old spawnSync blocked the extension host for
+ * up to 1.5s on the first search of a session.
  */
-let _rgPath: string | null | undefined;
-function findRipgrep(): string | null {
-    if (_rgPath !== undefined) return _rgPath;
-    const probe = cp.spawnSync('rg', ['--version'], { timeout: 1500, encoding: 'utf-8', windowsHide: true });
-    if (!probe.error && probe.status === 0) {
-        _rgPath = 'rg';
-        return _rgPath;
-    }
-    // A TIMED-OUT probe is transient (slow disk, AV scan, loaded machine) and
-    // must NOT be cached as "no ripgrep" - that would permanently disable
-    // rg-backed search for the session. It still falls through to the bundled
-    // copy below; only a definite absence is cached.
-    const timedOut = !!probe.error && (probe.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
-    const bundled = process.env.VSCODE_RIPGREP_PATH;
-    if (bundled && fs.existsSync(bundled)) {
-        _rgPath = bundled;
-        return _rgPath;
-    }
-    if (timedOut) return null;
-    _rgPath = null;
-    return null;
+let _rgPath: Promise<string | null> | null = null;
+function findRipgrep(): Promise<string | null> {
+    if (!_rgPath) _rgPath = probeRipgrep();
+    return _rgPath;
+}
+function probeRipgrep(): Promise<string | null> {
+    return new Promise((resolve) => {
+        cp.execFile('rg', ['--version'], { timeout: 1500, windowsHide: true }, (err) => {
+            if (!err) {
+                resolve('rg');
+                return;
+            }
+            // A TIMED-OUT probe is transient (slow disk, AV scan, loaded
+            // machine) and must NOT be cached as "no ripgrep" - that would
+            // permanently disable rg-backed search for the session. It still
+            // falls through to the bundled copy below; only a definite
+            // absence is cached.
+            const timedOut = (err as NodeJS.ErrnoException).code === 'ETIMEDOUT'
+                || (err as { killed?: boolean }).killed === true;
+            const bundled = process.env.VSCODE_RIPGREP_PATH;
+            if (bundled && fs.existsSync(bundled)) {
+                resolve(bundled);
+                return;
+            }
+            // Drop the cached promise so the next call re-probes.
+            if (timedOut) _rgPath = null;
+            resolve(null);
+        });
+    });
 }
 
 /** Collect current problems (errors/warnings) for one file so the model gets
  *  immediate lint feedback after its edits - Aider-style verify loop.
  *  Language servers publish asynchronously: read synchronously right after
  *  the write and every FRESH error is invisible (a live dogfood run shipped
- *  undefined-name errors that this check silently missed). Poll briefly and
- *  stop early once the server has published something interesting. */
+ *  undefined-name errors that this check silently missed). Wait for the
+ *  language server's change event instead of fixed sleeps - a fast publisher
+ *  is picked up in tens of ms, and a file with no server is still bounded by
+ *  the budget. A clear-then-set sequence fires two events; the short settle
+ *  after each catches the second state. */
+const DIAGNOSTICS_BUDGET_MS = 450;
+const DIAGNOSTICS_SETTLE_MS = 60;
+
+function waitForDiagnosticsChange(uri: vscode.Uri, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = (fired: boolean) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            sub.dispose();
+            resolve(fired);
+        };
+        const sub = vscode.languages.onDidChangeDiagnostics((e) => {
+            if (e.uris.some((u) => u.toString() === uri.toString())) finish(true);
+        });
+        const timer = setTimeout(() => finish(false), Math.max(1, timeoutMs));
+    });
+}
+
 async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
     try {
-        // Check immediately, then poll briefly. The old 400+800ms wait added
-        // ~1.2s to EVERY edit; three quick reads catch the same asynchronous
-        // publish while keeping the host responsive.
+        const interesting = (d: readonly vscode.Diagnostic[]) =>
+            d.some((x) => x.severity <= vscode.DiagnosticSeverity.Warning);
         let diags: readonly vscode.Diagnostic[] = vscode.languages.getDiagnostics(uri);
-        for (const waitMs of [150, 350]) {
-            if (diags.some((d) => d.severity <= vscode.DiagnosticSeverity.Warning)) break;
-            await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const deadline = Date.now() + DIAGNOSTICS_BUDGET_MS;
+        while (!interesting(diags) && Date.now() < deadline) {
+            const fired = await waitForDiagnosticsChange(uri, deadline - Date.now());
+            if (!fired) break;
+            // Settle briefly so a clear-then-set pair lands together.
+            await new Promise((r) => setTimeout(r, DIAGNOSTICS_SETTLE_MS));
             diags = vscode.languages.getDiagnostics(uri);
         }
-        const interesting = diags.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
-        if (interesting.length === 0) return '';
-        const errors = interesting.filter((d) => d.severity === vscode.DiagnosticSeverity.Error);
-        const lines = interesting.slice(0, 10).map((d) => {
+        const picked = diags.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
+        if (picked.length === 0) return '';
+        const errors = picked.filter((d) => d.severity === vscode.DiagnosticSeverity.Error);
+        const lines = picked.slice(0, 10).map((d) => {
             const pos = `${d.range.start.line + 1}:${d.range.start.character + 1}`;
             const kind = d.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning';
             return `  [${kind}] ${pos} ${d.message.split('\n')[0]}`;
         });
-        const head = `[Diagnostics] ${errors.length} error(s), ${interesting.length - errors.length} warning(s) after this edit:`;
+        const head = `[Diagnostics] ${errors.length} error(s), ${picked.length - errors.length} warning(s) after this edit:`;
         return '\n' + head + '\n' + lines.join('\n');
     } catch {
         return '';
@@ -592,7 +627,7 @@ async function dispatchTool(
             child.on('close', (code) => finish(code));
         });
     } else if (name === 'grep_search') {
-        const rg = findRipgrep();
+        const rg = await findRipgrep();
         if (!rg) {
             return { content: [{ type: 'text', text: "Error: ripgrep ('rg') is not installed and no bundled copy was found. Install ripgrep or use read_file/list_files." }], isError: true };
         }
@@ -700,7 +735,7 @@ async function dispatchTool(
             return { content: [{ type: 'text', text: `Error reading directory: ${err.message}` }], isError: true };
         }
     } else if (name === 'glob_search') {
-        const rg = findRipgrep();
+        const rg = await findRipgrep();
         if (!rg) {
             return { content: [{ type: 'text', text: "Error: ripgrep ('rg') is not installed and no bundled copy was found. Install ripgrep or use read_file/list_files." }], isError: true };
         }
