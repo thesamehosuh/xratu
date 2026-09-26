@@ -1592,46 +1592,63 @@ async function testTransientStreamDropRetriesOnce() {
     }
 }
 
-async function testNoRetryAfterOutputFlowed() {
+async function testMidContentDropResumesWithContinuation() {
+    const requests: any[] = [];
     const originalFetch = globalThis.fetch;
     let call = 0;
-    globalThis.fetch = (async () => {
+    globalThis.fetch = (async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
         call++;
-        const encoder = new TextEncoder();
-        let reads = 0;
-        return {
-            ok: true,
-            status: 200,
-            body: new ReadableStream<Uint8Array>({
-                pull(controller) {
-                    reads++;
-                    if (reads === 1) {
-                        controller.enqueue(encoder.encode(
-                            `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`,
-                        ));
-                        return;
-                    }
-                    // The socket dies AFTER content already reached the user.
-                    controller.error(deadConnection());
-                },
-            }),
-            text: async () => '',
-        } as MockResponse;
+        if (call === 1) {
+            const encoder = new TextEncoder();
+            let reads = 0;
+            return {
+                ok: true,
+                status: 200,
+                body: new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        reads++;
+                        if (reads === 1) {
+                            controller.enqueue(encoder.encode(
+                                `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+                            ));
+                            return;
+                        }
+                        // The socket dies AFTER content already reached the user.
+                        controller.error(deadConnection());
+                    },
+                }),
+                text: async () => '',
+            } as MockResponse;
+        }
+        // The continuation finishes the answer; it must not repeat what the
+        // user already saw.
+        return sse(textSse([' continued']));
     }) as typeof fetch;
 
     try {
-        await assert.rejects(
-            collect(
-                runLocalAgent(baseRequest(), {
-                    execute: async () => ({ output: '' }),
-                }, {
-                    requestApproval: async () => ({}),
-                })
-            ),
-            // The error surfaces with its cause, not the bare word "terminated".
-            /terminated.*other side closed/,
+        const events = await collect(
+            runLocalAgent(baseRequest(), {
+                execute: async () => ({ output: '' }),
+            }, {
+                requestApproval: async () => ({}),
+            })
         );
-        assert.equal(call, 1, 'mid-content drops are never retried (would duplicate streamed text)');
+        // Seamless: the original text, then only the continuation.
+        const chunks = events.filter((e: any) => e.type === 'chunk').map((e: any) => e.value);
+        assert.deepEqual(chunks, ['partial', ' continued']);
+        const final = events.filter((e: any) => e.type === 'assistantMessage').pop();
+        assert.equal(final.text, 'partial continued');
+        assert.equal(call, 2, 'a mid-content drop resumes once instead of restarting');
+        // The continuation sends the partial answer as an assistant turn plus
+        // the resume note, so the model sees exactly where it stopped.
+        const messages = requests[1].messages;
+        assert.equal(messages[messages.length - 2].role, 'assistant');
+        assert.equal(messages[messages.length - 2].content, 'partial');
+        assert.equal(messages[messages.length - 1].role, 'user');
+        assert.match(messages[messages.length - 1].content, /Connection lost/);
+        // Resuming is silent - no retry countdown on a stream that continues.
+        assert.ok(!events.some((e: any) => e.type === 'retrying'));
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -2258,7 +2275,7 @@ async function main() {
     await testStreamOptionsRejectedRetriesWithout();
     await testNonStreamOptions400DoesNotRetry();
     await testTransientStreamDropRetriesOnce();
-    await testNoRetryAfterOutputFlowed();
+    await testMidContentDropResumesWithContinuation();
     await testWrapupRetriesTransientDrop();
     await testCancelDuringRetryBackoffIsAbortError();
     await testCachedTokensParsed();

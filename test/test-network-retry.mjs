@@ -20,9 +20,13 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
     isTransientNetworkError,
+    isOfflineNetworkError,
+    shouldResumeStream,
     networkRetryDelayMs,
     TRANSPORT_TIMEOUT_CODE,
     NETWORK_MAX_RETRIES,
+    NETWORK_MAX_RESUMES,
+    OFFLINE_MAX_RETRIES,
     NETWORK_RETRY_BASE_DELAY_MS,
     NETWORK_RETRY_MAX_DELAY_MS,
 } = require('../out/local/localAgent.js');
@@ -110,6 +114,39 @@ checkTrue('attempt 1 jitter only increases', networkRetryDelayMs(1, 1) > 1000);
 checkTrue('jitter stays within +25%', networkRetryDelayMs(1, 1) <= 1250);
 checkTrue('large attempt is capped', networkRetryDelayMs(30, 1) <= NETWORK_RETRY_MAX_DELAY_MS);
 checkTrue('delay is an integer', Number.isInteger(networkRetryDelayMs(2, 0.37)));
+
+// --- offline (DNS / route) classification ------------------------------------
+checkTrue('EAI_AGAIN is offline', isOfflineNetworkError(coded('EAI_AGAIN')));
+checkTrue('ENETUNREACH is offline', isOfflineNetworkError(coded('ENETUNREACH')));
+checkTrue('ENETDOWN is offline', isOfflineNetworkError(coded('ENETDOWN')));
+checkTrue('EHOSTUNREACH is offline', isOfflineNetworkError(coded('EHOSTUNREACH')));
+checkTrue(
+    'offline code buried in the cause chain',
+    isOfflineNetworkError(typeError('fetch failed', { cause: coded('EAI_AGAIN') })),
+);
+checkFalse('socket reset is not offline', isOfflineNetworkError(coded('ECONNRESET')));
+checkFalse('ENOTFOUND (bad host) is not offline', isOfflineNetworkError(coded('ENOTFOUND')));
+checkFalse('ECONNREFUSED is not offline', isOfflineNetworkError(coded('ECONNREFUSED')));
+checkFalse('abort vetoes offline', isOfflineNetworkError(Object.assign(new Error('x'), { name: 'AbortError' })));
+checkFalse('offline behind an abort in the chain is vetoed', isOfflineNetworkError(
+    typeError('terminated', { cause: Object.assign(coded('EAI_AGAIN'), { name: 'AbortError' }) }),
+));
+check('offline retry budget exceeds the normal one', OFFLINE_MAX_RETRIES > NETWORK_MAX_RETRIES, true);
+check('offline max retries', OFFLINE_MAX_RETRIES, 8);
+
+// --- mid-stream resume policy -------------------------------------------------
+const resumeBase = { emittedOutput: true, sawToolCall: false, transient: true, aborted: false, resumesUsed: 0, deadlineMs: 1000, now: 0 };
+const resume = (over) => shouldResumeStream({ ...resumeBase, ...over });
+checkTrue('resumes a cut stream that had emitted text', resume({}));
+checkFalse('does not resume before any text', resume({ emittedOutput: false }));
+checkFalse('does not resume after a tool-call delta', resume({ sawToolCall: true }));
+checkFalse('does not resume a non-transient error', resume({ transient: false }));
+checkFalse('does not resume a cancel', resume({ aborted: true }));
+checkFalse('stops after the resume cap', resume({ resumesUsed: NETWORK_MAX_RESUMES }));
+checkTrue('last allowed resume', resume({ resumesUsed: NETWORK_MAX_RESUMES - 1 }));
+checkFalse('does not resume past the deadline', resume({ now: 1000 }));
+checkFalse('empty-string text is not a resume', resume({ emittedOutput: false }));
+check('resume cap', NETWORK_MAX_RESUMES, 2);
 
 console.log(failed === 0 ? '\nnetwork-retry tests: all passed' : `\nnetwork-retry tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

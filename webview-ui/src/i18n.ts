@@ -225,6 +225,7 @@ const fa = {
     costTitle: 'هزینه تخمینی این پاسخ',
     sessionCostTitle: 'هزینه تخمینی این گفتگو؛ برای دیدن مصرف کلیک کنید',
     retrying: 'در حال تلاش دوباره',
+    retryingOffline: 'اتصال قطع است',
 
     // Approval card
     approvalHead: 'درخواست اجرای ابزار',
@@ -805,6 +806,7 @@ const en: Record<keyof typeof fa, string> = {
     costTitle: 'Estimated cost of this answer',
     sessionCostTitle: 'Estimated cost of this conversation - open the usage page',
     retrying: 'Retrying',
+    retryingOffline: 'Offline',
 
     approvalHead: 'Tool execution request',
     approve: 'Approve & run',

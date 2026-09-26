@@ -86,7 +86,7 @@ export type LocalAgentEvent =
     // Transient transport retry (flaky network): `retrying` drives the
     // countdown on the streaming bubble, `attempting` clears it right before
     // the next fetch. Display-only - never part of the committed transcript.
-    | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number }
+    | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number; offline?: boolean }
     | { type: 'attempting' }
     // `estimated` marks the mid-stream usage estimates emitted WHILE a
     // response streams - the host must never record them as the turn's
@@ -570,6 +570,82 @@ export function networkRetryDelayMs(attempt: number, random = Math.random()): nu
     return Math.min(NETWORK_RETRY_MAX_DELAY_MS, Math.round(base + base * NETWORK_RETRY_JITTER * random));
 }
 
+/**
+ * DNS / routing failures: the machine itself cannot reach the network, as
+ * opposed to a provider that reset an established connection. These get the
+ * longer offline budget below, and the UI says "offline" instead of
+ * "retrying" so the user knows it is their link, not the provider.
+ */
+const OFFLINE_NETWORK_CODES = new Set(['EAI_AGAIN', 'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH']);
+
+/** True when an error (anywhere in its `cause` chain) says the NETWORK is
+ *  unreachable, not that the provider refused or dropped us. AbortErrors veto
+ *  (a cancel is never "offline"). */
+export function isOfflineNetworkError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    let aborted = false;
+    let offline = false;
+    const seen = new Set<unknown>();
+    let current: unknown = error;
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && current != null && typeof current === 'object'; depth++) {
+        if (seen.has(current)) break;
+        seen.add(current);
+        const node = current as { name?: unknown; code?: unknown; cause?: unknown };
+        if (node.name === 'AbortError' || node.name === 'ResponseAborted') aborted = true;
+        if (typeof node.code === 'string' && OFFLINE_NETWORK_CODES.has(node.code)) offline = true;
+        current = node.cause;
+    }
+    return offline && !aborted;
+}
+
+/** Total attempts = 1 initial + this many retries while OFFLINE. A link blip
+ *  can last tens of seconds, so the offline path keeps trying past the normal
+ *  three-attempt cap, bounded by the round's wall-clock deadline (the user can
+ *  cancel at any time). */
+export const OFFLINE_MAX_RETRIES = 8;
+/** Mid-stream resume attempts per round (see shouldResumeStream). */
+export const NETWORK_MAX_RESUMES = 2;
+
+/**
+ * A dropped stream is RESUMED rather than restarted when the provider had
+ * already produced text the user saw, but had not started a tool call: we
+ * re-send the prompt with the partial answer as an assistant turn and ask for
+ * the continuation. Restarting would duplicate visible text; resuming after a
+ * tool call would risk replaying a call with half-parsed arguments. Pure so
+ * the policy is unit-tested (test/test-network-retry.mjs).
+ */
+export function shouldResumeStream(opts: {
+    /** Some text/thinking already reached the user this attempt. */
+    emittedOutput: boolean;
+    /** A tool-call delta was seen this attempt (arguments may be partial). */
+    sawToolCall: boolean;
+    /** The attempt failed with a transient transport error. */
+    transient: boolean;
+    /** The user cancelled. */
+    aborted: boolean;
+    /** Resumes already used in this round. */
+    resumesUsed: number;
+    /** Wall-clock deadline for this round. */
+    deadlineMs: number;
+    /** Injectable clock for tests. */
+    now?: number;
+    maxResumes?: number;
+}): boolean {
+    return opts.transient
+        && opts.emittedOutput
+        && !opts.sawToolCall
+        && !opts.aborted
+        && opts.resumesUsed < (opts.maxResumes ?? NETWORK_MAX_RESUMES)
+        && (opts.now ?? Date.now()) < opts.deadlineMs;
+}
+
+/** Instruction appended as a user turn when resuming a cut-off stream. The
+ *  partial answer is the preceding assistant message, so the model can see
+ *  exactly where it stopped. */
+export const STREAM_RESUME_NOTE =
+    '[Connection lost. Your previous message was cut off mid-answer. Continue it from the exact point it stopped - do not repeat, summarise, or restart any text already written.]';
+
+
 /** An AbortError the host recognizes: it maps `err.name === 'AbortError'` to
  *  the localized "request cancelled" state. Used when a cancel surfaces as a
  *  socket error, or lands during a retry backoff, instead of as a clean
@@ -794,17 +870,18 @@ function requestStreamingCompletion(
     tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
+    onToolCall?: () => void,
 ): Promise<CompletionResult> {
     if (request.apiStyle === 'messages') {
-        return requestMessagesCompletion(request, messages, tailNote, onDelta, onThinking);
+        return requestMessagesCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
     }
     if (request.apiStyle === 'responses') {
-        return requestResponsesCompletion(request, messages, tailNote, onDelta, onThinking);
+        return requestResponsesCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
     }
     if (request.apiStyle === 'google') {
-        return requestGoogleCompletion(request, messages, tailNote, onDelta, onThinking);
+        return requestGoogleCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
     }
-    return requestChatCompletion(request, messages, tailNote, onDelta, onThinking);
+    return requestChatCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
 }
 
 async function requestChatCompletion(
@@ -813,6 +890,7 @@ async function requestChatCompletion(
     tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
+    onToolCall?: () => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'chat/completions');
     // Wire messages are built ONCE so the 400 recovery below can rebuild the
@@ -996,6 +1074,7 @@ async function requestChatCompletion(
         }
 
         const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+        if (calls.length) onToolCall?.();
         for (const call of calls) {
             const index = Number(call.index ?? 0);
             const current = toolDeltas.get(index) ?? {
@@ -1265,6 +1344,7 @@ async function requestMessagesCompletion(
     tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
+    onToolCall?: () => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'messages');
     const body = toMessagesBody(request, messages, tailNote);
@@ -1362,6 +1442,7 @@ async function requestMessagesCompletion(
                 const block = json.content_block;
                 const index = Number(json.index ?? 0);
                 if (block?.type === 'tool_use') {
+                    onToolCall?.();
                     toolDeltas.set(index, { id: String(block.id ?? ''), name: String(block.name ?? ''), arguments: '' });
                     blocks.set(index, { type: 'tool_use', id: String(block.id ?? ''), name: String(block.name ?? ''), input: {} });
                 } else if (block?.type === 'thinking') {
@@ -1405,6 +1486,7 @@ async function requestMessagesCompletion(
                 } else if (delta?.type === 'signature_delta' && typeof delta.signature === 'string') {
                     if (block) block.signature = (block.signature ?? '') + delta.signature;
                 } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+                    onToolCall?.();
                     const current = toolDeltas.get(index);
                     if (current) current.arguments += delta.partial_json;
                     partialJson.set(index, (partialJson.get(index) ?? '') + delta.partial_json);
@@ -1568,6 +1650,7 @@ async function requestResponsesCompletion(
     tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
+    onToolCall?: () => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'responses');
     const body = toResponsesBody(request, messages, tailNote);
@@ -1678,6 +1761,7 @@ async function requestResponsesCompletion(
                 const item = json.item;
                 if (item) itemsByIndex.set(Number(json.output_index ?? 0), item);
                 if (item?.type === 'function_call') {
+                    onToolCall?.();
                     // Key by the ITEM id: arguments deltas reference it.
                     toolDeltas.set(String(item.id ?? item.call_id ?? ''), {
                         id: String(item.call_id ?? item.id ?? ''),
@@ -1694,6 +1778,7 @@ async function requestResponsesCompletion(
                 break;
             }
             case 'response.function_call_arguments.delta': {
+                onToolCall?.();
                 const current = toolDeltas.get(String(json.item_id ?? ''));
                 if (current && typeof json.delta === 'string') current.arguments += json.delta;
                 break;
@@ -1903,6 +1988,7 @@ async function requestGoogleCompletion(
     tailNote: string,
     onDelta: (textDelta: string) => void,
     onThinking?: (thinking: string) => void,
+    onToolCall?: () => void,
 ): Promise<CompletionResult> {
     const base = endpointUrl(
         request.baseUrl,
@@ -2011,6 +2097,7 @@ async function requestGoogleCompletion(
                 }
                 modelParts.push(part);
             } else if (part?.functionCall) {
+                onToolCall?.();
                 const id = `google-call-${toolDeltas.size}`;
                 toolDeltas.set(id, {
                     id,
@@ -3061,11 +3148,18 @@ export async function* runLocalAgent(
     for (let round = 0; round < rounds; round++) {
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
-        // Transient-network retry state for THIS round. A round is only ever
-        // retried BEFORE any delta reached the user: once text/thinking has
-        // streamed, resuming would replay content the user already saw, so the
-        // error passes through (the same rule Cline's retry middleware uses).
+        // Transient-network retry state for THIS round. A round is retried
+        // BEFORE any delta reached the user; once text has streamed, a drop is
+        // RESUMED instead (continuation request) - restarting would replay
+        // content the user already saw, and resuming after a tool call would
+        // risk half-parsed arguments. See shouldResumeStream.
         let roundRetries = 0;
+        let resumesUsed = 0;
+        // Text the user already saw from FAILED attempts this round; the
+        // successful attempt's text is appended to it.
+        let resumedText = '';
+        // The continuation request's messages once a resume is armed.
+        let continuationMessages: LocalAgentMessage[] | null = null;
         const retryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
@@ -3079,6 +3173,11 @@ export async function* runLocalAgent(
         // True once this attempt streamed anything the webview already
         // rendered - retrying after that would duplicate it.
         let emittedOutput = false;
+        // Text emitted by THIS attempt (the resume prefix on the next try).
+        let attemptText = '';
+        // A tool-call delta landed this attempt - its arguments may be
+        // half-parsed, so the attempt may not be resumed.
+        let sawToolCall = false;
         result = null;
         requestError = null;
 
@@ -3108,8 +3207,9 @@ export async function* runLocalAgent(
 
         // A single huge tool result can exceed the window on its own, and
         // compaction never touches the current turn - bound it before sending.
-        // The messages are byte-identical between retries, so bound only once.
-        if (roundRetries === 0) boundToolResults(messages, windowTokens, toolTokens);
+        // The messages are byte-identical between retries, so bound only once;
+        // a resume reuses the same prompt plus the partial answer.
+        if (roundRetries === 0 && resumesUsed === 0) boundToolResults(messages, windowTokens, toolTokens);
 
         // Clear the previous attempt's countdown right before re-dialing: the
         // bubble falls back to typing dots and a hung connect is not mistaken
@@ -3118,10 +3218,15 @@ export async function* runLocalAgent(
 
         requestPromise = requestStreamingCompletion(
             request,
-            messages,
-            tailNoteFor(noteUsed),
-            (delta) => { emittedOutput = true; queue.push({ kind: 'text', value: delta }); },
+            continuationMessages ?? messages,
+            continuationMessages ? '' : tailNoteFor(noteUsed),
+            (delta) => {
+                emittedOutput = true;
+                attemptText += delta;
+                queue.push({ kind: 'text', value: delta });
+            },
             (thinking) => { emittedOutput = true; queue.push({ kind: 'thinking', value: thinking }); },
+            () => { sawToolCall = true; },
         )
             .then((value) => { result = value; return value; })
             .catch((err) => { requestError = err; return null; })
@@ -3151,18 +3256,53 @@ export async function* runLocalAgent(
         }
         await requestPromise;
 
-        if (!requestError) break;
+        if (!requestError) {
+            // Splice the failed attempts' text back in front of the resumed
+            // answer so the round settles with the COMPLETE message. Cast: the
+            // `.then` closure assignment is invisible to control-flow analysis.
+            const settled = result as CompletionResult | null;
+            if (resumedText && settled) result = { ...settled, text: resumedText + settled.text };
+            break;
+        }
+
+        // Mid-stream resume: the provider cut the body after text reached the
+        // user but before any tool call. Continue the partial answer instead
+        // of restarting (which would duplicate visible text) or failing the
+        // turn. A continuation carries the partial answer as an assistant turn
+        // plus a "continue exactly here" note, so it also works for providers
+        // that reject assistant prefill.
+        const transient = isTransientNetworkError(requestError);
+        if (shouldResumeStream({
+            emittedOutput: attemptText.length > 0,
+            sawToolCall,
+            transient,
+            aborted: !!request.signal?.aborted,
+            resumesUsed,
+            deadlineMs: retryDeadline,
+        })) {
+            resumesUsed++;
+            resumedText += attemptText;
+            continuationMessages = [
+                ...messages,
+                { role: 'assistant', content: resumedText },
+                { role: 'user', content: STREAM_RESUME_NOTE },
+            ];
+            continue;
+        }
 
         // Retry ONLY a transient transport drop (terminated / socket reset /
         // timeout) that happened before any output reached the user, while
-        // attempts and the total-time budget allow. Everything else - HTTP
-        // rejections, overflow, a user cancel, mid-content death - falls
-        // through to the error/recovery path below.
+        // attempts and the total-time budget allow. Offline (DNS/route) errors
+        // earn a larger attempt budget so a link blip does not kill the turn.
+        // Everything else - HTTP rejections, overflow, a user cancel,
+        // mid-content death - falls through to the error/recovery path below.
+        const offline = transient && isOfflineNetworkError(requestError);
+        const maxAttempts = offline ? OFFLINE_MAX_RETRIES + 1 : NETWORK_MAX_RETRIES + 1;
         const canRetry = !emittedOutput
             && !request.signal?.aborted
-            && roundRetries < NETWORK_MAX_RETRIES
+            && roundRetries + 1 < maxAttempts
             && Date.now() < retryDeadline
-            && isTransientNetworkError(requestError);
+            && transient;
         if (!canRetry) break;
 
         roundRetries++;
@@ -3170,8 +3310,9 @@ export async function* runLocalAgent(
         yield {
             type: 'retrying',
             attempt: roundRetries,
-            maxAttempts: NETWORK_MAX_RETRIES + 1,
+            maxAttempts,
             nextRetryInMs: waitMs,
+            offline,
         };
         await sleepAbortable(waitMs, request.signal);
         // Never start another attempt after a cancel, nor once the backoff has

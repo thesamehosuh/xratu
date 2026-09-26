@@ -57,7 +57,7 @@ function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage[
     return (
         <div className="msg-content retry-status" aria-live="polite">
             <span className="retry-dot" aria-hidden="true" />
-            <span>{t('retrying')}: {retryStatus.attempt}/{retryStatus.maxAttempts}</span>
+            <span>{t(retryStatus.offline ? 'retryingOffline' : 'retrying')}: {retryStatus.attempt}/{retryStatus.maxAttempts}</span>
             <span className="retry-countdown">{seconds}s</span>
         </div>
     );
