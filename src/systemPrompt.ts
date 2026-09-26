@@ -67,3 +67,42 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
     }
     return parts.join('\n');
 }
+
+/**
+ * System prompt for a delegated subagent run. The agent file's body (the
+ * profile's identity/instructions) leads; the operational notes state the
+ * delegation contract the tool description promises the parent: only the
+ * final report comes back, the prompt must be self-contained, and questions
+ * asked mid-run are never answered. Same cache-stability rules as the parent
+ * prompt apply (frozen rulesContext, no per-round content).
+ */
+export interface SubagentSystemPromptInputs {
+    /** The agent profile body (system prompt of the child). */
+    agentPrompt: string;
+    /** Frozen project-rules snapshot (AGENTS.md chain). */
+    rulesContext: string;
+    planMode: boolean;
+}
+
+export function buildSubagentSystemPrompt(inputs: SubagentSystemPromptInputs): string {
+    const parts: string[] = [
+        inputs.agentPrompt,
+        '',
+        "Operational notes for subagent mode:",
+        "- You are a delegated subagent inside a larger session. The parent agent - not the user - receives your FINAL MESSAGE, and only that message: your intermediate tool calls and reasoning stay private to you.",
+        "- You have NO access to the parent conversation. Everything you need must be in the task you were given; if a detail is missing, make a reasonable assumption and state it in your report.",
+        "- Do not ask questions and do not wait for input - work to a conclusion on your own.",
+        "- Use local tools (read_file, edit_file, grep_search, etc.) for workspace inspection and changes; web_search and fetch_url access the web directly from this machine.",
+        "- Finish with a complete, self-contained report: what you did or found (with file references), and anything the parent must know.",
+    ];
+    if (inputs.planMode) {
+        parts.push(
+            "",
+            "PLAN MODE (READ-ONLY): mutating tools are unavailable. Report findings and a proposed plan; do not attempt to change anything.",
+        );
+    }
+    if (inputs.rulesContext) {
+        parts.push("", "Project Rules (from AGENTS.md):", inputs.rulesContext);
+    }
+    return parts.join('\n');
+}

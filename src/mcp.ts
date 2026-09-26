@@ -22,6 +22,15 @@ import {
 import { killTree } from './tooling/processTree';
 import type { LocalToolDefinition } from './local/localAgent';
 import {
+    SUBAGENT_TOOL_NAME,
+    buildTaskToolDescription,
+    buildTaskToolSchema,
+    listableSubagents,
+    parseTaskToolArgs,
+    type SubagentDefinition,
+    type SubagentRunner,
+} from './subagents';
+import {
     buildSkillToolDescription,
     buildSkillToolSchema,
     findSkillDir,
@@ -341,12 +350,18 @@ const WEB_TOOL_DEFINITIONS: Array<{
  *  external MCP tool aggregation fetched by the host (async, so the host
  *  supplies it rather than this pure function). `skills` carries the
  *  discovered Agent Skills - the `skill` tool is read-only, so it is
- *  available in plan mode like read_file. */
+ *  available in plan mode like read_file. `subagents` carries the
+ *  discovered subagent definitions - when present the `task` delegation
+ *  tool is advertised (absent in a CHILD toolset, which is the structural
+ *  recursion deny; see local/subagentRunner.ts). `task` needs no approval
+ *  of its own: every mutation a child might make still passes through the
+ *  child's own per-tool approval flags. */
 export function getLocalToolDefinitions(opts?: {
     yolo?: boolean;
     plan?: boolean;
     external?: import('./externalMcp').AggregatedTool[];
     skills?: DiscoveredSkill[];
+    subagents?: SubagentDefinition[];
 }): LocalToolDefinition[] {
     const yolo = !!opts?.yolo;
     const plan = !!opts?.plan;
@@ -391,7 +406,21 @@ export function getLocalToolDefinitions(opts?: {
             requiresApproval: false,
         });
     }
-    return [...builtin, ...web, ...skillDefs, ...external];
+    // `task` (subagent delegation): NOT in MUTATING_TOOLS on purpose - a
+    // read-only explore delegation is valid in plan mode too, and the child
+    // inherits the plan-filtered toolset so it cannot mutate either.
+    // Advertised only when at least one VALID profile can be launched.
+    const taskDefs: LocalToolDefinition[] = [];
+    const subagents = opts?.subagents;
+    if (subagents && listableSubagents(subagents).length > 0) {
+        taskDefs.push({
+            name: SUBAGENT_TOOL_NAME,
+            description: buildTaskToolDescription(subagents),
+            inputSchema: buildTaskToolSchema(subagents),
+            requiresApproval: false,
+        });
+    }
+    return [...builtin, ...web, ...taskDefs, ...skillDefs, ...external];
 }
 
 /** Shared dispatch: executes a single built-in or expansion tool.
@@ -407,6 +436,10 @@ async function dispatchTool(
     skillResolver?: (name: string) => SkillResolution,
     /** Incremental output sink for long-running tools (terminal commands). */
     onOutput?: (chunk: string) => void,
+    /** Nested-run capability for the `task` tool. Present only on the parent
+     *  run's executor - child executors omit it, which is part of the
+     *  structural recursion deny. */
+    subagentRunner?: SubagentRunner,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     if (name === 'edit_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
@@ -999,6 +1032,19 @@ async function dispatchTool(
         const header = `Skill: ${skillName}`
             + (displayPath ? `\nDirectory: ${displayPath} (relative to the workspace root)` : '');
         return { content: [{ type: 'text', text: `${header}\n\n${body}` }] };
+    } else if (name === SUBAGENT_TOOL_NAME) {
+        // Local-runtime delegation tool (never advertised over the MCP
+        // bridge and absent from child toolsets). Without a runner there is
+        // no nested model to drive - fail loudly rather than silently.
+        if (!subagentRunner) {
+            return { content: [{ type: 'text', text: 'Error: the task tool is not available in this context.' }], isError: true };
+        }
+        const parsed = parseTaskToolArgs(args ?? {});
+        if (!parsed.ok) {
+            return { content: [{ type: 'text', text: parsed.error }], isError: true };
+        }
+        const result = await subagentRunner.run({ ...parsed.value, ...(onOutput ? { onOutput } : {}) });
+        return { content: [{ type: 'text', text: result.output }], isError: result.isError };
     } else if (name === 'web_search' || name === 'fetch_url') {
         // Local-runtime web tools (never advertised over the MCP bridge).
         const result = await executeWebTool(name, args ?? {});
@@ -1026,6 +1072,7 @@ export async function executeLocalTool(
     externalMcp?: ExternalMcpManager,
     skillResolver?: (name: string) => SkillResolution,
     onOutput?: (chunk: string) => void,
+    subagentRunner?: SubagentRunner,
 ): Promise<{ output: string; isError?: boolean }> {
     try {
         if (name.startsWith(EXTERNAL_PREFIX)) {
@@ -1034,7 +1081,7 @@ export async function executeLocalTool(
             }
             return { output: await externalMcp.callTool(name, args ?? {}) };
         }
-        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput);
+        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
@@ -1065,9 +1112,10 @@ export function createLocalToolExecutor(
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
     externalMcp?: ExternalMcpManager,
     skillResolver?: (name: string) => SkillResolution,
+    subagentRunner?: SubagentRunner,
 ): import('./local/localAgent').LocalToolExecutor {
     return {
         execute: async (call, onOutput) =>
-            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput),
+            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner),
     };
 }
