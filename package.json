@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "%ext.displayName%",
 	"description": "%ext.description%",
-	"version": "1.3.0",
+	"version": "1.2.0",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
