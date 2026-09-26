@@ -116,8 +116,11 @@ async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
         while (!interesting(diags) && Date.now() < deadline) {
             const fired = await waitForDiagnosticsChange(uri, deadline - Date.now());
             if (!fired) break;
-            // Settle briefly so a clear-then-set pair lands together.
-            await new Promise((r) => setTimeout(r, DIAGNOSTICS_SETTLE_MS));
+            // Settle briefly so a clear-then-set pair lands together, but never
+            // past the budget: an event landing at the deadline must not push
+            // the wait beyond the ceiling the comment above advertises.
+            const settle = Math.min(DIAGNOSTICS_SETTLE_MS, Math.max(0, deadline - Date.now()));
+            if (settle > 0) await new Promise((r) => setTimeout(r, settle));
             diags = vscode.languages.getDiagnostics(uri);
         }
         const picked = diags.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
