@@ -425,7 +425,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 ...state,
                 messages: state.messages.map((m) =>
                     m.id === id
-                        ? { ...m, retryStatus: { attempt: msg.attempt, maxAttempts: msg.maxAttempts, nextRetryInMs: msg.nextRetryInMs } }
+                        ? { ...m, retryStatus: { attempt: msg.attempt, maxAttempts: msg.maxAttempts, nextRetryInMs: msg.nextRetryInMs, offline: msg.offline } }
                         : m
                 ),
             };

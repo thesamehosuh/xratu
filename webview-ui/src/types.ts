@@ -305,7 +305,7 @@ export type FromExtensionMessage =
     | { type: 'credentialsSaved'; returnToChat?: boolean }
     | { type: 'byokReset' }
     | { type: 'openSettings' }
-    | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number }
+    | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number; offline?: boolean }
     | { type: 'attempting' }
     /** The host rejected the request after the composer was cleared -
      *  value/prompt/attachments are echoed back so the user can fix and
@@ -659,7 +659,7 @@ export interface ChatMessage {
      *  (queued at the agent loop's next round) - renders with a badge. */
     steered?: boolean;
     /** Retry state for the in-flight request - shown as a countdown. */
-    retryStatus?: { attempt: number; maxAttempts: number; nextRetryInMs: number } | null;
+    retryStatus?: { attempt: number; maxAttempts: number; nextRetryInMs: number; offline?: boolean } | null;
     /** Why the turn failed, when the bubble already carries streamed
      *  content (the reason must still be visible - red styling alone
      *  reads as a silent death). */

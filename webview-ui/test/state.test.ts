@@ -436,6 +436,12 @@ ok(
     s.messages.find((m) => m.id === retryId)?.retryStatus?.attempt === 1,
     'retrying patches the streaming bubble with the countdown'
 );
+// Offline-classified retries reach the UI flag so the label can say "offline".
+s = reduceChat(s, M('retrying', { attempt: 2, maxAttempts: 9, nextRetryInMs: 2000, offline: true }));
+ok(
+    s.messages.find((m) => m.id === retryId)?.retryStatus?.offline === true,
+    'an offline retry carries its flag to the bubble'
+);
 s = reduceChat(s, M('attempting'));
 ok(
     s.messages.find((m) => m.id === retryId)?.retryStatus === null,
