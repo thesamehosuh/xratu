@@ -6,16 +6,19 @@
 export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and clear like a senior classmate. No emojis.\nAfter changing code, say briefly what changed (1-2 sentences) - never repeat the edited code and never mention internal tool names.\nBefore claiming victory, quickly verify your changes (re-read the edited file or run the relevant check) so your summary reflects reality.\nFor multi-step work you may maintain a visible checklist with `update_task_list` (complete list every call, exactly one item in_progress while executing) so the user can follow progress - useful for plan mode AND for any non-trivial execution you choose to track.";
 
 /** Reply-language directives. Exported so the prompt-cache suite can assert
- *  the exact bytes. `auto` adds NOTHING to the prompt (byte-identical to the
- *  legacy prompt), because modern models already follow the user's message
- *  language - the explicit blocks exist to make it deterministic and to keep
+ *  the exact bytes. `auto` adds no LANGUAGE directive (modern models already
+ *  follow the user's message language), only the commit rule below - the
+ *  explicit blocks exist to make the reply language deterministic and to keep
  *  technical terms untranslated (the #1 failure mode of weaker/local models). */
 export const REPLY_LANGUAGE_FA =
     "Language: reply to the user in Persian (Farsi). Keep code, identifiers, file paths, " +
-    "commands, git commit messages, and technical terms (API, endpoint, commit, runtime, cache, " +
-    "branch, token) in English - never translate them into invented Persian; only a settled " +
-    "transliteration is fine where it is natural (کلید API). Git commit messages are ALWAYS English.";
+    "commands, and technical terms (API, endpoint, commit, runtime, cache, branch, token) in " +
+    "English - never translate them into invented Persian; only a settled transliteration is " +
+    "fine where it is natural (کلید API).";
 export const REPLY_LANGUAGE_EN = "Language: reply to the user in English.";
+/** Applies in EVERY mode (fa/en/auto): the user's standing decision is that
+ *  the agent's git commits are English regardless of reply language. */
+export const REPLY_COMMIT_MESSAGES = "Git commit messages are ALWAYS English, whatever language you are replying in.";
 
 /**
  * The inputs that shape the local system prompt.
@@ -60,9 +63,11 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
     ];
     if (inputs.replyLanguage === 'fa') {
-        parts.push("", REPLY_LANGUAGE_FA);
+        parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`);
     } else if (inputs.replyLanguage === 'en') {
-        parts.push("", REPLY_LANGUAGE_EN);
+        parts.push("", `${REPLY_LANGUAGE_EN} ${REPLY_COMMIT_MESSAGES}`);
+    } else {
+        parts.push("", REPLY_COMMIT_MESSAGES);
     }
     if (inputs.planMode) {
         // Per-turn plan guidance for the local runtime.

@@ -3773,8 +3773,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             this._pushEditorContext();
                             break;
                         case 'setLocale':
-                            void this._globalState.update('xratu.locale', data.locale);
+                            await this._globalState.update('xratu.locale', data.locale);
                             setUiLocale(data.locale === 'en' ? 'en' : 'fa');
+                            // Re-echo the effective reply language: the
+                            // locale-derived default follows the UI locale,
+                            // so the chips must never show a stale value.
+                            // Explicit fa/en/auto choices survive through
+                            // _resolveReplyLanguage.
+                            this._view?.webview.postMessage({
+                                type: 'replyLanguage',
+                                replyLanguage: this._resolveReplyLanguage(),
+                            });
                             break;
                         case 'setReplyLanguage':
                             void this._globalState.update('xratu.replyLanguage', data.replyLanguage);

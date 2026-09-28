@@ -22,7 +22,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN } = require('../out/systemPrompt.js');
+const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -221,20 +221,21 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
 }
 
 // ---------------------------------------------------------------------------
-// Reply language: fa/en add their block byte-stable; auto/omitted add NOTHING
-// (the legacy prompt must stay byte-identical so upgrading users with 'auto'
-// keep their cache warm).
+// Reply language: fa/en add their language block; auto/omitted add NO language
+// block - only the standing commit rule, which applies in every mode (commits
+// are English whatever the reply language is).
 // ---------------------------------------------------------------------------
 {
     const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
     const autoPrompt = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'auto' });
     const legacyPrompt = buildLocalSystemPrompt(inputs);
     ok('auto adds no language block', !autoPrompt.includes('Language: reply'));
-    ok('omitted replyLanguage == auto (legacy byte-identical)', autoPrompt === legacyPrompt);
+    ok('omitted replyLanguage == auto', autoPrompt === legacyPrompt);
+    ok('auto still enforces English commit messages', autoPrompt.includes(REPLY_COMMIT_MESSAGES));
 
     const fa = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
     ok('fa adds the Persian directive', fa.includes(REPLY_LANGUAGE_FA));
-    ok('fa directive keeps commits English', REPLY_LANGUAGE_FA.includes('commit messages are ALWAYS English'));
+    ok('fa enforces English commit messages', fa.includes(REPLY_COMMIT_MESSAGES));
     ok('fa prompt is deterministic', fa === buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' }));
 
     const en = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'en' });

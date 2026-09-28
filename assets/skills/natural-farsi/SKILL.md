@@ -151,9 +151,9 @@ so no half-spaces):**
 - update → به روزرسانی
 - delete/remove → حذف
 
-**Settled transliterations are fine where they are natural** (کلید API،
-رانتایم، بک اند) - the goal is to never INVENT a translation, not to police
-transliteration.
+**Settled transliterations override the list where they are natural** (رانتایم
+for runtime, بک اند for backend, کلید API for API key) - the list's point is to
+never INVENT a translation, not to police transliteration.
 
 **Git commit messages are ALWAYS English**, whatever language the rest of the
 text is in (tooling, search, and team review all expect it).
