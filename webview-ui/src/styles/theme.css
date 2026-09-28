@@ -29,18 +29,18 @@
     /* Bubbles read by elevation, not outline: the assistant turn is frameless
        (brackets + content sitting directly on the shell), and the user turn is
        a filled capsule one step below it. */
-    --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
+    --xratu-bubble: var(--vscode-editor-background);
     /* One shared "inset" surface: the user turn, the composer, dropdowns,
        suggestion cards and icon tiles all sit on the same dark tone. */
-    --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
+    --xratu-surface-inset: var(--vscode-sideBar-background);
     --xratu-bubble-user: var(--xratu-surface-inset);
-    --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
+    --xratu-input: var(--vscode-input-background);
 
     /* Fenced-code surfaces - one inset step below the message. Tokenized so a
        light theme inverts toward the FOREGROUND (a light gray inset) instead
        of toward black. */
-    --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
-    --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+    --xratu-code-bg: var(--vscode-editor-background);
+    --xratu-code-head-bg: var(--vscode-editor-background);
 
     /* Sub-page card tone - the composer card's exact color, kept from the
        sub-page redesign (settings/capabilities/credentials/welcome). */
@@ -51,7 +51,7 @@
     --xratu-shell: var(--vscode-sideBar-background);
 
     /* Borders blend the widget border with the accent (subtle) */
-    --xratu-border: color-mix(in srgb, var(--vscode-widget-border) 60%, var(--xratu-accent));
+    --xratu-border: var(--vscode-widget-border);
 
     /* Neutral resting border for sub-page forms/rows - the accent-mixed
        --xratu-border stays chat-only (suggestion chips, bubbles). */
@@ -112,10 +112,45 @@
    toward the foreground. */
 body.vscode-light {
     --xratu-bubble: var(--vscode-editor-background);
-    --xratu-surface-inset: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+    --xratu-surface-inset: var(--vscode-editor-background);
     --xratu-bubble-user: var(--xratu-surface-inset);
-    --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
-    --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground));
+    --xratu-code-bg: var(--vscode-editor-background);
+    --xratu-code-head-bg: var(--vscode-editor-background);
+}
+
+/* Form controls, placeholders and scrollbars follow the VS Code THEME, never
+   the OS. Without this a dark-themed webview on a light-OS Windows box paints
+   native controls WHITE (the "too white box" in the credentials form). */
+body.vscode-dark,
+body.vscode-high-contrast {
+    color-scheme: dark;
+}
+
+body.vscode-light,
+body.vscode-high-contrast-light {
+    color-scheme: light;
+}
+
+/* Elevation refinement ON TOP of the plain tokens above: the designed tones
+   are color-mix() blends. This block only applies where the engine can parse
+   them - an older Chromium (some VS Code builds on Windows) makes an invalid
+   color-mix drop the property entirely, and an inset box would paint the UA's
+   white instead of a subtle dark surface. */
+@supports (background: color-mix(in srgb, #000 50%, #fff)) {
+    :root {
+        --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
+        --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
+        --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
+        --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
+        --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+        --xratu-border: color-mix(in srgb, var(--vscode-widget-border) 60%, var(--xratu-accent));
+    }
+
+    body.vscode-light {
+        --xratu-surface-inset: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+        --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
+        --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground));
+    }
 }
 
 html,

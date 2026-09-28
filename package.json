@@ -225,6 +225,7 @@
 		"test:history-bounds": "node test/test-history-bounds.mjs",
 		"test:network-retry": "node test/test-network-retry.mjs",
 		"test:plan-tools": "node test/test-plan-tools.mjs",
+		"test:ripgrep-discovery": "node test/test-ripgrep-discovery.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",
 		"test:skills": "node test/test-skills.mjs",
 		"test:subagents": "node test/test-subagents.mjs",

@@ -57,37 +57,66 @@ const MUTATING_TOOLS = new Set([
 ]);
 
 /**
- * Locate a ripgrep binary: PATH first, then VS Code's own bundled copy
- * (exposed to extension hosts via VSCODE_RIPGREP_PATH). The probe is ASYNC
- * and cached as a promise: the old spawnSync blocked the extension host for
- * up to 1.5s on the first search of a session.
+ * Locate a ripgrep binary: PATH first (`rg`/`rg.exe`), then VS Code's own
+ * bundled copy - either the VSCODE_RIPGREP_PATH hint or the well-known
+ * `@vscode/ripgrep` location under the app root. Windows machines usually
+ * have NO `rg` on PATH and no env hint either, so the app-root candidate is
+ * what makes search work there at all. The probe is ASYNC and cached as a
+ * promise: the old spawnSync blocked the extension host for up to 1.5s on
+ * the first search of a session. `ripgrepCandidates` is pure (unit-tested).
  */
+export function ripgrepCandidates(opts: {
+    env: Record<string, string | undefined>;
+    appRoot: string | null;
+    platform: NodeJS.Platform;
+}): string[] {
+    const out: string[] = [];
+    const bundled = opts.env.VSCODE_RIPGREP_PATH;
+    if (bundled) out.push(bundled);
+    if (opts.appRoot) {
+        out.push(path.join(
+            opts.appRoot,
+            'node_modules', '@vscode', 'ripgrep', 'bin',
+            opts.platform === 'win32' ? 'rg.exe' : 'rg',
+        ));
+    }
+    return out;
+}
+
 let _rgPath: Promise<string | null> | null = null;
 function findRipgrep(): Promise<string | null> {
     if (!_rgPath) _rgPath = probeRipgrep();
     return _rgPath;
 }
 function probeRipgrep(): Promise<string | null> {
+    // Windows Defender/AV can stretch an exe launch well past 1.5s.
+    const timeout = process.platform === 'win32' ? 4000 : 1500;
     return new Promise((resolve) => {
-        cp.execFile('rg', ['--version'], { timeout: 1500, windowsHide: true }, (err) => {
+        cp.execFile('rg', ['--version'], { timeout, windowsHide: true }, (err) => {
             if (!err) {
                 resolve('rg');
                 return;
             }
-            // A TIMED-OUT probe is transient (slow disk, AV scan, loaded
-            // machine) and must NOT be cached as "no ripgrep" - that would
-            // permanently disable rg-backed search for the session. It still
-            // falls through to the bundled copy below; only a definite
-            // absence is cached.
-            const timedOut = (err as NodeJS.ErrnoException).code === 'ETIMEDOUT'
+            // A TIMED-OUT or AV-blocked probe is transient and must NOT be
+            // cached as "no ripgrep" - that would permanently disable
+            // rg-backed search for the session. Only a definite absence
+            // (ENOENT) sticks.
+            const code = (err as NodeJS.ErrnoException).code;
+            const transient = code === 'ETIMEDOUT'
+                || code === 'EACCES'
+                || code === 'EPERM'
                 || (err as { killed?: boolean }).killed === true;
-            const bundled = process.env.VSCODE_RIPGREP_PATH;
-            if (bundled && fs.existsSync(bundled)) {
-                resolve(bundled);
-                return;
+            if (transient) _rgPath = null;
+            for (const candidate of ripgrepCandidates({
+                env: process.env,
+                appRoot: vscode.env.appRoot || null,
+                platform: process.platform,
+            })) {
+                if (fs.existsSync(candidate)) {
+                    resolve(candidate);
+                    return;
+                }
             }
-            // Drop the cached promise so the next call re-probes.
-            if (timedOut) _rgPath = null;
             resolve(null);
         });
     });
