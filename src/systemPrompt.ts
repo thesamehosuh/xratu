@@ -61,6 +61,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- Use local tools (read_file, edit_file, grep_search, etc.) for workspace inspection and changes.",
         "- web_search and fetch_url access the web directly from this machine; if web_search reports no provider configured, rely on fetch_url or answer from your own knowledge.",
         "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
+        "- `ask_user_question` shows the user a decision card (2-4 options, one recommended) and returns their pick. Use it for genuine user-owned choices (preferences, tradeoffs, ambiguous direction) instead of asking a multiple-choice question in prose; never for permission requests, and never for what you can decide or verify yourself.",
     ];
     if (inputs.replyLanguage === 'fa') {
         parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`);
@@ -75,8 +76,14 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
             "",
             "PLAN MODE (READ-ONLY): mutating tools are unavailable. Draft the implementation plan " +
             "as a task list with update_task_list (one item per verifiable step, every label ONE SHORT " +
-            "single sentence ~10 words max, all items pending), then call exit_plan_mode ONCE to end " +
-            "plan mode - execution becomes possible in the next turn.",
+            "single sentence ~10 words max, the FIRST item in_progress so it is highlighted as the " +
+            "starting step and the rest pending), then call exit_plan_mode ONCE to end " +
+            "plan mode - execution becomes possible in the next turn. Delegating to subagents is also " +
+            "unavailable here: plan in the main thread, and implement AFTER plan mode ends. " +
+            "When the plan hinges on a user-owned choice (approach, tradeoff, scope, preference), use the " +
+            "ask_user_question tool to present 2-4 options with the one you recommend marked, BEFORE " +
+            "finalizing the plan - never ask a multiple-choice question in prose - then fold the answer " +
+            "into the plan.",
         );
     }
     if (inputs.rulesContext) {

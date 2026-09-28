@@ -12,6 +12,10 @@ export interface ProxySources {
     vscodeHttpProxy?: string | null;
     /** Process environment (upper/lower case accepted). */
     env?: Record<string, string | undefined>;
+    /** OS/system proxy (Clash "System Proxy" mode, WinINET, scutil). Node's
+     *  fetch never reads these on its own - lowest priority, because an
+     *  explicit setting or env var is a deliberate override. */
+    systemProxy?: string | null;
 }
 
 const ENV_KEYS = [
@@ -20,20 +24,58 @@ const ENV_KEYS = [
     'ALL_PROXY', 'all_proxy',
 ];
 
-/** Resolve the proxy URL to use, or null when none is configured. */
-export function pickProxyUrl(sources: ProxySources): string | null {
+/** User-facing proxy mode. `custom` = the explicit URL only (never env or
+ *  system), `off` = never proxy (even when the OS has one). */
+export type ProxyMode = 'auto' | 'custom' | 'off';
+
+/** Which resolution layer produced the URL - shown on the Proxy page so the
+ *  user can see WHY their traffic routes the way it does. */
+export type ProxySourceKind = 'setting' | 'vscode' | 'env' | 'system' | 'none';
+
+/** Per-consumer routing policy (the per-MCP-server `proxy` field):
+ *  `'direct'` bypasses the proxy, `'proxy'` forces it even past no_proxy,
+ *  `'auto'` follows the global chain. Absent = auto. */
+export type ProxyRouteMode = 'auto' | 'proxy' | 'direct';
+
+/** Normalize a hand-edited mcp.json `proxy` value. Unknown/typo'd values
+ *  fall back to undefined (= auto) instead of failing the whole entry. */
+export function normalizeProxyRoute(value: unknown): ProxyRouteMode | undefined {
+    return value === 'auto' || value === 'proxy' || value === 'direct' ? value : undefined;
+}
+
+export interface ResolvedProxy {
+    url: string | null;
+    source: ProxySourceKind;
+}
+
+/** Resolve the proxy with mode + provenance. Pure counterpart of
+ *  `getProxyUrl()` (the VS Code glue) so tests pin the exact chain. */
+export function resolveProxyUrl(sources: ProxySources & { mode?: ProxyMode | null }): ResolvedProxy {
+    const mode = sources.mode ?? 'auto';
+    if (mode === 'off') return { url: null, source: 'none' };
     const explicit = (sources.explicit ?? '').trim();
-    if (explicit) return explicit;
+    if (mode === 'custom') {
+        return explicit ? { url: explicit, source: 'setting' } : { url: null, source: 'none' };
+    }
+    if (explicit) return { url: explicit, source: 'setting' };
 
     const http = (sources.vscodeHttpProxy ?? '').trim();
-    if (http) return http;
+    if (http) return { url: http, source: 'vscode' };
 
     const env = sources.env ?? {};
     for (const key of ENV_KEYS) {
         const value = (env[key] ?? '').trim();
-        if (value) return value;
+        if (value) return { url: value, source: 'env' };
     }
-    return null;
+
+    const system = (sources.systemProxy ?? '').trim();
+    if (system) return { url: system, source: 'system' };
+    return { url: null, source: 'none' };
+}
+
+/** Resolve the proxy URL to use, or null when none is configured. */
+export function pickProxyUrl(sources: ProxySources): string | null {
+    return resolveProxyUrl(sources).url;
 }
 
 export interface NoProxySources {
@@ -143,4 +185,79 @@ export function redactProxyUrl(url: string): string {
     } catch {
         return 'invalid URL';
     }
+}
+
+/** Add http:// to a bare host:port; keep explicit schemes (incl. socks*). */
+function withDefaultScheme(value: string, fallbackScheme = 'http'): string {
+    const v = value.trim();
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `${fallbackScheme}://${v}`;
+}
+
+/**
+ * Parse a WinINET `ProxyServer` registry value (Clash/v2rayN "System Proxy"
+ * writes exactly this). Two forms: bare `host:port`, or the per-scheme
+ * `http=host:port;https=host:port;socks=host:port` list. Per-scheme entries
+ * are preference-ordered https > http > socks (WinINET's `https=` names the
+ * proxy used for https TARGETS - the proxy itself is plain HTTP).
+ */
+export function parseWindowsProxyServer(value: string): string | null {
+    const raw = (value ?? '').trim();
+    if (!raw) return null;
+    if (!raw.includes('=')) return withDefaultScheme(raw);
+    const entries = new Map<string, string>();
+    for (const part of raw.split(';')) {
+        const eq = part.indexOf('=');
+        if (eq <= 0) continue;
+        entries.set(part.slice(0, eq).trim().toLowerCase(), part.slice(eq + 1).trim());
+    }
+    const https = entries.get('https');
+    if (https) return withDefaultScheme(https);
+    const http = entries.get('http');
+    if (http) return withDefaultScheme(http);
+    const socks = entries.get('socks');
+    // Scheme kept as socks* so the dispatcher layer reports the real
+    // limitation instead of silently talking HTTP CONNECT to a SOCKS port.
+    return socks ? withDefaultScheme(socks, 'socks5') : null;
+}
+
+/**
+ * Parse `scutil --proxy` output (macOS system proxy). Prefers HTTPS then
+ * HTTP; a SOCKS-only setup surfaces as a socks5 URL (unsupported, but named).
+ */
+export function parseScutilProxy(output: string): string | null {
+    const fields = new Map<string, string>();
+    for (const line of (output ?? '').split('\n')) {
+        const match = /^\s*([A-Za-z0-9_]+)\s*:\s*(.*?)\s*$/.exec(line);
+        if (match) fields.set(match[1].toLowerCase(), match[2]);
+    }
+    const enabled = (key: string) => fields.get(key) === '1';
+    const pair = (proto: 'https' | 'http' | 'socks'): string | null => {
+        const host = fields.get(`${proto}proxy`);
+        const port = fields.get(`${proto}port`);
+        if (!host || !port) return null;
+        return withDefaultScheme(`${host}:${port}`, proto === 'socks' ? 'socks5' : 'http');
+    };
+    if (enabled('httpsenable')) {
+        const url = pair('https');
+        if (url) return url;
+    }
+    if (enabled('httpenable')) {
+        const url = pair('http');
+        if (url) return url;
+    }
+    if (enabled('socksenable')) return pair('socks');
+    return null;
+}
+
+/**
+ * Parse GNOME gsettings values for the system proxy: the `mode` string and
+ * the https (preferred) or http host/port. Only `manual` mode is actionable.
+ */
+export function parseGsettingsProxy(mode: string, host: string, port: string): string | null {
+    const clean = (value: string) => (value ?? '').trim().replace(/^'|'$/g, '');
+    if (clean(mode) !== 'manual') return null;
+    const h = clean(host);
+    const p = clean(port);
+    if (!h || !/^\d+$/.test(p)) return null;
+    return withDefaultScheme(`${h}:${p}`);
 }

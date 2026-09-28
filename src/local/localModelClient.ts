@@ -7,6 +7,7 @@
 
 import { LocalModelInfo, LocalModelConnection } from './localTypes';
 import { isLikelyLocalUrl } from '../endpointGuard';
+import { proxyFetch } from '../proxyFetch';
 import { providerIdForUrl } from '../providerIdentity';
 import { normalizeBaseUrl } from './baseUrl';
 import { applyModelKnowledge, applyModelsDev, normalizeModelsDevDoc, parseModelList, type ModelsDevCatalog } from './modelMetadata';
@@ -70,7 +71,7 @@ export async function fetchModelsDevCatalog(
             headers: { 'Accept': 'application/json' },
             signal: controller.signal,
         };
-        const response = await fetch(MODELS_DEV_URL, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
+        const response = await proxyFetch(MODELS_DEV_URL, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
         if (!response.ok) return null;
         const catalog = normalizeModelsDevDoc(await response.json());
         return Object.keys(catalog).length ? catalog : null;
@@ -104,7 +105,7 @@ async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, ap
         };
         // Route remote model-list probes through the proxy too - otherwise a
         // user behind filtering can send prompts but never discover models.
-        const response = await fetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
+        const response = await proxyFetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
         if (!response.ok) return null;
         return response.json();
     } catch {
@@ -177,7 +178,7 @@ async function postJson(url: string, body: unknown, signal?: AbortSignal, timeou
             body: JSON.stringify(body),
             signal: controller.signal,
         };
-        const response = await fetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
+        const response = await proxyFetch(url, dispatcher ? ({ ...init, dispatcher } as RequestInit) : init);
         if (!response.ok) return null;
         return response.json();
     } catch {

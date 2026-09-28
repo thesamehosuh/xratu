@@ -12,6 +12,7 @@
 import { reminderTaskList, taskListReminderLine, type TaskListItem } from '../taskList';
 import { resolveAgentRounds } from '../tooling/agentRounds';
 import { normalizeBaseUrl } from './baseUrl';
+import { proxyFetch } from '../proxyFetch';
 import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 import type { ThinkingLevel } from './localTypes';
@@ -556,6 +557,24 @@ export function isTransientNetworkError(error: unknown): boolean {
 
 /** Total attempts = 1 initial + this many retries. */
 export const NETWORK_MAX_RETRIES = 3;
+
+/** Provider HTTP statuses that mean "the upstream is temporarily unavailable
+ *  - retry with backoff" (529 is OpenRouter's overload signal; 502/503/504
+ *  are the classic gateways). 4xx rejections (auth, rate limit, bad request)
+ *  and bare 500s are DELIBERATELY absent: those need a different turn, not
+ *  another attempt at the same one. */
+const RETRYABLE_PROVIDER_HTTP_STATUSES = new Set([502, 503, 504, 529]);
+
+/** True for a tagged provider HTTP rejection whose status is worth another
+ *  attempt (see RETRYABLE_PROVIDER_HTTP_STATUSES). The transport was healthy
+ *  here - the provider said "try again shortly" in status form. */
+export function isRetryableProviderHttpError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const e = error as { code?: unknown; status?: unknown };
+    return e.code === PROVIDER_HTTP_STATUS_CODE
+        && typeof e.status === 'number'
+        && RETRYABLE_PROVIDER_HTTP_STATUSES.has(e.status);
+}
 /** First backoff; doubles each retry (1s → 2s → 4s) with +0–25% jitter. */
 export const NETWORK_RETRY_BASE_DELAY_MS = 1000;
 export const NETWORK_RETRY_MAX_DELAY_MS = 15_000;
@@ -949,7 +968,7 @@ async function requestChatCompletion(
     const send = async (payload: Record<string, unknown>): Promise<Response> => {
         const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
         try {
-            return await fetch(url, withDispatcher({
+            return await proxyFetch(url, withDispatcher({
                 method: 'POST',
                 headers: makeHeaders(request.apiKey, request.sessionId),
                 body: JSON.stringify(payload),
@@ -1369,7 +1388,7 @@ async function requestMessagesCompletion(
     const send = async (payload: Record<string, unknown>): Promise<Response> => {
         const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
         try {
-            return await fetch(url, withDispatcher({
+            return await proxyFetch(url, withDispatcher({
                 method: 'POST',
                 headers: makeMessagesHeaders(request.apiKey, request.sessionId),
                 body: JSON.stringify(payload),
@@ -1675,7 +1694,7 @@ async function requestResponsesCompletion(
     const send = async (payload: Record<string, unknown>): Promise<Response> => {
         const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
         try {
-            return await fetch(url, withDispatcher({
+            return await proxyFetch(url, withDispatcher({
                 method: 'POST',
                 headers: makeHeaders(request.apiKey, request.sessionId),
                 body: JSON.stringify(payload),
@@ -2017,7 +2036,7 @@ async function requestGoogleCompletion(
     const send = async (payload: Record<string, unknown>): Promise<Response> => {
         const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
         try {
-            return await fetch(url, withDispatcher({
+            return await proxyFetch(url, withDispatcher({
                 method: 'POST',
                 headers: makeGoogleHeaders(request.apiKey, request.sessionId),
                 body: JSON.stringify(payload),
@@ -2768,7 +2787,7 @@ async function requestSummaryCompletion(
         };
     }
 
-    const send = (): Promise<Response> => fetch(endpointUrl(request.baseUrl, endpoint), withDispatcher({
+    const send = (): Promise<Response> => proxyFetch(endpointUrl(request.baseUrl, endpoint), withDispatcher({
         method: 'POST',
         headers,
         signal,
@@ -3305,22 +3324,24 @@ export async function* runLocalAgent(
             continue;
         }
 
-        // Retry ONLY a transient transport drop (terminated / socket reset /
-        // timeout) that happened before any ANSWER text or tool call reached
-        // the user, while attempts and the total-time budget allow. A
+        // Retry a transient transport drop (terminated / socket reset /
+        // timeout) OR a provider "upstream unavailable" status (529/502/503/
+        // 504) that happened before any ANSWER text or tool call reached the
+        // user, while attempts and the total-time budget allow. A
         // thinking-only attempt is restartable: no answer text is duplicated,
         // the fresh attempt simply opens another thinking pill. Offline
         // (DNS/route) errors earn a larger attempt budget so a link blip does
-        // not kill the turn. Everything else - HTTP rejections, overflow, a
-        // user cancel, mid-content death - falls through to the error/recovery
-        // path below.
+        // not kill the turn. Everything else - ordinary HTTP rejections,
+        // overflow, a user cancel, mid-content death - falls through to the
+        // error/recovery path below.
+        const retryable = transient || isRetryableProviderHttpError(requestError);
         const maxAttempts = offline ? OFFLINE_MAX_RETRIES + 1 : NETWORK_MAX_RETRIES + 1;
         const canRetry = !attemptText
             && !sawToolCall
             && !request.signal?.aborted
             && roundRetries + 1 < maxAttempts
             && Date.now() < retryDeadline
-            && transient;
+            && retryable;
         if (!canRetry) break;
 
         roundRetries++;

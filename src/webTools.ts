@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import * as dns from 'dns';
 import { isIPv4 } from 'net';
 import { isProxyConfigured, getProxyDispatcher } from './proxyDispatcher';
+import { proxyFetch } from './proxyFetch';
 
 const TIMEOUT_MS = 15000;
 const CONNECT_TIMEOUT_MS = 8000;
@@ -167,7 +168,7 @@ function cleanHtml(text: string): string {
 function fetchWithTimeout(url: string, init: RequestInit, connectTimeoutMs = CONNECT_TIMEOUT_MS): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), connectTimeoutMs);
-    return fetch(url, withProxy({ ...init, signal: controller.signal }, url)).finally(() => clearTimeout(timer));
+    return proxyFetch(url, withProxy({ ...init, signal: controller.signal }, url)).finally(() => clearTimeout(timer));
 }
 
 /** Read with a per-read idle deadline: the fetch timeout above only covers
@@ -223,7 +224,7 @@ async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
             try {
                 const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
                 try {
-                    response = await fetch(current, withProxy({
+                    response = await proxyFetch(current, withProxy({
                         redirect: 'manual',
                         headers: { 'User-Agent': 'Xratu/1.0' },
                         signal: controller.signal,

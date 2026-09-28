@@ -20,6 +20,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { killTree, snapshotTree, killPids } from './tooling/processTree';
 import { mcpCleartextHeadersError } from './endpointGuard';
+import { getProxyDispatcher } from './proxyDispatcher';
+import { proxyFetch } from './proxyFetch';
+import { normalizeProxyRoute } from './proxy';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
 // The MCP SDK's websocket client transport needs a WebSocket global under
@@ -207,19 +210,27 @@ export class ExternalMcpManager {
                 // policy rejection as the server's visible lastError.
                 throw new Error(cleartextError);
             }
+            // Every outbound request rides the configured proxy (env, VS Code
+            // http.proxy, or the OS system proxy) - the SDK's default fetch
+            // would bypass it and time out behind a filtering network.
             // Credential-bearing requests must never follow redirects: the
             // SDK's fetch forwards configured headers to redirect targets,
             // so a 3xx could leak Authorization-style headers cross-origin.
             // Redirects stay allowed for header-less servers (compat).
-            const guardedFetch: typeof fetch | undefined = headerCount
-                ? ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
-                    fetch(input, { ...init, redirect: 'error' }))
-                : undefined;
+            const routingFetch = (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+                // Per-server routing policy (mcp.json `proxy`): 'direct'
+                // bypasses the proxy, 'proxy' forces it even past no_proxy.
+                const dispatcher = getProxyDispatcher(url.toString(), normalizeProxyRoute(cfg.proxy));
+                const next: RequestInit & { dispatcher?: unknown } = { ...(init ?? {}) };
+                if (headerCount) next.redirect = 'error';
+                if (dispatcher) next.dispatcher = dispatcher;
+                return proxyFetch(input, next as RequestInit & { dispatcher?: unknown });
+            };
             if (type === 'streamableHttp') {
                 return {
                     transport: new StreamableHTTPClientTransport(url, {
                         requestInit: { headers },
-                        ...(guardedFetch ? { fetch: guardedFetch } : {}),
+                        fetch: routingFetch,
                     }),
                     type,
                 };
@@ -229,7 +240,7 @@ export class ExternalMcpManager {
             return {
                 transport: new SSEClientTransport(url, {
                     requestInit: { headers },
-                    ...(guardedFetch ? { fetch: guardedFetch } : {}),
+                    fetch: routingFetch,
                     eventSourceInit: {
                         fetch: (input: unknown, init?: Record<string, unknown>) => {
                             // The SDK passes a Web Headers object (already
@@ -239,10 +250,9 @@ export class ExternalMcpManager {
                             for (const [key, value] of Object.entries(headers)) {
                                 mergedHeaders.set(key, value);
                             }
-                            return fetch(input as Parameters<typeof fetch>[0], {
+                            return routingFetch(input as Parameters<typeof fetch>[0], {
                                 ...(init as RequestInit),
                                 headers: mergedHeaders,
-                                ...(guardedFetch ? { redirect: 'error' as const } : {}),
                             });
                         },
                     } as never,

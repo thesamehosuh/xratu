@@ -27,6 +27,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { USER_QUESTION_TOOL_NAME } from './tooling/userQuestion';
 
 /** Model-facing name of the delegation tool. */
 export const SUBAGENT_TOOL_NAME = 'task';
@@ -323,8 +324,9 @@ export function resolveSubagent(
  *  tool is ALWAYS removed: recursion is denied structurally (in the toolset
  *  AND again at child-executor level), never as a prompt hint. The parent's
  *  session-control tools are removed for the same reason - they write state
- *  one level up. Both strips hold even when a profile's allow-list names
- *  them. */
+ *  one level up. `ask_user_question` is stripped too: interactive decision
+ *  cards belong to the root thread (a delegated child has no user to ask).
+ *  All strips hold even when a profile's allow-list names them. */
 export function filterToolsForSubagent<T extends { name: string }>(
     tools: readonly T[],
     def: Pick<SubagentDefinition, 'tools'> | null | undefined,
@@ -332,6 +334,7 @@ export function filterToolsForSubagent<T extends { name: string }>(
     const allow = def?.tools ? new Set(def.tools) : null;
     return tools.filter((tool) => tool.name !== SUBAGENT_TOOL_NAME
         && !SESSION_CONTROL_TOOLS.has(tool.name)
+        && tool.name !== USER_QUESTION_TOOL_NAME
         && (allow === null || allow.has(tool.name)));
 }
 

@@ -20,6 +20,12 @@ import {
     type ExpansionToolRuntime,
 } from './xratu_mcp_tools';
 import { killTree } from './tooling/processTree';
+import {
+    USER_QUESTION_TOOL_NAME,
+    formatUserQuestionResult,
+    parseUserQuestionArgs,
+    type UserQuestionGate,
+} from './tooling/userQuestion';
 import type { LocalToolDefinition } from './local/localAgent';
 import {
     SUBAGENT_TOOL_NAME,
@@ -302,6 +308,43 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
             required: ['path']
         }
     },
+    {
+        // NOT in MUTATING_TOOLS: the card is read-only and is itself the
+        // user-interaction surface - gating it behind an approval card would
+        // be circular. Available in plan mode like read_file.
+        name: USER_QUESTION_TOOL_NAME,
+        description: [
+            'Present a decision card and wait for the user\'s pick.',
+            'Use this INSTEAD of writing a multiple-choice question in prose when the answer is genuinely the user\'s call: preferences, tradeoffs, ambiguous direction, or choices with several defensible answers.',
+            'One question per call, with 2-4 mutually exclusive options that are complete, actionable answers (no placeholders). Mark at most one option recommended: true - the one you would choose.',
+            'Do NOT add an "Other"/catch-all option: the card always offers a free-text answer automatically.',
+            'In plan mode, resolve approach/scope choices with this tool BEFORE finalizing the plan - the user\'s pick shapes the task list.',
+            'Never use it for permission requests or to ask whether to proceed - never ask what you can decide or verify yourself.',
+        ].join(' '),
+        inputSchema: {
+            type: 'object',
+            properties: {
+                header: { type: 'string', description: 'Very short label shown as the card header (max 30 chars), e.g. "Approach"' },
+                question: { type: 'string', description: 'The single decision to make, phrased as one clear question' },
+                options: {
+                    type: 'array',
+                    description: '2-4 mutually exclusive choices for this question',
+                    minItems: 2,
+                    maxItems: 4,
+                    items: {
+                        type: 'object',
+                        properties: {
+                            label: { type: 'string', description: 'Display text (1-5 words, concise)' },
+                            description: { type: 'string', description: 'One short sentence: what choosing this option means' },
+                            recommended: { type: 'boolean', description: 'true for the single option you recommend' }
+                        },
+                        required: ['label', 'description']
+                    }
+                }
+            },
+            required: ['question', 'options']
+        }
+    },
     ...XRATU_EXPANSION_TOOLS,
 ];
 
@@ -406,13 +449,15 @@ export function getLocalToolDefinitions(opts?: {
             requiresApproval: false,
         });
     }
-    // `task` (subagent delegation): NOT in MUTATING_TOOLS on purpose - a
-    // read-only explore delegation is valid in plan mode too, and the child
-    // inherits the plan-filtered toolset so it cannot mutate either.
+    // `task` (subagent delegation): NEVER advertised in plan mode - a planning
+    // run must finish the plan and call exit_plan_mode, not farm the work out
+    // to a subagent ("implement this" delegation during planning is the bug
+    // this prevents; the child's tools are plan-filtered as defense in depth).
+    // Implementation happens on a LATER turn, in the main thread.
     // Advertised only when at least one VALID profile can be launched.
     const taskDefs: LocalToolDefinition[] = [];
     const subagents = opts?.subagents;
-    if (subagents && listableSubagents(subagents).length > 0) {
+    if (!plan && subagents && listableSubagents(subagents).length > 0) {
         taskDefs.push({
             name: SUBAGENT_TOOL_NAME,
             description: buildTaskToolDescription(subagents),
@@ -440,6 +485,10 @@ async function dispatchTool(
      *  run's executor - child executors omit it, which is part of the
      *  structural recursion deny. */
     subagentRunner?: SubagentRunner,
+    /** User decision card for `ask_user_question`. Present only on the
+     *  parent run's executor: interactive questions stay at the root thread
+     *  (a delegated child has no user of its own to ask). */
+    decisionGate?: UserQuestionGate,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     if (name === 'edit_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
@@ -1045,6 +1094,35 @@ async function dispatchTool(
         }
         const result = await subagentRunner.run({ ...parsed.value, ...(onOutput ? { onOutput } : {}) });
         return { content: [{ type: 'text', text: result.output }], isError: result.isError };
+    } else if (name === USER_QUESTION_TOOL_NAME) {
+        const parsed = parseUserQuestionArgs(args ?? {});
+        if (!parsed.ok) {
+            return { content: [{ type: 'text', text: parsed.error }], isError: true };
+        }
+        if (!decisionGate) {
+            return {
+                content: [{ type: 'text', text: `Error: ${USER_QUESTION_TOOL_NAME} is not available in this context.` }],
+                isError: true,
+            };
+        }
+        try {
+            const outcome = await decisionGate.ask(parsed.value);
+            return { content: [{ type: 'text', text: formatUserQuestionResult(outcome) }] };
+        } catch (err: any) {
+            // Cancelled while the card was open: a model-visible error row
+            // (codex's wording) - never a silent drop, which would leave the
+            // tool call hanging without a result.
+            if (err?.name === 'AbortError') {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: `${USER_QUESTION_TOOL_NAME} was cancelled before the user answered. Continue with your best judgment.`,
+                    }],
+                    isError: true,
+                };
+            }
+            throw err;
+        }
     } else if (name === 'web_search' || name === 'fetch_url') {
         // Local-runtime web tools (never advertised over the MCP bridge).
         const result = await executeWebTool(name, args ?? {});
@@ -1073,6 +1151,7 @@ export async function executeLocalTool(
     skillResolver?: (name: string) => SkillResolution,
     onOutput?: (chunk: string) => void,
     subagentRunner?: SubagentRunner,
+    decisionGate?: UserQuestionGate,
 ): Promise<{ output: string; isError?: boolean }> {
     try {
         if (name.startsWith(EXTERNAL_PREFIX)) {
@@ -1081,7 +1160,7 @@ export async function executeLocalTool(
             }
             return { output: await externalMcp.callTool(name, args ?? {}) };
         }
-        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner);
+        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
@@ -1113,9 +1192,10 @@ export function createLocalToolExecutor(
     externalMcp?: ExternalMcpManager,
     skillResolver?: (name: string) => SkillResolution,
     subagentRunner?: SubagentRunner,
+    decisionGate?: UserQuestionGate,
 ): import('./local/localAgent').LocalToolExecutor {
     return {
         execute: async (call, onOutput) =>
-            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner),
+            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate),
     };
 }

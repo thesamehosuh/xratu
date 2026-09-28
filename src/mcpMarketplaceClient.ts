@@ -16,6 +16,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getProxyDispatcher } from './proxyDispatcher';
+import { proxyFetch } from './proxyFetch';
 import {
     CLINE_CATALOG_URL,
     MARKETPLACE_CACHE_VERSION,
@@ -105,7 +106,7 @@ async function fetchJson(url: string, timeoutMs: number): Promise<{ payload: unk
         // configured proxy routes the catalog request too.
         const dispatcher = getProxyDispatcher(url);
         if (dispatcher) init.dispatcher = dispatcher;
-        const response = await fetch(url, init as RequestInit);
+        const response = await proxyFetch(url, init as RequestInit);
         if (!response.ok) return { payload: null, error: `HTTP ${response.status}` };
         const text = await response.text();
         if (text.length > MAX_BYTES) return { payload: null, error: 'catalog too large' };
@@ -344,7 +345,7 @@ async function fetchText(url: string, timeoutMs: number): Promise<string | null>
         };
         const dispatcher = getProxyDispatcher(url);
         if (dispatcher) init.dispatcher = dispatcher;
-        const response = await fetch(url, init as RequestInit);
+        const response = await proxyFetch(url, init as RequestInit);
         if (!response.ok) return null;
         const text = await response.text();
         if (!text || text.length > MAX_BYTES) return null;

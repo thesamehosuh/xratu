@@ -2,7 +2,7 @@
 	"name": "xratu",
 	"displayName": "%ext.displayName%",
 	"description": "%ext.description%",
-	"version": "1.2.5",
+	"version": "1.3.0",
 	"publisher": "xratu",
 	"license": "SEE LICENSE IN LICENSE",
 	"icon": "assets/icon.png",
@@ -66,6 +66,16 @@
 					"type": "string",
 					"default": "",
 					"description": "%config.proxyUrl.desc%"
+				},
+				"xratu.proxyMode": {
+					"type": "string",
+					"enum": [
+						"auto",
+						"custom",
+						"off"
+					],
+					"default": "auto",
+					"description": "%config.proxyMode.desc%"
 				},
 				"xratu.noProxy": {
 					"type": "string",
@@ -197,6 +207,7 @@
 		"test:event-bounds": "node test/test-event-bounds.mjs",
 		"test:base-url": "node test/test-base-url.mjs",
 		"test:proxy": "node test/test-proxy.mjs",
+		"test:proxy-detect": "node test/test-proxy-detect.mjs",
 		"test:mcp-marketplace": "node test/test-mcp-marketplace.mjs",
 		"test:git-status": "node test/test-git-status.mjs",
 		"test:provider-identity": "node test/test-provider-identity.mjs",
@@ -213,6 +224,7 @@
 		"test:compaction-e2e": "node test/test-compaction-e2e.mjs",
 		"test:history-bounds": "node test/test-history-bounds.mjs",
 		"test:network-retry": "node test/test-network-retry.mjs",
+		"test:plan-tools": "node test/test-plan-tools.mjs",
 		"test:session-approval": "node test/test-session-approval.mjs",
 		"test:skills": "node test/test-skills.mjs",
 		"test:subagents": "node test/test-subagents.mjs",
@@ -224,6 +236,7 @@
 		"test:process-tree": "node test/test-process-tree.mjs",
 		"test:test-framework": "node test/test-test-framework.mjs",
 		"test:edit-file-mode": "node test/test-edit-file-mode.mjs",
+		"test:user-question": "node test/test-user-question.mjs",
 		"test:task-list": "node test/test-task-list.mjs",
 		"test:agent-rounds": "node test/test-agent-rounds.mjs",
 		"test:vsix-contents": "node test/test-vsix-contents.mjs",
