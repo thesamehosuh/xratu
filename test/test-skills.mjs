@@ -373,6 +373,24 @@ const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the 
         await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV1)), 'skipped');
     check('update: deletion sticks', fs.existsSync(target), false);
 
+    // SKILL.md swapped to a symlink pointing outside the skill dir: the
+    // realpath containment must refuse the write (the seed tests cover the
+    // same posture for creation).
+    let symlinksOk = true;
+    try {
+        fs.mkdirSync(path.join(root, 'upd-skill'), { recursive: true });
+        const outside = path.join(tmpRoot, 'outside-skill.md');
+        fs.writeFileSync(outside, mdV1, 'utf-8');
+        fs.symlinkSync(outside, target);
+    } catch {
+        symlinksOk = false;
+    }
+    if (symlinksOk) {
+        check('update: symlinked SKILL.md escaping the dir is refused',
+            await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV1)), 'skipped');
+        check('update: outside target untouched', fs.readFileSync(path.join(tmpRoot, 'outside-skill.md'), 'utf-8'), mdV1);
+    }
+
     let threw = false;
     try { await updateBundledSkillIfUntouched(root, '../evil', mdV2, 'x'); } catch { threw = true; }
     check('update: invalid dirName throws', threw, true);

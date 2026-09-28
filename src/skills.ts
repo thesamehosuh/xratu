@@ -519,8 +519,18 @@ export async function updateBundledSkillIfUntouched(
     const currentHash = sha256Hex(current);
     if (currentHash !== seededHash) return 'skipped'; // user edited
     if (currentHash === sha256Hex(skillMd)) return 'skipped'; // up to date
-    // Hash pre-check above guarantees we only ever overwrite OUR bytes; the
-    // write goes to the same path we read (user-managed skill dir boundary).
+    // Same realpath-containment posture as readSkillResource: the write
+    // must land inside the skill directory even if SKILL.md is (or was
+    // swapped to be) a symlink. The hash pre-check above additionally
+    // guarantees we only ever overwrite OUR bytes.
+    try {
+        const realDir = fs.realpathSync(path.join(skillsRoot, dirName));
+        const realTarget = fs.realpathSync(target);
+        const rel = path.relative(realDir, realTarget);
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return 'skipped';
+    } catch {
+        return 'skipped';
+    }
     await fs.promises.writeFile(target, skillMd, { encoding: 'utf-8' });
     return 'updated';
 }
