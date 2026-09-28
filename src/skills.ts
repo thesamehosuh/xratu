@@ -19,6 +19,7 @@
  * CRLF-tolerant parsing, path.join everywhere, os.homedir() (never `~`).
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -480,6 +481,48 @@ export async function ensureBundledSkill(
         if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') return 'exists';
         throw err;
     }
+}
+
+/** Content hash for bundled-skill update bookkeeping (seededHash in
+ *  globalState): an on-disk copy that still matches the hash we recorded at
+ *  seed time is "untouched by the user" and may receive bundled updates. */
+export function sha256Hex(text: string): string {
+    return crypto.createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+/**
+ * Update a previously seeded bundled skill ONLY when the on-disk copy is
+ *  still byte-identical to what we seeded (recorded hash) - so bundled
+ *  content updates reach users who never touched the file, while a
+ *  user-edited copy is theirs forever and a deleted copy is never
+ *  resurrected. Returns 'updated' or 'skipped'; anything else throws.
+ */
+export async function updateBundledSkillIfUntouched(
+    skillsRoot: string,
+    dirName: string,
+    skillMd: string,
+    seededHash: string,
+): Promise<'updated' | 'skipped'> {
+    if (!NAME_RE.test(dirName)) {
+        throw new Error(`bundled skill dirName "${dirName}" is invalid`);
+    }
+    // 'foreign' (or any missing/odd hash) = the copy was never ours to
+    // overwrite - a pre-existing user file or a legacy seed with no record.
+    if (!seededHash || seededHash === 'foreign') return 'skipped';
+    const target = path.join(skillsRoot, dirName, SKILL_FILE);
+    let current: string;
+    try {
+        current = await fs.promises.readFile(target, 'utf-8');
+    } catch {
+        return 'skipped'; // deleted = final; never resurrect
+    }
+    const currentHash = sha256Hex(current);
+    if (currentHash !== seededHash) return 'skipped'; // user edited
+    if (currentHash === sha256Hex(skillMd)) return 'skipped'; // up to date
+    // Hash pre-check above guarantees we only ever overwrite OUR bytes; the
+    // write goes to the same path we read (user-managed skill dir boundary).
+    await fs.promises.writeFile(target, skillMd, { encoding: 'utf-8' });
+    return 'updated';
 }
 
 /** Read one bundled resource of a skill, scoped to the skill's directory:

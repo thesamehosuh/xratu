@@ -20,6 +20,8 @@ const {
     resolveSkill,
     readSkillResource,
     ensureBundledSkill,
+    updateBundledSkillIfUntouched,
+    sha256Hex,
     skillDirectoryDisplayPath,
     MAX_BODY_CHARS,
     MAX_RESOURCE_CHARS,
@@ -336,6 +338,44 @@ const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the 
         check('seed: dangling symlink -> exists', await ensureBundledSkill(root, 'dangling-skill', md), 'exists');
         check('seed: dangling target untouched', fs.existsSync(path.join(root, 'nowhere')), false);
     }
+}
+
+// --- bundled-skill updates (per-skill seededHash bookkeeping) ---
+{
+    const root = path.join(tmpRoot, 'update-root');
+    const mdV1 = '---\nname: upd-skill\ndescription: v1\n---\n\nV1 body\n';
+    const mdV2 = '---\nname: upd-skill\ndescription: v2\n---\n\nV2 body\n';
+    const target = path.join(root, 'upd-skill', 'SKILL.md');
+
+    check('sha256Hex is deterministic', sha256Hex(mdV1), sha256Hex(mdV1));
+    check('sha256Hex differs on content', sha256Hex(mdV1) === sha256Hex(mdV2), false);
+
+    check('update: seed first', await ensureBundledSkill(root, 'upd-skill', mdV1), 'created');
+    check('update: untouched copy receives bundled update',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV1)), 'updated');
+    check('update: file now carries v2', fs.readFileSync(target, 'utf-8'), mdV2);
+    check('update: re-running with same content is a no-op',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV2)), 'skipped');
+
+    const mdUser = '---\nname: upd-skill\ndescription: mine\n---\n\nMy own body\n';
+    fs.writeFileSync(target, mdUser, 'utf-8'); // user hand-edits the seeded v2
+    check('update: user-edited copy is never clobbered',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV2)), 'skipped');
+    check('update: user content preserved', fs.readFileSync(target, 'utf-8'), mdUser);
+
+    check('update: foreign hash never updates',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, 'foreign'), 'skipped');
+    check('update: empty hash never updates',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, ''), 'skipped');
+
+    fs.rmSync(path.join(root, 'upd-skill'), { recursive: true, force: true });
+    check('update: deleted copy is never resurrected',
+        await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV1)), 'skipped');
+    check('update: deletion sticks', fs.existsSync(target), false);
+
+    let threw = false;
+    try { await updateBundledSkillIfUntouched(root, '../evil', mdV2, 'x'); } catch { threw = true; }
+    check('update: invalid dirName throws', threw, true);
 }
 
 fs.rmSync(tmpRoot, { recursive: true, force: true });
