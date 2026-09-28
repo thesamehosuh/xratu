@@ -128,7 +128,11 @@ function toolRowDone(r: ToolRow): boolean {
  *  terminal commands: each command and its output is its own unit, and
  *  collapsing them nested a second rail under the group. */
 function isGroupableTool(tool: string | undefined): boolean {
-    return toolFamily(tool) !== 'terminal';
+    // Terminal and subagent runs never group: each run is its own top-level
+    // pill - a group would nest full run pills (trace, report, live output)
+    // inside one summary, which is noise for long-running runs.
+    const family = toolFamily(tool);
+    return family !== 'terminal' && family !== 'subagent';
 }
 
 /** Two consecutive calls belong in one pill when they are the SAME tool - or
@@ -311,8 +315,10 @@ function buildRows(steps: Step[]): Row[] {
 type ToolFamily = 'edit' | 'terminal' | 'read' | 'search' | 'git' | 'web' | 'ops' | 'mcp' | 'subagent' | 'generic';
 
 /** Edit/terminal dropdowns open by default - the diff/command IS the payload
- *  the user cares about; everything else stays collapsed. */
-const DEFAULT_OPEN_FAMILIES: readonly ToolFamily[] = ['edit', 'terminal', 'subagent'];
+ *  the user cares about; everything else stays collapsed. The subagent pill
+ *  stays collapsed too: its summary line carries the delegated task, and the
+ *  full trace/report is one click away. */
+const DEFAULT_OPEN_FAMILIES: readonly ToolFamily[] = ['edit', 'terminal'];
 
 /** Regex-ordered, first match wins - mirrors TOOL_ICONS/TOOL_LABELS style. */
 function toolFamily(tool?: string): ToolFamily {
@@ -1024,6 +1030,23 @@ function SubagentBody({ call, result }: { call: Step; result?: Step }) {
     // a live tool trace while it runs, and the final report when it settles.
     const text = resultTextOf(call, result);
     const done = !!call.result || !!result;
+    // The trace follows the newest line while pinned (mirrors TerminalBody).
+    // Deliberately NOT the `term-out`/`term-live` classes: `term-out` styles a
+    // WRAPPER div (its display:flex mangles a raw pre) and `term-live`'s
+    // `overscroll-behavior: contain` exists for the terminal's pinned tail -
+    // here it would block the wheel from chaining into the chat scroll, which
+    // is exactly the "scrolling is broken while the pill is open" bug.
+    const liveRef = useRef<HTMLPreElement | null>(null);
+    const livePinned = useRef(true);
+    const live = call.live ?? '';
+    useEffect(() => {
+        const el = liveRef.current;
+        if (!done && el && livePinned.current) el.scrollTop = el.scrollHeight;
+    }, [live, done]);
+    const onLiveScroll = () => {
+        const el = liveRef.current;
+        if (el) livePinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    };
     return (
         <>
             <ArgView call={call} />
@@ -1038,10 +1061,15 @@ function SubagentBody({ call, result }: { call: Step; result?: Step }) {
                 <>
                     <div className="tool-loading">
                         <span className="spinner" aria-hidden="true" />
-                        <span>{t('toolRunning')}</span>
+                        <span>{t('subagentDelegating')}</span>
                     </div>
                     {call.live && (
-                        <pre className="term-out term-live result-tall" dir="ltr">{call.live.slice(-20000)}</pre>
+                        <pre
+                            ref={liveRef}
+                            onScroll={onLiveScroll}
+                            className="result-tall"
+                            dir="ltr"
+                        >{call.live.slice(-20000)}</pre>
                     )}
                 </>
             )}
@@ -1101,39 +1129,41 @@ function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGrou
             onToggle={(e) => setOpen(e.currentTarget.open)}
         >
             <summary>
-                <Icon size={13} className="step-icon" />
-                <span className="step-label" dir={isEdit ? undefined : fa === tool ? 'ltr' : undefined}>
-                    {isEdit ? tf('editedFiles', { count: String(row.calls.length) }) : fa}
+                <span className="sum-row">
+                    <Icon size={13} className="step-icon" />
+                    <span className="step-label" dir={isEdit ? undefined : fa === tool ? 'ltr' : undefined}>
+                        {isEdit ? tf('editedFiles', { count: String(row.calls.length) }) : fa}
+                    </span>
+                    {anyFailed ? (
+                        <X size={13} className="step-status err" />
+                    ) : allDone ? (
+                        <Check size={13} className="step-status ok" />
+                    ) : (
+                        <span className="step-status spinner" aria-hidden="true" />
+                    )}
+                    {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
+                    {isEdit && (
+                        <button
+                            type="button"
+                            className="icon-btn-mini"
+                            title={t('openDiff')}
+                            aria-label={t('openDiff')}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onOpenDiff?.(row.calls.map((c) => ({
+                                    tool: c.call.tool,
+                                    args: c.call.text,
+                                    callId: c.call.callId,
+                                    result: c.call.result,
+                                })));
+                            }}
+                        >
+                            <ExternalLink size={12} />
+                        </button>
+                    )}
+                    <ChevronDown size={13} className="step-chev" />
                 </span>
-                {anyFailed ? (
-                    <X size={13} className="step-status err" />
-                ) : allDone ? (
-                    <Check size={13} className="step-status ok" />
-                ) : (
-                    <span className="step-status spinner" aria-hidden="true" />
-                )}
-                {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
-                {isEdit && (
-                    <button
-                        type="button"
-                        className="icon-btn-mini"
-                        title={t('openDiff')}
-                        aria-label={t('openDiff')}
-                        onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onOpenDiff?.(row.calls.map((c) => ({
-                                tool: c.call.tool,
-                                args: c.call.text,
-                                callId: c.call.callId,
-                                result: c.call.result,
-                            })));
-                        }}
-                    >
-                        <ExternalLink size={12} />
-                    </button>
-                )}
-                <ChevronDown size={13} className="step-chev" />
             </summary>
             {isEdit ? (
                 <div className="step-body">
@@ -1193,11 +1223,41 @@ function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, {
         return parseTerminalOutput(resultTextOf(summaryCall, summaryResult))?.exitCode ?? null;
     }, [summaryCall, summaryResult, family]);
     // Terminal pills show the command in the summary - "Run terminal command"
-    // alone says nothing about what ran.
+    // alone says nothing about what ran. Subagent pills show the delegated
+    // task the same way (description only - the profile is body detail).
     const summaryCmd = useMemo(() => {
-        if (!summaryCall || family !== 'terminal') return null;
-        return argString(parseArgs(summaryCall.text), 'command') ?? null;
+        if (!summaryCall) return null;
+        const args = parseArgs(summaryCall.text);
+        if (family === 'terminal') return argString(args, 'command') ?? null;
+        if (family === 'subagent') {
+            return argString(args, 'description') ?? argString(args, 'subagent_type') ?? null;
+        }
+        return null;
     }, [summaryCall, family]);
+    // Second summary row for subagent pills (visible while CLOSED): a grey
+    // elbow under the icon with the LATEST child tool call (one at a time,
+    // replaced as the run progresses); once done, the number of tool calls
+    // the run made (from the task_id note, so it survives session restore).
+    const subBrief = useMemo(() => {
+        if (!summaryCall || family !== 'subagent') return null;
+        const live = summaryCall.live ?? '';
+        const done = toolRowDone({ key: '', call: summaryCall, result: summaryResult });
+        if (done) {
+            const fromNote = /· (\d+) tool calls/.exec(resultTextOf(summaryCall, summaryResult))?.[1];
+            const liveCount = live ? String((live.match(/^↳ /gm) ?? []).length) : null;
+            const count = fromNote ?? liveCount;
+            return count === null ? null : { kind: 'count' as const, text: tf('subagentToolCalls', { count }) };
+        }
+        const lines = live.split('\n');
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = (lines[i] ?? '').trim();
+            // `↳ ` is rendered by the elbow ICON on this row - show the call
+            // itself; `… ` lines (retry/waiting) are shown as-is.
+            if (line.startsWith('↳ ')) return { kind: 'live' as const, text: line.slice(2) };
+            if (line.startsWith('… ')) return { kind: 'live' as const, text: line };
+        }
+        return null;
+    }, [summaryCall, summaryResult, family]);
 
     if (row.kind === 'thinking') {
         const dur = fmtDur((row.step.endedAt ?? 0) - (row.step.startedAt ?? 0));
@@ -1208,11 +1268,13 @@ function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, {
                 onToggle={(e) => setThinkOpen(e.currentTarget.open)}
             >
                 <summary>
-                    <Brain size={13} className="step-icon" />
-                    <span className="step-label">{active ? t('thinkingActive') : t('thinkingDone')}</span>
-                    {!active && dur && <span className="step-dur">{dur}</span>}
-                    {active && <span className="step-status spinner" aria-hidden="true" />}
-                    <ChevronDown size={13} className="step-chev" />
+                    <span className="sum-row">
+                        <Brain size={13} className="step-icon" />
+                        <span className="step-label">{active ? t('thinkingActive') : t('thinkingDone')}</span>
+                        {!active && dur && <span className="step-dur">{dur}</span>}
+                        {active && <span className="step-status spinner" aria-hidden="true" />}
+                        <ChevronDown size={13} className="step-chev" />
+                    </span>
                 </summary>
                 {row.step.html ? (
                     <div
@@ -1246,47 +1308,55 @@ function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, {
             onToggle={(e) => setOpen(e.currentTarget.open)}
         >
             <summary>
-                <Icon size={13} className="step-icon" />
-                <span className={`step-label${summaryCmd ? ' step-label-fixed' : ''}`} dir={fa === row.call.tool ? 'ltr' : undefined}>
-                    {fa}
-                </span>
-                {summaryCmd && <span className="step-cmd" dir="ltr">{summaryCmd}</span>}
-                {done ? (
-                    failed ? (
-                        <X size={13} className="step-status err" />
+                <span className="sum-row">
+                    <Icon size={13} className="step-icon" />
+                    <span className={`step-label${summaryCmd ? ' step-label-fixed' : ''}`} dir={fa === row.call.tool ? 'ltr' : undefined}>
+                        {fa}
+                    </span>
+                    {summaryCmd && <span className="step-cmd" dir="ltr">{summaryCmd}</span>}
+                    {done ? (
+                        failed ? (
+                            <X size={13} className="step-status err" />
+                        ) : (
+                            <Check size={13} className="step-status ok" />
+                        )
                     ) : (
-                        <Check size={13} className="step-status ok" />
-                    )
-                ) : (
-                    <span className="step-status spinner" aria-hidden="true" />
-                )}
-                {editStat && <EditStatsText stats={editStat} />}
-                {termExit !== null && (
-                    <span className={`step-stat ${termExit === '0' ? 'ok' : 'd'}`} dir="ltr">
-                        {t('termExitCode')} {termExit}
+                        <span className="step-status spinner" aria-hidden="true" />
+                    )}
+                    {editStat && <EditStatsText stats={editStat} />}
+                    {termExit !== null && (
+                        <span className={`step-stat ${termExit === '0' ? 'ok' : 'd'}`} dir="ltr">
+                            {t('termExitCode')} {termExit}
+                        </span>
+                    )}
+                    {family === 'edit' && (
+                        <button
+                            type="button"
+                            className="icon-btn-mini"
+                            title={t('openDiff')}
+                            aria-label={t('openDiff')}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onOpenDiff?.([{
+                                    tool: row.call.tool,
+                                    args: row.call.text,
+                                    callId: row.call.callId,
+                                    result: row.call.result,
+                                }]);
+                            }}
+                        >
+                            <ExternalLink size={12} />
+                        </button>
+                    )}
+                    <ChevronDown size={13} className="step-chev" />
+                </span>
+                {subBrief && (
+                    <span className="sum-sub">
+                        <CornerDownRight size={12} className="sum-elbow" aria-hidden="true" />
+                        <span className="sum-live" dir={subBrief.kind === 'count' ? 'auto' : 'ltr'}>{subBrief.text}</span>
                     </span>
                 )}
-                {family === 'edit' && (
-                    <button
-                        type="button"
-                        className="icon-btn-mini"
-                        title={t('openDiff')}
-                        aria-label={t('openDiff')}
-                        onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onOpenDiff?.([{
-                                tool: row.call.tool,
-                                args: row.call.text,
-                                callId: row.call.callId,
-                                result: row.call.result,
-                            }]);
-                        }}
-                    >
-                        <ExternalLink size={12} />
-                    </button>
-                )}
-                <ChevronDown size={13} className="step-chev" />
             </summary>
             <div className="step-body">
                 <ToolBody call={row.call} result={row.result} />

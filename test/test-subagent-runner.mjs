@@ -201,7 +201,7 @@ function childContext(extra = {}) {
         subagentType: 'nope',
         description: 'x',
         prompt: 'do it',
-    });
+    }, new Map());
     ok('unknown type is an error', result.isError === true);
     ok('error lists available types', result.output.includes('explore') && result.output.includes('general'), result.output);
 }
@@ -221,12 +221,15 @@ function childContext(extra = {}) {
         description: 'find foo',
         prompt: 'Find where foo is defined. Self-contained task.',
         onOutput: (chunk) => trace.push(chunk),
-    }));
-    check('tool result is exactly the final report', result.output, 'ANSWER: found foo at src/x.ts:10');
+    }, new Map()));
+    ok('tool result is the final report', result.output.startsWith('ANSWER: found foo at src/x.ts:10'), result.output);
+    ok('result carries the task_id note with the tool-call count',
+        /\[task_id: [0-9a-f]{10} · 1 tool calls\]/.test(result.output), result.output);
     check('result is not an error', result.isError, undefined);
     check('child made exactly two rounds', seen.length, 2);
     ok('trace announces the subagent', trace.join('').includes('▶ explore'));
-    ok('trace shows the child tool call', trace.join('').includes('→ read_file'));
+    ok('trace shows the child tool call as a readable line (tool + subject, no args JSON)',
+        trace.join('').includes('↳ read_file src/x.ts'), trace.join(''));
     ok('trace shows the tool result line', trace.join('').includes('✓ contents of src/x.ts'));
     check('child usage forwarded once per round', usageEvents.length, 2);
     const firstTools = seen[0].body.tools.map((t) => t.function?.name ?? t.name);
@@ -264,9 +267,9 @@ function childContext(extra = {}) {
         description: 'endless tools',
         prompt: 'Always call a tool.',
         onOutput: () => {},
-    }));
+    }, new Map()));
     check('maxRounds caps the loop at budget + wrap-up', seen.length, 2);
-    check('wrap-up text becomes the report', result.output, 'WRAPUP: partial findings');
+    ok('wrap-up text becomes the report', result.output.startsWith('WRAPUP: partial findings'), result.output);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,31 +283,107 @@ function childContext(extra = {}) {
         subagentType: 'explore',
         description: 'cancelled',
         prompt: 'Find foo.',
-    }));
+    }, new Map()));
     ok('cancelled run reports cancellation', result.isError === true
         && result.output.includes('cancelled'), result.output);
     check('cancelled run never dials out', seen.length, 0);
 }
 {
     const { ctx, requestCount } = childContext();
+    const registry = new Map();
     const handlers = [
         () => textReply('ONE'),
         () => textReply('TWO'),
     ];
     await withMockFetch(handlers, async () => {
-        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'a', prompt: 'task one' });
-        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'b', prompt: 'task two' });
+        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'a', prompt: 'task one' }, registry);
+        await runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'b', prompt: 'task two' }, registry);
     });
     check('baseRequest is built once per task', requestCount(), 2);
 }
 
 // ---------------------------------------------------------------------------
-// 6. Full parent -> child loop: the report lands as the parent tool result.
+// 6. Resume/heal: task_id continues the same subagent with its context.
+// ---------------------------------------------------------------------------
+{
+    const { ctx } = childContext();
+    const registry = new Map();
+    const first = await withMockFetch([
+        () => toolReply('read_file', { path: 'src/x.ts' }, 'c1'),
+        () => textReply('PARTIAL: found foo, still checking y'),
+    ], () => runSubagentTask(ctx, DEFS, {
+        subagentType: 'explore',
+        description: 'find foo and y',
+        prompt: 'Find where foo and y are defined.',
+    }, registry));
+    const taskId = /\[task_id: ([0-9a-f]{10}) /.exec(first.result.output)?.[1];
+    ok('first run reports a task_id', !!taskId, first.result.output);
+    ok('interrupted/partial work is still resumable', registry.has(taskId));
+    check('registry holds the committed rows (user, tool-call turn, final)',
+        registry.get(taskId)?.rows.length, 4);
+
+    const trace = [];
+    const second = await withMockFetch([
+        () => textReply('FULL: foo at src/x.ts:10 and y at src/y.ts:3'),
+    ], () => runSubagentTask(ctx, DEFS, {
+        subagentType: '',
+        description: 'continue',
+        prompt: 'Now finish checking y.',
+        taskId,
+        onOutput: (chunk) => trace.push(chunk),
+    }, registry));
+    ok('resume continues with the final answer', second.result.output.startsWith('FULL:'), second.result.output);
+    ok('resume keeps the same task_id', second.result.output.includes(`[task_id: ${taskId} ·`), second.result.output);
+    const resumedMessages = second.seen[0].body.messages;
+    ok('resume restores the run history (not a fresh context)',
+        resumedMessages.length > 2, `messages=${resumedMessages.length}`);
+    ok('history carries the earlier prompt',
+        resumedMessages.some((m) => String(m.content ?? '').includes('Find where foo and y are defined.')));
+    ok('history carries the earlier tool round',
+        resumedMessages.some((m) => m.role === 'tool'),
+        JSON.stringify(resumedMessages.map((m) => m.role)));
+    ok('new prompt is the continuation',
+        String(resumedMessages[resumedMessages.length - 1].content ?? '').startsWith('Now finish checking y.'),
+        JSON.stringify(resumedMessages[resumedMessages.length - 1].content));
+    ok('resume trace announces the continuation', trace.join('').includes('▶ explore (resume)'), trace.join(''));
+}
+{
+    // Unknown task_id fails with the available list; type mismatch refuses.
+    const { ctx } = childContext();
+    const registry = new Map();
+    const bad = await runSubagentTask(ctx, DEFS, {
+        subagentType: '',
+        description: 'x',
+        prompt: 'continue',
+        taskId: 'deadbeef00',
+    }, registry);
+    ok('unknown task_id is an error', bad.isError === true && bad.output.includes('Unknown task_id'), bad.output);
+
+    const created = await withMockFetch([
+        () => textReply('DONE'),
+    ], () => runSubagentTask(ctx, DEFS, {
+        subagentType: 'explore',
+        description: 'x',
+        prompt: 'go',
+    }, registry));
+    const taskId = /\[task_id: ([0-9a-f]{10}) /.exec(created.result.output)?.[1];
+    const mismatch = await runSubagentTask(ctx, DEFS, {
+        subagentType: 'general',
+        description: 'x',
+        prompt: 'continue',
+        taskId,
+    }, registry);
+    ok('task_id/subagent_type mismatch is refused',
+        mismatch.isError === true && mismatch.output.includes('belongs to subagent_type'), mismatch.output);
+}
+
+// ---------------------------------------------------------------------------
+// 7. Full parent -> child loop: the report lands as the parent tool result.
 // ---------------------------------------------------------------------------
 {
     const { ctx: childCtx } = childContext();
     const defs = discoverSubagents({ workspaceRoot: '/nonexistent-workspace', homedir: '/nonexistent-home' });
-    const runner = createSubagentRunner(childCtx, defs);
+    const runner = createSubagentRunner(childCtx, defs, new Map());
     const parentEvents = [];
     const parentHandlers = [
         // Parent round 1: delegate.
@@ -356,7 +435,7 @@ function childContext(extra = {}) {
     });
     const toolResult = parentEvents.find((e) => e.type === 'toolResult' && e.tool === SUBAGENT_TOOL_NAME);
     ok('parent saw a toolResult for the task call', !!toolResult);
-    check('parent toolResult is the child report', toolResult?.output, 'REPORT: foo lives in src/x.ts:10');
+    ok('parent toolResult is the child report', toolResult?.output.startsWith('REPORT: foo lives in src/x.ts:10'), toolResult?.output);
     const finalMessage = [...parentEvents].reverse().find((e) => e.type === 'assistantMessage' && !e.toolCalls.length);
     check('parent run completed with its own answer', finalMessage?.text, 'Delegated research is done.');
     // Fetch order: parent round 1, child rounds, parent round 2.
@@ -364,6 +443,90 @@ function childContext(extra = {}) {
     const childSystem = String(seen[1].body.messages[0]?.content ?? '');
     ok('child did not inherit parent history', seen[1].body.messages.length === 2
         && !childSystem.includes('earlier turn'), `messages=${seen[1].body.messages.length}`);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Parallel delegation: several task calls in ONE round run concurrently.
+// ---------------------------------------------------------------------------
+{
+    // Two children gated on a barrier: only CONCURRENT execution can dial
+    // both, so a serial regression deadlocks into the timeout and fails.
+    let dialed = 0;
+    let releaseBarrier = () => {};
+    let timedOut = false;
+    const barrier = new Promise((resolve) => { releaseBarrier = resolve; });
+    const guard = new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(undefined); }, 2000));
+    const childHandler = (label) => () => {
+        dialed++;
+        if (dialed >= 2) releaseBarrier();
+        return Promise.race([barrier, guard]).then(() => textReply(`CHILD ${label}`, false));
+    };
+    const twoToolReply = sse([
+        frame({
+            choices: [{
+                delta: {
+                    tool_calls: [
+                        { index: 0, id: 'pa', type: 'function', function: { name: SUBAGENT_TOOL_NAME, arguments: JSON.stringify({ subagent_type: 'explore', description: 'first', prompt: 'Task A.' }) } },
+                        { index: 1, id: 'pb', type: 'function', function: { name: SUBAGENT_TOOL_NAME, arguments: JSON.stringify({ subagent_type: 'explore', description: 'second', prompt: 'Task B.' }) } },
+                    ],
+                },
+            }],
+        }),
+        usageFrame,
+        'data: [DONE]\n\n',
+    ]);
+    // The scripted queue hands responses out in CALL order; the two children
+    // race, so accept either label for either slot.
+    const labels = ['A', 'B'];
+    const parentHandlers = [
+        () => twoToolReply,
+        () => childHandler(labels.shift() ?? 'X')(),
+        () => childHandler(labels.shift() ?? 'X')(),
+        () => textReply('Both reports are in.'),
+    ];
+    const { ctx: childCtx } = childContext();
+    const runner = createSubagentRunner(childCtx, DEFS, new Map());
+    const parentEvents = [];
+    await withMockFetch(parentHandlers, async () => {
+        for await (const event of runLocalAgent(
+            {
+                baseUrl: 'https://example.invalid/v1',
+                apiKey: 'k',
+                model: 'test-model',
+                systemPrompt: 'Parent prompt',
+                userText: 'research two areas',
+                history: [],
+                tools: ALL_TOOLS,
+                apiStyle: 'chat',
+                contextWindow: 100000,
+                parallelTools: [SUBAGENT_TOOL_NAME],
+            },
+            {
+                execute: async (call, onOutput) => {
+                    if (call.name === SUBAGENT_TOOL_NAME) {
+                        return runner.run({
+                            subagentType: String(call.arguments.subagent_type ?? ''),
+                            description: String(call.arguments.description ?? ''),
+                            prompt: String(call.arguments.prompt ?? ''),
+                            ...(onOutput ? { onOutput } : {}),
+                        });
+                    }
+                    return { output: 'ok' };
+                },
+            },
+            { requestApproval: async () => ({}) },
+        )) {
+            parentEvents.push(event);
+        }
+    });
+    ok('both subagents dialed before either finished (concurrent, not serial)',
+        dialed === 2 && !timedOut, `dialed=${dialed} timedOut=${timedOut}`);
+    const taskResults = parentEvents.filter((e) => e.type === 'toolResult' && e.tool === SUBAGENT_TOOL_NAME);
+    check('both delegated results landed', taskResults.length, 2);
+    ok('each result carries its own report',
+        taskResults.some((e) => e.output.startsWith('CHILD ')), JSON.stringify(taskResults.map((e) => e.output.slice(0, 20))));
+    const finalMessage = [...parentEvents].reverse().find((e) => e.type === 'assistantMessage' && !e.toolCalls.length);
+    check('parent completed after both children', finalMessage?.text, 'Both reports are in.');
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);

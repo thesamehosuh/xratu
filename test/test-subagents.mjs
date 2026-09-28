@@ -188,6 +188,13 @@ fs.writeFileSync(
     const noDesc = parseTaskToolArgs({ subagent_type: 'explore', prompt: 'x' });
     check('description optional', noDesc.ok, true);
     check('description defaults to empty', noDesc.value?.description, '');
+    const viaTaskId = parseTaskToolArgs({ prompt: 'continue', task_id: 'abc123def0' });
+    check('task_id alone is enough (resume without subagent_type)', viaTaskId.ok, true);
+    check('task_id captured', viaTaskId.value?.taskId, 'abc123def0');
+    const both = parseTaskToolArgs({ subagent_type: 'explore', prompt: 'x', task_id: 'abc123def0' });
+    check('task_id + subagent_type accepted', both.ok, true);
+    const neither = parseTaskToolArgs({ prompt: 'x' });
+    check('neither subagent_type nor task_id rejected', neither.ok, false);
 }
 
 // --- description/schema builders ---
@@ -198,10 +205,15 @@ fs.writeFileSync(
     ok('description lists custom reviewer', description.includes('- reviewer: Project reviewer'));
     ok('description excludes invalid defs', !description.includes('mismatch'));
     ok('description states the fresh-context contract', description.includes('FRESH context'));
+    ok('description guides when to delegate', description.includes('When to delegate'));
+    ok('description guides when NOT to delegate', description.includes('When NOT to delegate'));
+    ok('description names tours/research as the delegation case', description.includes('tours'));
     const schema = buildTaskToolSchema(defs);
-    check('schema requires prompt + type', JSON.stringify(schema.required), JSON.stringify(['prompt', 'subagent_type']));
+    check('schema requires prompt (type comes from subagent_type or task_id)', JSON.stringify(schema.required), JSON.stringify(['prompt']));
     ok('schema enum line lists types', String(schema.properties.subagent_type.description).includes('explore'));
     ok('schema enum line lists custom type', String(schema.properties.subagent_type.description).includes('reviewer'));
+    ok('schema documents task_id continuation', String(schema.properties.task_id.description).includes('task_id'));
+    ok('description documents the task_id resume path', description.includes('task_id'));
 }
 
 fs.rmSync(tmpRoot, { recursive: true, force: true });

@@ -197,6 +197,14 @@ export interface LocalAgentRequest {
      *  request of the run. Transports that reject the control fall back to
      *  dropping the definitions themselves. */
     toolChoice?: 'none';
+    /** Tool names that run as a CONCURRENT group within a round: several
+     *  calls to these tools in one assistant message execute in parallel
+     *  (e.g. multiple subagent delegations). Everything else keeps the
+     *  serial in-order path. Absent/empty = fully serial rounds, the
+     *  default. Tool results stream as each call completes; the model
+     *  ledger rows are pushed in completion order (which is what the
+     *  replayed history stores, so run and replay stay byte-identical). */
+    parallelTools?: string[];
 }
 
 export interface LocalToolExecutor {
@@ -3484,6 +3492,76 @@ export async function* runLocalAgent(
             };
             yield { type: 'status', value: 'waitingApproval' };
             decisions = await approvalGate.requestApproval(approvalId, approvalCalls);
+        }
+
+        // Parallel group (e.g. multiple subagent delegations in one round):
+        // calls to `parallelTools` run CONCURRENTLY with each other while the
+        // round's other calls keep the serial in-order path - both started at
+        // once so a long delegation never delays the rest. Results stream as
+        // each call settles and land in the ledger in completion order (the
+        // replayed history stores the same order, so cache prefixes match).
+        // Rounds without a parallel-tool call take the untouched serial path
+        // below.
+        const parallelNames = new Set(request.parallelTools ?? []);
+        const parallelCalls = parallelNames.size
+            ? finalResult.toolCalls.filter((call) => parallelNames.has(call.name))
+            : [];
+        if (parallelCalls.length) {
+            for (const call of finalResult.toolCalls) {
+                yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
+            }
+            const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
+            let inFlight = 0;
+            let execError: unknown = null;
+            const runOne = (call: LocalToolCall): Promise<void> => {
+                inFlight++;
+                return (async () => {
+                    const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
+                    if (!approved) {
+                        const output = 'Tool execution denied by the user.';
+                        messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
+                        eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
+                        return;
+                    }
+                    try {
+                        const result = await executor.execute(call, (chunk) =>
+                            eventQueue.push({ type: 'toolOutput', id: call.id, value: chunk }));
+                        if (!result) throw new Error('Tool executor returned no result.');
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: call.id,
+                            content: result.output,
+                            isError: result.isError === true,
+                        });
+                        eventQueue.push({
+                            type: 'toolResult',
+                            id: call.id,
+                            tool: call.name,
+                            output: result.output,
+                            isError: result.isError,
+                        });
+                    } catch (e) {
+                        execError = execError ?? e;
+                    } finally {
+                        inFlight--;
+                        if (inFlight === 0) eventQueue.close();
+                    }
+                })();
+            };
+            for (const call of parallelCalls) void runOne(call);
+            void (async () => {
+                for (const call of finalResult.toolCalls) {
+                    if (parallelNames.has(call.name)) continue;
+                    await runOne(call);
+                }
+            })();
+            while (true) {
+                const event = await eventQueue.pop();
+                if (event === null) break;
+                yield event;
+            }
+            if (execError) throw execError;
+            continue;
         }
 
         for (const call of finalResult.toolCalls) {

@@ -77,11 +77,14 @@ export interface SubagentDefinition {
     error?: string;
 }
 
-/** Model-facing launch request as validated from tool arguments. */
+/** Model-facing launch request as validated from tool arguments. `taskId`
+ *  continues a previous run of this session (context restored); omit it to
+ *  start a fresh subagent. */
 export interface SubagentRunRequest {
     subagentType: string;
     description: string;
     prompt: string;
+    taskId?: string;
     onOutput?: (chunk: string) => void;
 }
 
@@ -336,21 +339,26 @@ export interface TaskToolArgs {
     subagentType: string;
     description: string;
     prompt: string;
+    taskId: string;
 }
 
 export function parseTaskToolArgs(
     args: Record<string, unknown>,
 ): { ok: true; value: TaskToolArgs } | { ok: false; error: string } {
     const subagentType = typeof args.subagent_type === 'string' ? args.subagent_type.trim() : '';
+    const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
     const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
     const description = typeof args.description === 'string' ? args.description.trim() : '';
-    if (!subagentType) {
-        return { ok: false, error: 'Missing required argument: subagent_type' };
-    }
     if (!prompt) {
         return { ok: false, error: 'Missing required argument: prompt' };
     }
-    return { ok: true, value: { subagentType, description, prompt } };
+    if (!subagentType && !taskId) {
+        return {
+            ok: false,
+            error: 'Missing required argument: subagent_type (or task_id to continue a previous subagent run)',
+        };
+    }
+    return { ok: true, value: { subagentType, description, prompt, taskId } };
 }
 
 function typeLines(defs: readonly SubagentDefinition[]): string[] {
@@ -364,8 +372,11 @@ function typeLines(defs: readonly SubagentDefinition[]): string[] {
 export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): string {
     return [
         'Delegates a self-contained task to a specialized subagent. The subagent runs in a FRESH context - it cannot see this conversation - and returns only its final report (its intermediate tool calls stay private).',
-        'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The subagent cannot ask questions mid-run. Do not delegate what needs the user\'s decision, and do not delegate a task you can finish in one or two tool calls yourself.',
-        'Several task calls in ONE message are executed in order, one subagent at a time - use that for independent subtasks, not for a single task.',
+        'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The subagent cannot ask questions mid-run. Do not delegate what needs the user\'s decision.',
+        'When to delegate: open-ended codebase research (project tours, "how does X work", finding something whose location you do not know), searches that may span many files, and independent subtasks you can hand over whole. Delegation keeps this conversation clean - the subagent\'s long search and file output never lands here.',
+        'When NOT to delegate: a lookup you can finish in one or two tool calls, work that leans on this conversation\'s context, and anything where the user must choose.',
+        'Every run reports a task_id. If a run was interrupted, failed, or needs follow-up work, pass that task_id to CONTINUE the same subagent with its context restored - never relaunch the same work from scratch.',
+        'Several task calls in ONE message run CONCURRENTLY as independent subagents - use that for parallelizable subtasks. They cannot coordinate with each other; one task = one coherent piece of work.',
         'Subagent types (for subagent_type):',
         ...typeLines(defs),
     ].join('\n');
@@ -379,13 +390,17 @@ export function buildTaskToolSchema(defs: readonly SubagentDefinition[]): Record
             description: { type: 'string', description: 'A short (3-5 words) description of the task' },
             prompt: {
                 type: 'string',
-                description: 'The complete, self-contained task for the subagent: goal, relevant paths, constraints. It does not share this conversation, so include everything it needs.',
+                description: 'The complete, self-contained task for the subagent: goal, relevant paths, constraints. It does not share this conversation, so include everything it needs. When continuing via task_id, describe only the NEXT step - the subagent remembers its earlier work.',
             },
             subagent_type: {
                 type: 'string',
-                description: `The kind of subagent to launch. Must be one of: ${names}`,
+                description: `The kind of subagent to launch for a NEW run. Must be one of: ${names}. Omit when continuing a previous run via task_id.`,
+            },
+            task_id: {
+                type: 'string',
+                description: 'Continue a previous subagent run of this session by its task_id (reported in every result) instead of starting over: its context is restored, so interrupted runs resume where they stopped and follow-up work builds on what it already did.',
             },
         },
-        required: ['prompt', 'subagent_type'],
+        required: ['prompt'],
     };
 }

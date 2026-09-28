@@ -38,6 +38,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- Attached images are part of the current request only.",
         "- Use local tools (read_file, edit_file, grep_search, etc.) for workspace inspection and changes.",
         "- web_search and fetch_url access the web directly from this machine; if web_search reports no provider configured, rely on fetch_url or answer from your own knowledge.",
+        "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
     ];
     if (inputs.planMode) {
         // Per-turn plan guidance for the local runtime.

@@ -18,8 +18,8 @@ import { ExternalMcpManager } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
 import type { LocalToolExecutor } from './local/localAgent';
-import { createSubagentRunner } from './local/subagentRunner';
-import { discoverSubagents, filterToolsForSubagent } from './subagents';
+import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
+import { SUBAGENT_TOOL_NAME, discoverSubagents, filterToolsForSubagent } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage } from './local/localSessionStore';
 import {
@@ -792,6 +792,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         resolve: (decisions: Record<string, boolean>) => void;
         reject: (err: unknown) => void;
     }> = {};
+    /** Serializes approval-card presentation: the webview shows ONE card at a
+     *  time, so concurrent requests (parallel subagents) queue behind the
+     *  card in flight. */
+    private _approvalCardChain: Promise<void> = Promise.resolve();
+    /** Card-slot release hooks keyed by approvalId (see _releaseApprovalCard). */
+    private _approvalCardRelease: Map<string, () => void> = new Map();
     /** Local-mode conversation history (OpenAI-format messages). Carries the
      *  provider-native replay carriers (`providerBlocks`, `reasoningContent`,
      *  `isError`) so the next request rebuilds the EXACT bytes the provider
@@ -878,6 +884,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Machine-global timestamped usage ledger (daily chart + retroactive
      *  repricing). See src/local/usageLedger.ts. */
     private readonly _usageLedger: UsageLedgerStore;
+    /** Delegated subagent transcripts by task_id (session-scoped, in-memory):
+     *  a later `task` call can CONTINUE a run with its context restored.
+     *  Cleared with the session ledgers. */
+    private readonly _subagentRuns: SubagentRunRegistry = new Map();
     /** Serializes read-modify-write pricing mutations so two rapid edits cannot
      *  clobber each other's snapshot of the settings object. */
     private _pricingWrite: Promise<void> = Promise.resolve();
@@ -2726,16 +2736,38 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 resolve: (decisions) => resolve({ ...preDecided, ...decisions }),
                 reject,
             };
-            void this._processNeedsApproval({
-                approval_id: approvalId,
-                approvals: pending.map((a) => ({
-                    tool_call_id: a.tool_call_id,
-                    tool_name: a.tool_name,
-                    args: a.args,
-                })),
-                auto: [],
-            });
+            // The webview renders ONE approval card at a time: a second
+            // concurrent needsApproval post would replace the first and
+            // orphan its promise (parallel subagents request approvals at the
+            // same time). Resolvers all register immediately - a cancel still
+            // rejects queued cards - but each card is presented only when the
+            // previous one has settled.
+            this._approvalCardChain = this._approvalCardChain.then(() => new Promise<void>((release) => {
+                if (!this._localApprovalResolvers[approvalId]) {
+                    release();
+                    return;
+                }
+                this._approvalCardRelease.set(approvalId, release);
+                void this._processNeedsApproval({
+                    approval_id: approvalId,
+                    approvals: pending.map((a) => ({
+                        tool_call_id: a.tool_call_id,
+                        tool_name: a.tool_name,
+                        args: a.args,
+                    })),
+                    auto: [],
+                });
+            }));
         });
+    }
+
+    /** Free the single approval-card slot after a decision or cancel. */
+    private _releaseApprovalCard(approvalId: string): void {
+        const release = this._approvalCardRelease.get(approvalId);
+        if (release) {
+            this._approvalCardRelease.delete(approvalId);
+            release();
+        }
     }
 
     /** Resolve a local approval from the UI decision. */
@@ -2745,6 +2777,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             delete this._localApprovalResolvers[approvalId];
             resolver.resolve(decisions);
         }
+        this._releaseApprovalCard(approvalId);
     }
 
     /** Reject every pending local approval. Used on cancel/logout: the local
@@ -2757,6 +2790,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             err.name = 'AbortError';
             resolver.reject(err);
             this._view?.webview.postMessage({ type: 'approvalResolved', approval_id: approvalId, resolution: 'rejected' });
+            this._releaseApprovalCard(approvalId);
         }
     }
 
@@ -3064,6 +3098,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 },
             },
             subagentDefs,
+            this._subagentRuns,
         );
 
         const rawExecutor = createLocalToolExecutor(
@@ -3193,6 +3228,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // Sent as `prompt_cache_key` on hosts that accept it; the
                     // transport decides (see supportsPromptCacheKey).
                     cacheKey: conversationId,
+                    // Several `task` calls in one message run as concurrent
+                    // subagents - that is the point of delegation.
+                    parallelTools: [SUBAGENT_TOOL_NAME],
                 },
                 executor,
                 // Shared with nested subagent runs (same live YOLO check).
@@ -4715,6 +4753,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._ephemeralSessionId = null;
         this._history = [];
         this._localHistory = [];
+        this._subagentRuns.clear();
         this._localEvictedUserTurns = 0;
         this._localReplayUserTurns = null;
         this._compactionRunReplayBase = null;
@@ -4902,6 +4941,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
+            this._subagentRuns.clear();
             this._localEvictedUserTurns = 0;
             this._localReplayUserTurns = null;
             this._compactionRunReplayBase = null;
@@ -4918,6 +4958,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
+            this._subagentRuns.clear();
             this._localEvictedUserTurns = 0;
             this._localReplayUserTurns = null;
             this._compactionRunReplayBase = null;
