@@ -579,6 +579,9 @@ const fa = {
     // Language setting
     settingsLanguage: 'زبان',
     settingsLanguageDesc: 'زبان پیام ها و اعلان ها',
+    settingsReplyLanguage: 'زبان پاسخ',
+    settingsReplyLanguageDesc: 'زبانی که ایجنت باهاش جواب میده. کد، اسم های کد و پیام های commit همیشه انگلیسی میمونن.',
+    settingsReplyAuto: 'خودکار',
 
     // Composer / misc
     modelPlaceholder: 'مدل',
@@ -1160,6 +1163,9 @@ const en: Record<keyof typeof fa, string> = {
 
     settingsLanguage: 'Interface language',
     settingsLanguageDesc: 'UI messages and notifications',
+    settingsReplyLanguage: 'Reply language',
+    settingsReplyLanguageDesc: 'The language the agent answers in. Code, identifiers, and commit messages always stay English.',
+    settingsReplyAuto: 'Auto',
 
     modelPlaceholder: 'model',
     argTruncated: '… truncated',

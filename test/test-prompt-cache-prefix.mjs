@@ -22,7 +22,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildLocalSystemPrompt } = require('../out/systemPrompt.js');
+const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -218,6 +218,29 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('plan guidance appears in plan mode', plan.includes('PLAN MODE (READ-ONLY)'));
     ok('eviction note appears when turns were evicted', plan.includes('2 older turn(s) were dropped'));
     ok('rules still come before the summary', plan.indexOf('RULES') < plan.indexOf('SUMMARY'));
+}
+
+// ---------------------------------------------------------------------------
+// Reply language: fa/en add their language block; auto/omitted add NO language
+// block - only the standing commit rule, which applies in every mode (commits
+// are English whatever the reply language is).
+// ---------------------------------------------------------------------------
+{
+    const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
+    const autoPrompt = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'auto' });
+    const legacyPrompt = buildLocalSystemPrompt(inputs);
+    ok('auto adds no language block', !autoPrompt.includes('Language: reply'));
+    ok('omitted replyLanguage == auto', autoPrompt === legacyPrompt);
+    ok('auto still enforces English commit messages', autoPrompt.includes(REPLY_COMMIT_MESSAGES));
+
+    const fa = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
+    ok('fa adds the Persian directive', fa.includes(REPLY_LANGUAGE_FA));
+    ok('fa enforces English commit messages', fa.includes(REPLY_COMMIT_MESSAGES));
+    ok('fa prompt is deterministic', fa === buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' }));
+
+    const en = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'en' });
+    ok('en adds the English directive', en.includes(REPLY_LANGUAGE_EN));
+    ok('en and fa blocks differ', !en.includes(REPLY_LANGUAGE_FA));
 }
 
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);

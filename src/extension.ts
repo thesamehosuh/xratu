@@ -2560,6 +2560,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
+    /** Effective reply language: explicit user choice, else derived from the
+     *  UI locale (fa UI -> Persian replies). 'auto' is stored explicitly and
+     *  means "follow the user's message language" (no prompt block). */
+    private _resolveReplyLanguage(): 'fa' | 'en' | 'auto' {
+        const stored = this._globalState.get<string>('xratu.replyLanguage');
+        if (stored === 'fa' || stored === 'en' || stored === 'auto') return stored;
+        return this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa';
+    }
+
     /** Build the system prompt for local mode. The persona base is the
      *  canonical prompt bundled in systemPrompt.ts - the runtime is fully
      *  local, so the prompt travels with the extension. Only the
@@ -2570,6 +2579,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             sessionSummary,
             planMode,
             evictedUserTurns: this._localEvictedUserTurns,
+            replyLanguage: this._resolveReplyLanguage(),
         });
     }
 
@@ -3725,6 +3735,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                                 type: 'locale',
                                 locale: this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa'
                             });
+                            // Effective reply language for the settings page
+                            // (locale-derived default resolved host-side so the
+                            // chips never lie about what the agent will do).
+                            this._view?.webview.postMessage({
+                                type: 'replyLanguage',
+                                replyLanguage: this._resolveReplyLanguage(),
+                            });
                             this._startConnectionPolling();
                             // Re-echo the policy toggles: a webview reload
                             // (new session, logout loop, window reload)
@@ -3756,8 +3773,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             this._pushEditorContext();
                             break;
                         case 'setLocale':
-                            void this._globalState.update('xratu.locale', data.locale);
+                            await this._globalState.update('xratu.locale', data.locale);
                             setUiLocale(data.locale === 'en' ? 'en' : 'fa');
+                            // Re-echo the effective reply language: the
+                            // locale-derived default follows the UI locale,
+                            // so the chips must never show a stale value.
+                            // Explicit fa/en/auto choices survive through
+                            // _resolveReplyLanguage.
+                            this._view?.webview.postMessage({
+                                type: 'replyLanguage',
+                                replyLanguage: this._resolveReplyLanguage(),
+                            });
+                            break;
+                        case 'setReplyLanguage':
+                            void this._globalState.update('xratu.replyLanguage', data.replyLanguage);
                             break;
                         case 'askQuestion':
                             await this._handleChatRequest(data.value, data.attachments);
