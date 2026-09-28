@@ -100,6 +100,9 @@ export type ToExtensionMessage =
     | { type: 'notificationAction'; id: string; action: string | null }
     /** Persist the UI language choice (Settings page flip). */
     | { type: 'setLocale'; locale: 'fa' | 'en' }
+    /** Persist the agent's reply language (Settings page chips). 'auto' = no
+     *  prompt block; the model follows the user's message language. */
+    | { type: 'setReplyLanguage'; replyLanguage: 'fa' | 'en' | 'auto' }
     /** @-mention support: ask the host for the workspace file list (git
      *  keep-set with a findFiles fallback) to power the composer popup. */
     | { type: 'requestFileList' }
@@ -325,6 +328,9 @@ export type FromExtensionMessage =
     | { type: 'notification'; id: string; kind: NotificationKind; valueKey: string; params?: Record<string, string>; actions?: string[] }
     /** Persisted UI language, echoed on webviewReady. */
     | { type: 'locale'; locale: 'fa' | 'en' }
+    /** Effective reply language (locale-derived default resolved host-side),
+     *  echoed on webviewReady. */
+    | { type: 'replyLanguage'; replyLanguage: 'fa' | 'en' | 'auto' }
     /** The file open in the active editor (workspace-relative, null when
      *  none) - lets suggestion workflows name the user's actual file. */
     | { type: 'editorContext'; activeFile: string | null }

@@ -22,7 +22,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildLocalSystemPrompt } = require('../out/systemPrompt.js');
+const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -218,6 +218,28 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('plan guidance appears in plan mode', plan.includes('PLAN MODE (READ-ONLY)'));
     ok('eviction note appears when turns were evicted', plan.includes('2 older turn(s) were dropped'));
     ok('rules still come before the summary', plan.indexOf('RULES') < plan.indexOf('SUMMARY'));
+}
+
+// ---------------------------------------------------------------------------
+// Reply language: fa/en add their block byte-stable; auto/omitted add NOTHING
+// (the legacy prompt must stay byte-identical so upgrading users with 'auto'
+// keep their cache warm).
+// ---------------------------------------------------------------------------
+{
+    const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
+    const autoPrompt = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'auto' });
+    const legacyPrompt = buildLocalSystemPrompt(inputs);
+    ok('auto adds no language block', !autoPrompt.includes('Language: reply'));
+    ok('omitted replyLanguage == auto (legacy byte-identical)', autoPrompt === legacyPrompt);
+
+    const fa = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
+    ok('fa adds the Persian directive', fa.includes(REPLY_LANGUAGE_FA));
+    ok('fa directive keeps commits English', REPLY_LANGUAGE_FA.includes('commit messages are ALWAYS English'));
+    ok('fa prompt is deterministic', fa === buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' }));
+
+    const en = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'en' });
+    ok('en adds the English directive', en.includes(REPLY_LANGUAGE_EN));
+    ok('en and fa blocks differ', !en.includes(REPLY_LANGUAGE_FA));
 }
 
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);

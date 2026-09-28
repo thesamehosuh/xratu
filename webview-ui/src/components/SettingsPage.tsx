@@ -17,6 +17,9 @@ interface SettingsPageProps {
     error?: string | null;
     locale: 'fa' | 'en';
     onSetLocale: (locale: 'fa' | 'en') => void;
+    /** Agent reply language ('auto' = follow the user's message language). */
+    replyLanguage?: 'fa' | 'en' | 'auto';
+    onSetReplyLanguage?: (language: 'fa' | 'en' | 'auto') => void;
     onOpenCredentials?: () => void;
     /** Open the merged capabilities page (MCP servers + Agent Skills). */
     onOpenCapabilities?: () => void;
@@ -31,6 +34,8 @@ export function SettingsPage({
     error = null,
     locale,
     onSetLocale,
+    replyLanguage = 'auto',
+    onSetReplyLanguage,
     onOpenCredentials,
     onOpenCapabilities,
     onOpenUsage,
@@ -127,6 +132,37 @@ export function SettingsPage({
                             </button>
                         </div>
                         <Globe size={14} />
+                    </div>
+
+                    <div className="settings-nav-row">
+                        <div className="settings-nav-main">
+                            <strong>{t('settingsReplyLanguage')}</strong>
+                            <span>{t('settingsReplyLanguageDesc')}</span>
+                        </div>
+                        <div className="lang-choice">
+                            <button
+                                type="button"
+                                className={replyLanguage === 'fa' ? 'lang-chip active' : 'lang-chip'}
+                                onClick={() => onSetReplyLanguage?.('fa')}
+                            >
+                                فارسی
+                            </button>
+                            <button
+                                type="button"
+                                className={replyLanguage === 'en' ? 'lang-chip active' : 'lang-chip'}
+                                onClick={() => onSetReplyLanguage?.('en')}
+                            >
+                                English
+                            </button>
+                            <button
+                                type="button"
+                                className={replyLanguage === 'auto' ? 'lang-chip active' : 'lang-chip'}
+                                onClick={() => onSetReplyLanguage?.('auto')}
+                            >
+                                {t('settingsReplyAuto')}
+                            </button>
+                        </div>
+                        <MessageSquare size={14} />
                     </div>
 
                     {!confirmClear ? (

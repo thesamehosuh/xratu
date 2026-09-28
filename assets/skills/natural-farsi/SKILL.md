@@ -1,6 +1,6 @@
 ---
 name: natural-farsi
-description: How to write natural, informal Persian (Farsi) like a real person typing — the "no half-space, no diacritics" orthography, plus conversational tone, plus correct handling of mixed Persian/technical (RTL/LTR) content. Use this skill whenever writing, editing, or translating anything into Farsi: READMEs, docs, UI strings, commit descriptions, chat replies, social posts, or emails — even when the user just asks to "write it in Persian" or "translate this to Farsi" without mentioning style. Also use it to review or fix existing Farsi text that reads stiff or formal, uses half-spaces or Arabic diacritics, or renders scrambled when Persian is mixed with URLs, paths, code, or identifiers in UI.
+description: How to write natural, informal Persian (Farsi) like a real person typing — the "no half-space, no diacritics" orthography, plus conversational tone, plus correct handling of mixed Persian/technical (RTL/LTR) content, plus which technical terms stay in English. Use this skill whenever writing, editing, or translating anything into Farsi: READMEs, docs, UI strings, chat replies, social posts, or emails — even when the user just asks to "write it in Persian" or "translate this to Farsi" without mentioning style. Also use it to review or fix existing Farsi text that reads stiff or formal, uses half-spaces or Arabic diacritics, translates technical terms that should stay English, or renders scrambled when Persian is mixed with URLs, paths, code, or identifiers in UI.
 ---
 
 # Natural, informal Farsi writing
@@ -87,8 +87,8 @@ Orthography alone is not enough — the prose itself must feel human.
 - می‌باشد / میگردد → است / هست / میشود. (میباشد is wrong Persian anyway.)
 - پس از → بعد از؛ جهت (as "for") → برای؛ مجدداً → دوباره؛ قابل ذکر است که →
   (delete — just say the thing).
-- Do not invent Persian jargon. Technical terms stay in English or in their
-  common Persian transliteration: API، کلید API، رانتایم، بک اند، اندپوینت.
+- Do not invent Persian jargon. Technical terms follow the vocabulary list
+  in the next section.
 
 ### Sentence rhythm
 
@@ -119,6 +119,48 @@ The audience is a developer, the channel is documentation. So:
 - OK: میشود، نمیخواد، راحت، فقط، خیلی، کاملا
 - Not OK: chat slang like دمت گرم، خفن — informal orthography, not slang.
 - Never mix registers inside one document.
+
+## Technical vocabulary (dev terms)
+
+Iranian developers overwhelmingly say/write technical terms in English even
+inside otherwise-Persian sentences ("این commit رو باید rebase کنم").
+Invented Persian translations like «بازنشانی خیمه‌ای» for "rebase" read as
+stilted or actively confusing to a working developer. Consistency matters
+more than either extreme (all-English or all-translated).
+
+**Leave these in English (Latin script) inside Persian sentences - no
+translation, no invented Persian:**
+
+commit, push, pull, pull request, merge, rebase, branch, checkout, stash,
+build, deploy, staging, production, debug, bug, issue, ticket, sprint,
+backend, frontend, endpoint, API, token, cache, deprecated, refactor,
+runtime, framework, dependency, repository/repo, stack trace, hook, lint.
+
+**Translate these - they have settled, natural Persian equivalents that
+Iranian developers actually use (orthography follows the house rules above,
+so no half-spaces):**
+
+- error → خطا
+- warning → هشدار
+- file → فایل
+- folder/directory → پوشه
+- setting(s) → تنظیمات
+- user → کاربر
+- password → رمز عبور
+- install → نصب
+- update → به روزرسانی
+- delete/remove → حذف
+
+**Settled transliterations are fine where they are natural** (کلید API،
+رانتایم، بک اند) - the goal is to never INVENT a translation, not to police
+transliteration.
+
+**Git commit messages are ALWAYS English**, whatever language the rest of the
+text is in (tooling, search, and team review all expect it).
+
+When a term is not listed, prefer whichever form a working Iranian developer
+would type in a chat message to a teammate. If genuinely unsure, keep it in
+English - over-translating reads worse than under-translating in this domain.
 
 ## Mixed Persian + technical content (RTL/LTR islands)
 

@@ -145,6 +145,9 @@ export function App() {
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     /** UI language - mirrored from the host's persisted choice on ready. */
     const [locale, setLocaleState] = useState<'fa' | 'en'>(getLocale());
+    /** Agent reply language - echoed from the host on ready (the host resolves
+     *  the locale-derived default so the chips show the effective value). */
+    const [replyLanguage, setReplyLanguageState] = useState<'fa' | 'en' | 'auto'>(getLocale() === 'en' ? 'en' : 'fa');
     /** Session picker state - the toolbar's centered title button drives it. */
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -686,6 +689,9 @@ export function App() {
                     setLocale(msg.locale);
                     setLocaleState(msg.locale);
                     break;
+                case 'replyLanguage':
+                    setReplyLanguageState(msg.replyLanguage);
+                    break;
                 case 'editorContext':
                     setActiveFile(msg.activeFile);
                     break;
@@ -966,6 +972,11 @@ export function App() {
                         setLocale(l);
                         setLocaleState(l);
                         send({ type: 'setLocale', locale: l });
+                    }}
+                    replyLanguage={replyLanguage}
+                    onSetReplyLanguage={(l) => {
+                        setReplyLanguageState(l);
+                        send({ type: 'setReplyLanguage', replyLanguage: l });
                     }}
                     onOpenCredentials={() => {
                         setCredReturnTo('settings');
