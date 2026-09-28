@@ -529,5 +529,100 @@ function childContext(extra = {}) {
     check('parent completed after both children', finalMessage?.text, 'Both reports are in.');
 }
 
+// ---------------------------------------------------------------------------
+// 9. A DENIED call in a parallel round still settles the queue.
+//    Regression: the denied branch used to return outside the try/finally,
+//    leaking the in-flight count so eventQueue.close() never ran and the
+//    round hung forever.
+// ---------------------------------------------------------------------------
+{
+    let dialed = 0;
+    let releaseBarrier = () => {};
+    let timedOut = false;
+    const barrier = new Promise((resolve) => { releaseBarrier = resolve; });
+    const guard = new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(undefined); }, 2000));
+    const childHandler = (label) => () => {
+        dialed++;
+        if (dialed >= 2) releaseBarrier();
+        return Promise.race([barrier, guard]).then(() => textReply(`CHILD ${label}`, false));
+    };
+    const mixedReply = sse([
+        frame({
+            choices: [{
+                delta: {
+                    tool_calls: [
+                        { index: 0, id: 'ed', type: 'function', function: { name: 'edit_file', arguments: JSON.stringify({ path: 'a.ts' }) } },
+                        { index: 1, id: 'pa', type: 'function', function: { name: SUBAGENT_TOOL_NAME, arguments: JSON.stringify({ subagent_type: 'explore', description: 'first', prompt: 'Task A.' }) } },
+                        { index: 2, id: 'pb', type: 'function', function: { name: SUBAGENT_TOOL_NAME, arguments: JSON.stringify({ subagent_type: 'explore', description: 'second', prompt: 'Task B.' }) } },
+                    ],
+                },
+            }],
+        }),
+        usageFrame,
+        'data: [DONE]\n\n',
+    ]);
+    const labels = ['A', 'B'];
+    // edit_file fetches NOTHING (it is denied before the executor runs), so
+    // the scripted queue is: mixed round -> two children -> final text.
+    const parentHandlers = [
+        () => mixedReply,
+        () => childHandler(labels.shift() ?? 'X')(),
+        () => childHandler(labels.shift() ?? 'X')(),
+        () => textReply('Denied one, both reports are in.'),
+    ];
+    const { ctx: childCtx } = childContext();
+    const runner = createSubagentRunner(childCtx, DEFS, new Map());
+    const parentEvents = [];
+    await withMockFetch(parentHandlers, async () => {
+        const consume = (async () => {
+            for await (const event of runLocalAgent(
+                {
+                    baseUrl: 'https://example.invalid/v1',
+                    apiKey: 'k',
+                    model: 'test-model',
+                    systemPrompt: 'Parent prompt',
+                    userText: 'edit and research',
+                    history: [],
+                    tools: ALL_TOOLS,
+                    apiStyle: 'chat',
+                    contextWindow: 100000,
+                    parallelTools: [SUBAGENT_TOOL_NAME],
+                },
+                {
+                    execute: async (call, onOutput) => {
+                        if (call.name === SUBAGENT_TOOL_NAME) {
+                            return runner.run({
+                                subagentType: String(call.arguments.subagent_type ?? ''),
+                                description: String(call.arguments.description ?? ''),
+                                prompt: String(call.arguments.prompt ?? ''),
+                                ...(onOutput ? { onOutput } : {}),
+                            });
+                        }
+                        return { output: 'ok' };
+                    },
+                },
+                // No approvals granted: edit_file is denied, the tasks run.
+                { requestApproval: async () => ({}) },
+            )) {
+                parentEvents.push(event);
+            }
+            return 'done';
+        })();
+        // A hung queue must FAIL the assertion, not stall the suite.
+        const settled = await Promise.race([
+            consume,
+            new Promise((resolve) => setTimeout(() => resolve('hang'), 4000)),
+        ]);
+        check('denied call in a parallel round does not hang the queue', settled, 'done');
+    });
+    const denied = parentEvents.find((e) => e.type === 'toolResult' && e.id === 'ed');
+    ok('denied edit_file produced its denial result', !!denied);
+    check('denial result is marked as an error', denied?.isError, true);
+    const taskResults = parentEvents.filter((e) => e.type === 'toolResult' && e.tool === SUBAGENT_TOOL_NAME);
+    check('both delegated results landed alongside the denial', taskResults.length, 2);
+    const finalMessage = [...parentEvents].reverse().find((e) => e.type === 'assistantMessage' && !e.toolCalls.length);
+    check('parent completed after the denied call and both children', finalMessage?.text, 'Denied one, both reports are in.');
+}
+
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
 process.exit(failed === 0 ? 0 : 1);

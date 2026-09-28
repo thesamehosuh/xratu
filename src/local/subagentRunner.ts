@@ -91,6 +91,13 @@ export interface SubagentRunRecord {
     /** Committed model-ledger rows of everything the run has done so far. */
     rows: LocalSessionHistoryMessage[];
     startedAt: number;
+    /** True while a run is inside `runLocalAgent`. A resume (task_id) targeting
+     *  an in-flight run would replay the same committed rows from two
+     *  interleaved loops and corrupt them - rejected in `runSubagentTask`.
+     *  Set synchronously before the loop starts (no await between the check
+     *  and the set, so two concurrent calls cannot both pass), cleared in the
+     *  run's `finally`. */
+    running?: boolean;
 }
 
 export type SubagentRunRegistry = Map<string, SubagentRunRecord>;
@@ -194,6 +201,12 @@ export async function runSubagentTask(
                 isError: true,
             };
         }
+        if (existing.running) {
+            return {
+                output: `task_id ${req.taskId} is still running; wait for it to finish before continuing it. Concurrent resumes of one run would corrupt its history.`,
+                isError: true,
+            };
+        }
         taskId = req.taskId;
         record = existing;
         resumed = true;
@@ -252,6 +265,9 @@ export async function runSubagentTask(
     let finalText = '';
     let lastError = '';
     let toolCallCount = 0;
+    // Marked synchronously (no await since the resume check above), so two
+    // concurrent `task` calls carrying this task_id cannot both start.
+    record.running = true;
     try {
         for await (const event of runLocalAgent(
             request,
@@ -301,6 +317,8 @@ export async function runSubagentTask(
         }
         const msg = err instanceof Error ? err.message : String(err);
         return { output: withTaskIdNote(`Subagent failed: ${msg}`, taskId, toolCallCount), isError: true };
+    } finally {
+        record.running = false;
     }
     commitTurn();
     if (finalText.trim()) {

@@ -3511,11 +3511,15 @@ export async function* runLocalAgent(
                 yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
             }
             const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
-            let inFlight = 0;
+            // The queue closes EXACTLY once, when EVERY call of the round has
+            // settled: a denied call settles inside the same try/finally (it
+            // used to return early and leak the count, hanging the round), and
+            // the serial tail never observes a premature zero between two of
+            // its own awaits (which would drop the rest of its results).
+            let remaining = finalResult.toolCalls.length;
             let execError: unknown = null;
-            const runOne = (call: LocalToolCall): Promise<void> => {
-                inFlight++;
-                return (async () => {
+            const runOne = async (call: LocalToolCall): Promise<void> => {
+                try {
                     const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
                     if (!approved) {
                         const output = 'Tool execution denied by the user.';
@@ -3523,30 +3527,27 @@ export async function* runLocalAgent(
                         eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
                         return;
                     }
-                    try {
-                        const result = await executor.execute(call, (chunk) =>
-                            eventQueue.push({ type: 'toolOutput', id: call.id, value: chunk }));
-                        if (!result) throw new Error('Tool executor returned no result.');
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: call.id,
-                            content: result.output,
-                            isError: result.isError === true,
-                        });
-                        eventQueue.push({
-                            type: 'toolResult',
-                            id: call.id,
-                            tool: call.name,
-                            output: result.output,
-                            isError: result.isError,
-                        });
-                    } catch (e) {
-                        execError = execError ?? e;
-                    } finally {
-                        inFlight--;
-                        if (inFlight === 0) eventQueue.close();
-                    }
-                })();
+                    const result = await executor.execute(call, (chunk) =>
+                        eventQueue.push({ type: 'toolOutput', id: call.id, value: chunk }));
+                    if (!result) throw new Error('Tool executor returned no result.');
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: call.id,
+                        content: result.output,
+                        isError: result.isError === true,
+                    });
+                    eventQueue.push({
+                        type: 'toolResult',
+                        id: call.id,
+                        tool: call.name,
+                        output: result.output,
+                        isError: result.isError,
+                    });
+                } catch (e) {
+                    execError = execError ?? e;
+                } finally {
+                    if (--remaining === 0) eventQueue.close();
+                }
             };
             for (const call of parallelCalls) void runOne(call);
             void (async () => {

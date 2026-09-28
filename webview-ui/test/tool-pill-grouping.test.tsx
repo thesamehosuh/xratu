@@ -60,7 +60,7 @@ ok(html.includes('find foo'), 'collapsed summary carries the delegated task brie
 ok(!html.includes('explore ·'), 'collapsed summary does NOT show the agent profile');
 ok(html.includes('sum-sub'), 'closed pill has the second (elbow) row');
 const countRow = /class="sum-live" dir="auto">([^<]+)</.exec(html)?.[1] ?? '';
-ok(/^2\b/.test(countRow), 'done row shows the localized tool-call count from the note', countRow);
+ok(/^2\b/.test(countRow), `done row shows the localized tool-call count from the note (${countRow})`);
 
 // Running: the elbow row shows the LATEST live tool call (one at a time).
 html = render(messageWith([
@@ -70,8 +70,8 @@ html = render(messageWith([
     }),
 ], 'streaming'));
 const subRow = /class="sum-sub"[\s\S]*?class="sum-live" dir="ltr">([^<]*)</.exec(html)?.[1] ?? '';
-ok(subRow.includes('read_file src/x.ts'), 'elbow row shows the latest live tool call (readable)', subRow);
-ok(!subRow.includes('grep_search'), 'elbow row does not stack earlier tool calls', subRow);
+ok(subRow.includes('read_file src/x.ts'), `elbow row shows the latest live tool call (readable) (${subRow})`);
+ok(!subRow.includes('grep_search'), `elbow row does not stack earlier tool calls (${subRow})`);
 
 // Positive control: consecutive search calls still collapse into a group.
 const grepStep = (id: string): Step => ({

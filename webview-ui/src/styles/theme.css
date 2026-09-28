@@ -1952,7 +1952,7 @@ button {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px;
     direction: ltr;
-    text-align: left;
+    text-align: start;
     opacity: 0.85;
 }
 
