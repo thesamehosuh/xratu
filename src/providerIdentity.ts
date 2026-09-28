@@ -38,6 +38,7 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
     ['anthropic.com', 'anthropic'],
     ['kayaai.ir', 'kayaai'],
     ['api.avalai.ir', 'avalai'],
+    ['api.gapgpt.app', 'gapgpt'],
     ['api.metisai.ir', 'metis'],
     ['ai.liara.ir', 'liara'],
     ['api.arvancloud.ir', 'arvan'],
@@ -59,7 +60,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
     nvidia: 'NVIDIA NIM', huggingface: 'Hugging Face', sambanova: 'SambaNova',
     moonshot: 'Moonshot AI', zai: 'Z.AI', vllm: 'vLLM',
     avalai: 'Avalai', metis: 'Metis AI', liara: 'Liara AI',
-    arvan: 'ArvanCloud AI', navaan: 'Navaan',
+    arvan: 'ArvanCloud AI', navaan: 'Navaan', gapgpt: 'GapGPT',
     custom: 'Custom',
 };
 
@@ -104,7 +105,7 @@ export function providerLabelForUrl(baseUrl: string): string {
 }
 
 /** Iranian providers (no VPN, rial billing) - used for Toman cost display. */
-const IRANIAN_PROVIDER_IDS = new Set(['kayaai', 'avalai', 'metis', 'liara', 'arvan', 'navaan']);
+const IRANIAN_PROVIDER_IDS = new Set(['kayaai', 'avalai', 'metis', 'liara', 'arvan', 'navaan', 'gapgpt']);
 
 export function isIranianProvider(providerId: string): boolean {
     return IRANIAN_PROVIDER_IDS.has(providerId);

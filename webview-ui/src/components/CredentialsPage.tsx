@@ -72,6 +72,10 @@ const PRESETS: Preset[] = [
     // Kaya and Avalai expose a shared, documented OpenAI-compatible base URL.
     { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
     { id: 'avalai', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
+    // GapGPT (گپ جی پی تی) publishes a shared OpenAI-compatible endpoint
+    // (api.gapgpt.app/v1 verified: OpenAI error envelope, ArvanCloud-hosted),
+    // Persian docs, rial payment.
+    { id: 'gapgpt', label: 'GapGPT', group: 'iranian', baseUrl: 'https://api.gapgpt.app/v1', hintKey: 'credIranianHint' },
     // Metis, Liara, ArvanCloud and Navaan do NOT expose a shared base URL:
     // Metis routes through per-provider wrappers (no stable OpenAI base we can
     // verify), and Liara hands each AI service its own `baseUrl` containing an
