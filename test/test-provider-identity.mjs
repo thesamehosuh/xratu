@@ -11,7 +11,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { providerIdForUrl, providerLabelForUrl, PROVIDER_HOSTS } = require('../out/providerIdentity.js');
+const { providerIdForUrl, providerLabelForUrl, isIranianProvider, PROVIDER_HOSTS } = require('../out/providerIdentity.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -28,6 +28,7 @@ const PRESETS = [
     ['https://openrouter.ai/api/v1', 'openrouter'],
     ['https://kayaai.ir/api', 'kayaai'],
     ['https://api.avalai.ir/v1', 'avalai'],
+    ['https://api.gapgpt.app/v1', 'gapgpt'],
     ['https://api.metisai.ir/api/v1/wrapper/openai', 'metis'],
     ['https://ai.liara.ir/api/v1', 'liara'],
     ['https://api.arvancloud.ir/ai/v1', 'arvan'],
@@ -82,6 +83,7 @@ check('perplexity not mistaken for x.ai', providerIdForUrl('https://api.perplexi
 // --- Labels mirror the preset names exactly ---
 check('kaya label', providerLabelForUrl('https://kayaai.ir/api'), 'Kaya AI');
 check('avalai label', providerLabelForUrl('https://api.avalai.ir/v1'), 'Avalai');
+check('gapgpt label', providerLabelForUrl('https://api.gapgpt.app/v1'), 'GapGPT');
 check('opencode zen label', providerLabelForUrl('https://opencode.ai/zen/v1'), 'OpenCode Zen');
 check('opencode go label', providerLabelForUrl('https://opencode.ai/zen/go/v1'), 'OpenCode Go');
 check('navaan label', providerLabelForUrl('https://api.navaan.ai/v1'), 'Navaan');
@@ -102,6 +104,12 @@ check('generativelanguage -> google', providerIdForUrl('https://generativelangua
 
 // --- Table is well-formed (no duplicate ids need distinct hosts; ids known) ---
 check('table non-empty', PROVIDER_HOSTS.length > 0, true);
+
+// --- Iranian (Toman-billed, no-VPN) classification: drives the Toman cost
+// --- ledger, the geo-block switch target and the usage-page attribution.
+check('gapgpt is Iranian', isIranianProvider('gapgpt'), true);
+check('kaya stays Iranian', isIranianProvider('kayaai'), true);
+check('openai is not Iranian', isIranianProvider('openai'), false);
 
 console.log(failed === 0 ? '\nprovider-identity: all tests passed' : `\nprovider-identity: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
