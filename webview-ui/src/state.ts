@@ -64,6 +64,22 @@ function ensureStreaming(state: ChatState): { state: ChatState; id: string } {
     return { state: { ...state, streamingId: id, messages: [...state.messages, msg] }, id };
 }
 
+/** Patch the toolCall step a live/result event belongs to - WHICHEVER message
+ *  owns it. Pairing only against the current streaming bubble orphans the row
+ *  the moment a steer splits the bubble mid-run: the live trace goes blank and
+ *  the pill spins forever. Returns null when no step carries the callId. */
+function mapCallStep(state: ChatState, callId: string | undefined, patchStep: (st: Step) => Step): ChatState | null {
+    if (!callId) return null;
+    let hit = false;
+    const messages = state.messages.map((m) => {
+        if (hit) return m;
+        if (!m.steps.some((st) => st.kind === 'toolCall' && st.callId === callId)) return m;
+        hit = true;
+        return { ...m, steps: m.steps.map((st) => (st.kind === 'toolCall' && st.callId === callId ? patchStep(st) : st)) };
+    });
+    return hit ? { ...state, messages } : null;
+}
+
 /** Drop the userIndex-th user bubble and EVERYTHING after it (edit/resend
  *  and regenerate rewind the visible timeline alongside server history). */
 function truncateFromUser(messages: ChatMessage[], userIndex: number): ChatMessage[] {
@@ -281,6 +297,11 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
         }
 
         case 'toolResult': {
+            // Pair GLOBALLY by callId first (see toolOutput: a steer splits the
+            // bubble mid-run and the result must close the pill that owns the
+            // call - not orphan a row on the fresh bubble).
+            const global = mapCallStep(state, msg.callId, (st) => ({ ...st, result: tOrRaw(msg.output) }));
+            if (global) return global;
             const { state: s, id } = ensureStreaming(state);
             return {
                 ...s,
@@ -324,9 +345,16 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
         }
 
         case 'toolOutput': {
-            // Live terminal output: append to the open call row so the user can
-            // watch a long command. Display-only - the final toolResult still
-            // supplies the authoritative (capped) output.
+            // Live terminal/subagent output: append to the open call row so
+            // the user can watch a long command. Display-only - the final
+            // toolResult still supplies the authoritative (capped) output.
+            // Pair GLOBALLY by callId first: a steer splits the bubble mid-run
+            // and the trace must keep flowing to the pill that owns the call.
+            const global = mapCallStep(state, msg.callId, (st) => ({
+                ...st,
+                live: ((st.live ?? '') + msg.value).slice(-LIVE_OUTPUT_MAX),
+            }));
+            if (global) return global;
             const { state: s, id } = ensureStreaming(state);
             return {
                 ...s,
@@ -540,6 +568,59 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     if (m.role === 'assistant') return [{ ...m, approval: undefined }];
                     return [];
                 }),
+            };
+        }
+
+        case 'decisionRequest': {
+            // Mirror of needsApproval: attach to the live assistant bubble,
+            // else stand up a standalone card row. A turn may ask SEVERAL
+            // questions - they collect on the bubble in ask order, and the
+            // answered ones collapse into one inline pill row.
+            const decision = {
+                decision_id: msg.decision_id,
+                header: msg.header,
+                question: msg.question,
+                options: msg.options,
+            };
+            if (state.streamingId) {
+                const current = state.messages.find((m) => m.id === state.streamingId);
+                if (current) {
+                    return patch(state, state.streamingId, {
+                        decisions: [...(current.decisions ?? []), decision],
+                        tone: undefined,
+                    });
+                }
+            }
+            return append(state, {
+                id: nextId(),
+                role: 'system',
+                text: '',
+                steps: [],
+                status: 'done',
+                tone: 'pending',
+                createdAt: Date.now(),
+                decisions: [decision],
+            });
+        }
+
+        case 'decisionResolved': {
+            // Unlike approvals, the answered card IS the transcript record of
+            // the choice (Cline's approach) - keep it and highlight the pick
+            // instead of stripping it.
+            return {
+                ...state,
+                messages: state.messages.map((m) =>
+                    m.decisions?.some((d) => d.decision_id === msg.decision_id)
+                        ? {
+                              ...m,
+                              decisions: m.decisions!.map((d) =>
+                                  d.decision_id === msg.decision_id
+                                      ? { ...d, answered: true, answer: msg.answer }
+                                      : d,
+                              ),
+                          }
+                        : m
+                ),
             };
         }
 

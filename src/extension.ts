@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -8,6 +9,17 @@ import { promisify } from 'util';
 import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor, killRunningTerminalCommands } from './mcp';
+import {
+    type UserQuestion,
+    type UserQuestionGate,
+    type UserQuestionOutcome,
+} from './tooling/userQuestion';
+import {
+    planProxyTest,
+    summarizeProxyTest,
+    type ProxyTestOutcome,
+    type ProxyTestResult,
+} from './proxyTest';
 import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
 import { editDiffFromArgs } from './editDiff';
 import { openEditDiff } from './editDiffView';
@@ -66,7 +78,9 @@ import { resolveAgentRounds } from './tooling/agentRounds';
 import { resolveCompactRatio } from './tooling/compactionPolicy';
 import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type GitStatusSummary } from './tooling/gitStatus';
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
-import { getProxyDispatcher } from './proxyDispatcher';
+import { getProxyDispatcher, getProxyResolution } from './proxyDispatcher';
+import { proxyFetch } from './proxyFetch';
+import { detectLocalProxies } from './proxyDetect';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
 import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
 import { explainError } from './local/errorExplain';
@@ -757,6 +771,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _approvalCardChain: Promise<void> = Promise.resolve();
     /** Card-slot release hooks keyed by approvalId (see _releaseApprovalCard). */
     private _approvalCardRelease: Map<string, () => void> = new Map();
+    /** Pending `ask_user_question` decisions - resolver keyed by decisionId.
+     *  Same correlation pattern as the approval card (promise parked until
+     *  the webview answers), tracked so a cancel can reject it instead of
+     *  leaving the tool call suspended forever. The question rides along so
+     *  a picked label can be mapped back onto its option (description and
+     *  all) before the outcome reaches the model. */
+    private _localDecisionResolvers: Map<string, {
+        resolve: (outcome: UserQuestionOutcome) => void;
+        reject: (err: unknown) => void;
+        question: UserQuestion;
+    }> = new Map();
+    /** Serializes decision-card presentation (one interactive card at a time). */
+    private _decisionCardChain: Promise<void> = Promise.resolve();
+    /** Card-slot release hooks keyed by decisionId. */
+    private _decisionCardRelease: Map<string, () => void> = new Map();
     /** Local-mode conversation history (OpenAI-format messages). Carries the
      *  provider-native replay carriers (`providerBlocks`, `reasoningContent`,
      *  `isError`) so the next request rebuilds the EXACT bytes the provider
@@ -2767,6 +2796,89 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /** Park an `ask_user_question` decision until the webview answers. The
+     *  pending promise is tracked so a cancel can reject it - the tool call
+     *  is suspended on it inside the agent loop. Cards are presented one at
+     *  a time, mirroring the approval-card chain. */
+    private _requestLocalDecision(question: UserQuestion): Promise<UserQuestionOutcome> {
+        return new Promise((resolve, reject) => {
+            const decisionId = `dec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            this._localDecisionResolvers.set(decisionId, { resolve, reject, question });
+            this._decisionCardChain = this._decisionCardChain.then(() => new Promise<void>((release) => {
+                if (!this._localDecisionResolvers.has(decisionId)) {
+                    release();
+                    return;
+                }
+                this._decisionCardRelease.set(decisionId, release);
+                this._view?.webview.postMessage({
+                    type: 'decisionRequest',
+                    decision_id: decisionId,
+                    header: question.header,
+                    question: question.question,
+                    options: question.options,
+                });
+            }));
+        });
+    }
+
+    /** Free the single decision-card slot after an answer or cancel. */
+    private _releaseDecisionCard(decisionId: string): void {
+        const release = this._decisionCardRelease.get(decisionId);
+        if (release) {
+            this._decisionCardRelease.delete(decisionId);
+            release();
+        }
+    }
+
+    /** Turn a webview `decisionResponse` into a user question outcome. A label
+     *  that matches one of the card's options resolves as that option (its
+     *  description rides back to the model); anything else is the card's
+     *  free-text answer. */
+    private _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void {
+        const entry = this._localDecisionResolvers.get(decisionId);
+        if (!entry) return;
+        const trimmed = typeof answer === 'string' ? answer.trim() : '';
+        if (dismissed || !trimmed) {
+            this._resolveLocalDecision(decisionId, { kind: 'dismissed' });
+            return;
+        }
+        const match = entry.question.options.find((o) => o.label === trimmed);
+        this._resolveLocalDecision(decisionId, match
+            ? { kind: 'selected', label: match.label, description: match.description }
+            : { kind: 'custom', text: trimmed });
+    }
+
+    /** Resolve a pending decision from the UI (or a cancel). `outcome` is
+     *  also echoed back as `decisionResolved` so the card settles into its
+     *  answered state even when the user never saw the answer leave. */
+    private _resolveLocalDecision(decisionId: string, outcome: UserQuestionOutcome): void {
+        const resolver = this._localDecisionResolvers.get(decisionId);
+        if (resolver) {
+            this._localDecisionResolvers.delete(decisionId);
+            resolver.resolve(outcome);
+        }
+        this._view?.webview.postMessage({
+            type: 'decisionResolved',
+            decision_id: decisionId,
+            answer: outcome.kind === 'dismissed' ? null : outcome.kind === 'selected' ? outcome.label : outcome.text,
+        });
+        this._releaseDecisionCard(decisionId);
+    }
+
+    /** Reject every pending decision. Used on cancel/logout: the ask_user_question
+     *  call is suspended awaiting the card and must resume (with an AbortError)
+     *  instead of waiting on a user who has moved on. */
+    private _rejectPendingLocalDecisions(): void {
+        for (const [decisionId, resolver] of [...this._localDecisionResolvers]) {
+            this._localDecisionResolvers.delete(decisionId);
+            const err = new Error('Request cancelled while waiting for the user');
+            err.name = 'AbortError';
+            resolver.reject(err);
+            this._view?.webview.postMessage({ type: 'decisionResolved', decision_id: decisionId, answer: null });
+            this._releaseDecisionCard(decisionId);
+        }
+    }
+
     /** Public: whether the active credential is a local runtime. */
     public async isLocalMode(): Promise<boolean> {
         return this._isLocalRuntime();
@@ -3010,6 +3122,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             },
         };
 
+        // One decision gate for the run tree root: `ask_user_question` blocks
+        // here until the webview card is answered. Children never get one -
+        // interactive questions stay at the root thread (filterToolsForSubagent
+        // strips the tool from their toolsets too).
+        const decisionGate: UserQuestionGate = {
+            ask: (question) => this._requestLocalDecision(question),
+        };
+
         // Subagent delegation (the `task` tool): named agent profiles, run as
         // nested agent loops in a fresh context. Discovery is per run like
         // skills; children share the parent's model/transport but never its
@@ -3089,6 +3209,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 new Set(this._disabledSkillIds()),
             ),
             subagentRunner,
+            decisionGate,
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -3698,10 +3819,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._pendingNotifies.delete(id);
             resolve(null);
         }
-        // Same for local-approval promises: the approval card died with the
-        // old page, so nobody can ever answer it - without this the suspended
-        // runLocalAgent generator waits forever, holding its controller slot.
+        // Same for local-approval and decision-card promises: the cards died
+        // with the old page, so nobody can ever answer them - without this the
+        // suspended runLocalAgent generator (or ask_user_question tool call)
+        // waits forever, holding its controller slot.
         this._rejectPendingLocalApprovals();
+        this._rejectPendingLocalDecisions();
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -3814,6 +3937,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             break;
                         case 'requestFileList':
                             void this._pushFileList();
+                            break;
+                        case 'decisionResponse':
+                            this._handleToolDecision(data.decisionId, data.answer, data.dismissed === true);
                             break;
                         case 'approvalDecision':
                             await this._handleToolApproval(data.approvalId, data.decisions || {}, data.sessionApprove === true);
@@ -4013,6 +4139,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                             break;
                         case 'usageRemoveModel':
                             await this._removeModelPricing(String(data.id ?? ''));
+                            break;
+                        case 'proxyGetState':
+                            await this._sendProxyState();
+                            break;
+                        case 'proxySave':
+                            await this._saveProxySettings(
+                                data.mode === 'off' || data.mode === 'custom' ? data.mode : 'auto',
+                                String(data.proxyUrl ?? ''),
+                                String(data.noProxy ?? ''),
+                            );
+                            break;
+                        case 'proxyDetect':
+                            await this._detectProxies();
+                            break;
+                        case 'proxyTest':
+                            await this._testProxyConnection();
                             break;
                         case 'skillsGetState':
                             await this._sendSkillsState();
@@ -4252,6 +4394,177 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             servers,
             hasWorkspace: !!config.workspacePath,
             legacyInUse: config.legacyInUse,
+        });
+    }
+
+    /** Push the Proxy page's view: stored settings plus the LIVE resolution
+     *  (which layer won - the answer is often "your OS system proxy", which
+     *  is invisible in the settings UI otherwise). */
+    private async _sendProxyState(): Promise<void> {
+        if (!this._view) return;
+        const cfg = vscode.workspace.getConfiguration('xratu');
+        const resolved = getProxyResolution();
+        this._view.webview.postMessage({
+            type: 'proxyState',
+            mode: resolved.mode,
+            proxyUrl: cfg.get<string>('proxyUrl') ?? '',
+            noProxy: cfg.get<string>('noProxy') ?? '',
+            resolvedUrl: resolved.url,
+            resolvedSource: resolved.source,
+            systemProxy: resolved.systemProxy,
+            noProxyList: resolved.noProxy,
+        });
+    }
+
+    /** Persist proxy settings (Proxy page). Writes the `xratu.*` settings -
+     *  the dispatcher picks them up on the next request (its cache keys off
+     *  the resolved URL). */
+    private async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string): Promise<void> {
+        const cfg = vscode.workspace.getConfiguration('xratu');
+        await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
+        await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
+        await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
+        await this._sendProxyState();
+    }
+
+    /** Scan loopback for running proxy clients (Clash family, v2rayN, …). */
+    private async _detectProxies(): Promise<void> {
+        if (!this._view) return;
+        let candidates: Array<{
+            service: string;
+            url: string | null;
+            ports: Array<{ port: number; protocol: 'http' | 'mixed' | 'socks5'; url: string; usable: boolean }>;
+        }> = [];
+        try {
+            candidates = (await detectLocalProxies()).map((c) => ({
+                service: c.service,
+                url: c.url,
+                ports: c.ports.map((p) => ({
+                    port: p.port,
+                    protocol: p.protocol,
+                    url: p.url,
+                    usable: p.usable,
+                })),
+            }));
+        } catch {
+            candidates = [];
+        }
+        this._view.webview.postMessage({ type: 'proxyDetectResult', candidates });
+    }
+
+    /** Live connectivity check through the CURRENT resolution. When a proxy
+     *  is configured the PROXY itself is verified first (TCP probe) and every
+     *  target is FORCED through it: a target that answers on its own (a
+     *  localhost runtime matching no_proxy) must never prove a dead proxy
+     *  works. Planning + verdict shaping are pure (src/proxyTest.ts); every
+     *  failure carries an i18n key, never baked English. */
+    private async _testProxyConnection(): Promise<void> {
+        if (!this._view) return;
+        const post = (result: ProxyTestResult) => {
+            this._view?.webview.postMessage({
+                type: 'proxyTestResult',
+                ok: result.ok,
+                ...(result.detailKey ? { detailKey: result.detailKey } : {}),
+                ...(result.params ? { params: result.params } : {}),
+            });
+        };
+        const resolution = getProxyResolution();
+        let providerUrl: string | null = null;
+        try {
+            providerUrl = (await this._getLlmCredentials()).llm_base_url ?? null;
+        } catch { /* no active provider - generic endpoints still answer */ }
+        const plan = planProxyTest({
+            proxyUrl: resolution.url,
+            providerUrl,
+            providerIsLocal: !!providerUrl && isLikelyLocalUrl(providerUrl),
+        });
+        if (plan.blockedKey) {
+            post({ ok: false, detailKey: plan.blockedKey });
+            return;
+        }
+        // "Connection refused" to the proxy IS the diagnosis - say so before
+        // any endpoint can drown it in a generic timeout.
+        if (resolution.url) {
+            const proxyFailure = await this._probeProxyReachable(resolution.url);
+            if (proxyFailure) {
+                post({ ok: false, detailKey: 'proxyDetailProxyDead', params: proxyFailure });
+                return;
+            }
+        }
+        const outcomes = await Promise.all(plan.targets.map(async ({ url, throughProxy }) => {
+            let host = url;
+            try {
+                host = new URL(url).host;
+            } catch { /* keep the raw string for the report */ }
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 10000);
+                let response: Response;
+                try {
+                    const init: RequestInit & { dispatcher?: unknown } = {
+                        signal: controller.signal,
+                        redirect: 'follow',
+                    };
+                    // 'proxy' forces the proxy even past no_proxy - testing
+                    // the proxy must never fall back to a direct path.
+                    const dispatcher = getProxyDispatcher(url, throughProxy ? 'proxy' : undefined);
+                    if (dispatcher) init.dispatcher = dispatcher;
+                    response = await proxyFetch(url, init);
+                } finally {
+                    clearTimeout(timer);
+                }
+                // Any real HTTP answer means the route works - even 401
+                // (needs a key) or 404 (wrong path) came back THROUGH it.
+                return {
+                    ok: response.status < 500,
+                    detailKey: 'proxyDetailHttp',
+                    params: { status: String(response.status), host },
+                } as ProxyTestOutcome;
+            } catch (err: any) {
+                return {
+                    ok: false,
+                    detailKey: err?.name === 'AbortError' ? 'proxyDetailTimeout' : 'proxyDetailFetchFailed',
+                    params: err?.name === 'AbortError'
+                        ? { host }
+                        : { message: String(err?.message ?? err), host },
+                } as ProxyTestOutcome;
+            }
+        }));
+        post(summarizeProxyTest(outcomes));
+    }
+
+    /** TCP-connect the proxy endpoint itself. Returns null when it accepts
+     *  connections, else the { endpoint, reason } params for the "proxy
+     *  unreachable" report - the single most useful diagnosis when the
+     *  connection to the proxy is dead. */
+    private _probeProxyReachable(proxyUrl: string): Promise<{ endpoint: string; reason: string } | null> {
+        return new Promise((resolve) => {
+            let host = '127.0.0.1';
+            let port = 80;
+            try {
+                const parsed = new URL(proxyUrl);
+                host = parsed.hostname;
+                port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+            } catch {
+                resolve({ endpoint: proxyUrl, reason: 'invalid URL' });
+                return;
+            }
+            const endpoint = `${host}:${port}`;
+            const socket = net.connect({ host, port });
+            let settled = false;
+            const finish = (value: { endpoint: string; reason: string } | null) => {
+                if (settled) return;
+                settled = true;
+                socket.removeAllListeners();
+                socket.destroy();
+                resolve(value);
+            };
+            socket.setTimeout(3000, () => finish({ endpoint, reason: 'timed out after 3s' }));
+            socket.once('connect', () => finish(null));
+            socket.once('error', (err: any) => finish({
+                endpoint,
+                reason: String(err?.code ?? err?.message ?? 'connection failed'),
+            }));
         });
     }
 
@@ -5298,6 +5611,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         this._abortControllers.clear();
         this._rejectPendingLocalApprovals();
+        this._rejectPendingLocalDecisions();
     }
 
     private _displayAssistantResponse(parsed: any) {

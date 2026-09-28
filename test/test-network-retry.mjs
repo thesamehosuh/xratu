@@ -20,6 +20,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
     isTransientNetworkError,
+    isRetryableProviderHttpError,
     isOfflineNetworkError,
     shouldResumeStream,
     networkRetryDelayMs,
@@ -157,5 +158,26 @@ checkFalse(
     resume({ resumesUsed: OFFLINE_MAX_RETRIES, maxResumes: OFFLINE_MAX_RETRIES }),
 );
 
+// --- provider "upstream unavailable" statuses are retryable -----------------
+{
+    const providerHttpError = (status) => {
+        const e = new Error(`Model request failed (${status}): upstream`);
+        e.name = 'XratuProviderHttpError';
+        e.code = 'XRATU_HTTP_STATUS';
+        e.status = status;
+        return e;
+    };
+    check('529 upstream overload is retryable', isRetryableProviderHttpError(providerHttpError(529)), true);
+    check('502 bad gateway is retryable', isRetryableProviderHttpError(providerHttpError(502)), true);
+    check('503 unavailable is retryable', isRetryableProviderHttpError(providerHttpError(503)), true);
+    check('504 gateway timeout is retryable', isRetryableProviderHttpError(providerHttpError(504)), true);
+    check('500 bare server error is NOT retried', isRetryableProviderHttpError(providerHttpError(500)), false);
+    check('429 rate limit is NOT (has its own path)', isRetryableProviderHttpError(providerHttpError(429)), false);
+    check('401 auth is NOT retried', isRetryableProviderHttpError(providerHttpError(401)), false);
+    check('400 bad request is NOT retried', isRetryableProviderHttpError(providerHttpError(400)), false);
+    check('transport errors are not provider statuses', isRetryableProviderHttpError(new TypeError('fetch failed')), false);
+}
+
 console.log(failed === 0 ? '\nnetwork-retry tests: all passed' : `\nnetwork-retry tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
+

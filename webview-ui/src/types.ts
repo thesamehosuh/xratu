@@ -50,6 +50,10 @@ export type ToExtensionMessage =
     /** Open the credentials page; `target` preselects the matching provider
      *  (remote-provider chip vs local-runtime chip in the empty state). */
     | { type: 'openCredentials'; target?: 'byok' | 'local' }
+    /** Answer a pending decision card (`ask_user_question`). `answer` is the
+     *  picked option label or the free-text "Other" answer; `dismissed` marks
+     *  the card closed without a pick. */
+    | { type: 'decisionResponse'; decisionId: string; answer?: string; dismissed?: boolean }
     | { type: 'approvalDecision'; approvalId: string; decisions: Record<string, boolean>; sessionApprove?: boolean }
     | { type: 'listModels' }
     | { type: 'selectModel'; value: string }
@@ -114,6 +118,14 @@ export type ToExtensionMessage =
     /** Usage page: set a per-model price override (currency defaults to USD). */
     | { type: 'usageSaveModel'; id: string; input: number; output: number; cachedInput?: number | null; currency?: 'USD' | 'IRT' }
     | { type: 'usageRemoveModel'; id: string }
+    /** Proxy page: request settings + the live resolution report. */
+    | { type: 'proxyGetState' }
+    /** Proxy page: persist mode + proxy URL + no_proxy list. */
+    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string }
+    /** Proxy page: scan loopback for running proxy clients (Clash, v2rayN…). */
+    | { type: 'proxyDetect' }
+    /** Proxy page: live connectivity check through the current resolution. */
+    | { type: 'proxyTest' }
     /** Copy a code block to the OS clipboard via the host (webview clipboard
      *  permissions are unreliable). */
     | { type: 'copyToClipboard'; value: string }
@@ -286,6 +298,13 @@ export type FromExtensionMessage =
     | { type: 'error'; value?: string; valueKey?: string; params?: Record<string, string> }
     | { type: 'needsApproval'; approval_id: string; approvals: ApprovalItem[]; preDenied?: Record<string, boolean> }
     | { type: 'approvalResolved'; approval_id: string; resolution: ApprovalResolution }
+    /** A pending decision card (the `ask_user_question` tool): the model asked
+     *  the user to pick between options. Attaches to the live assistant
+     *  bubble like `needsApproval`. */
+    | { type: 'decisionRequest'; decision_id: string; header: string; question: string; options: DecisionOption[] }
+    /** The decision settled. `answer` is the picked option label, the custom
+     *  answer text, or null when the card was dismissed/cancelled. */
+    | { type: 'decisionResolved'; decision_id: string; answer: string | null }
     | { type: 'yoloMode'; enabled: boolean }
     | { type: 'planMode'; enabled: boolean }
     | { type: 'modelInfo'; defaultModel: string; models: string[]; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
@@ -369,7 +388,53 @@ export type FromExtensionMessage =
           history: LedgerDay[];
           /** Machine-global totals across every recorded day. */
           allTime: UsageTotals;
+      }
+    /** Response to proxyGetState / proxySave - the Proxy page's view. */
+    | ({ type: 'proxyState' } & ProxyStateView)
+    /** Response to proxyDetect - running proxy clients found on loopback. */
+    | { type: 'proxyDetectResult'; candidates: ProxyCandidateView[] }
+    /** Response to proxyTest - connectivity through the current resolution.
+     *  Failures carry an i18n key + params (raw `detail` is a legacy echo). */
+    | {
+          type: 'proxyTestResult';
+          ok: boolean;
+          detail?: string;
+          detailKey?: string;
+          params?: Record<string, string>;
       };
+
+/** One open listener inside a detected proxy client's family. */
+export interface ProxyCandidatePortView {
+    port: number;
+    /** What the port actually speaks (sniffed), not what the catalog claims. */
+    protocol: 'http' | 'mixed' | 'socks5';
+    url: string;
+    /** false for SOCKS-only listeners (the dispatcher cannot use them). */
+    usable: boolean;
+}
+
+/** One detected proxy CLIENT (Clash Verge Rev, v2rayN, ...) with every port
+ *  it owns - one row per client, never one row per port. */
+export interface ProxyCandidateView {
+    /** Best-guess client name (or a generic label for unknown ports). */
+    service: string;
+    /** Endpoint the "Use" button locks to; null when the family is
+     *  SOCKS-only (named, but the dispatcher cannot ride it). */
+    url: string | null;
+    ports: ProxyCandidatePortView[];
+}
+
+/** Response to proxyGetState - settings plus WHY the traffic routes as it
+ *  does (which resolution layer won). */
+export interface ProxyStateView {
+    mode: 'auto' | 'custom' | 'off';
+    proxyUrl: string;
+    noProxy: string;
+    resolvedUrl: string | null;
+    resolvedSource: 'setting' | 'vscode' | 'env' | 'system' | 'none';
+    systemProxy: string | null;
+    noProxyList: string;
+}
 
 /** All-time usage + cost for one provider, for the provider usage list. */
 export interface ProviderUsageView {
@@ -438,6 +503,11 @@ export interface ModelRateView {
 export type McpTransportType = 'stdio' | 'websocket' | 'streamableHttp' | 'sse';
 export type McpSaveTarget = 'global' | 'workspace';
 
+/** Per-server proxy routing (mirrors src/proxy.ts `ProxyRouteMode`):
+ *  'auto' follows the global chain, 'proxy' forces the proxy even past
+ *  no_proxy, 'direct' bypasses it. Absent = auto. */
+export type ProxyRouteMode = 'auto' | 'proxy' | 'direct';
+
 /** One MCP server entry as written to the config file. */
 export interface McpServerPayload {
     name: string;
@@ -449,6 +519,7 @@ export interface McpServerPayload {
     url?: string;
     headers?: Record<string, string>;
     disabled?: boolean;
+    proxy?: ProxyRouteMode;
     autoApprove?: string[];
     timeoutMs?: number;
 }
@@ -611,6 +682,26 @@ export interface ApprovalPayload {
     resolution?: ApprovalResolution;
 }
 
+/** One choice on a decision card (`ask_user_question`). */
+export interface DecisionOption {
+    label: string;
+    description?: string;
+    /** The option the model recommends - rendered with a badge. */
+    recommended?: boolean;
+}
+
+export interface DecisionPayload {
+    decision_id: string;
+    /** Short card header from the model; falls back to a generic label. */
+    header?: string;
+    question: string;
+    options: DecisionOption[];
+    /** True once the card settled (pick, free text, or dismiss). */
+    answered?: boolean;
+    /** Picked label / custom answer text; null = dismissed without a pick. */
+    answer?: string | null;
+}
+
 export interface Step {
     id: string;
     kind: StepKind;
@@ -655,6 +746,9 @@ export interface ChatMessage {
     tone?: 'info' | 'error' | 'pending';
     createdAt: number;
     approval?: ApprovalPayload;
+    /** Pending/answered decision cards from `ask_user_question` calls (one
+     *  entry per question, in ask order - a turn may ask several). */
+    decisions?: DecisionPayload[];
     usage?: TokenUsage | null;
     /** Attachment metadata for user bubbles (no base64 - never persisted). */
     attachments?: AttachmentMeta[];

@@ -25,6 +25,10 @@ interface SettingsPageProps {
     onOpenCapabilities?: () => void;
     /** Open the dedicated usage page. */
     onOpenUsage?: () => void;
+    /** Open the proxy page (routing, local proxy detection, per-MCP policy). */
+    onOpenProxy?: () => void;
+    /** Live resolution summary shown on the proxy row (e.g. a proxy URL). */
+    proxySummary?: string | null;
     onClearHistory?: () => void;
 }
 
@@ -39,6 +43,8 @@ export function SettingsPage({
     onOpenCredentials,
     onOpenCapabilities,
     onOpenUsage,
+    onOpenProxy,
+    proxySummary = null,
     onClearHistory,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
@@ -100,6 +106,27 @@ export function SettingsPage({
                         {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                     </button>
 
+                </section>
+
+                <section className="settings-card">
+                    <div className="settings-section-head">
+                        <div className="settings-section-icon" aria-hidden="true">
+                            <Globe size={15} />
+                        </div>
+                        <h3>{t('proxyPageTitle')}</h3>
+                    </div>
+
+                    <button type="button" className="settings-nav-row" onClick={onOpenProxy}>
+                        <div className="settings-nav-main">
+                            <strong>{t('settingsProxy')}</strong>
+                            <span dir="auto">
+                                {proxySummary
+                                    ? `${t('proxyStatusTitle')}: ${proxySummary}`
+                                    : t('settingsProxyDesc')}
+                            </span>
+                        </div>
+                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+                    </button>
                 </section>
 
                 <section className="settings-card">

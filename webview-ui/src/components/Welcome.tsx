@@ -82,7 +82,6 @@ export function Welcome({
             </section>
 
             <section className="welcome-local">
-                <h2>{t('welcomeFoundHeading')}</h2>
                 {localModelsScanning && localRuntimes.length === 0 && (
                     <div className="welcome-empty">
                         <span dir="auto">{t('welcomeScanning')}</span>

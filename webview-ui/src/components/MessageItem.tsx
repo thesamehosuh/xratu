@@ -10,6 +10,8 @@ import {
     BookOpen,
     Check,
     ChevronDown,
+    ChevronLeft,
+    ChevronRight,
     CircleDot,
     Clock,
     CodeXml,
@@ -22,6 +24,7 @@ import {
     FolderTree,
     GitBranch,
     GripVertical,
+    HelpCircle,
     History,
     Image as ImageIcon,
     Globe,
@@ -40,9 +43,9 @@ import {
     Wrench,
     X,
 } from 'lucide-react';
-import type { ApprovalPayload, ChatMessage, ConnectionStatus, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
+import type { ApprovalPayload, ChatMessage, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
-import { t, tf } from '../i18n';
+import { getLocale, t, tf } from '../i18n';
 import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
 
@@ -77,9 +80,14 @@ type Row =
     | { key: string; kind: 'text'; steps: Step[] }
     | ({ key: string; kind: 'tool' } & ToolRow)
     | { key: string; kind: 'toolGroup'; calls: ToolRow[] }
-    | { key: string; kind: 'taskList'; step: Step };
+    | { key: string; kind: 'taskList'; step: Step }
+    // A settled `ask_user_question`: the compact "Answered" pills, INLINE in
+    // one row (a turn may settle several). Present only on reload - while the
+    // live cards exist they render their own pill row.
+    | { key: string; kind: 'decision'; steps: Step[] };
 
 export const TASK_LIST_TOOL = 'update_task_list';
+export const USER_QUESTION_TOOL = 'ask_user_question';
 
 /** Field aliases weak models emit for the schema's `label` (observed live:
  *  Terminal Game sent `task`). Mirrors extension/src/taskList.ts. */
@@ -117,6 +125,70 @@ export function parseTaskListStep(text: string): TaskListItem[] | null {
     } catch {
         return null;
     }
+}
+
+/** Display shape of one `ask_user_question` option (mirrors DecisionOption). */
+export interface QuestionOptionView {
+    label: string;
+    description?: string;
+    recommended?: boolean;
+}
+
+/** Parse a `ask_user_question` toolCall step's args into what the record row
+ *  shows on expand. Tolerant (weak models omit fields), null when there is
+ *  no usable question. */
+export function parseQuestionStep(text: string): { question: string; options: QuestionOptionView[] } | null {
+    try {
+        const v: unknown = JSON.parse(text);
+        const obj = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+        if (!obj || typeof obj.question !== 'string') return null;
+        const options: QuestionOptionView[] = [];
+        const raw = Array.isArray(obj.options) ? obj.options : [];
+        for (const entry of raw) {
+            if (!entry || typeof entry !== 'object') continue;
+            const label = (entry as { label?: unknown }).label;
+            if (typeof label !== 'string' || !label.trim()) continue;
+            const description = (entry as { description?: unknown }).description;
+            const recommended = (entry as { recommended?: unknown }).recommended;
+            options.push({
+                label: label.trim(),
+                ...(typeof description === 'string' && description.trim() ? { description: description.trim() } : {}),
+                ...(recommended === true ? { recommended: true } : {}),
+            });
+        }
+        return { question: obj.question, options };
+    } catch {
+        return null;
+    }
+}
+
+/** Read the user's answer back out of the tool result text (the shape
+ *  `formatUserQuestionResult` writes). null = unrecognised (show it raw). */
+export function parseQuestionAnswer(
+    result: string,
+): { kind: 'selected'; label: string } | { kind: 'custom'; text: string } | { kind: 'dismissed' } | null {
+    const selected = /The user selected the option: "([^"]+)"/.exec(result);
+    if (selected) return { kind: 'selected', label: selected[1] };
+    if (/dismissed the question/i.test(result)) return { kind: 'dismissed' };
+    const custom = /The user provided a custom answer:\n?([\s\S]*)/.exec(result);
+    if (custom) return { kind: 'custom', text: custom[1].trim() };
+    return null;
+}
+
+/** Rebuild a settled decision card from its steps (reload path - the live
+ *  card is built from the host's decisionRequest/Resolved messages). */
+export function decisionPayloadFromStep(step: Step): import('../types').DecisionPayload {
+    const parsed = parseQuestionStep(step.text);
+    const answer = parseQuestionAnswer(step.result ?? '');
+    return {
+        decision_id: step.id,
+        question: parsed?.question ?? '',
+        options: parsed?.options ?? [],
+        answered: true,
+        answer: answer == null
+            ? (step.result ?? null)
+            : answer.kind === 'dismissed' ? null : answer.kind === 'selected' ? answer.label : answer.text,
+    };
 }
 
 /** Is this tool row finished (has a paired result)? */
@@ -162,6 +234,7 @@ function pushToolRow(rows: Row[], row: ToolRow): void {
 
 const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^update_task_list$/, icon: ListChecks },
+    { re: /^ask_user_question$/, icon: HelpCircle },
     { re: /^task$/, icon: Bot },
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
     { re: /^skill$/, icon: BookOpen },
@@ -193,6 +266,7 @@ const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
+    { re: /^ask_user_question$/, key: 'toolAskUserQuestion' },
     { re: /^task$/, key: 'toolTask' },
     { re: /^read_file$/, key: 'toolReadFile' },
     { re: /^read_files$/, key: 'toolReadFiles' },
@@ -272,7 +346,7 @@ function fmtTok(n: number | null): string {
     return String(n);
 }
 
-function buildRows(steps: Step[]): Row[] {
+function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
     // Results arrive PAIRED onto their call step (Step.result). A standalone
     // toolResult step only exists as an orphan fallback - it renders as an
     // already-completed row (its text is the RESULT, never args).
@@ -294,9 +368,24 @@ function buildRows(steps: Step[]): Row[] {
                 rows.push({ key: s.id, kind: 'taskList', step: s });
                 continue;
             }
+            if (s.tool === USER_QUESTION_TOOL) {
+                // The decision card IS the UI - never a pill. Once settled the
+                // card collapses into an "Answered" pill; on reload (no live
+                // cards) the pills are rebuilt from the steps, inline in ONE
+                // row (consecutive questions merge).
+                if (!hasDecisionCard && s.result) {
+                    const last = rows[rows.length - 1];
+                    if (last?.kind === 'decision') {
+                        last.steps.push(s);
+                    } else {
+                        rows.push({ key: s.id, kind: 'decision', steps: [s] });
+                    }
+                }
+                continue;
+            }
             pushToolRow(rows, { key: s.id, call: s });
         } else if (s.kind === 'toolResult') {
-            if (s.tool === TASK_LIST_TOOL) continue;
+            if (s.tool === TASK_LIST_TOOL || s.tool === USER_QUESTION_TOOL) continue;
             pushToolRow(rows, {
                 key: s.id,
                 call: { ...s, text: '' },
@@ -1182,7 +1271,7 @@ function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGrou
     );
 }
 
-function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler }) {
+function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
@@ -2071,7 +2160,237 @@ function ApprovalCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr' }: MessageItemProps) {
+/** The settled decision in full: question, every option (the pick is
+ *  highlighted), and the answer/dismissal row. Pure display - shared by the
+ *  live card's expandable line and the reload record row. */
+export function DecisionResolvedBody({ payload }: { payload: DecisionPayload }) {
+    const answer = payload.answer ?? null;
+    const pickedLabel =
+        answer !== null && payload.options.some((o) => o.label === answer) ? answer : null;
+    return (
+        <section className="decision-card resolved" aria-label={t('decisionAnswered')}>
+            <p className="decision-question" dir="auto">{payload.question}</p>
+
+            <div className="decision-options" role="group" aria-label={t('decisionOptionsAria')}>
+                {payload.options.map((option) => {
+                    const selected = pickedLabel === option.label;
+                    return (
+                        <button
+                            key={option.label}
+                            type="button"
+                            className={`decision-option${selected ? ' selected' : ''}`}
+                            disabled
+                            aria-pressed={selected}
+                        >
+                            <span className="decision-option-top">
+                                <span className="decision-option-label" dir="auto">{option.label}</span>
+                                {option.recommended && (
+                                    <span className="decision-option-badge">{t('decisionRecommended')}</span>
+                                )}
+                                {selected && <Check size={13} className="decision-option-check" />}
+                            </span>
+                            {option.description && (
+                                <span className="decision-option-desc" dir="auto">{option.description}</span>
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {answer !== null && !pickedLabel && (
+                <div className="decision-resolution custom" dir="auto">{answer}</div>
+            )}
+            {answer === null && (
+                <div className="decision-resolution dismissed" dir="auto">{t('decisionDismissed')}</div>
+            )}
+        </section>
+    );
+}
+
+/** Compact "Answered" line - what a settled decision collapses into. Click
+ *  expands the full card again (the line stays as the toggle). */
+function DecisionAnsweredLine({ payload }: { payload: DecisionPayload }) {
+    const [open, setOpen] = useState(false);
+    return (
+        <div className={open ? 'decision-record open' : 'decision-record'}>
+            <button
+                type="button"
+                className={open ? 'decision-collapsed open' : 'decision-collapsed'}
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+            >
+                <span className="decision-collapsed-icon" aria-hidden="true">
+                    {open
+                        ? <ChevronDown size={13} />
+                        : (getLocale() === 'fa' ? <ChevronLeft size={13} /> : <ChevronRight size={13} />)}
+                </span>
+                <strong>{payload.answer === null ? t('decisionDismissed') : t('decisionAnswered')}</strong>
+            </button>
+            {open && <DecisionResolvedBody payload={payload} />}
+        </div>
+    );
+}
+
+/** All of a message's decisions in ask order: the settled ones collapse into
+ *  ONE inline pill row (a turn may settle several - side by side, never one
+ *  per line), the still-open question renders as its card below. The switch
+ *  from card to pill (and to the next question's card) animates in so it
+ *  never reads as a clipped jump. */
+function DecisionStack({
+    decisions,
+    onDecide,
+}: {
+    decisions: DecisionPayload[];
+    onDecide?: (decisionId: string, answer?: string, dismissed?: boolean) => void;
+}) {
+    if (!decisions.length) return null;
+    const answered = decisions.filter((d) => d.answered);
+    const pending = decisions.filter((d) => !d.answered);
+    return (
+        <div className="decision-stack">
+            {answered.length > 0 && (
+                <div className="decision-records">
+                    {answered.map((d) => (
+                        <DecisionAnsweredLine key={d.decision_id} payload={d} />
+                    ))}
+                </div>
+            )}
+            {pending.map((d) => (
+                <DecisionCard key={d.decision_id} payload={d} onDecide={onDecide} />
+            ))}
+        </div>
+    );
+}
+
+/** Reload path: settled pills rebuilt from the tool steps, inline in one row. */
+function DecisionRecords({ steps }: { steps: Step[] }) {
+    return (
+        <div className="decision-records">
+            {steps.map((st) => (
+                <DecisionAnsweredLine key={st.id} payload={decisionPayloadFromStep(st)} />
+            ))}
+        </div>
+    );
+}
+
+/** Interactive decision card for the `ask_user_question` tool: the model asks
+ *  one question, the user picks an option (the model's pick carries a
+ *  "recommended" badge) or answers free-text via the always-available Other
+ *  row. Once answered it collapses into the "Answered" line - the card is
+ *  never a tool pill (see buildRows). */
+function DecisionCard({
+    payload,
+    onDecide,
+}: {
+    payload: DecisionPayload;
+    onDecide?: (decisionId: string, answer?: string, dismissed?: boolean) => void;
+}) {
+    const answered = !!payload.answered;
+    const [otherOpen, setOtherOpen] = useState(false);
+    const [otherText, setOtherText] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    useEffect(() => {
+        if (answered) {
+            setSubmitting(false);
+            setOtherOpen(false);
+        }
+    }, [answered]);
+
+    if (answered) return <DecisionAnsweredLine payload={payload} />;
+
+    const settle = (answer?: string, dismissed?: boolean) => {
+        if (answered || submitting) return;
+        setSubmitting(true);
+        onDecide?.(payload.decision_id, answer, dismissed);
+    };
+
+    const title = payload.header || t('decisionHead');
+
+    return (
+        <section className="decision-card pending" aria-label={title}>
+            <div className="decision-head">
+                <span className="decision-state-icon">
+                    <HelpCircle size={14} />
+                </span>
+                <strong>{title}</strong>
+                <button
+                    type="button"
+                    className="icon-btn decision-dismiss"
+                    onClick={() => settle(undefined, true)}
+                    disabled={submitting}
+                    aria-label={t('decisionDismiss')}
+                    title={t('decisionDismiss')}
+                >
+                    <X size={12} />
+                </button>
+            </div>
+
+            <p className="decision-question" dir="auto">{payload.question}</p>
+
+            <div className="decision-options" role="group" aria-label={t('decisionOptionsAria')}>
+                {payload.options.map((option) => (
+                    <button
+                        key={option.label}
+                        type="button"
+                        className="decision-option"
+                        onClick={() => settle(option.label)}
+                        disabled={submitting}
+                    >
+                        <span className="decision-option-top">
+                            <span className="decision-option-label" dir="auto">{option.label}</span>
+                            {option.recommended && (
+                                <span className="decision-option-badge">{t('decisionRecommended')}</span>
+                            )}
+                        </span>
+                        {option.description && (
+                            <span className="decision-option-desc" dir="auto">{option.description}</span>
+                        )}
+                    </button>
+                ))}
+            </div>
+
+            {otherOpen ? (
+                <div className="decision-other-box">
+                    <textarea
+                        dir="auto"
+                        rows={2}
+                        placeholder={t('decisionOtherPlaceholder')}
+                        value={otherText}
+                        onChange={(e) => setOtherText(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                if (otherText.trim()) settle(otherText.trim());
+                            }
+                        }}
+                    />
+                    <div className="decision-other-actions">
+                        <button type="button" className="icon-btn" onClick={() => setOtherOpen(false)} aria-label={t('decisionDismiss')}>
+                            <X size={12} />
+                        </button>
+                        <button
+                            type="button"
+                            className="apply-btn"
+                            onClick={() => otherText.trim() && settle(otherText.trim())}
+                            disabled={!otherText.trim() || submitting}
+                        >
+                            {submitting ? <span className="step-status spinner" /> : <Check size={13} />}
+                            {t('decisionSend')}
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <button type="button" className="decision-other-btn" onClick={() => setOtherOpen(true)} disabled={submitting}>
+                    <PencilLine size={12} />
+                    {t('decisionOther')}
+                </button>
+            )}
+        </section>
+    );
+}
+
+function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr' }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2084,7 +2403,7 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
 
-    const rows = useMemo(() => buildRows(steps), [steps]);
+    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length), [steps, message.decisions]);
 
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
@@ -2135,10 +2454,15 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
         }
     };
 
-    if (isSystem && message.approval) {
+    if (isSystem && (message.approval || message.decisions?.length)) {
+        // The card IS the surface. A decision-only row drops the system-bubble
+        // box - dashed border + padding around the card reads as a big empty
+        // frame.
+        const bare = !!message.decisions?.length && !message.approval;
         return (
-            <article className={bubbleClass} dir="auto">
-                <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />
+            <article className={bare ? 'decision-holder' : bubbleClass} dir="auto">
+                {message.approval && <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />}
+                <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />
             </article>
         );
     }
@@ -2165,6 +2489,8 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                             <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
                         ) : row.kind === 'taskList' ? (
                             <TaskListRow key={row.key} row={row} view={taskList} streaming={streamingContent} />
+                        ) : row.kind === 'decision' ? (
+                            <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
                             <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} />
                         )
@@ -2262,6 +2588,8 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
                 <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />
             )}
 
+            <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />
+
             {approvalPending && (
                 <div className="approval-waiting-row" aria-live="polite">
                     <span className="approval-waiting-dot" aria-hidden="true" />
@@ -2352,6 +2680,8 @@ function MessageItemImpl({ message, onApprovalDecision, onRegenerate, onEditMess
 interface MessageItemProps {
     message: ChatMessage;
     onApprovalDecision?: (approvalId: string, decisions: Record<string, boolean>, sessionApprove?: boolean) => void;
+    /** Answer a decision card (pick / free text / dismiss). */
+    onDecisionResponse?: (decisionId: string, answer?: string, dismissed?: boolean) => void;
     /** Regenerate the last exchange (replaces the old checkpoint button). */
     onRegenerate?: () => void;
     /** Load a user message into the composer card for editing; sending from
@@ -2386,6 +2716,7 @@ interface MessageItemProps {
 export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.message === b.message &&
     a.onApprovalDecision === b.onApprovalDecision &&
+    a.onDecisionResponse === b.onDecisionResponse &&
     a.onRegenerate === b.onRegenerate &&
     a.onEditMessage === b.onEditMessage &&
     a.onRestoreCheckpoint === b.onRestoreCheckpoint &&

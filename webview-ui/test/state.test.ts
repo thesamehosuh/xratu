@@ -448,5 +448,97 @@ ok(
     'attempting clears the countdown before the next fetch'
 );
 
+// 29. Decision card (ask_user_question): attaches to the live assistant
+//     bubble exactly like needsApproval.
+s = createInitialChatState();
+s = reduceChat(s, M('startResponse'));
+const decStreamingId = s.streamingId!;
+s = reduceChat(s, M('decisionRequest', {
+    decision_id: 'dec-1',
+    header: 'Database',
+    question: 'Which database?',
+    options: [
+        { label: 'Postgres', description: 'Relational.', recommended: true },
+        { label: 'SQLite', description: 'Single file.' },
+    ],
+}));
+const decMsg = s.messages.find((m) => m.id === decStreamingId)!;
+ok(decMsg.decisions?.[0]?.decision_id === 'dec-1', 'decision attaches to the streaming bubble');
+ok(decMsg.decisions?.[0]?.options?.length === 2, 'decision keeps its options');
+ok(decMsg.decisions?.[0]?.options?.[0].recommended === true, 'decision keeps the recommended flag');
+s = reduceChat(s, M('decisionResolved', { decision_id: 'dec-1', answer: null }));
+ok(
+    s.messages.find((m) => m.id === decStreamingId)?.decisions?.[0]?.answer === null,
+    'dismissed card records a null answer'
+);
+ok(
+    s.messages.find((m) => m.id === decStreamingId)?.decisions?.[0]?.answered === true,
+    'dismissed card is settled too'
+);
+
+// 30. With no streaming bubble the card stands alone as a system row.
+s = createInitialChatState();
+s = reduceChat(s, M('decisionRequest', {
+    decision_id: 'dec-2',
+    header: '',
+    question: 'Ship it?',
+    options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }],
+}));
+ok(s.messages.length === 1 && s.messages[0].role === 'system', 'standalone decision card row');
+ok(s.messages[0].tone === 'pending', 'standalone decision card is pending-toned');
+
+// 31. decisionResolved settles the card but KEEPS it - the answered card is
+//     the transcript record of the choice (selected option stays highlighted).
+s = reduceChat(s, M('decisionResolved', { decision_id: 'dec-2', answer: 'Yes' }));
+ok(s.messages[0].decisions?.[0]?.answered === true, 'resolved card marked answered');
+ok(s.messages[0].decisions?.[0]?.answer === 'Yes', 'resolved card records the pick');
+ok(s.messages.length === 1, 'answered card is not removed');
+
+// 32. Two questions in one turn collect on the SAME bubble in ask order -
+//     the first card's settled record is never erased by the second.
+s = createInitialChatState();
+s = reduceChat(s, M('startResponse'));
+const twoQStreamingId = s.streamingId!;
+s = reduceChat(s, M('decisionRequest', {
+    decision_id: 'q1', header: '', question: 'First?',
+    options: [{ label: 'A', description: '' }, { label: 'B', description: '' }],
+}));
+s = reduceChat(s, M('decisionResolved', { decision_id: 'q1', answer: 'A' }));
+s = reduceChat(s, M('decisionRequest', {
+    decision_id: 'q2', header: '', question: 'Second?',
+    options: [{ label: 'C', description: '' }, { label: 'D', description: '' }],
+}));
+const twoQ = s.messages.find((m) => m.id === twoQStreamingId)!;
+ok(s.messages.length === 1, 'both questions live on the same bubble');
+ok(twoQ.decisions?.length === 2, 'second question appends beside the first');
+ok(twoQ.decisions?.[0]?.decision_id === 'q1' && twoQ.decisions[0].answered, 'first record survives and is settled');
+ok(twoQ.decisions?.[1]?.decision_id === 'q2' && !twoQ.decisions[1].answered, 'second question is the open card');
+s = reduceChat(s, M('decisionResolved', { decision_id: 'q2', answer: 'D' }));
+ok(
+    s.messages.filter((m) => m.decisions?.every((d) => d.answered)).length === 1
+        && s.messages[0].decisions!.length === 2,
+    'both questions keep their answered record (inline pills)',
+);
+
+// 33. Live output/results pair onto their call WHICHEVER message owns it:
+//     a steer splits the bubble mid-run, and the trace must keep flowing to
+//     the pill that owns the call (otherwise the run shows a blank row and
+//     the pill spins forever).
+s = createInitialChatState();
+s = reduceChat(s, M('startResponse'));
+const steerOwner = s.streamingId!;
+s = reduceChat(s, M('toolCall', { callId: 'call_task1', tool: 'task', args: '{"prompt":"x"}' }));
+s = reduceChat(s, M('steerUser', { value: 'wtf' }));
+ok(s.streamingId !== steerOwner, 'steer opens a fresh bubble');
+s = reduceChat(s, M('toolOutput', { callId: 'call_task1', value: '↳ read_file a.py\n' }));
+const owner = s.messages.find((m) => m.id === steerOwner)!;
+ok(owner.steps[0]?.live?.includes('read_file') === true, 'live trace lands on the owning pill after a steer split');
+ok(!s.messages.some((m) => m.id !== steerOwner && m.steps.some((st) => st.live)), 'no orphan live rows on the fresh bubble');
+s = reduceChat(s, M('toolResult', { callId: 'call_task1', tool: 'task', output: 'done' }));
+ok(
+    s.messages.find((m) => m.id === steerOwner)?.steps[0]?.result === 'done',
+    'result closes the owning pill after a steer split',
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

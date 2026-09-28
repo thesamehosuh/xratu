@@ -14,6 +14,8 @@ interface MessageListProps {
     contentRef?: Ref<HTMLDivElement>;
     onPickSuggestion: (text: string) => void;
     onApprovalDecision?: (approvalId: string, decisions: Record<string, boolean>) => void;
+    /** Answer a decision card (pick / free text / dismiss). */
+    onDecisionResponse?: (decisionId: string, answer?: string, dismissed?: boolean) => void;
     /** Regenerate the last exchange (last assistant bubble only). */
     onRegenerate?: () => void;
     /** Load a user message into the composer card for editing (sending
@@ -57,7 +59,7 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; fileP
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -158,6 +160,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     key={m.id}
                     message={m}
                     onApprovalDecision={onApprovalDecision}
+                    onDecisionResponse={onDecisionResponse}
                     onRegenerate={onRegenerate}
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}

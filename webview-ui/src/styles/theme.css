@@ -647,6 +647,14 @@ button {
     min-height: 100%;
 }
 
+/* Same as .cred-page > * / .settings-scroll > *: without this, flex-shrink
+   squashes tall bubbles toward the viewport height instead of overflowing
+   into a scroll - rows clip into each other and the transcript stops
+   scrolling (seen live on a long subagent session). */
+.messages-inner > * {
+    flex-shrink: 0;
+}
+
 /* Reveals the next older page of bubbles. The transcript stays complete in
    state; only a trailing window is mounted, so this is how the reader walks
    back through it. Logical properties keep it correct in RTL. */
@@ -1193,6 +1201,604 @@ button {
 
 .approval-resolution.mixed {
     color: var(--xratu-accent-strong);
+}
+
+/* Decision card (ask_user_question): stacked option buttons, the model's
+   recommended pick wears a badge, Other opens an inline free-text row.
+   Direction-safe: logical margins and text-align:start only. */
+.decision-card {
+    width: 100%;
+    margin: 10px 0 2px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 10px;
+    background: var(--xratu-surface-inset);
+    overflow: hidden;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+}
+
+.decision-card.resolved {
+    opacity: 0.86;
+}
+
+.decision-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 44px;
+    padding: 9px 11px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+.decision-head strong {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.25;
+    font-weight: 650;
+    color: var(--vscode-foreground);
+}
+
+.decision-head .decision-dismiss {
+    margin-inline-start: auto;
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+}
+
+.decision-question {
+    margin: 0;
+    padding: 12px 13px 5px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--vscode-foreground);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.decision-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+}
+
+.decision-option {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    font-family: inherit;
+    font-size: 13px;
+    text-align: start;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.decision-option:hover:not(:disabled) {
+    background: var(--xratu-accent-faint);
+    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+}
+
+.decision-option.selected {
+    background: var(--xratu-accent-faint);
+    border-color: color-mix(in srgb, var(--xratu-accent) 60%, transparent);
+}
+
+.decision-option:disabled {
+    cursor: default;
+    opacity: 0.75;
+}
+
+.decision-option.selected:disabled {
+    opacity: 1;
+}
+
+.decision-option-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* Label hugs its text so the badge sits RIGHT AFTER the label (a trailing
+   chip on the far row end reads as a row action, not as part of the label).
+   The check alone is pushed to the row end. */
+.decision-option-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.decision-option-badge {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--xratu-accent-faint);
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    color: var(--xratu-accent-strong);
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.5;
+}
+
+.decision-option-check {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+    color: var(--xratu-accent-strong);
+}
+
+.decision-option-desc {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--vscode-descriptionForeground);
+    overflow-wrap: anywhere;
+}
+
+.decision-other-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0 10px 10px;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.decision-other-btn:hover:not(:disabled) {
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+}
+
+.decision-other-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0 10px 10px;
+}
+
+.decision-other-box textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 48px;
+    padding: 8px 10px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 8px;
+    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.decision-other-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.decision-other-actions .icon-btn {
+    color: var(--vscode-descriptionForeground);
+}
+
+.decision-other-actions .apply-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.decision-other-actions .apply-btn:hover:not(:disabled) {
+    background: var(--xratu-accent-dim);
+}
+
+.decision-other-actions .apply-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+.decision-resolution {
+    padding: 9px 11px 10px;
+    border-top: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+/* A settled decision collapses into this pill; it is the expand toggle for
+   the full card underneath. Settled pills of one turn sit INLINE in
+   `.decision-records` - side by side, never one per line. */
+.decision-record {
+    margin: 8px 0 2px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+}
+
+.decision-records {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 8px 0 2px;
+}
+
+.decision-records .decision-record {
+    margin: 0;
+    max-width: 100%;
+}
+
+/* An expanded record drops onto its own full row so the reopened card is not
+   squeezed between neighbouring pills. */
+.decision-records .decision-record.open {
+    flex-basis: 100%;
+}
+
+.decision-stack {
+    display: flex;
+    flex-direction: column;
+}
+
+.decision-stack .decision-records {
+    margin: 0 0 2px;
+}
+
+/* Card→pill→next-card never reads as a clipped jump: everything the stack
+   mounts rises in gently (same language as xratu-rise on bubbles). */
+@keyframes decision-in {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.decision-stack .decision-card,
+.decision-record {
+    animation: decision-in 0.18s ease-out;
+}
+
+/* Holder for a decision-only system row: no bubble chrome at all - the
+   decision card brings its own surface and border. */
+.decision-holder {
+    background: transparent;
+    border: 0;
+    padding: 0;
+}
+
+.decision-collapsed {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px 3px 5px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 999px;
+    background: var(--xratu-surface-inset);
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.decision-collapsed:hover {
+    color: var(--xratu-accent-strong);
+    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    background: var(--xratu-accent-faint);
+}
+
+.decision-collapsed-icon {
+    display: inline-flex;
+    color: var(--xratu-accent-strong);
+}
+
+.decision-record .decision-card {
+    margin-top: 6px;
+}
+
+/* Proxy page: settings vocabulary plus field rows, detected-client rows and
+   per-MCP routing chips. Direction-safe (logical props, dir="ltr" only on
+   addresses/ports). */
+.settings-head-copy span {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--xratu-fs-sm);
+    color: var(--vscode-descriptionForeground);
+}
+
+.proxy-field-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px 12px 2px;
+}
+
+.proxy-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.proxy-field.grow {
+    flex: 1 1 160px;
+}
+
+.proxy-field label,
+.proxy-field .proxy-field-label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+}
+
+.proxy-field input {
+    height: 33px;
+    padding: 0 9px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 7px;
+    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    font-family: inherit;
+    font-size: 13px;
+}
+
+/* The shared Dropdown gets the same input chrome here (the usage page uses
+   the same 13px field scale). */
+.proxy-field .dropdown {
+    flex: 0 1 auto;
+    min-width: 84px;
+}
+
+.proxy-field .dropdown-trigger {
+    height: 33px;
+    padding: 0 9px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 7px;
+    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    font-size: 13px;
+}
+
+.proxy-field .dropdown-trigger:hover {
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+}
+
+.proxy-field input:focus,
+.proxy-field .dropdown-trigger:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--xratu-accent) 55%, transparent);
+    outline-offset: 0;
+}
+
+.proxy-hint {
+    padding: 4px 13px 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--vscode-descriptionForeground);
+    overflow-wrap: anywhere;
+}
+
+.proxy-hint.warn {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+/* Scan/test icon button in a section head: pushed to the row end (the side
+   opposite the section icon). */
+.proxy-head-action {
+    margin-inline-start: auto;
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+}
+
+.proxy-save-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 12px;
+}
+
+.proxy-save-row .apply-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-inline-start: auto;
+}
+
+.proxy-save-row .apply-btn:disabled {
+    /* Nothing drafted yet: a quiet gray pill, not a dimmed accent button. */
+    background: transparent;
+    border-color: var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    opacity: 1;
+    cursor: default;
+}
+
+.proxy-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.proxy-status strong {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    color: var(--vscode-foreground);
+    overflow-wrap: anywhere;
+}
+
+.proxy-source-chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-size: 10.5px;
+    font-weight: 650;
+}
+
+.proxy-candidate,
+.proxy-mcp-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--vscode-widget-border);
+}
+
+.proxy-candidate-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1 1 180px;
+}
+
+/* Same row scale as the MCP page's server rows:14px name, dimmed meta. */
+.proxy-candidate-main strong {
+    font-size: var(--xratu-fs-base);
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    overflow-wrap: anywhere;
+}
+
+.proxy-candidate-main span {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--xratu-fs-xs);
+    opacity: 0.7;
+    color: var(--vscode-foreground);
+    overflow-wrap: anywhere;
+}
+
+.proxy-candidate-tag {
+    flex: 0 0 auto;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 10.5px;
+    font-weight: 650;
+}
+
+.proxy-candidate-tag.disabled {
+    opacity: 0.75;
+}
+
+/* Client name and its port pills share one line (wrap together). */
+.proxy-candidate-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
+}
+
+.proxy-port-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.proxy-port-chip {
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.proxy-port-chip.disabled {
+    opacity: 0.65;
+}
+
+.proxy-candidate .apply-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent-strong);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.proxy-mcp-bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 2px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.proxy-test {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 13px 11px;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.proxy-test.ok {
+    color: #3fb950;
+}
+
+.proxy-test.fail {
+    color: var(--vscode-errorForeground);
 }
 
 .approval-waiting-row {
@@ -5521,6 +6127,9 @@ pre.tool-cmd {
 
 .settings-head-copy {
     min-width: 0;
+    /* Back/title on one side, trailing action (test connection, refresh) on
+       the far other side - justify-between for the header row. */
+    flex: 1 1 auto;
 }
 
 .settings-eyebrow {

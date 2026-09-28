@@ -35,6 +35,10 @@ export interface ExternalServerConfig {
     headers?: Record<string, string>;
     /** Disabled servers are shown in the UI but never connected. */
     disabled?: boolean;
+    /** Per-server proxy routing: 'auto' (default, follow the global chain),
+     *  'proxy' (force through the proxy even past no_proxy), 'direct'
+     *  (bypass the proxy entirely). Remote transports only. */
+    proxy?: import('./proxy').ProxyRouteMode;
     /** Tool names the user trusts enough to skip the approval gate. */
     autoApprove?: string[];
     /** Per-call timeout in ms (default 30000; 0 disables the timeout). */

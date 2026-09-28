@@ -54,6 +54,9 @@ interface CapabilitiesPageProps {
     onMarketplaceDetect: (id: string) => void;
     onMarketplaceClearDetection: () => void;
     skills: SkillView[];
+    /** Request MCP + skills state once on mount - every entry path (toolbar,
+     *  settings, proxy) must see the lists without a prior visit elsewhere. */
+    onGetState?: () => void;
     onRefreshMcp: () => void;
     onSave: (target: McpSaveTarget, servers: McpServerPayload[]) => void;
     onRestart: (name: string) => void;
@@ -340,6 +343,7 @@ export function CapabilitiesPage({
     onMarketplaceDetect,
     onMarketplaceClearDetection,
     skills,
+    onGetState,
     onRefreshMcp,
     onSave,
     onRestart,
@@ -384,6 +388,14 @@ export function CapabilitiesPage({
     // pending-flag flip that arms the effect on click.
     const prevServers = useRef(servers);
     const prevSkills = useRef(skills);
+
+    // State is requested by the PAGE (once, on mount): the openers must not
+    // have to remember it, or an entry path shows empty lists.
+    useEffect(() => {
+        onGetState?.();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     useEffect(() => {
         setPendingRestart(null);
     }, [servers, skills]);

@@ -35,13 +35,14 @@ import { SettingsPage } from './components/SettingsPage';
 import { CapabilitiesPage } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
 import { UsagePage } from './components/UsagePage';
+import { ProxyPage } from './components/ProxyPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
-import type { LedgerDay, ModelRateView, ProviderUsageView, UsageTotals } from './types';
+import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage';
+type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -98,6 +99,15 @@ export function App() {
         allTime: UsageTotals;
     } | null>(null);
     const [usageReturnTo, setUsageReturnTo] = useState<'chat' | 'settings'>('settings');
+    /** Proxy page state (host-owned settings + live resolution) + Back target. */
+    const [proxyState, setProxyState] = useState<ProxyStateView | null>(null);
+    const [proxyCandidates, setProxyCandidates] = useState<ProxyCandidateView[] | null>(null);
+    const [proxyDetecting, setProxyDetecting] = useState(false);
+    const [proxyTesting, setProxyTesting] = useState(false);
+    const [proxyTestResult, setProxyTestResult] = useState<
+        { ok: boolean; detail?: string; detailKey?: string; params?: Record<string, string> } | null
+    >(null);
+    const [proxyReturnTo, setProxyReturnTo] = useState<'chat' | 'settings'>('settings');
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
     const [injectedText, setInjectedText] = useState<{ id: number; text: string } | null>(null);
     // Workspace-relative path of the file open in the active editor - the
@@ -592,6 +602,30 @@ export function App() {
                         allTime: msg.allTime,
                     });
                     break;
+                case 'proxyState':
+                    setProxyState({
+                        mode: msg.mode,
+                        proxyUrl: msg.proxyUrl,
+                        noProxy: msg.noProxy,
+                        resolvedUrl: msg.resolvedUrl,
+                        resolvedSource: msg.resolvedSource,
+                        systemProxy: msg.systemProxy,
+                        noProxyList: msg.noProxyList,
+                    });
+                    break;
+                case 'proxyDetectResult':
+                    setProxyDetecting(false);
+                    setProxyCandidates(msg.candidates);
+                    break;
+                case 'proxyTestResult':
+                    setProxyTesting(false);
+                    setProxyTestResult({
+                        ok: msg.ok,
+                        ...(msg.detail ? { detail: msg.detail } : {}),
+                        ...(msg.detailKey ? { detailKey: msg.detailKey } : {}),
+                        ...(msg.params ? { params: msg.params } : {}),
+                    });
+                    break;
                 case 'modelInfo':
                     setModelInfo({
                         defaultModel: msg.defaultModel,
@@ -795,6 +829,11 @@ export function App() {
             send({ type: 'approvalDecision', approvalId, decisions, sessionApprove }),
         [send]
     );
+    const handleDecisionResponse = useCallback(
+        (decisionId: string, answer?: string, dismissed?: boolean) =>
+            send({ type: 'decisionResponse', decisionId, answer, dismissed }),
+        [send]
+    );
     const handleRegenerate = useCallback(() => send({ type: 'regenerate' }), [send]);
     // Pencil on a user bubble: load the message into the composer card for
     // editing (handleSend performs the rewind-resend when it goes out).
@@ -936,6 +975,10 @@ export function App() {
                     onMarketplaceDetect={(id) => send({ type: 'mcpMarketplaceDetect', id })}
                     onMarketplaceClearDetection={() => setMarketplaceDetection(null)}
                     skills={skills}
+                    onGetState={() => {
+                        send({ type: 'mcpGetState' });
+                        send({ type: 'skillsGetState' });
+                    }}
                     onRefreshMcp={() => send({ type: 'mcpGetState' })}
                     onSave={(target: McpSaveTarget, list: McpServerPayload[]) => send({ type: 'mcpSave', target, servers: list })}
                     onRestart={(name) => send({ type: 'mcpRestart', name })}
@@ -961,6 +1004,61 @@ export function App() {
         );
     }
 
+    if (screen === 'proxy') {
+        // Per-server route edits reuse the MCP save path: every row keeps its
+        // own file's entries intact (workspace rows save to the workspace
+        // file, global+legacy rows to the global file).
+        const stripView = (s: McpServerView) => {
+            const { state: _st, toolCount: _tc, lastError: _le, source: _src, ...payload } = s;
+            return payload;
+        };
+        const commitProxyRoute = (update: (s: McpServerView) => McpServerView) => {
+            for (const target of ['workspace', 'global'] as const) {
+                const mates = mcpServers.filter((s) =>
+                    target === 'workspace' ? s.source === 'workspace' : s.source !== 'workspace');
+                if (mates.length === 0) continue;
+                send({ type: 'mcpSave', target, servers: mates.map((s) => stripView(update(s))) });
+            }
+        };
+        overlay = (
+                <ProxyPage
+                    onBack={() => setScreen(proxyReturnTo)}
+                    state={proxyState}
+                    candidates={proxyCandidates}
+                    detecting={proxyDetecting}
+                    testing={proxyTesting}
+                    testResult={proxyTestResult}
+                    servers={mcpServers}
+                    onGetState={() => {
+                        send({ type: 'proxyGetState' });
+                        // The page lists MCP servers too - request their state
+                        // on every entry instead of assuming a capabilities
+                        // visit happened first.
+                        send({ type: 'mcpGetState' });
+                    }}
+                    onSave={(mode, proxyUrl, noProxy) => {
+                        setProxyTestResult(null);
+                        send({ type: 'proxySave', mode, proxyUrl, noProxy });
+                    }}
+                    onDetect={() => {
+                        setProxyDetecting(true);
+                        send({ type: 'proxyDetect' });
+                    }}
+                    onTest={() => {
+                        setProxyTesting(true);
+                        setProxyTestResult(null);
+                        send({ type: 'proxyTest' });
+                    }}
+                    onSetServerProxy={(name, mode: ProxyRouteMode) =>
+                        commitProxyRoute((s) => (s.name === name ? { ...s, proxy: mode === 'auto' ? undefined : mode } : s))
+                    }
+                    onSetAllProxies={(mode: ProxyRouteMode) =>
+                        commitProxyRoute((s) => ({ ...s, proxy: mode === 'auto' ? undefined : mode }))
+                    }
+                />
+        );
+    }
+
     if (screen === 'settings') {
         overlay = (
                 <SettingsPage
@@ -981,18 +1079,29 @@ export function App() {
                     onOpenCredentials={() => {
                         setCredReturnTo('settings');
                         setScreen('credentials');
+                        // The host answers openCredentials with the saved
+                        // provider list - without this the page only fills
+                        // when it was opened from the chat toolbar first.
+                        send({ type: 'openCredentials' });
                     }}
                     onOpenCapabilities={() => {
                         setCapReturnTo('settings');
+                        // State requests happen in CapabilitiesPage's mount
+                        // effect - every entry path gets the lists.
                         setScreen('capabilities');
-                        send({ type: 'mcpGetState' });
-                        send({ type: 'skillsGetState' });
                     }}
                     onOpenUsage={() => {
                         setUsageReturnTo('settings');
                         setScreen('usage');
                         send({ type: 'usageGetState' });
                     }}
+                    onOpenProxy={() => {
+                        setProxyReturnTo('settings');
+                        setScreen('proxy');
+                        send({ type: 'proxyGetState' });
+                        send({ type: 'mcpGetState' });
+                    }}
+                    proxySummary={proxyState?.resolvedUrl ?? null}
                     onClearHistory={() => {
                         // "Clear history" really clears: every stored session
                         // on this machine is deleted, then a fresh one starts.
@@ -1104,8 +1213,6 @@ export function App() {
                 onOpenCapabilities={() => {
                     setCapReturnTo('chat');
                     setScreen('capabilities');
-                    send({ type: 'mcpGetState' });
-                    send({ type: 'skillsGetState' });
                 }}
                 onOpenSettings={() => setScreen('settings')}
             />
@@ -1154,6 +1261,7 @@ export function App() {
                     activeFile={activeFile}
                     onPickSuggestion={(text) => setInjectedText({ id: Date.now(), text })}
                     onApprovalDecision={handleApprovalDecision}
+                    onDecisionResponse={handleDecisionResponse}
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
