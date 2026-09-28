@@ -26,6 +26,7 @@ const {
     trimDisplayEvent,
 } = require('../out/local/eventBounds.js');
 const { MAX_CONTENT_CAP, CARRIER_BUDGET, clipHistoryContent } = require('../out/local/historyBounds.js');
+const { TOOL_RESULT_ELISION_MARKER } = require('../out/local/localAgent.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -65,6 +66,51 @@ const clipMarker = (text) => text.includes('[...clipped');
     check('display row content survives', carrier.content, 'hi');
 }
 
+// --- clipDisplay / trimDisplayEvent idempotency (push -> transfer) ----------
+{
+    const raw = 'o'.repeat(DISPLAY_OUTPUT_LIMIT + 900);
+    const once = trimDisplayEvent({ type: 'tool_result', id: 'a', tool: 't', output: raw });
+    const twice = trimDisplayEvent(once);
+    check('re-trimming a clipped output is byte-identical (marker not re-cut)',
+        twice.output, once.output);
+    checkTrue('clipped output carries exactly one marker',
+        (once.output.match(/\[\+\d+ chars truncated\]/g) ?? []).length === 1);
+
+    const rawArgs = { path: 'x', body: 'b'.repeat(DISPLAY_ARG_LIMIT + 900) };
+    const onceArgs = trimDisplayEvent({ type: 'tool_call', id: 'b', tool: 'write_file', args: rawArgs });
+    const twiceArgs = trimDisplayEvent(onceArgs);
+    check('re-trimming clipped args is byte-identical', twiceArgs.args.body, onceArgs.args.body);
+}
+
+// --- nested argument payloads are bounded too -------------------------------
+{
+    const nested = trimDisplayEvent({
+        type: 'tool_call', id: 'n', tool: 'write_file',
+        args: { file: { path: 'x.ts', content: 'c'.repeat(DISPLAY_ARG_LIMIT + 4000) }, other: 7 },
+    });
+    checkTrue('nested string leaf clips to the per-key limit',
+        nested.args.file.content.length <= DISPLAY_ARG_LIMIT + 64);
+    checkTrue('nested clip carries the marker', nested.args.file.content.includes('clipped'));
+    check('non-string leaf passes through', nested.args.other, 7);
+
+    const task = { tasks: 't'.repeat(9000), nested: { deep: 'd'.repeat(9000) } };
+    const exempt = trimDisplayEvent({ type: 'tool_call', id: 'm', tool: 'update_task_list', args: task });
+    check('update_task_list nested args stay whole', exempt.args.nested.deep, task.nested.deep);
+}
+
+// --- thinking / result clipping at the transfer ----------------------------
+{
+    const big = 'r'.repeat(MAX_CONTENT_CAP + 10);
+    const t = trimDisplayEvent({ type: 'thinking', content: big });
+    check('thinking event clips at transfer', t.content.length <= MAX_CONTENT_CAP, true);
+    check('small thinking unchanged at transfer',
+        trimDisplayEvent({ type: 'thinking', content: 'ok' }).content, 'ok');
+
+    const result = trimDisplayEvent({ type: 'result', persian_explanation: 'answer', thinking: big });
+    check('result thinking clips at transfer', result.thinking.length <= MAX_CONTENT_CAP, true);
+    check('result ANSWER text is never clipped (transcript)', result.persian_explanation, 'answer');
+}
+
 // --- boundOutcomeEvents: under budget, nothing changes ----------------------
 {
     const events = [
@@ -100,6 +146,25 @@ const clipMarker = (text) => text.includes('[...clipped');
     const viaTransfer = trimDisplayEvent({ type: 'tool_result', id: 'a', tool: 'run_terminal_command', output: raw(800_000) });
     check('clipped bytes match trimDisplayEvent exactly', events[0].output, viaTransfer.output);
 
+    checkFalse('second pass is a no-op (idempotent)', boundOutcomeEvents(events));
+}
+
+// --- boundOutcomeEvents: aggregate enforced even with tiny outputs ----------
+{
+    // 1500 outputs of 1500 chars = 2.25M > 2M while EVERY output is already
+    // at/below the display size - pass 2 cannot shrink them, pass 3 must.
+    const events = [];
+    for (let i = 0; i < 1500; i++) {
+        events.push({ type: 'tool_result', id: `e${i}`, tool: 'grep_search', output: 'x'.repeat(DISPLAY_OUTPUT_LIMIT) });
+    }
+    const ref = events;
+    checkTrue('over-budget small outputs still get bounded', boundOutcomeEvents(events));
+    check('same array reference', events === ref, true);
+    const total = events.reduce((n, e) => n + e.output.length, 0);
+    checkTrue('aggregate fits the budget after the marker pass', total <= EVENT_OUTPUT_BUDGET);
+    check('oldest output collapsed to the elision marker', events[0].output, TOOL_RESULT_ELISION_MARKER);
+    check('newest output kept at display size', events[events.length - 1].output.length, DISPLAY_OUTPUT_LIMIT);
+    check('pairing survives the collapse', events[0].id, 'e0');
     checkFalse('second pass is a no-op (idempotent)', boundOutcomeEvents(events));
 }
 

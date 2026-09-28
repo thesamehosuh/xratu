@@ -33,8 +33,10 @@ import {
     MAX_CONTENT_CAP,
     boundCarriers,
     clipHistoryContent,
+    clipJsonValue,
     type CarrierRow,
 } from './historyBounds';
+import { TOOL_RESULT_ELISION_MARKER } from './localAgent';
 
 /** Display-event payload caps - bounds what the host persists per event.
  *  Non-mutating: returns a clipped copy only when something was trimmed. */
@@ -45,10 +47,18 @@ export const DISPLAY_PATCH_KEYS = new Set(['patch', 'new_content']);
 export const DISPLAY_PATCH_ARG_LIMIT = 6000;
 export const DISPLAY_OUTPUT_LIMIT = 1500;
 
+/** The tail `clipDisplay` appends - matched to detect an ALREADY-clipped
+ *  value (see `clipDisplay`). */
+const CLIP_DISPLAY_MARKER_RE = /\[\+\d+ chars truncated\]$/;
+
 function clipDisplay(value: string, limit: number): string {
-    return value.length <= limit
-        ? value
-        : `${value.slice(0, limit)}… [+${value.length - limit} chars truncated]`;
+    if (value.length <= limit) return value;
+    // Already clipped by an earlier pass: its marker sits INSIDE `limit`, so
+    // re-clipping would slice the marker itself and rewrite the count. The
+    // push -> transfer path (trimDisplayEvent twice) relies on this to be
+    // byte-idempotent.
+    if (CLIP_DISPLAY_MARKER_RE.test(value)) return value;
+    return `${value.slice(0, limit)}… [+${value.length - limit} chars truncated]`;
 }
 
 /** Clip a display event for the transcript - the single source of truth for
@@ -61,15 +71,34 @@ export function trimDisplayEvent(event: any): any {
         const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
         event = rest;
     }
+    if (event?.type === 'thinking' && typeof event.content === 'string') {
+        // Legacy sessions restore thinking from a pending snapshot that was
+        // saved before the streaming clip existed - bound it here too.
+        return event.content.length > MAX_CONTENT_CAP
+            ? { ...event, content: clipHistoryContent(event.content, MAX_CONTENT_CAP) }
+            : event;
+    }
+    if (event?.type === 'result' && typeof event.thinking === 'string'
+        && event.thinking.length > MAX_CONTENT_CAP) {
+        // The result event rides the LIVE path with the full cumulative value
+        // (the completion re-post must stay byte-identical to what streamed);
+        // the transcript copy is what gets bounded, at transfer.
+        return { ...event, thinking: clipHistoryContent(event.thinking, MAX_CONTENT_CAP) };
+    }
     if (event?.type === 'tool_call' && event.tool !== TASK_LIST_TOOL_NAME) {
         if (event.args && typeof event.args === 'object') {
             return {
                 ...event,
                 args: Object.fromEntries(
-                    Object.entries(event.args).map(([k, v]) =>
-                        [k, typeof v === 'string'
-                            ? clipDisplay(v, DISPLAY_PATCH_KEYS.has(k) ? DISPLAY_PATCH_ARG_LIMIT : DISPLAY_ARG_LIMIT)
-                            : v])
+                    Object.entries(event.args).map(([k, v]) => {
+                        const limit = DISPLAY_PATCH_KEYS.has(k) ? DISPLAY_PATCH_ARG_LIMIT : DISPLAY_ARG_LIMIT;
+                        if (typeof v === 'string') return [k, clipDisplay(v, limit)];
+                        // Nested objects/arrays: bound every string leaf to
+                        // the same per-key limit - a top-level-only pass let a
+                        // nested payload (a wrapped file body) bypass the cap.
+                        if (v && typeof v === 'object') return [k, clipJsonValue(v, limit)];
+                        return [k, v];
+                    })
                 ),
             };
         }
@@ -100,16 +129,19 @@ export const EVENT_OUTPUT_BUDGET = 2_000_000;
  * changed.
  *
  * The array is shared by reference with the pending-turn snapshot, so it is
- * never reassigned or spliced - elements are replaced only. Three idempotent
+ * never reassigned or spliced - elements are replaced only. Four idempotent
  * passes, each mirroring a policy the consumer applies anyway:
  *  1. Thinking blocks over `MAX_CONTENT_CAP` are clipped (head+tail): the
- *     stream handler extends the block in place with cumulative deltas, so
- *     this is the only place that bounds it while the run lives.
+ *     stream handler already bounds what it pushes, so this is the safety
+ *     net for restored/legacy arrays.
  *  2. Tool outputs over `EVENT_OUTPUT_BUDGET` are re-clipped OLDEST-first to
  *     the display size (`trimDisplayEvent`'s exact output - the transcript is
  *     unchanged). Mirrors `boundCarriers`: newest first, because the model
  *     reasons over the recent results and old detail is elided by design.
- *  3. Provider carriers (`providerBlocks`/`reasoningContent`) are kept whole
+ *  3. Still over budget with every output at/below the display size (a run
+ *     with 1300+ tool calls): the OLDEST collapse to the elision marker -
+ *     pairing (id, tool) survives, only the payload goes.
+ *  4. Provider carriers (`providerBlocks`/`reasoningContent`) are kept whole
  *     or dropped under `CARRIER_BUDGET` - the same `boundCarriers` policy the
  *     turn-end ledger trim applies, just applied while the run lives.
  *
@@ -138,6 +170,7 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
             const e = events[i];
             if (e?.type !== 'tool_result' || typeof e.output !== 'string') continue;
             if (e.output.length <= DISPLAY_OUTPUT_LIMIT) continue;
+            if (CLIP_DISPLAY_MARKER_RE.test(e.output)) continue; // already display-clipped
             const clipped = clipDisplay(e.output, DISPLAY_OUTPUT_LIMIT);
             total -= e.output.length - clipped.length;
             events[i] = { ...e, output: clipped };
@@ -145,7 +178,20 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
         }
     }
 
-    // 3. Carrier budget: `boundCarriers` returns the SAME array when nothing
+    // 3. Every output now fits the display size but the AGGREGATE still
+    // exceeds the budget: collapse the oldest payloads to the marker.
+    if (total > budget) {
+        for (let i = 0; i < events.length && total > budget; i++) {
+            const e = events[i];
+            if (e?.type !== 'tool_result' || typeof e.output !== 'string') continue;
+            if (e.output === TOOL_RESULT_ELISION_MARKER) continue;
+            total -= e.output.length - TOOL_RESULT_ELISION_MARKER.length;
+            events[i] = { ...e, output: TOOL_RESULT_ELISION_MARKER };
+            changed = true;
+        }
+    }
+
+    // 4. Carrier budget: `boundCarriers` returns the SAME array when nothing
     // is dropped (no churn on the hot path); when it drops, adopt the result
     // element-wise so the shared reference survives.
     const bounded = boundCarriers(events);

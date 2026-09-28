@@ -823,8 +823,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Timeline event for the CURRENT reasoning block: the first delta pushes
      *  it into outcome.events (so reasoning survives reload in the right place
      *  relative to tool/text steps), later cumulative deltas extend it in
-     *  place. Null between blocks. */
+     *  place. Null between blocks. `content` carries the BOUNDED copy (clipped
+     *  to MAX_CONTENT_CAP as it streams); `_localThinkingBlockRaw` keeps the
+     *  full cumulative value the extends are matched against - a clipped
+     *  string is never a prefix of the next delta. */
     private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
+    private _localThinkingBlockRaw: string | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
     /** Sum of every non-estimated round's usage across the CURRENT turn (a
      *  tool-calling turn makes several requests) - the basis for turn cost. */
@@ -2941,6 +2945,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._localAccumulatedText = '';
         this._localAccumulatedThinking = '';
         this._localThinkingBlockEvent = null;
+        this._localThinkingBlockRaw = null;
         this._localCurrentUsage = null;
         this._localTurnUsage = null;
         // `events` is held by reference and grows as the run streams - the
@@ -3249,22 +3254,29 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._scheduleLocalPartialPersist();
                 break;
             case 'thinking':
-                // The accumulated copy feeds the result event, the pending
-                // snapshot and legacy restore - clip it at the source so a
-                // >200k reasoning chain cannot sit in memory for the rest of
-                // the session. The LIVE webview stream above stays full.
-                this._localAccumulatedThinking = clipHistoryContent(event.value, MAX_CONTENT_CAP);
+                // The accumulated copy is the LIVE terminal value: the result
+                // event re-posts it at completion, and that re-post is only
+                // idempotent while it is byte-identical to what streamed - so
+                // it stays RAW. Every PERSISTENCE path clips on the way out:
+                // the thinking event clips as it streams (below), the result
+                // event clips in trimDisplayEvent at transfer, and the pending
+                // snapshot clips in sanitizePendingTurn.
+                this._localAccumulatedThinking = event.value;
                 this._flushLiveSegment();
                 this._noteThinking(event.value);
                 // Record the reasoning in the turn's event timeline so it keeps
                 // its position relative to tool/text steps and survives reload
                 // (_restoreChatUI replays thinking events in order). The first
                 // delta of a block pushes the event; later cumulative deltas
-                // extend it in place instead of growing the array.
-                if (this._localThinkingBlockEvent && event.value.startsWith(this._localThinkingBlockEvent.content)) {
-                    this._localThinkingBlockEvent.content = event.value;
+                // extend it in place instead of growing the array - the event
+                // carries the BOUNDED copy from the first delta on.
+                if (this._localThinkingBlockEvent && this._localThinkingBlockRaw != null
+                    && event.value.startsWith(this._localThinkingBlockRaw)) {
+                    this._localThinkingBlockRaw = event.value;
+                    this._localThinkingBlockEvent.content = clipHistoryContent(event.value, MAX_CONTENT_CAP);
                 } else {
-                    this._localThinkingBlockEvent = { type: 'thinking', content: event.value };
+                    this._localThinkingBlockRaw = event.value;
+                    this._localThinkingBlockEvent = { type: 'thinking', content: clipHistoryContent(event.value, MAX_CONTENT_CAP) };
                     outcome.events.push(this._localThinkingBlockEvent);
                 }
                 this._scheduleLocalPartialPersist();
@@ -3274,6 +3286,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // A tool call closes the current reasoning block - reasoning
                 // after it belongs to a fresh block and needs its own pill.
                 this._localThinkingBlockEvent = null;
+                this._localThinkingBlockRaw = null;
                 // Display-only event (the model ledger takes its tool rows
                 // from `assistant_message.tool_calls`): trim at PUSH so a
                 // whole written file never rides the run-lifetime array - the
@@ -3294,6 +3307,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             case 'toolResult': {
                 this._flushLiveSegment();
                 this._localThinkingBlockEvent = null;
+                this._localThinkingBlockRaw = null;
                 const persisted = persistedEventFromAgentEvent(event);
                 if (persisted) outcome.events.push(persisted);
                 // Re-enforce the run-lifetime bounds (output budget, thinking
@@ -4970,7 +4984,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // duplicate (and misorder) the reasoning pill.
             const hasThinkingEvent = (pt.events ?? []).some((e: any) => e?.type === 'thinking');
             if (pt.thinking && !hasThinkingEvent) {
-                restoredEvents.push({ type: 'thinking', content: pt.thinking });
+                restoredEvents.push({ type: 'thinking', content: clipHistoryContent(pt.thinking, MAX_CONTENT_CAP) });
             }
             restoredEvents.push(...(pt.events ?? []).map(trimDisplayEvent));
             if (pt.text) restoredEvents.push({ type: 'result', persian_explanation: pt.text });
