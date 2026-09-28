@@ -193,6 +193,7 @@
 		"test:host": "node test/run-host-tests.mjs",
 		"test:sanitizer": "node test/test-sanitizer.mjs",
 		"test:endpoint-guard": "node test/test-endpoint-guard.mjs",
+		"test:event-bounds": "node test/test-event-bounds.mjs",
 		"test:base-url": "node test/test-base-url.mjs",
 		"test:proxy": "node test/test-proxy.mjs",
 		"test:mcp-marketplace": "node test/test-mcp-marketplace.mjs",

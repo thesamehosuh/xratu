@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
-import { MAX_STORED_TURNS, boundCarriers, carrierSize, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
+import { MAX_CONTENT_CAP, MAX_STORED_TURNS, boundCarriers, carrierSize, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
     role: string;
@@ -331,6 +331,12 @@ function boundedContentCap(
 
 function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
     const events = Array.isArray(pt.events) ? pt.events.slice(-40).map((event: any) => {
+        if (event?.type === 'thinking' && typeof event.content === 'string') {
+            // A reasoning block can still be growing when a mid-run persist
+            // fires; hold it to the SAME ceiling the in-memory ledger uses so
+            // the crash snapshot cannot outgrow memory.
+            return { ...event, content: clipHistoryContent(event.content, MAX_CONTENT_CAP) };
+        }
         if (event?.type === 'tool_result' && typeof event.output === 'string') {
             return { ...event, output: clipHistoryContent(event.output, contentCap) };
         }

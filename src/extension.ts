@@ -55,7 +55,8 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { buildLocalSystemPrompt, buildSubagentSystemPrompt } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
+import { boundOutcomeEvents, trimDisplayEvent } from './local/eventBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { RulesSnapshot } from './local/rulesSnapshot';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
@@ -649,55 +650,12 @@ interface StreamOutcome {
  *  than reality overflows the prompt and makes small models degenerate. */
 const LOCAL_DEFAULT_CONTEXT_WINDOW = 8192;
 
-/** Display-event payload caps - bounds what the host persists per event.
- *  Non-mutating: returns a clipped copy only when something was trimmed. */
-const DISPLAY_ARG_LIMIT = 300;
-/** Edit-family payloads: the patch IS the rendered diff body on reload -
- *  a 300-char clip leaves a mangled partial block in the pill. */
-const DISPLAY_PATCH_KEYS = new Set(['patch', 'new_content']);
-const DISPLAY_PATCH_ARG_LIMIT = 6000;
-const DISPLAY_OUTPUT_LIMIT = 1500;
-
-function _clipDisplay(value: string, limit: number): string {
-    return value.length <= limit
-        ? value
-        : `${value.slice(0, limit)}… [+${value.length - limit} chars truncated]`;
-}
-
 /** Case-tolerant path equality for watcher-vs-store path comparisons
  *  (Windows returns watcher URIs with arbitrary drive-letter casing). */
 function sameMcpPath(a: string, b: string): boolean {
     return process.platform === 'win32'
         ? a.toLowerCase() === b.toLowerCase()
         : a === b;
-}
-
-function trimDisplayEvent(event: any): any {
-    // Provider-native replay carriers are MODEL-ledger data: they must never
-    // reach the display ledger, the pending-turn snapshot, or the webview.
-    if (event?.type === 'assistant_message' && (event.providerBlocks || event.reasoningContent)) {
-        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
-        event = rest;
-    }
-    if (event?.type === 'tool_call' && event.tool !== TASK_LIST_TOOL_NAME) {
-        if (event.args && typeof event.args === 'object') {
-            return {
-                ...event,
-                args: Object.fromEntries(
-                    Object.entries(event.args).map(([k, v]) =>
-                        [k, typeof v === 'string'
-                            ? _clipDisplay(v, DISPLAY_PATCH_KEYS.has(k) ? DISPLAY_PATCH_ARG_LIMIT : DISPLAY_ARG_LIMIT)
-                            : v])
-                ),
-            };
-        }
-        if (typeof event.args === 'string') {
-            return { ...event, args: _clipDisplay(event.args, DISPLAY_ARG_LIMIT) };
-        }
-    } else if (event?.type === 'tool_result' && typeof event.output === 'string' && event.output.length > DISPLAY_OUTPUT_LIMIT) {
-        return { ...event, output: _clipDisplay(event.output, DISPLAY_OUTPUT_LIMIT) };
-    }
-    return event;
 }
 
 /** One row of the Usage page's rate sheet: a model's effective rate plus where
@@ -3291,7 +3249,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._scheduleLocalPartialPersist();
                 break;
             case 'thinking':
-                this._localAccumulatedThinking = event.value;
+                // The accumulated copy feeds the result event, the pending
+                // snapshot and legacy restore - clip it at the source so a
+                // >200k reasoning chain cannot sit in memory for the rest of
+                // the session. The LIVE webview stream above stays full.
+                this._localAccumulatedThinking = clipHistoryContent(event.value, MAX_CONTENT_CAP);
                 this._flushLiveSegment();
                 this._noteThinking(event.value);
                 // Record the reasoning in the turn's event timeline so it keeps
@@ -3312,7 +3274,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // A tool call closes the current reasoning block - reasoning
                 // after it belongs to a fresh block and needs its own pill.
                 this._localThinkingBlockEvent = null;
-                outcome.events.push({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args });
+                // Display-only event (the model ledger takes its tool rows
+                // from `assistant_message.tool_calls`): trim at PUSH so a
+                // whole written file never rides the run-lifetime array - the
+                // turn-end transfer produced these exact bytes anyway.
+                // `update_task_list` stays whole (the checklist re-parses it).
+                outcome.events.push(trimDisplayEvent({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args }));
                 this._scheduleLocalPartialPersist();
                 if (event.tool === TASK_LIST_TOOL_NAME) {
                     this._noteTaskListWrite();
@@ -3329,6 +3296,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._localThinkingBlockEvent = null;
                 const persisted = persistedEventFromAgentEvent(event);
                 if (persisted) outcome.events.push(persisted);
+                // Re-enforce the run-lifetime bounds (output budget, thinking
+                // ceiling, carrier budget) after every payload-bearing push.
+                boundOutcomeEvents(outcome.events);
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({
                     type: 'toolResult',
@@ -3368,6 +3338,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             case 'assistantMessage': {
                 const persisted = persistedEventFromAgentEvent(event);
                 if (persisted) outcome.events.push(persisted);
+                boundOutcomeEvents(outcome.events);
                 this._scheduleLocalPartialPersist();
                 break;
             }
@@ -5643,6 +5614,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 agentStarted = true;
                 const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart);
                 this._endLiveMarkdown();
+                // Final pass over the run-lifetime ledger before either
+                // terminal path consumes it: a reasoning block (or carrier
+                // pileup) that never crossed another tool push gets bounded
+                // here, so what the ledgers and the snapshot retain is the
+                // bounded copy.
+                boundOutcomeEvents(outcome.events);
                 // An empty completion (context overflow, degenerate round) must
                 // read as an error, not finalize a silent empty bubble.
                 if (outcome.resultEvent && !String(outcome.resultEvent.persian_explanation ?? '').trim() && outcome.events.length === 0) {
