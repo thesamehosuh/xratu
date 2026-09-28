@@ -68,7 +68,8 @@ import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
-import { isGeoBlockedError } from './providerErrors';
+import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
+import { explainError } from './local/errorExplain';
 import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
 import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
@@ -3232,7 +3233,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 }
             } else {
                 const msg = err instanceof Error ? err.message : String(err);
-                this._view?.webview.postMessage({ type: 'error', value: msg });
+                // Persian one-liner + raw detail when the failure is a known
+                // class (offline, deterministic - see local/errorExplain);
+                // unknown failures keep passing through raw.
+                const http = providerHttpStatus(err);
+                const explained = explainError(http ? `${msg} ${http.body}` : msg, http?.status);
+                if (explained) {
+                    this._view?.webview.postMessage({ type: 'error', valueKey: explained.valueKey, params: explained.params });
+                } else {
+                    this._view?.webview.postMessage({ type: 'error', value: msg });
+                }
                 outcome.errorEvent = { error: msg };
                 void this._maybeOfferIranianFallback(err);
             }
@@ -3471,10 +3481,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     };
                 }
                 break;
-            case 'error':
+            case 'error': {
                 outcome.errorEvent = { error: event.value };
-                this._view?.webview.postMessage({ type: 'error', value: event.value });
+                const explained = explainError(event.value);
+                this._view?.webview.postMessage(explained
+                    ? { type: 'error', valueKey: explained.valueKey, params: explained.params }
+                    : { type: 'error', value: event.value });
                 break;
+            }
         }
     }
 
