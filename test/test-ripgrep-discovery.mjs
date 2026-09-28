@@ -8,6 +8,7 @@
  */
 import { createRequire } from 'module';
 import Module from 'module';
+import path from 'path';
 
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
@@ -34,12 +35,14 @@ const check = (name, actual, expected) => {
 };
 
 const win = ripgrepCandidates({ env: {}, appRoot: 'C:\\VSCode\\resources\\app', platform: 'win32' });
-// Separator is the HOST's (path.join) - the win32 flag only picks the name.
-check('windows: app-root bundled rg.exe', win[0].endsWith('/@vscode/ripgrep/bin/rg.exe') || win[0].endsWith('\\@vscode\\ripgrep\\bin\\rg.exe'), true);
-check('windows: candidate lives under the app root', win[0].startsWith('C:\\VSCode\\resources\\app'), true);
+// Built with the HOST's path.join (the win32 flag only picks the name), so
+// the expectation joins the same way the implementation does.
+const winWant = path.join('C:\\VSCode\\resources\\app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe');
+check('windows: app-root bundled rg.exe', win[0], winWant);
 
 const linux = ripgrepCandidates({ env: {}, appRoot: '/usr/share/code/resources/app', platform: 'linux' });
-check('posix: app-root bundled rg', linux[0], '/usr/share/code/resources/app/node_modules/@vscode/ripgrep/bin/rg');
+const posixWant = path.join('/usr/share/code/resources/app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg');
+check('posix: app-root bundled rg', linux[0], posixWant);
 
 const hinted = ripgrepCandidates({ env: { VSCODE_RIPGREP_PATH: 'D:/tools/rg.exe' }, appRoot: 'C:\\VSCode', platform: 'win32' });
 check('env hint wins over app root', hinted[0], 'D:/tools/rg.exe');
