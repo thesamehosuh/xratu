@@ -72,7 +72,7 @@ import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
 import { explainError } from './local/errorExplain';
 import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
-import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, skillId, SKILL_FILE, type DiscoveredSkill } from './skills';
+import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, sha256Hex, skillId, updateBundledSkillIfUntouched, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** Shared promisified runner for the git status line. */
 const execFileAsync = promisify(execFile);
@@ -6293,20 +6293,60 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 }
 
-/** First-run default skill: seed the bundled natural-farsi writing skill
- *  into the user's global cross-agent skills root (~/.agents/skills), the
- *  same location the Skills page already scans. The once-flag means the
- *  seed happens exactly once per install: an existing SKILL.md (user-
- *  authored or previously seeded) is never touched, and a deliberate
- *  deletion is never resurrected - disabling via the Skills page is the
- *  supported "off" switch. */
-async function seedDefaultSkill(context: vscode.ExtensionContext): Promise<void> {
-    if (context.globalState.get<boolean>('xratu.skills.bundledSeeded')) return;
+/** Bundled skills seeded into the user's global cross-agent skills root
+ *  (~/.agents/skills), the same location the Skills page scans. Each entry
+ *  is [skill directory name, path relative to the extension root]. */
+const BUNDLED_SKILLS: ReadonlyArray<readonly [string, string]> = [
+    ['natural-farsi', path.join('assets', 'skills', 'natural-farsi', SKILL_FILE)],
+    ['jalali-dates', path.join('assets', 'skills', 'jalali-dates', SKILL_FILE)],
+    ['finglish-normalize', path.join('assets', 'skills', 'finglish-normalize', SKILL_FILE)],
+    ['iran-connectivity-fallback', path.join('assets', 'skills', 'iran-connectivity-fallback', SKILL_FILE)],
+    ['iran-dev-access', path.join('assets', 'skills', 'iran-dev-access', SKILL_FILE)],
+    ['local-llm-low-ram', path.join('assets', 'skills', 'local-llm-low-ram', SKILL_FILE)],
+];
+
+/** Seed/update the bundled skills. Per-skill bookkeeping:
+ *  - `xratu.skills.seeded.<name>` marks that this install has SEEN the skill;
+ *    a skill the user deleted afterwards is never resurrected (the flag
+ *    makes later runs skip creation), and disabling via the Skills page
+ *    stays the supported "off" switch.
+ *  - `xratu.skills.seededHash.<name>` records the content hash we wrote, so
+ *    bundled content updates reach untouched copies while a user-edited
+ *    copy ('foreign', or a legacy seed with no hash) is theirs forever. */
+async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void> {
     if (vscode.workspace.isTrusted === false) return;
-    const source = path.join(context.extensionPath, 'assets', 'skills', 'natural-farsi', SKILL_FILE);
-    const skillMd = await fs.promises.readFile(source, 'utf-8');
-    await ensureBundledSkill(path.join(os.homedir(), '.agents', 'skills'), 'natural-farsi', skillMd);
-    await context.globalState.update('xratu.skills.bundledSeeded', true);
+    const root = path.join(os.homedir(), '.agents', 'skills');
+    const legacy = context.globalState.get<boolean>('xratu.skills.bundledSeeded') === true;
+    for (const [name, relPath] of BUNDLED_SKILLS) {
+        try {
+            const flagKey = `xratu.skills.seeded.${name}`;
+            const hashKey = `xratu.skills.seededHash.${name}`;
+            const skillMd = await fs.promises.readFile(path.join(context.extensionPath, relPath), 'utf-8');
+            if (!context.globalState.get<boolean>(flagKey)) {
+                // Legacy installs seeded natural-farsi under the old
+                // once-flag with no hash recorded: treat their copy as
+                // user-owned so updates never clobber it.
+                if (legacy && name === 'natural-farsi') {
+                    await context.globalState.update(flagKey, true);
+                    await context.globalState.update(hashKey, 'foreign');
+                    continue;
+                }
+                const result = await ensureBundledSkill(root, name, skillMd);
+                await context.globalState.update(flagKey, true);
+                // 'exists' = a copy was already there (user-authored): never
+                // ours to update. 'created' records our hash.
+                await context.globalState.update(hashKey, result === 'created' ? sha256Hex(skillMd) : 'foreign');
+                continue;
+            }
+            const updated = await updateBundledSkillIfUntouched(
+                root, name, skillMd, context.globalState.get<string>(hashKey) ?? 'foreign');
+            if (updated === 'updated') {
+                await context.globalState.update(hashKey, sha256Hex(skillMd));
+            }
+        } catch (e) {
+            console.error('xratu: bundled skill seed failed', name, e);
+        }
+    }
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -6330,8 +6370,8 @@ export function activate(context: vscode.ExtensionContext) {
     // create inside - an existing copy is never clobbered. Fire-and-forget:
     // the next skills scan picks the folder up, and failures must never
     // block activation.
-    seedDefaultSkill(context).catch((e) =>
-        console.error('xratu: default skill seed failed:', e));
+    seedBundledSkills(context).catch((e) =>
+        console.error('xratu: bundled skills seed failed:', e));
 
     initShiki().catch(err => console.error('Shiki init failed:', err));
 
@@ -6438,10 +6478,10 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.workspace.onDidGrantWorkspaceTrust(() => {
             void provider.reloadMcpFromDisk().catch((e) =>
                 console.error('xratu: mcp trust-transition reload failed:', e));
-            // Activation skipped the default-skill seed in Restricted Mode -
+            // Activation skipped the bundled-skills seed in Restricted Mode -
             // this transition is its only second chance in this window.
-            void seedDefaultSkill(context).catch((e) =>
-                console.error('xratu: default skill trust-transition seed failed:', e));
+            void seedBundledSkills(context).catch((e) =>
+                console.error('xratu: bundled skills trust-transition seed failed:', e));
         })
     );
 }
