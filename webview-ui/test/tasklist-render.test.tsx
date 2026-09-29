@@ -116,5 +116,27 @@ ok(!!parseTaskListArgs(JSON.stringify({ tasks: [{ task: 'A', status: 'completed'
 ok(!!parseTaskListArgs({ tasks: [{ content: 'B', status: 'pending' }] }), 'host parser: alias keys');
 ok(parseTaskListArgs('not json') === null, 'host parser: garbage rejected');
 
+// 9. Parse identity stability: the App-level memo re-runs parseTaskListStep on
+//    every streamed chunk (chat.messages identity changes per thinking tick),
+//    and the editor keys rows by OBJECT IDENTITY - a re-parse that mints fresh
+//    item objects remounts every row and flickers the checkmarks (seen live
+//    during thinking, even with the thinking pill closed). Same text must
+//    yield the same array identity; rows then keep their keys.
+{
+    const text = JSON.stringify({
+        tasks: [
+            { label: 'One', status: 'completed' },
+            { label: 'Two', status: 'pending' },
+        ],
+    });
+    const a = parseTaskListStep(text);
+    const b = parseTaskListStep(text);
+    ok(a !== null && b !== null, 'parse identity: both parses succeed');
+    ok(a === b, 'parse identity: same text returns the same array');
+    ok(a![0] === b![0] && a![1] === b![1], 'parse identity: items keep object identity');
+    const other = parseTaskListStep(JSON.stringify({ tasks: [{ label: 'Three', status: 'pending' }] }));
+    ok(other !== null && other !== a, 'parse identity: different text is a different array');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

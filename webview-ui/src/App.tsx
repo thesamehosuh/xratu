@@ -392,10 +392,18 @@ export function App() {
                 // sticky, so revealing while pinned keeps the reader at the
                 // bottom (and its own scroll adjustment fires events with no
                 // user intent) - collapsing there would undo the reveal.
+                // Hands OFF the scroll: collapsing unmounts rows from the
+                // top in one commit, and doing that while a wheel/touch
+                // gesture is still landing reflows a heavy transcript
+                // mid-drag (live: freeze/flicker/clipping on scroll-up, only
+                // recoverable by a new message's re-pin). Defer the collapse
+                // until the reader's hands are off; the scroll handler will
+                // get another chance on the next event.
                 if (!wasAtBottom
                     && visibleBudget > HISTORY_PAGE_SIZE
                     && el.scrollHeight > el.clientHeight
-                    && !pendingScrollAdjust.current) {
+                    && !pendingScrollAdjust.current
+                    && Date.now() - userIntentAt.current > 500) {
                     setVisibleBudget(HISTORY_PAGE_SIZE);
                 }
             } else if (movedUp && (userIntent || !heightChanged)) {

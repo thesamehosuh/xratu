@@ -106,7 +106,30 @@ function taskListLabelOf(entry: object): unknown {
  *  raw JSON string; `label`/`task`/`content`/`step` aliases are tolerated
  *  (weak models). Malformed/legacy payloads return null so the row falls
  *  back to the plain tool pill. */
+/** Parsed step cache keyed by the step's args text. The memo that feeds the
+ *  interactive checklist re-runs on every streamed chunk (chat.messages
+ *  identity changes with each thinking/tool tick), and every re-parse minted
+ *  FRESH item objects - the editor keys rows by object identity, so all rows
+ *  remounted on every tick and the checkmarks flickered off/on the whole run
+ *  (seen live, even with the thinking pill closed). Same text -> same array
+ *  identity -> stable keys. Results are treated as read-only everywhere, so
+ *  sharing is safe. */
+const TASK_LIST_PARSE_CACHE = new Map<string, TaskListItem[] | null>();
+const TASK_LIST_PARSE_CACHE_MAX = 100;
+
 export function parseTaskListStep(text: string): TaskListItem[] | null {
+    const cached = TASK_LIST_PARSE_CACHE.get(text);
+    if (cached !== undefined) return cached;
+    const parsed = parseTaskListStepUncached(text);
+    if (TASK_LIST_PARSE_CACHE.size >= TASK_LIST_PARSE_CACHE_MAX) {
+        const first = TASK_LIST_PARSE_CACHE.keys().next().value;
+        if (first !== undefined) TASK_LIST_PARSE_CACHE.delete(first);
+    }
+    TASK_LIST_PARSE_CACHE.set(text, parsed);
+    return parsed;
+}
+
+function parseTaskListStepUncached(text: string): TaskListItem[] | null {
     try {
         const v: unknown = JSON.parse(text);
         const obj = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
@@ -591,6 +614,12 @@ function diffBlockLines(search: string, replace: string): BlockDiffLine[] | null
     return out;
 }
 
+/** Rows rendered per diff block before the "+N more" expander. A run that
+ *  ends in several 6KB patch pills used to mount every row of every block at
+ *  once - the DOM churn froze the scroller and the squash measurements went
+ *  stale (clipping) as late highlight landings shifted heights. */
+const BLOCK_DIFF_RENDER_ROWS = 160;
+
 /** One apply_patch block: LCS-diffed against the target file's language and
  *  SHIKI-highlighted per line. `del` lines consume the SEARCH text's
  *  highlighted lines in order, `add`/`same` lines the REPLACE text's - the
@@ -601,19 +630,26 @@ function PillDiffBlock({ block, lang }: { block: PatchBlock; lang: string }) {
     const delLines = useHighlightedCode(block.search, lang);
     const addLines = useHighlightedCode(block.replace, lang);
     const lines = useMemo(() => diffBlockLines(block.search, block.replace), [block.search, block.replace]);
+    const [expanded, setExpanded] = useState(false);
     if (!lines) {
+        // Oversized or non-diffable block: bound the raw fallback too - a
+        // whole clipped file as one <pre> is exactly the freeze case.
+        const cap = (text: string) =>
+            text.length > 8000 ? `${text.slice(0, 8000)}\n… [${text.length - 8000} more chars]` : text;
         return (
             <div className="pill-diff-block">
-                {block.search ? <pre className="pill-diff-del">{block.search}</pre> : null}
-                {block.replace ? <pre className="pill-diff-add">{block.replace}</pre> : null}
+                {block.search ? <pre className="pill-diff-del">{cap(block.search)}</pre> : null}
+                {block.replace ? <pre className="pill-diff-add">{cap(block.replace)}</pre> : null}
             </div>
         );
     }
+    const shown = expanded ? lines : lines.slice(0, BLOCK_DIFF_RENDER_ROWS);
+    const hidden = lines.length - shown.length;
     let di = 0;
     let ai = 0;
     return (
         <div className="pill-diff-block">
-            {lines.map((l, j) => {
+            {shown.map((l, j) => {
                 const hi = l.kind === 'del' ? delLines[di++] ?? '' : addLines[ai++] ?? '';
                 return (
                     <div key={j} className={`pill-diff-line${l.kind === 'same' ? '' : ` ${l.kind}`}`} dir="ltr">
@@ -627,6 +663,11 @@ function PillDiffBlock({ block, lang }: { block: PatchBlock; lang: string }) {
                     </div>
                 );
             })}
+            {hidden > 0 ? (
+                <button type="button" className="pill-diff-more" dir="ltr" onClick={() => setExpanded(true)}>
+                    + {hidden} more lines
+                </button>
+            ) : null}
         </div>
     );
 }
@@ -1977,12 +2018,35 @@ function useShikiTheme(): string {
     return useSyncExternalStore(subscribeTheme, currentShikiTheme, currentShikiTheme);
 }
 
+/** Memo of Shiki output per (theme, lang, code). Highlighting is async and
+ *  expensive; without a cache every diff block in a run re-highlights on
+ *  mount, and again on every theme/code change - a run ending in several
+ *  6KB apply_patch pills used to fire dozens of codeToHtml passes at once
+ *  (freeze, then a line-by-line raw->highlighted flash as each landed). */
+const HIGHLIGHT_CACHE = new Map<string, string[]>();
+const HIGHLIGHT_CACHE_MAX = 150;
+/** Above this, skip highlighting entirely (escaped raw lines instead): the
+ *  tokenizer cost is not worth it for huge clipped blocks. */
+const HIGHLIGHT_MAX_CHARS = 24_000;
+
+function cacheKey(theme: string, lang: string, code: string): string {
+    return `${theme}\u0000${lang}\u0000${code}`;
+}
+
 function useHighlightedCode(code: string, lang: string): string[] {
-    const [highlighted, setHighlighted] = useState<string[]>([]);
     const theme = useShikiTheme();
+    const [highlighted, setHighlighted] = useState<string[]>(() =>
+        (code && lang !== 'text' ? HIGHLIGHT_CACHE.get(cacheKey(theme, lang, code)) : undefined) ?? [],
+    );
     useEffect(() => {
-        if (!code || lang === 'text') {
+        if (!code || lang === 'text' || code.length > HIGHLIGHT_MAX_CHARS) {
             setHighlighted([]);
+            return;
+        }
+        const key = cacheKey(theme, lang, code);
+        const hit = HIGHLIGHT_CACHE.get(key);
+        if (hit) {
+            setHighlighted(hit);
             return;
         }
         let cancelled = false;
@@ -2001,7 +2065,14 @@ function useHighlightedCode(code: string, lang: string): string[] {
             const inner = match[1]
                 .replace(/<span class="line">/g, '')
                 .replace(/<\/span>\s*(?=<span class="line">|$)/g, '');
-            setHighlighted(inner.split('\n'));
+            const lines = inner.split('\n');
+            if (HIGHLIGHT_CACHE.size >= HIGHLIGHT_CACHE_MAX) {
+                // Cheap LRU-ish trim: drop the oldest half.
+                const keys = Array.from(HIGHLIGHT_CACHE.keys());
+                for (const k of keys.slice(0, Math.floor(keys.length / 2))) HIGHLIGHT_CACHE.delete(k);
+            }
+            HIGHLIGHT_CACHE.set(key, lines);
+            setHighlighted(lines);
         }).catch(() => {
             if (!cancelled) setHighlighted([]);
         });

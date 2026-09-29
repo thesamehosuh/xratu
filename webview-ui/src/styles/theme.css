@@ -3545,6 +3545,22 @@ pre.tool-cmd {
     text-align: left;
 }
 
+.pill-diff-more {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.pill-diff-more:hover {
+  color: var(--ink);
+}
+
 /* Shiki token colors sit on the pill's diff tint instead of the editor
    background - a mild boost keeps them at editor strength. */
 .pill-diff-code span {
