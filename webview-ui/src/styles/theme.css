@@ -71,6 +71,19 @@
     /* Reading measure for prose - caps line length on wide panels without
        touching code/tables. Sidebar widths already sit under this. */
     --xratu-measure: 72ch;
+
+    /* Motion language - "stream & settle": content arrives on an expressive
+       ease-out and lands softly, interactive surfaces pop out of their
+       anchor, live states breathe instead of blink. Durations form a 4-step
+       scale so related motions stay in rhythm; the reduced-motion block at
+       the end of the file switches the whole language off. */
+    --xratu-ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+    --xratu-ease-spring: cubic-bezier(0.34, 1.32, 0.64, 1);
+    --xratu-ease-flow: cubic-bezier(0.45, 0, 0.2, 1);
+    --xratu-dur-1: 110ms;
+    --xratu-dur-2: 180ms;
+    --xratu-dur-3: 280ms;
+    --xratu-dur-4: 420ms;
 }
 
 * {
@@ -105,6 +118,23 @@
 
 *::-webkit-scrollbar-corner {
     background: transparent;
+}
+
+/* Scrollers that deliberately show NO scrollbar (chat transcript, dropdown
+   lists, sub-page bodies incl. the MCP marketplace list). `scrollbar-width`
+   is the effective switch: the global `*` rule above sets `thin`, and on
+   current Chromium a non-auto scrollbar-width makes the ::-webkit-scrollbar
+   display:none fallbacks below a no-op - which is why a "hidden" scrollbar
+   could pop out on a mounting page. Listing them together keeps the two
+   mechanisms in sync. */
+.session-pop-list,
+.messages,
+.task-list-chip-menu-list,
+.cred-page,
+.settings-scroll,
+.dropdown-list,
+.rate-pop {
+    scrollbar-width: none;
 }
 
 /* Light themes invert the elevation: the editor is the lightest surface, so
@@ -158,6 +188,12 @@ body {
     margin: 0;
     padding: 0;
     height: 100%;
+    /* The webview panel is a fixed shell: every surface scrolls inside its
+       own container. Without this, entrance transforms that poke past the
+       viewport bottom (overlay/page rise-ins) briefly grow the DOCUMENT
+       scroll box and the scrollbar pops out for the length of the
+       animation. */
+    overflow: hidden;
 }
 
 body {
@@ -270,6 +306,59 @@ button {
     flex-direction: column;
     min-height: 0;
     background: var(--vscode-sideBar-background);
+    /* Page rise-ins translate inside this box - clip them so a mounting
+       page can never push the shell's own scroll geometry around. */
+    overflow: hidden;
+    /* Page transition: the screen settles in over the chat, and leaves
+       through the same door (App.tsx keeps it mounted for the exit beat). */
+    animation: xratu-overlay-in var(--xratu-dur-3) var(--xratu-ease-settle) both;
+}
+
+.screen-overlay.is-leaving {
+    animation: xratu-overlay-out 170ms var(--xratu-ease-flow) both;
+    pointer-events: none;
+}
+
+@keyframes xratu-overlay-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.992);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes xratu-overlay-out {
+    from {
+        opacity: 1;
+        transform: none;
+    }
+    to {
+        opacity: 0;
+        transform: translateY(6px) scale(0.994);
+    }
+}
+
+/* The overlay page bodies (credentials/settings/capabilities/usage/proxy
+   share .settings-page or .cred-page) settle once per navigation - the page
+   component remounts on every screen change, so the mount animation IS the
+   transition between pages inside the same overlay shell. */
+.screen-overlay .cred-page,
+.screen-overlay .settings-page {
+    animation: xratu-page-in var(--xratu-dur-4) var(--xratu-ease-settle) both;
+}
+
+@keyframes xratu-page-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -305,7 +394,7 @@ button {
     color: var(--vscode-descriptionForeground);
     font-family: inherit;
     font-size: 12px;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-btn:hover:not(:disabled),
@@ -322,7 +411,7 @@ button {
 
 .session-btn-chevron {
     flex: 0 0 auto;
-    transition: transform 0.15s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-btn.open .session-btn-chevron {
@@ -344,7 +433,8 @@ button {
     background: var(--xratu-shell);
     mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
-    animation: xratu-drop 0.16s ease-out;
+    animation: xratu-drop var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: top center;
 }
 
 .session-pop-head {
@@ -390,7 +480,7 @@ button {
     font-size: 11px;
     padding: 3px 8px;
     border-radius: var(--xratu-radius-sm);
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-scope:hover {
@@ -458,7 +548,7 @@ button {
     text-align: start;
     padding: 6px 8px;
     border-radius: var(--xratu-radius-sm);
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-row-main:hover:not(:disabled) {
@@ -518,7 +608,7 @@ button {
     /* Never shrink: the long, truncating text should give way first. */
     flex: 0 0 auto;
     opacity: 0;
-    transition: opacity 0.12s ease, color 0.15s ease, background 0.15s ease;
+    transition: opacity var(--xratu-dur-1) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-row:hover .session-row-action,
@@ -576,7 +666,7 @@ button {
     font-size: 11px;
     padding: 3px 8px;
     border-radius: var(--xratu-radius-sm);
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .session-danger:hover {
@@ -600,7 +690,7 @@ button {
     border-radius: var(--xratu-radius-sm);
     background: transparent;
     color: var(--vscode-descriptionForeground);
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .ghost-btn.small {
@@ -705,7 +795,7 @@ button {
     border: 0;
     border-radius: var(--xratu-radius-sm);
     cursor: pointer;
-    transition: color 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .show-earlier:hover {
@@ -769,18 +859,18 @@ button {
     color: var(--vscode-descriptionForeground);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(6px);
-    animation: xratu-jump-in 0.15s ease-out;
-    transition: color 0.15s ease, transform 0.15s ease;
+    animation: xratu-jump-in var(--xratu-dur-3) var(--xratu-ease-spring);
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 @keyframes xratu-jump-in {
     from {
         opacity: 0;
-        transform: translateY(8px);
+        transform: translateY(10px) scale(0.55);
     }
     to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
     }
 }
 
@@ -1023,7 +1113,7 @@ button {
 .approval-item-chevron {
     flex: 0 0 auto;
     color: var(--vscode-descriptionForeground);
-    transition: transform 0.12s ease;
+    transition: transform var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .approval-item[open] .approval-item-chevron {
@@ -1168,7 +1258,7 @@ button {
     font-family: inherit;
     font-weight: 600;
     line-height: 1;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), border-color var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle), opacity var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .approval-actions .deny-btn {
@@ -1224,6 +1314,8 @@ button {
     border-top: 1px solid var(--vscode-widget-border);
     color: var(--vscode-descriptionForeground);
     font-size: 10.5px;
+    /* The verdict seals the card: it settles in under the actions row. */
+    animation: decision-in var(--xratu-dur-3) var(--xratu-ease-settle);
 }
 
 .approval-resolution.approved {
@@ -1312,7 +1404,7 @@ button {
     font-size: 13px;
     text-align: start;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), border-color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .decision-option:hover:not(:disabled) {
@@ -1367,6 +1459,10 @@ button {
     flex: 0 0 auto;
     margin-inline-start: auto;
     color: var(--xratu-accent-strong);
+}
+
+.decision-option.selected .decision-option-check {
+    animation: xratu-pop var(--xratu-dur-2) var(--xratu-ease-spring);
 }
 
 .decision-option-desc {
@@ -1462,6 +1558,7 @@ button {
     color: var(--vscode-descriptionForeground);
     font-size: 12px;
     overflow-wrap: anywhere;
+    animation: decision-in var(--xratu-dur-3) var(--xratu-ease-settle);
 }
 
 /* A settled decision collapses into this pill; it is the expand toggle for
@@ -1504,11 +1601,11 @@ button {
 }
 
 /* Card→pill→next-card never reads as a clipped jump: everything the stack
-   mounts rises in gently (same language as xratu-rise on bubbles). */
+   mounts settles in gently (same language as xratu-rise on bubbles). */
 @keyframes decision-in {
     from {
         opacity: 0;
-        transform: translateY(5px);
+        transform: translateY(6px) scale(0.98);
     }
     to {
         opacity: 1;
@@ -1518,7 +1615,7 @@ button {
 
 .decision-stack .decision-card,
 .decision-record {
-    animation: decision-in 0.18s ease-out;
+    animation: decision-in var(--xratu-dur-3) var(--xratu-ease-settle);
 }
 
 /* Holder for a decision-only system row: no bubble chrome at all - the
@@ -1533,7 +1630,10 @@ button {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 3px 10px 3px 5px;
+    /* Logical: the text side keeps its 10px end padding in BOTH directions -
+       the physical shorthand gave fa's RTL text only 5px on the left. */
+    padding: 3px 10px;
+    padding-inline-start: 5px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 999px;
     background: var(--xratu-surface-inset);
@@ -1542,7 +1642,7 @@ button {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .decision-collapsed:hover {
@@ -1937,7 +2037,7 @@ button {
     background: var(--xratu-surface-inset);
     border: 1px solid var(--xratu-border);
     border-radius: var(--xratu-radius-sm);
-    transition: border-color 0.15s ease, background 0.15s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .chip svg {
@@ -1952,7 +2052,7 @@ button {
 
 /* Suggestion chips ride in one after another - the stagger is the hook. */
 .chip-suggest {
-    animation: xratu-rise 0.22s ease-out backwards;
+    animation: xratu-rise var(--xratu-dur-3) var(--xratu-ease-settle) backwards;
 }
 
 .chip:disabled {
@@ -1973,17 +2073,33 @@ button {
     border-radius: var(--xratu-radius);
     padding: 11px 13px;
     background: var(--xratu-bubble);
-    animation: xratu-rise 0.18s ease-out;
+    /* Settle-in: the turn rises 6px out of the shell and lands from a hair
+       under scale. User turns also drift in from their own side. */
+    --msg-enter-x: 0px;
+    animation: xratu-rise var(--xratu-dur-3) var(--xratu-ease-settle);
 }
 
 @keyframes xratu-rise {
     from {
         opacity: 0;
-        transform: translateY(4px);
+        transform: translate3d(var(--msg-enter-x, 0px), 6px, 0) scale(0.985);
     }
     to {
         opacity: 1;
-        transform: translateY(0);
+        transform: translate3d(0, 0, 0) scale(1);
+    }
+}
+
+/* Small things (chips, checks, discovered rows) pop out of their own box
+   instead of sliding - the spring curve overshoots a hair and settles. */
+@keyframes xratu-pop {
+    from {
+        opacity: 0;
+        transform: scale(0.92);
+    }
+    to {
+        opacity: 1;
+        transform: none;
     }
 }
 
@@ -2073,11 +2189,13 @@ button {
 .msg.user {
     background: var(--xratu-bubble-user);
     /* Physical, not logical: the user turn stays on the RIGHT in both locales
-       (align-self: flex-end would flip it to the left in RTL). */
+       (align-self: flex-end would flip it to the left in RTL). Its entrance
+       drifts in from that same side. */
     margin-left: auto;
     margin-right: 0;
     max-width: 85%;
     padding: 9px 12px;
+    --msg-enter-x: 10px;
 }
 
 .msg.system {
@@ -2109,6 +2227,28 @@ button {
     flex-wrap: wrap;
     gap: 7px;
     margin: 0 0 9px;
+}
+
+/* Payload chips land with a pop - a file appearing on a turn (or in the
+   composer) should read as "this was just attached". */
+.message-attachment-image,
+.message-attachment-file {
+    animation: xratu-pop var(--xratu-dur-2) var(--xratu-ease-spring) backwards;
+}
+
+.message-attachment-image:nth-child(2),
+.message-attachment-file:nth-child(2) {
+    animation-delay: 40ms;
+}
+
+.message-attachment-image:nth-child(3),
+.message-attachment-file:nth-child(3) {
+    animation-delay: 80ms;
+}
+
+.message-attachment-image:nth-child(4),
+.message-attachment-file:nth-child(4) {
+    animation-delay: 120ms;
 }
 
 .message-attachment-image {
@@ -2402,7 +2542,7 @@ button {
     font-size: 10.5px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    transition: background var(--xratu-dur-1) var(--xratu-ease-settle), color var(--xratu-dur-1) var(--xratu-ease-settle), border-color var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .code-copy:hover {
@@ -2483,12 +2623,11 @@ button {
 
 @keyframes xratu-blink {
     0%,
-    50% {
+    100% {
         opacity: 1;
     }
-    50.01%,
-    100% {
-        opacity: 0;
+    50% {
+        opacity: 0.25;
     }
 }
 
@@ -2507,7 +2646,7 @@ button {
     height: 7px;
     border-radius: 50%;
     background: #bf8700;
-    animation: xratu-blink 1.05s steps(1, end) infinite;
+    animation: xratu-blink 1.05s var(--xratu-ease-flow) infinite;
 }
 
 .retry-countdown {
@@ -2536,9 +2675,68 @@ button {
 /* Tool pills carry NO surface of their own - the row and its open body sit
    directly on the message background; the rail is the only structure. */
 .step {
+    position: relative;
     border-radius: var(--xratu-radius-sm);
     font-size: 12.5px;
-    overflow: hidden;
+    /* A new pill doesn't pop in - it unfolds downward from the pill above it.
+       Transform/opacity ONLY: a layout animation here would fight the
+       transcript's scroll pinning in App.tsx. */
+    transform-origin: top center;
+    animation: xratu-step-in var(--xratu-dur-3) var(--xratu-ease-settle) 70ms backwards;
+}
+
+@keyframes xratu-step-in {
+    from {
+        opacity: 0;
+        transform: translateY(-5px) scaleY(0.92);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* The stitch between consecutive pills: a short accent thread draws down the
+   icon column from the pill above just before the new one lands - the
+   transition frame that ties a new tool call to the tool call before it.
+   ONLY pill-after-pill: a pill under response text or a task list is the
+   start of a new run, and stitching it to prose would read as a timeline
+   that is not there. It dissolves as the row settles; the open-body rail
+   takes over from there. */
+.step + .step::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 6px;
+    top: -6px;
+    width: 1px;
+    height: 6px;
+    background: var(--xratu-accent);
+    opacity: 0;
+    transform-origin: top;
+    pointer-events: none;
+    animation: xratu-thread var(--xratu-dur-4) var(--xratu-ease-settle) backwards;
+}
+
+/* Nested pills inside a grouped run sit 3px apart, not 6px - the stitch
+   must span the actual gap. */
+.step-group-body .step + .step::before {
+    top: -3px;
+    height: 3px;
+}
+
+@keyframes xratu-thread {
+    0% {
+        opacity: 0;
+        transform: scaleY(0);
+    }
+    35% {
+        opacity: 0.65;
+        transform: scaleY(1);
+    }
+    100% {
+        opacity: 0;
+        transform: scaleY(1);
+    }
 }
 
 .step[open] > summary .step-label {
@@ -2556,7 +2754,7 @@ button {
     color: var(--vscode-descriptionForeground);
     list-style: none;
     border-radius: var(--xratu-radius-sm);
-    transition: color 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 /* The summary's primary row - every pill's icon/label/status line lives
@@ -2818,6 +3016,7 @@ button {
 .task-list-item.completed .task-list-check {
     background: var(--xratu-accent);
     border-color: var(--xratu-accent);
+    animation: xratu-pop var(--xratu-dur-2) var(--xratu-ease-spring);
 }
 
 .task-list-label {
@@ -2866,7 +3065,7 @@ button {
     gap: 2px;
     /* Always faintly visible so editing is discoverable; full opacity on hover. */
     opacity: 0.45;
-    transition: opacity 0.12s ease;
+    transition: opacity var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .task-list-item:hover .task-list-controls,
@@ -2963,7 +3162,7 @@ button {
 
 .task-list-chip-caret {
     color: var(--vscode-descriptionForeground);
-    transition: transform 0.15s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .task-list-chip.open .task-list-chip-caret {
@@ -2983,7 +3182,7 @@ button {
     height: 100%;
     border-radius: 999px;
     background: var(--xratu-accent);
-    transition: width 0.25s ease;
+    transition: width var(--xratu-dur-4) var(--xratu-ease-settle);
 }
 
 /* Header task-list expansion - mirrors .session-pop: drops down like a
@@ -2999,6 +3198,8 @@ button {
     background: var(--xratu-shell);
     mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 10px), transparent 100%);
+    animation: xratu-drop var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: top center;
 }
 
 .task-list-chip-menu-list {
@@ -3037,7 +3238,7 @@ button {
 .step-chev {
     flex-shrink: 0;
     opacity: 1;
-    transition: transform 0.15s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 /* Direct-child only: sub-pills live INSIDE an open group pill, and a
@@ -3179,7 +3380,7 @@ button {
     color: var(--vscode-descriptionForeground);
     opacity: 0.55;
     cursor: pointer;
-    transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+    transition: opacity var(--xratu-dur-1) var(--xratu-ease-settle), background var(--xratu-dur-1) var(--xratu-ease-settle), color var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .icon-btn-mini:hover {
@@ -3481,14 +3682,34 @@ pre.tool-cmd {
 }
 
 /* Heartbeat row: run is live but no step row is spinning (e.g. right after
-   a tool finished, before the next reasoning deltas arrive). */
+   a tool finished, before the next reasoning deltas arrive). No horizontal
+   padding and a 13px icon slot (10px ring + 1.5px optical margins): the
+   spinner's centre lands exactly on the tool-pill icon column above it
+   (13px icons), and the label starts where pill labels start. Fade only -
+   a scaled entrance would drift the spinner off the column mid-animation. */
 .working-row {
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 3px 8px;
+    padding: 3px 0;
     font-size: var(--xratu-fs-md);
     color: var(--vscode-descriptionForeground);
+    animation: xratu-fade-in var(--xratu-dur-2) var(--xratu-ease-settle);
+}
+
+.working-row .spinner {
+    width: 10px;
+    height: 10px;
+    margin-inline: 1.5px;
+}
+
+@keyframes xratu-fade-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 /* Streamed AI text segment living between the pills - chronological with
@@ -3505,6 +3726,14 @@ pre.tool-cmd {
 
 .step-text-seg.streaming {
     color: var(--vscode-descriptionForeground);
+}
+
+/* Streamed text wears no cursor: the live signal is the words themselves
+   settling in. Each arriving word fades up on a short staggered wave (see
+   StreamingText in MessageItem.tsx) - a chunk landing as one solid blob
+   reads as a glitch, a wave of words reads as writing. */
+.stream-tok {
+    animation: xratu-fade-in 240ms var(--xratu-ease-settle) backwards;
 }
 
 .step-text-seg .msg-content {
@@ -3553,7 +3782,7 @@ pre.tool-cmd {
     border-radius: var(--xratu-radius-xs);
     background: transparent;
     color: var(--vscode-descriptionForeground);
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .icon-btn:hover {
@@ -3693,7 +3922,7 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-input-border);
     border-radius: var(--xratu-radius);
     padding: 4px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), box-shadow var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 /* Teal marks a DRAFT, not attention: focus alone (clicking an empty composer)
@@ -3744,7 +3973,7 @@ pre.tool-cmd {
     border-radius: var(--xratu-radius-xs);
     background: transparent;
     color: var(--vscode-descriptionForeground);
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .attach-btn:hover {
@@ -3767,14 +3996,14 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 @keyframes xratu-drop-up {
     from {
         opacity: 0;
-        transform: translateY(5px) scale(0.98);
-        transform-origin: bottom left;
+        transform: translateY(8px) scale(0.96);
     }
     to {
         opacity: 1;
@@ -3794,7 +4023,7 @@ pre.tool-cmd {
     border: none;
     border-radius: var(--xratu-radius-xs);
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .attach-menu-item:hover {
@@ -3820,6 +4049,7 @@ pre.tool-cmd {
     border: 1px solid var(--xratu-accent-dim);
     font-size: var(--xratu-fs-sm);
     color: var(--vscode-foreground);
+    animation: xratu-pop var(--xratu-dur-2) var(--xratu-ease-spring) backwards;
 }
 
 .attach-chip-thumb {
@@ -3875,7 +4105,7 @@ pre.tool-cmd {
     background: transparent;
     color: var(--vscode-descriptionForeground);
     flex-shrink: 0;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .attach-chip-remove:hover {
@@ -3958,7 +4188,7 @@ pre.tool-cmd {
     border: none;
     border-radius: 999px;
     cursor: pointer;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .chip-btn:hover:not(.static) {
@@ -4010,13 +4240,14 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 @keyframes xratu-drop {
     from {
         opacity: 0;
-        transform: translateY(6px) scale(0.99);
+        transform: translateY(-8px) scale(0.985);
     }
     to {
         opacity: 1;
@@ -4104,7 +4335,7 @@ pre.tool-cmd {
     background: transparent;
     border: none;
     border-radius: var(--xratu-radius-xs);
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .model-item:hover {
@@ -4203,7 +4434,7 @@ pre.tool-cmd {
     background: transparent;
     border: none;
     border-radius: var(--xratu-radius-xs);
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .mention-item:hover,
@@ -4283,7 +4514,7 @@ pre.tool-cmd {
     place-items: center;
     padding: 0;
     border-radius: 999px;
-    transition: opacity 0.15s ease, color 0.15s ease;
+    transition: opacity var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .send-btn > svg {
@@ -4414,6 +4645,47 @@ pre.tool-cmd {
     margin-top: 2px;
 }
 
+/* First run is the one orchestrated entrance in the app: the mark pops out
+   of its brackets first, then the copy stacks in behind it. */
+.welcome-mark {
+    animation: xratu-mark-in var(--xratu-dur-4) var(--xratu-ease-spring) both;
+}
+
+@keyframes xratu-mark-in {
+    from {
+        opacity: 0;
+        transform: scale(0.6);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.welcome-hero > :not(.welcome-mark) {
+    animation: xratu-page-in var(--xratu-dur-4) var(--xratu-ease-settle) both;
+}
+
+.welcome-hero > :nth-child(2) {
+    animation-delay: 60ms;
+}
+
+.welcome-hero > :nth-child(3) {
+    animation-delay: 110ms;
+}
+
+.welcome-hero > :nth-child(4) {
+    animation-delay: 160ms;
+}
+
+.welcome-hero > :nth-child(5) {
+    animation-delay: 200ms;
+}
+
+.welcome-hero > :nth-child(6) {
+    animation-delay: 240ms;
+}
+
 /* Welcome: local runtimes discovered on this machine. */
 .welcome-local {
     width: 100%;
@@ -4439,6 +4711,20 @@ pre.tool-cmd {
     padding: 9px 11px;
     border-radius: 8px;
     background: var(--xratu-surface);
+    /* Discovery results arrive as a batch - each row pops into the list. */
+    animation: xratu-pop var(--xratu-dur-3) var(--xratu-ease-spring) backwards;
+}
+
+.welcome-runtime:nth-child(2) {
+    animation-delay: 40ms;
+}
+
+.welcome-runtime:nth-child(3) {
+    animation-delay: 80ms;
+}
+
+.welcome-runtime:nth-child(4) {
+    animation-delay: 120ms;
 }
 
 .welcome-runtime-info {
@@ -4532,7 +4818,7 @@ pre.tool-cmd {
     background: var(--xratu-accent);
     border: 1px solid var(--xratu-accent);
     border-radius: var(--xratu-radius-sm);
-    transition: background 0.15s ease, transform 0.12s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), transform var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .primary-btn:hover:not(:disabled) {
@@ -4628,7 +4914,7 @@ pre.tool-cmd {
 
 .tok-ring-fill {
     stroke: #4cc38a;
-    transition: stroke-dasharray 0.25s ease, stroke 0.15s ease;
+    transition: stroke-dasharray var(--xratu-dur-4) var(--xratu-ease-settle), stroke var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .tok-ring-fill.warn {
@@ -4699,7 +4985,8 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 .ctx-opt {
@@ -4715,7 +5002,7 @@ pre.tool-cmd {
     border: none;
     border-radius: var(--xratu-radius-xs);
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .ctx-opt:hover {
@@ -4775,7 +5062,7 @@ pre.tool-cmd {
     border: none;
     border-radius: calc(var(--xratu-radius-xs) - 1px);
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle);
     white-space: nowrap;
 }
 
@@ -5070,7 +5357,7 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-widget-border);
     border-radius: 999px;
     cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), border-color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-notice-retry:hover:not(:disabled) {
@@ -5130,7 +5417,7 @@ pre.tool-cmd {
     font-family: inherit;
     font-size: 11.5px;
     white-space: nowrap;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .prov-card-inline:hover {
@@ -5211,7 +5498,7 @@ pre.tool-cmd {
     border: 1px solid transparent;
     border-radius: var(--xratu-radius-sm);
     background: transparent;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .saved-credential:hover {
@@ -5344,7 +5631,7 @@ pre.tool-cmd {
     text-align: start;
     font-family: inherit;
     font-size: 12.5px;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-discovery-toggle:hover {
@@ -5365,19 +5652,20 @@ pre.tool-cmd {
 
 .cred-discovery-toggle .chevron-open {
     transform: rotate(180deg);
-    transition: transform 0.18s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-discovery-toggle .chevron-closed {
     transform: rotate(0deg);
-    transition: transform 0.18s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-discovery-body {
     display: flex;
     flex-direction: column;
     gap: 9px;
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 .cred-search-wrap input {
@@ -5440,7 +5728,7 @@ pre.tool-cmd {
     text-align: start;
     font-family: inherit;
     font-size: 11.5px;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease, transform 0.1s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle), transform var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .prov-card:hover {
@@ -5710,7 +5998,7 @@ pre.tool-cmd {
     font-weight: 600;
     cursor: pointer;
     font-family: inherit;
-    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle), border-color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 .cred-local-connect:hover {
     background: var(--xratu-accent-dim);
@@ -5762,7 +6050,7 @@ pre.tool-cmd {
     border-radius: var(--xratu-radius-sm);
     background: var(--xratu-surface);
     overflow: hidden;
-    transition: border-color 0.14s ease;
+    transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-card.open {
@@ -5785,7 +6073,7 @@ pre.tool-cmd {
     cursor: pointer;
     text-align: start;
     font-family: inherit;
-    transition: background 0.14s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-card-head:hover {
@@ -5869,12 +6157,12 @@ pre.tool-cmd {
 
 .cred-card-head .chevron-open {
     transform: rotate(180deg);
-    transition: transform 0.18s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-card-head .chevron-closed {
     transform: rotate(0deg);
-    transition: transform 0.18s ease;
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-card-body {
@@ -5882,7 +6170,8 @@ pre.tool-cmd {
     flex-direction: column;
     gap: 9px;
     padding: 11px;
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 .cred-card-note {
@@ -5933,7 +6222,8 @@ pre.tool-cmd {
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    animation: xratu-drop-up 0.16s ease-out;
+    animation: xratu-drop-up var(--xratu-dur-2) var(--xratu-ease-spring);
+    transform-origin: bottom center;
 }
 
 .cred-provider-option {
@@ -5949,7 +6239,7 @@ pre.tool-cmd {
     text-align: start;
     font-family: inherit;
     font-size: 12.5px;
-    transition: background 0.14s ease;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .cred-provider-option:hover,
@@ -6069,7 +6359,7 @@ pre.tool-cmd {
     background: transparent;
     color: var(--vscode-descriptionForeground);
     cursor: pointer;
-    transition: color 0.14s ease, background 0.14s ease;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle), background var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
 .saved-edit-btn.save {
@@ -8122,7 +8412,7 @@ button.mcp-row-main:hover strong {
     height: 11px;
     border-radius: 50%;
     background: #fff;
-    transition: transform 0.12s ease;
+    transition: transform var(--xratu-dur-1) var(--xratu-ease-settle);
 }
 
 .mcp-switch.on .mcp-switch-knob {
@@ -8225,6 +8515,67 @@ button.mcp-row-main:hover strong {
 [dir='rtl'] .task-list-edit-input:placeholder-shown,
 [dir='rtl'] .session-search input:placeholder-shown {
     direction: rtl;
+}
+
+/* ---------------------------------------------------------------------------
+   Press & hover feedback - the tactile half of the motion language.
+   `scale` animates on its own property so it composes with the transforms
+   already in use (the centered session button, hover lifts) instead of
+   fighting them. The shared transition set keeps `scale` smooth on release
+   while each control's color transitions keep running - a later per-control
+   `transition` shorthand would silently drop `scale` from the list.
+   ------------------------------------------------------------------------- */
+button:not(:disabled),
+.chip:not(:disabled),
+.lang-chip,
+.task-list-check:not(:disabled),
+.dropdown-trigger {
+    transition:
+        color var(--xratu-dur-2) var(--xratu-ease-settle),
+        background var(--xratu-dur-2) var(--xratu-ease-settle),
+        border-color var(--xratu-dur-2) var(--xratu-ease-settle),
+        opacity var(--xratu-dur-2) var(--xratu-ease-settle),
+        box-shadow var(--xratu-dur-3) var(--xratu-ease-settle),
+        transform var(--xratu-dur-2) var(--xratu-ease-settle),
+        scale var(--xratu-dur-1) var(--xratu-ease-settle);
+}
+
+button:not(:disabled):active,
+.chip:not(:disabled):active,
+.lang-chip:active,
+.task-list-check:not(:disabled):active {
+    scale: 0.96;
+}
+
+/* Icons lean into their button on hover - a micro-pop, not a color trick. */
+.icon-btn svg,
+.icon-btn-mini svg,
+.ghost-btn svg,
+.attach-btn svg,
+.send-btn svg,
+.jump-btn svg {
+    transition: scale var(--xratu-dur-2) var(--xratu-ease-spring);
+}
+
+.icon-btn:hover svg,
+.icon-btn-mini:hover svg,
+.ghost-btn:hover:not(:disabled) svg,
+.attach-btn:hover svg {
+    scale: 1.08;
+}
+
+.send-btn:not(:disabled):hover {
+    scale: 1.06;
+}
+
+/* Carets and chevrons flip on a spring - the one rotation in the UI that
+   should feel mechanical, not linear. */
+.step-chev,
+.session-btn-chevron,
+.task-list-chip-caret,
+.approval-item-chevron,
+.dropdown-caret {
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-spring);
 }
 
 /* ---------------------------------------------------------------------------

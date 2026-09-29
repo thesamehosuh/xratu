@@ -23,6 +23,7 @@ import type { ComposerAttachment, ModelCapability, ThinkingLevel, TokenUsage } f
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
 import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf } from '../i18n';
+import { prefersReducedMotion } from '../motion';
 
 /** Fallback when no window is known for this model yet. */
 const DEFAULT_CONTEXT_LIMIT = 131_072;
@@ -474,6 +475,18 @@ export function InputBar({
         // The typewriter rewrites the text - any live @-mention token is dead.
         setMention(null);
         ref.current?.focus();
+        if (prefersReducedMotion()) {
+            // No char-by-char theatre; the same send beat still gives the
+            // user a window to take over (any keypress cancels the auto-send).
+            setValue(full);
+            sendBeatRef.current = window.setTimeout(() => {
+                sendBeatRef.current = null;
+                injectedAppliedRef.current?.();
+                sendRef.current(full, []);
+                setValue('');
+            }, 450);
+            return clearInjectionTimers;
+        }
         setTyping(true);
         let i = 0;
         // Adaptive pace: long workflow prompts finish in ~1s, short ones keep

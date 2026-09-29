@@ -152,8 +152,11 @@ test('save button is gray until something is drafted', async ({ page }) => {
     expect(idle.background).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
     await page.locator('#proxy-port').fill('7899');
     await expect(btn).toBeEnabled();
-    const active = await btn.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(active).not.toBe(idle.background);
+    // Arming the button transitions its background in (motion polish) - poll
+    // until the transition settles instead of sampling the first frame.
+    await expect
+        .poll(() => btn.evaluate((el) => getComputedStyle(el).backgroundColor))
+        .not.toBe(idle.background);
 });
 
 test('settings page keeps the proxy section in the middle', async ({ page }) => {

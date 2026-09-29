@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -46,6 +46,7 @@ import {
 import type { ApprovalPayload, ChatMessage, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { getLocale, t, tf } from '../i18n';
+import { prefersReducedMotion } from '../motion';
 import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
 
@@ -1521,7 +1522,7 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
             const key = Number(row.dataset.key);
             const top = row.offsetTop;
             const prevTop = prevTops.current.get(key);
-            if (animating && prevTop !== undefined && Math.abs(prevTop - top) > 1) {
+            if (animating && !prefersReducedMotion() && prevTop !== undefined && Math.abs(prevTop - top) > 1) {
                 const staleRaf = animRafs.current.get(key);
                 if (staleRaf !== undefined) cancelAnimationFrame(staleRaf);
                 const dy = prevTop - top;
@@ -1529,7 +1530,7 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
                 row.style.transform = `translateY(${dy}px)`;
                 const raf = requestAnimationFrame(() => {
                     animRafs.current.delete(key);
-                    row.style.transition = 'transform 0.15s ease';
+                    row.style.transition = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)';
                     row.style.transform = '';
                 });
                 animRafs.current.set(key, raf);
@@ -1635,6 +1636,7 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
                             aria-label={item.status === 'completed' ? t('taskListMarkPending') : t('taskListMarkDone')}
                             onClick={() => setStatus(i, item.status === 'completed' ? 'pending' : 'completed')}
                         >
+                            {item.status === 'completed' && <Check size={11} strokeWidth={3} aria-hidden="true" />}
                         </button>
                         {editingIdx === i ? (
                             <input
@@ -1780,6 +1782,43 @@ function TaskListRow({ row, view, streaming }: { row: Extract<Row, { kind: 'task
     );
 }
 
+/** Streamed text split into words that fade in as they land. A chunk arriving
+ *  as one blob reads as a glitch; words settling in a short wave reads as
+ *  writing. Whitespace (newlines included) stays raw so `pre-wrap` layout is
+ *  untouched. Keys are character offsets and a word's entrance delay is
+ *  assigned ONCE (kept in a map): re-renders must not touch a span's props
+ *  mid-animation, or React strips the class and the word pops to rest. */
+function StreamingText({ text }: { text: string }) {
+    const delays = useRef(new Map<number, number>());
+    const seenLen = useRef(0);
+    const prevLen = Math.min(seenLen.current, text.length);
+    seenLen.current = text.length;
+    let wave = 0;
+    let offset = 0;
+    const out: ReactNode[] = [];
+    for (const part of text.split(/(\s+)/)) {
+        const start = offset;
+        offset += part.length;
+        if (!part) continue;
+        const isWord = !/^\s+$/.test(part);
+        let delay = delays.current.get(start);
+        if (isWord && delay === undefined && start >= prevLen) {
+            delay = Math.min(wave++ * 22, 360);
+            delays.current.set(start, delay);
+        }
+        out.push(
+            isWord && delay !== undefined ? (
+                <span key={start} className="stream-tok" style={{ animationDelay: `${delay}ms` }}>
+                    {part}
+                </span>
+            ) : (
+                <span key={start}>{part}</span>
+            )
+        );
+    }
+    return <>{out}</>;
+}
+
 /** Streamed AI text segments living INSIDE the pill timeline. Consecutive
  *  fragments merge into one flowing block: when every fragment carries its
  *  host-rendered markdown the htmls CONCATENATE into one .msg-content, so a
@@ -1805,7 +1844,7 @@ function TextSegmentRow({ steps, streaming }: { steps: Step[]; streaming: boolea
                     // row: a nested one would announce the HTML twice.
                     <RenderedMarkdown key={step.id} html={step.html} streaming={streaming} />
                 ) : (
-                    <span key={step.id}>{step.text}</span>
+                    <span key={step.id}>{streaming ? <StreamingText text={step.text} /> : step.text}</span>
                 )
             )}
         </div>
@@ -2549,7 +2588,11 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                                     aria-live={streamingContent ? 'polite' : undefined}
                                     aria-atomic={streamingContent ? 'false' : undefined}
                                 >
-                                    {r.steps.map((s) => s.text).join('\n')}
+                                    {streamingContent ? (
+                                        <StreamingText text={r.steps.map((s) => s.text).join('\n')} />
+                                    ) : (
+                                        r.steps.map((s) => s.text).join('\n')
+                                    )}
                                 </div>
                             )
                         )}
@@ -2573,7 +2616,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                     aria-live={streamingContent ? 'polite' : undefined}
                     aria-atomic="false"
                 >
-                    {text}
+                    {streamingContent ? <StreamingText text={text} /> : text}
                 </div>
             ) : null}
 
