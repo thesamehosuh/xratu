@@ -10,6 +10,7 @@
  */
 
 import { reminderTaskList, taskListReminderLine, type TaskListItem } from '../taskList';
+import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { resolveAgentRounds } from '../tooling/agentRounds';
 import { normalizeBaseUrl } from './baseUrl';
 import { proxyFetch } from '../proxyFetch';
@@ -336,14 +337,29 @@ function steerContent(
     return content;
 }
 
-function parseArguments(raw: string): Record<string, unknown> {
+export { UNPARSED_ARGS_KEY };
+
+export function parseArguments(raw: unknown): Record<string, unknown> {
+    // Some providers deliver `function.arguments` as an already-parsed object.
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw as Record<string, unknown>;
+    }
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text) return {};
     try {
-        const value = JSON.parse(raw);
-        return value && typeof value === 'object' && !Array.isArray(value)
-            ? value
-            : {};
+        const value = JSON.parse(text);
+        if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+        // Double-encoded arguments (a JSON string of a JSON string): unwrap
+        // once - providers that stringify twice still mean the inner object.
+        if (typeof value === 'string') {
+            try {
+                const inner = JSON.parse(value);
+                if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner;
+            } catch { /* fall through to the marker */ }
+        }
+        return { [UNPARSED_ARGS_KEY]: text.slice(0, 200) };
     } catch {
-        return {};
+        return { [UNPARSED_ARGS_KEY]: text.slice(0, 200) };
     }
 }
 
@@ -466,13 +482,19 @@ export function providerHttpError(status: number, text: string): Error {
     return error;
 }
 
-/** Generous output cap derived from the context window (4k floor, 16k
+/** Generous output cap derived from the context window (8k floor, 16k
  *  ceiling). The Messages API REQUIRES max_tokens; the chat, Responses and
  *  Google transports get the same derived cap so a full-window prompt plus a
  *  provider's default output maximum cannot overrun the context. An explicit
- *  `request.maxTokens` always wins. */
+ *  `request.maxTokens` always wins.
+ *
+ *  The floor matters: tool calls carry WHOLE FILES (edit_file new_content).
+ *  A 4k floor truncated a ~15KB HTML write mid-JSON on a small-window model,
+ *  which the tool then reported as missing arguments - a resend death loop
+ *  (seen live). 8k still fits inside every real window with room for the
+ *  prompt, and providers clamp to the true remaining context anyway. */
 function derivedMaxTokens(windowTokens?: number | null): number {
-    return Math.min(16384, Math.max(4096, Math.floor((windowTokens ?? 8192) / 4)));
+    return Math.min(16384, Math.max(8192, Math.floor((windowTokens ?? 8192) / 4)));
 }
 
 /** The output cap actually sent: an explicit caller cap wins outright, else
@@ -1112,7 +1134,14 @@ async function requestChatCompletion(
 
             if (call.id) current.id = String(call.id);
             if (call.function?.name) current.name += String(call.function.name);
-            if (call.function?.arguments) current.arguments += String(call.function.arguments);
+            if (call.function?.arguments) {
+                // Deltas carry strings, but some providers ship the whole
+                // arguments object on the first delta - String() would turn it
+                // into "[object Object]" and every key would go missing.
+                current.arguments += typeof call.function.arguments === 'string'
+                    ? call.function.arguments
+                    : JSON.stringify(call.function.arguments);
+            }
 
             toolDeltas.set(index, current);
         }

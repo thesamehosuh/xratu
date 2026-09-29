@@ -273,6 +273,15 @@ test('returning to the tail collapses the reveal window', async ({ page }) => {
     // Leave the tail and return: the mounted window collapses back to one page
     // so a long session cannot keep every revealed bubble in the DOM forever.
     await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
+    // The collapse is edge-triggered on "was away from the tail, now back"
+    // (collapsing while pinned would undo the reveal). Two back-to-back
+    // scrollTop writes can coalesce into ONE scroll event whose final state
+    // is "at tail", so the away-from-tail edge is never observed and the
+    // window stays at 50 - the flake. Let a frame render at the top first so
+    // the scroll handler sees the off-tail position before the return.
+    await page.locator('.messages').evaluate((el) => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+    }));
     await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
     await expect(bubbles).toHaveCount(40);
     await expect(page.locator('.show-earlier')).toBeVisible();

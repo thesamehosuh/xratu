@@ -256,4 +256,62 @@ check('a repaired patch parses to the same blocks as a hand-closed one', () => {
     }
 });
 
+// ---------------------------------------------------------------------------
+// Near-miss markers: models count chevrons wrong (live: '<<<<<< SEARCH' with
+// 6) and drop the final closer. repairPatchMarkers normalizes 5-7 chevrons to
+// the canonical 7 before its grammar repair, so those patches apply instead
+// of dying as "no valid blocks".
+// ---------------------------------------------------------------------------
+check('6-chevron markers normalize and parse', () => {
+    const raw = '<<<<<< SEARCH\nfoo\n=======\nbar\n>>>>>>> REPLACE';
+    const { patch, repairs } = repairPatchMarkers(raw);
+    const blocks = parsePatchBlocks(patch);
+    if (blocks.length !== 1 || blocks[0].search !== 'foo' || blocks[0].replace !== 'bar') {
+        throw new Error(JSON.stringify(blocks));
+    }
+    if (!repairs.some((r) => /normalized/.test(r))) throw new Error(JSON.stringify(repairs));
+});
+
+check('lowercase marker words normalize and parse', () => {
+    const raw = '<<<<<< search\nfoo\n=======\nbar\n>>>>>> replace';
+    const blocks = parsePatchBlocks(repairPatchMarkers(raw).patch);
+    if (blocks.length !== 1 || blocks[0].search !== 'foo') throw new Error(JSON.stringify(blocks));
+});
+
+check('6-chevron with a dropped final closer is normalized AND closed', () => {
+    // The live incident shape: full hunk written with 6-chevron openers and
+    // no trailing closer at all.
+    const raw = '<<<<<< SEARCH\n.plate{color:red}\n</style>\n=======\n.plate{color:blue}\n</style>';
+    const { patch, repairs } = repairPatchMarkers(raw);
+    const blocks = parsePatchBlocks(patch);
+    if (blocks.length !== 1 || !blocks[0].replace.includes('color:blue')) {
+        throw new Error(JSON.stringify(blocks));
+    }
+    if (!repairs.some((r) => /closed at end-of-input/.test(r))) throw new Error(JSON.stringify(repairs));
+});
+
+check('multi-hunk 6-chevron patch with one dropped closer repairs fully', () => {
+    const raw = '<<<<<< SEARCH\nkeep\n=======\nkept\n>>>>>>> REPLACE\n<<<<<< SEARCH\ndrop\n=======\ndropped';
+    const blocks = parsePatchBlocks(repairPatchMarkers(raw).patch);
+    if (blocks.length !== 2 || blocks[1].replace !== 'dropped') throw new Error(JSON.stringify(blocks));
+});
+
+check('5-chevron separators normalize too', () => {
+    const raw = '<<<<<< SEARCH\nfoo\n=====\nbar\n>>>>>>> REPLACE';
+    const blocks = parsePatchBlocks(repairPatchMarkers(raw).patch);
+    if (blocks.length !== 1 || blocks[0].replace !== 'bar') throw new Error(JSON.stringify(blocks));
+});
+
+check('a lone 4-chevron line is content, not a marker', () => {
+    const raw = '<<<< SEARCH\nfoo\n=======\nbar\n>>>>>>> REPLACE';
+    // 4 chevrons is below the normalization floor and below markerTokens -
+    // this is the old "no valid blocks" diagnosis, unchanged.
+    try {
+        parsePatchBlocks(repairPatchMarkers(raw).patch);
+        throw new Error('expected refusal');
+    } catch (e) {
+        if (!/marker|blocks/i.test(e.message)) throw new Error(`wrong error: ${e.message}`);
+    }
+});
+
 process.exit(failed ? 1 : 0);

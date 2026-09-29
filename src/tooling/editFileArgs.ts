@@ -44,6 +44,18 @@ function safeStringify(value: unknown): string {
 
 export type EditContentResolution = { content: string } | { error: string };
 
+/** Marker key placed in the args object when tool-call arguments arrive
+ *  unparseable. The old behavior was a silent `{}`, which made EVERY tool
+ *  report its first required argument as missing (`new_content is required`)
+ *  no matter what the model sent - a resend loop on every large write.
+ *  Lives here (not localAgent) so dependency-free consumers can share it. */
+export const UNPARSED_ARGS_KEY = '__unparsed_args';
+
+/** Keys weak models send INSTEAD of `new_content`. Precedent: the task-list
+ *  tool accepts `task`/`content`/`step` because a live model sent `task` -
+ *  a wrong-but-present key must not become "new_content is required". */
+export const EDIT_CONTENT_ALIASES = ['content', 'contents', 'text'] as const;
+
 /**
  * Resolve the `new_content` argument.
  *
@@ -71,6 +83,22 @@ export function resolveEditContent(raw: unknown): EditContentResolution {
             + 'content as text (the complete content for "overwrite"/"create", the text to add '
             + 'for "append").',
     };
+}
+
+/**
+ * Resolve the edit content from a full args object: `new_content` first, then
+ * the known aliases. A model that sends the file body under `content` gets its
+ * write, not a missing-argument error it cannot interpret.
+ */
+export function resolveEditContentFrom(args: Record<string, unknown>): EditContentResolution {
+    if (args && args.new_content !== undefined && args.new_content !== null) {
+        return resolveEditContent(args.new_content);
+    }
+    for (const key of EDIT_CONTENT_ALIASES) {
+        const v = args ? args[key] : undefined;
+        if (v !== undefined && v !== null) return resolveEditContent(v);
+    }
+    return resolveEditContent(undefined);
 }
 
 /**
