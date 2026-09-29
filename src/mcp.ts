@@ -2,8 +2,9 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { parsePatchBlocks, repairPatchMarkers, sanitizePath, withPathAlias } from './paths';
+import { decodeUnicodeEscapes, looksBinary, parsePatchBlocks, repairPatchMarkers, sanitizePath, withPathAlias } from './paths';
 import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
+import { resolveToolName } from './tooling/toolNames';
 import {
     terminalToolDescription,
     terminalCommandParamDescription,
@@ -217,7 +218,7 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
     {
         name: 'edit_file',
         description: [
-            'Whole-file writer: mode="overwrite" (default) REPLACES ITS ENTIRE CONTENT with new_content; mode="create" fails if the file already exists; mode="append" adds new_content to the end.',
+            'Whole-file writer: mode="overwrite" (default) REPLACES ITS ENTIRE CONTENT with new_content; mode="create" fails if the file already exists; mode="append" adds new_content to the end. Practical per-call ceiling is roughly 8KB of new_content - model output limits truncate larger calls mid-JSON, so build big files in chunks: mode "create" with a skeleton, then mode "append" pieces.',
             'To change PART of an existing file, do NOT use this tool - apply_patch (one or more SEARCH/REPLACE blocks) preserves the rest of the file.',
             'Overwriting far less content than the file has requires confirm_overwrite: true (200+ lines shrunk to under half, or 20+ lines shrunk to under a quarter) - a guard against accidental whole-file replacement.',
         ].join(' '),
@@ -254,7 +255,8 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
         inputSchema: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: terminalCommandParamDescription(process.platform) }
+                command: { type: 'string', description: terminalCommandParamDescription(process.platform) },
+                detach: { type: 'boolean', description: 'Launch and return immediately without waiting for exit (GUI apps, dev servers, xdg-open). The process is not owned, timed out, or killed by this tool. Output is not captured.' }
             },
             required: ['command']
         }
@@ -582,11 +584,28 @@ async function dispatchTool(
         const stats = existed
             ? ` - ${prevLines} → ${nextLines} lines (${delta >= 0 ? '+' : ''}${delta})`
             : ` (${nextLines} lines)`;
-        return { content: [{ type: 'text', text: `Successfully ${verb} ${args.path}${stats}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
+        // Append saves are mid-build by definition - the linter would only
+        // report the expected "unterminated" noise of an intentionally
+        // incomplete file (live: every chunked write lit up).
+        const diag = mode === 'append' ? '' : await diagnosticsSummary(vscode.Uri.file(fullPath));
+        return { content: [{ type: 'text', text: `Successfully ${verb} ${args.path}${stats}` + diag }] };
     } else if (name === 'read_file') {
         const fullPath = sanitizePath(args.path, workspaceRoot);
         if (!fs.existsSync(fullPath)) {
             return { content: [{ type: 'text', text: `Error: file not found: ${args.path}` }], isError: true };
+        }
+        {
+            // Binary payloads (PNG, zips, executables) used to come back as
+            // walls of mojibake that ate the context window (live: an 80KB
+            // PNG "read" as text). Refuse with a next step instead.
+            const head = fs.readFileSync(fullPath).subarray(0, 8192);
+            if (looksBinary(Buffer.from(head))) {
+                const kb = Math.round(fs.statSync(fullPath).size / 1024);
+                return {
+                    content: [{ type: 'text', text: `Error: ${args.path} is a binary file (~${kb}KB) - text output cannot show it. This harness has no image/preview tool; verify rendered output via DOM/text assertions or a CLI dump (e.g. a headless-browser --dump-dom) instead.` }],
+                    isError: true,
+                };
+            }
         }
         const MAX_LINES = 2000;
         const allLines = readLines(fullPath);
@@ -640,6 +659,25 @@ async function dispatchTool(
         const isWindows = process.platform === 'win32';
         const shellCmd = isWindows ? 'cmd.exe' : '/bin/bash';
         const shellArgs = isWindows ? ['/d', '/s', '/c', command] : ['-c', command];
+        // Detached launches (GUI apps, dev servers): a blocking run would sit
+        // on the idle/hard cap until the tool killed the process tree (live:
+        // xdg-open held the call open until the timeout, and the kill took
+        // the launched app down with it).
+        if (args.detach) {
+            const child = cp.spawn(shellCmd, shellArgs, {
+                cwd: workspaceRoot,
+                stdio: 'ignore',
+                detached: true,
+                windowsHide: true,
+            });
+            child.unref();
+            return {
+                content: [{
+                    type: 'text',
+                    text: `Launched detached: ${command}${child.pid ? ` (pid ${child.pid})` : ''}. The tool does not wait for, capture, or kill this process - do not expect its output.`,
+                }],
+            };
+        }
         // Inactivity vs hard cap: a QUIET-but-working process (a release
         // build, a slow test) must not die on the idle window - only the
         // absolute ceiling ends it. Anything streaming output resets idle.
@@ -925,14 +963,22 @@ async function dispatchTool(
             }
             let applied = 0;
             const errors: string[] = [];
-            for (const { search, replace } of blocks) {
+            const notes: string[] = [];
+            for (let bi = 0; bi < blocks.length; bi++) {
+                const { search, replace } = blocks[bi];
+                const tag = `#${bi + 1}`;
                 if (!search) {
                     errors.push(`Empty search block`);
                     continue;
                 }
                 let count = content.split(search).length - 1;
+                if (count > 1) {
+                    notes.push(`${tag} matched ${count} identical spots - applied the FIRST; make SEARCH unique`);
+                }
                 if (count === 1) {
+                    const at = content.indexOf(search);
                     content = content.replace(search, () => replace);
+                    notes.push(`${tag} @ line ${content.slice(0, at).split('\n').length}`);
                     applied++;
                     continue;
                 }
@@ -953,6 +999,7 @@ async function dispatchTool(
                     }
                 }
                 if (foundAt >= 0) {
+                    notes.push(`${tag} @ line ${foundAt + 1} (whitespace-tolerant match)`);
                     const replaceLines = replace.split('\n');
                     const baseIndentRe = /^[ \t]*/;
                     const searchIndent = (searchLines[0].match(baseIndentRe)?.[0] ?? '');
@@ -984,6 +1031,7 @@ async function dispatchTool(
                     }
                 }
                 if (foundAt >= 0) {
+                    notes.push(`${tag} @ line ${foundAt + 1} (whitespace-normalized match)`);
                     const replaceLines = replace.split('\n');
                     contentLines.splice(foundAt, searchLines.length, ...replaceLines);
                     content = contentLines.join('\n');
@@ -1005,6 +1053,7 @@ async function dispatchTool(
                                     }
                                 }
                                 if (middleMatch) {
+                                    notes.push(`${tag} @ line ${i + 1} (edge-line match)`);
                                     const replaceLines = replace.split('\n');
                                     contentLines.splice(i, searchLines.length, ...replaceLines);
                                     content = contentLines.join('\n');
@@ -1017,21 +1066,42 @@ async function dispatchTool(
                     }
                 }
                 if (foundAt < 0) {
-                    errors.push(`Could not find: "${search.slice(0, 80)}..."`);
+                    // Last resort: the SEARCH may describe the same line with
+                    // `\uXXXX` escapes decoded (or encoded) relative to the
+                    // file bytes - one more pass with the decoded form.
+                    const decoded = decodeUnicodeEscapes(search);
+                    if (decoded !== search) {
+                        const dCount = content.split(decoded).length - 1;
+                        if (dCount === 1) {
+                            const at = content.indexOf(decoded);
+                            content = content.replace(decoded, () => replace);
+                            notes.push(`${tag} @ line ${content.slice(0, at).split('\n').length} (matched after decoding \\uXXXX escapes)`);
+                            applied++;
+                            continue;
+                        }
+                        if (dCount > 1) {
+                            notes.push(`${tag} matched ${dCount} spots after decoding \\uXXXX escapes - applied none; make SEARCH unique`);
+                        }
+                    }
+                    const escapeHint = /\\u[0-9a-fA-F]{4}/.test(search) || decoded !== search
+                        ? ' Note: the SEARCH contains \\uXXXX escape text - it must match the FILE bytes exactly (literal backslash-u text in the file vs the real characters are different bytes). Copy the line from read_file output verbatim.'
+                        : '';
+                    errors.push(`Could not find: "${search.slice(0, 80)}..."${escapeHint}`);
                 }
             }
             if (applied > 0) {
                 fs.writeFileSync(fullPath, preserveEol(raw, content), 'utf-8');
             }
+            const noteStr = notes.length ? ` (${notes.slice(0, 12).join('; ')})` : '';
             const msg = errors.length > 0
                 ? [
-                      `Applied ${applied}/${blocks.length} blocks to ${args.path}.`,
+                      `Applied ${applied}/${blocks.length} blocks to ${args.path}${noteStr}.`,
                       ...errors,
                       applied > 0
                           ? 'The other blocks were applied successfully - do NOT re-send them.'
                           : '',
                   ].filter(Boolean).join('\n')
-                : `Successfully applied ${applied} patch blocks to ${args.path}`;
+                : `Successfully applied ${applied} patch blocks to ${args.path}${noteStr}`;
             const diag = applied > 0 ? await diagnosticsSummary(vscode.Uri.file(fullPath)) : '';
             return { content: [{ type: 'text', text: msg + diag + repairNote }], isError: errors.length > 0 && applied === 0 };
         } catch (e) {
@@ -1173,7 +1243,17 @@ async function dispatchTool(
         };
         return await handleExpansionTool(name, args ?? {}, expansionRuntime);
     }
-    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+    const hint = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
+    const aliasNote = /^(write|create|new|save)_file$/.test(name)
+        ? ` For whole-file writes use edit_file (mode "create" for new files, "overwrite" to replace, "append" to add to the end).`
+        : '';
+    return {
+        content: [{
+            type: 'text',
+            text: `Unknown tool: ${name}.${hint.suggestion ? ` Did you mean \`${hint.suggestion}\`?` : ''}${aliasNote}`,
+        }],
+        isError: true,
+    };
 }
 
 /** Execute a single built-in or expansion tool outside the MCP bridge.
@@ -1198,10 +1278,11 @@ export async function executeLocalTool(
             }
             return { output: await externalMcp.callTool(name, args ?? {}) };
         }
-        // Fill `path` from known aliases before any tool validates it: a
-        // model that sends `file_path` used to hit a raw Node TypeError deep
-        // in sanitizePath ("The 'path' argument must be of type string").
-        const result = await dispatchTool(workspaceRoot, name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
+        // Resolve model-drift tool NAMES first (write_file -> edit_file etc.),
+        // then fill `path` from known aliases: a model that sends `file_path`
+        // used to hit a raw Node TypeError deep in sanitizePath.
+        const named = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
+        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };

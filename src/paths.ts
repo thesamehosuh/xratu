@@ -356,3 +356,45 @@ export function sanitizePath(userPath: string, workspaceRoot: string): string {
     }
     return resolved;
 }
+
+/** Heuristic binary sniff for file reads: NUL bytes or a high share of
+ *  non-text bytes in the head. Text tools must not dump raw PNG/exec bytes
+ *  as "text" (live: an 80KB mojibake wall that ate the context window). */
+export function looksBinary(head: Buffer, sampleSize = 8192): boolean {
+    const n = Math.min(head.length, sampleSize);
+    if (n === 0) return false;
+    const slice = head.subarray(0, n);
+    for (let i = 0; i < n; i++) if (slice[i] === 0) return true;
+    // NUL-free binaries (PNG, zips) are not valid UTF-8 - Persian/emoji text
+    // is. Byte-ratio heuristics cannot tell them apart (multi-byte UTF-8
+    // shares the high bytes), so let the decoder decide; tolerate the sample
+    // cutting a multi-byte character at the very end.
+    try {
+        new TextDecoder('utf-8', { fatal: true }).decode(slice);
+    } catch {
+        try {
+            // First failure may be the sample cutting a multi-byte character
+            // at the end - that is still text; only a second failure (with the
+            // tail dropped) proves real invalid bytes.
+            new TextDecoder('utf-8', { fatal: true }).decode(slice.subarray(0, Math.max(0, n - 3)));
+        } catch {
+            return true;
+        }
+    }
+    let control = 0;
+    for (let i = 0; i < n; i++) {
+        const b = slice[i];
+        if (b < 9 || (b > 13 && b < 32)) control++;
+    }
+    return control / n > 0.1;
+}
+
+/** Decode `\uXXXX` sequences to the characters they encode. A model
+ *  patching source that holds LITERAL escape text sometimes sends the
+ *  decoded characters (or vice versa) - one side stops matching the file
+ *  bytes even though both describe the same line (live: patching a
+ *  `\u06f2...` literal). Used as a LAST-RESORT match pass. */
+export function decodeUnicodeEscapes(text: string): string {
+    return text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16)));
+}

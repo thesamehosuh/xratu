@@ -89,5 +89,32 @@ eq('canonical path wins over aliases', withPathAlias({ path: 'a.html', file: 'b.
 eq('empty canonical path falls through to alias', withPathAlias({ path: '  ', file: 'b.html' }).path, 'b.html');
 eq('no path at all leaves args unchanged', withPathAlias({ other: 1 }).path, undefined);
 
-console.log(failed === 0 ? '\nall tool-args checks passed (incl. path)' : `\n${failed} check(s) failed`);
+
+// --- tool-name resolution (live: "Unknown tool: write_file" dead ends)
+const { resolveToolName, TOOL_NAME_ALIASES } = require('../out/tooling/toolNames.js');
+const KNOWN = ['edit_file', 'read_file', 'apply_patch', 'run_terminal_command', 'grep_search'];
+
+eq('write_file resolves to edit_file', resolveToolName('write_file', KNOWN).name, 'edit_file');
+eq('alias reports its origin', resolveToolName('write_file', KNOWN).aliasedFrom, 'write_file');
+for (const alias of ['create_file', 'new_file', 'save_file']) {
+    eq(`alias ${alias} resolves`, resolveToolName(alias, KNOWN).name, TOOL_NAME_ALIASES[alias]);
+}
+eq('canonical names pass through', resolveToolName('apply_patch', KNOWN).name, 'apply_patch');
+eq('near-miss suggests the tool', resolveToolName('edit_fiel', KNOWN).suggestion, 'edit_file');
+eq('unknown name suggests by containment', resolveToolName('file', KNOWN).suggestion, 'edit_file');
+eq('unrelated name gives no bad suggestion', resolveToolName('zzzzzzzzzzzz', KNOWN).suggestion, undefined);
+
+// --- binary sniff (live: read_file dumped an 80KB PNG as mojibake text)
+const { looksBinary, decodeUnicodeEscapes } = require('../out/paths.js');
+const buf = (arr) => Buffer.from(new Uint8Array(arr));
+ok('plain text is not binary', !looksBinary(Buffer.from('hello\nworld\n')));
+ok('persian text is not binary', !looksBinary(Buffer.from('سلام دنیا\n')));
+ok('NUL byte means binary', looksBinary(buf([0x89, 0x50, 0x00, 0x01])));
+ok('png-ish high-entropy head is binary', looksBinary(buf([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array(100).fill(0xab)])));
+ok('empty file is not binary', !looksBinary(buf([])));
+
+eq('escape decoding round-trips characters', decodeUnicodeEscapes('\\u06f2\\u06f8'), '۲۸');
+eq('non-escape text is untouched', decodeUnicodeEscapes('a\\nb'), 'a\\nb');
+
+console.log(failed === 0 ? '\nall tool-args checks passed (incl. names + binary)' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);
