@@ -174,7 +174,7 @@ orthography step alone is just "drop the ZWNJ"):
 - اعلان‌ها → اعلان ها، پیام‌ها → پیام ها
 - بهینه‌تر → بهینه تر، کوچک‌تر → کوچک تر
 - مهم‌ترین → مهم ترین، سنگین‌ترین → سنگین ترین
-- Words ending in ه always take the space: ارائه‌دهنده‌ها → ارائه دهنده ها،
+- Words ending in ه always take the space: ارائه‌دهنده‌ها → ارایه دهنده ها،
   جلسه‌ها → جلسه ها
 
 **Full space — everything else that was a half-space compound:**
