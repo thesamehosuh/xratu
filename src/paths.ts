@@ -266,7 +266,39 @@ function comparable(p: string): string {
     return process.platform === 'win32' ? p.toLowerCase() : p;
 }
 
+/** Keys models send instead of `path` (same live-drift class as the
+ *  task-list `task`/`content`/`step` and edit_file content aliases). */
+export const PATH_ALIASES = ['file', 'file_path', 'filePath', 'filename'] as const;
+
+/** Fill `args.path` from a known alias when the canonical key is absent.
+ *  Returns the same object for chaining. */
+export function withPathAlias<T extends Record<string, unknown>>(args: T): T {
+    const rec = args as Record<string, unknown>;
+    const p = rec.path;
+    if (typeof p === 'string' && p.trim() !== '') return args;
+    for (const key of PATH_ALIASES) {
+        const v = rec[key];
+        if (typeof v === 'string' && v.trim() !== '') {
+            rec.path = v;
+            return args;
+        }
+    }
+    return args;
+}
+
 export function sanitizePath(userPath: string, workspaceRoot: string): string {
+    // Type-check FIRST: an undefined/blank path used to reach path.isAbsolute
+    // and die with a raw Node TypeError ("The 'path' argument must be of type
+    // string. Received undefined") that told the model nothing. Name the
+    // missing argument instead (seen live: the call failed once, the resend
+    // with the key filled in worked).
+    if (typeof userPath !== 'string' || userPath.trim() === '') {
+        throw new Error(
+            `the "path" argument is required and must be a non-empty string (got ${
+                typeof userPath === 'string' ? 'an empty string' : typeof userPath
+            }) - send the workspace-relative file path as "path".`,
+        );
+    }
     if (!workspaceRoot) {
         throw new Error('No workspace open. Open a folder in VS Code before using file operations.');
     }

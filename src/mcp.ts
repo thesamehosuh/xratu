@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
+import { parsePatchBlocks, repairPatchMarkers, sanitizePath, withPathAlias } from './paths';
 import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
 import {
     terminalToolDescription,
@@ -1198,7 +1198,10 @@ export async function executeLocalTool(
             }
             return { output: await externalMcp.callTool(name, args ?? {}) };
         }
-        const result = await dispatchTool(workspaceRoot, name, args, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
+        // Fill `path` from known aliases before any tool validates it: a
+        // model that sends `file_path` used to hit a raw Node TypeError deep
+        // in sanitizePath ("The 'path' argument must be of type string").
+        const result = await dispatchTool(workspaceRoot, name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };

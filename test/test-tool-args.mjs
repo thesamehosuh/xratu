@@ -57,5 +57,37 @@ eq('empty string is valid content', resolveEditContentFrom({ new_content: '' }),
 eq('missing still reports the canonical message',
     resolveEditContent(undefined).error?.startsWith('Error: new_content is required'), true);
 
-console.log(failed === 0 ? '\nall tool-args checks passed' : `\n${failed} check(s) failed`);
+
+// --- path argument resolution (live: raw Node TypeError leaked to the model)
+const { sanitizePath, withPathAlias, PATH_ALIASES } = require('../out/paths.js');
+const os = require('node:os');
+const path = require('node:path');
+
+const tmpRoot = os.tmpdir();
+const throwsPathError = (fn) => {
+    try { fn(); } catch (e) {
+        if (!/path/i.test(e.message)) throw new Error(`wrong error: ${e.message}`);
+        return;
+    }
+    throw new Error('expected a path error');
+};
+
+throwsPathError(() => sanitizePath(undefined, tmpRoot));
+throwsPathError(() => sanitizePath('', tmpRoot));
+throwsPathError(() => sanitizePath('   ', tmpRoot));
+throwsPathError(() => sanitizePath(42, tmpRoot));
+ok('undefined path error names the argument',
+    (() => { try { sanitizePath(undefined, tmpRoot); return false; } catch (e) {
+        return /required and must be a non-empty string/.test(e.message); } })(),
+    'message must name the missing "path" argument');
+ok('a real path still resolves', typeof sanitizePath('a.txt', tmpRoot) === 'string');
+
+for (const key of PATH_ALIASES) {
+    eq(`path alias ${key} fills args.path`, withPathAlias({ [key] : 'a.html' }).path, 'a.html');
+}
+eq('canonical path wins over aliases', withPathAlias({ path: 'a.html', file: 'b.html' }).path, 'a.html');
+eq('empty canonical path falls through to alias', withPathAlias({ path: '  ', file: 'b.html' }).path, 'b.html');
+eq('no path at all leaves args unchanged', withPathAlias({ other: 1 }).path, undefined);
+
+console.log(failed === 0 ? '\nall tool-args checks passed (incl. path)' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);
