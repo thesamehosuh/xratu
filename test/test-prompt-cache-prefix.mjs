@@ -243,5 +243,29 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('en and fa blocks differ', !en.includes(REPLY_LANGUAGE_FA));
 }
 
+// ---------------------------------------------------------------------------
+// natural-farsi preload: fa injects the skill body under the language
+// directive; en/auto never do (even when a body is passed); the injection is
+// byte-stable so the cacheable prefix holds.
+// ---------------------------------------------------------------------------
+{
+    const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
+    const SKILL = 'FARSI_SKILL_BODY';
+
+    const fa = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa', farsiSkill: SKILL });
+    ok('fa preloads the farsi skill body', fa.includes(SKILL));
+    ok('skill body lands after the language directive', fa.indexOf(REPLY_LANGUAGE_FA) < fa.indexOf(SKILL));
+    ok('fa+skill is deterministic', fa === buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa', farsiSkill: SKILL }));
+
+    const en = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'en', farsiSkill: SKILL });
+    ok('en never preloads the farsi skill', !en.includes(SKILL));
+
+    const auto = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'auto', farsiSkill: SKILL });
+    ok('auto never preloads the farsi skill', !auto.includes(SKILL));
+
+    const bare = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
+    ok('fa without a skill body stays shape-stable', bare.includes(REPLY_LANGUAGE_FA) && !bare.includes('natural-farsi skill, preloaded'));
+}
+
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

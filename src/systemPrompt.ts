@@ -45,6 +45,11 @@ export interface LocalSystemPromptInputs {
     evictedUserTurns: number;
     /** Explicit reply language; omitted/`auto` adds no language block. */
     replyLanguage?: 'fa' | 'en' | 'auto';
+    /** natural-farsi skill body, preloaded for `fa` so the writing rules are
+     *  deterministic from the first token (models drift to written Persian in
+     *  long outputs otherwise). Ignored unless `replyLanguage === 'fa'`.
+     *  Treat like `rulesContext`: byte-stable for the session. */
+    farsiSkill?: string;
 }
 
 /**
@@ -65,6 +70,13 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
     ];
     if (inputs.replyLanguage === 'fa') {
         parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`);
+        if (inputs.farsiSkill) {
+            parts.push(
+                "",
+                "Writing rules (the natural-farsi skill, preloaded) - follow them for ALL Persian you produce:",
+                inputs.farsiSkill,
+            );
+        }
     } else if (inputs.replyLanguage === 'en') {
         parts.push("", `${REPLY_LANGUAGE_EN} ${REPLY_COMMIT_MESSAGES}`);
     } else {
