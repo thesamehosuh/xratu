@@ -5,6 +5,9 @@ description: Use when the user wants to run LLMs locally on a small machine (8GB
 
 # Local LLMs on a small machine
 
+Sizing advice calibrated as of 2026; the math below ages better than model
+names do.
+
 ## Sizing math (the part people get wrong)
 
 Weights size = parameters x bytes-per-weight. A 7-8B model at 4-bit (Q4)
@@ -18,7 +21,11 @@ is roughly 4.5-5.5GB on disk and in memory, plus context and overhead.
 
 Leave headroom: the OS and the inference runtime want ~2GB beyond the
 weights. When memory is tight, a smaller model that answers is worth more
-than a bigger one that swaps.
+than a bigger one that swaps. **Check actual free memory first** (`free -h`
+on Linux, Task Manager on Windows) before picking a size - the table is a
+target, not a promise about the machine in front of you. Swap (or zram)
+keeps a too-big model from crashing but turns generation into minutes per
+reply; if the machine is swapping, downsize instead of tolerating it.
 
 ## Quantization
 
@@ -40,13 +47,17 @@ after checking the model card AND the machine's free memory.
 
 - **Ollama**: install, `ollama pull <model>`, then keep it running -
   Xratu auto-discovers the local endpoint (no API key needed) and lists its
-  models.
+  models. On Windows, the installer registers Ollama as a login-item
+  service, so "it's not running" usually means the tray app was closed -
+  reopening Ollama is enough; there is no `ollama serve` to run by hand
+  unless the service was removed.
 - **LM Studio / vLLM / llama.cpp**: serve any OpenAI-compatible endpoint;
   Xratu auto-discovers these too (Settings -> API keys shows what was
   found; the URL can always be pasted manually).
 - If discovery finds nothing, walk the user through starting the runtime
   first - a connection-refused error from the local endpoint almost always
-  means the runtime isn't running yet.
+  means the runtime isn't running yet. Discovery only probes localhost
+  ports, so a runtime on another machine needs its URL pasted manually.
 
 ## Expectations to set
 
