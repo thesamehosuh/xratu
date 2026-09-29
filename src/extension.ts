@@ -86,7 +86,7 @@ import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
 import { explainError } from './local/errorExplain';
 import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
-import { discoverSkills, ensureBundledSkill, listableSkills, resolveSkillForRun, sha256Hex, skillId, updateBundledSkillIfUntouched, SKILL_FILE, type DiscoveredSkill } from './skills';
+import { discoverSkills, ensureBundledSkill, listableSkills, readSkillBody, resolveSkillForRun, sha256Hex, skillId, updateBundledSkillIfUntouched, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** Shared promisified runner for the git status line. */
 const execFileAsync = promisify(execFile);
@@ -2603,14 +2603,38 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  canonical prompt bundled in systemPrompt.ts - the runtime is fully
      *  local, so the prompt travels with the extension. Only the
      *  local-operational notes and static context are appended here. */
-    private _buildLocalSystemPrompt(rulesContext: string, sessionSummary: string | null, planMode: boolean): string {
+    private _buildLocalSystemPrompt(rulesContext: string, sessionSummary: string | null, planMode: boolean, workspaceRoot: string): string {
+        const replyLanguage = this._resolveReplyLanguage();
         return buildLocalSystemPrompt({
             rulesContext,
             sessionSummary,
             planMode,
             evictedUserTurns: this._localEvictedUserTurns,
-            replyLanguage: this._resolveReplyLanguage(),
+            replyLanguage,
+            // fa replies preload the natural-farsi skill body so the writing
+            // rules hold from the first token - the model otherwise drifts to
+            // written Persian (را، همان، میدهد) in longer outputs. Resolved
+            // per run like the skill tool itself (project copies win, a
+            // disabled skill injects nothing).
+            farsiSkill: replyLanguage === 'fa' ? this._loadFarsiSkillBody(workspaceRoot) : undefined,
         });
+    }
+
+    /** Body of the winning `natural-farsi` skill copy (discovery priority:
+     *  project overrides before global, user-disabled skills inject nothing),
+     *  or undefined when the skill is missing/unreadable. */
+    private _loadFarsiSkillBody(workspaceRoot: string): string | undefined {
+        try {
+            const resolution = resolveSkillForRun(
+                workspaceRoot || undefined,
+                'natural-farsi',
+                new Set(this._disabledSkillIds()),
+            );
+            if (resolution.status !== 'ok') return undefined;
+            return readSkillBody(resolution.skill.dirPath) ?? undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     /** Project rules for the run, resolved ONCE per session so the system
@@ -3247,7 +3271,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // The turn's plan mode was captured by the caller BEFORE any await -
         // a mid-preflight toggle must not expose mutating tools in an
         // already-started plan turn. (Resolved above, next to the executor.)
-        const systemPrompt = this._buildLocalSystemPrompt(rulesContext, this._sessionSummary, runPlanMode);
+        const systemPrompt = this._buildLocalSystemPrompt(rulesContext, this._sessionSummary, runPlanMode, workspaceRoot);
 
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
