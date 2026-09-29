@@ -533,7 +533,7 @@ async function dispatchTool(
         // into a resend loop on every large write.
         if (args && args[UNPARSED_ARGS_KEY]) {
             return {
-                content: [{ type: 'text', text: `Error: tool-call arguments arrived malformed and could not be parsed (received head: ${String(args[UNPARSED_ARGS_KEY])}). Resend the call with a single plain-JSON arguments object.` }],
+                content: [{ type: 'text', text: `Error: tool-call arguments arrived malformed or truncated and could not be parsed (received head: ${String(args[UNPARSED_ARGS_KEY])}). If the call was large, it was most likely cut off at the model's output token limit mid-JSON - do NOT resend it whole: write the file in chunks (create a skeleton with edit_file mode "create", then append or apply_patch the rest in smaller pieces). If it was small, resend it as a single plain-JSON arguments object.` }],
                 isError: true,
             };
         }

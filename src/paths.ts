@@ -17,6 +17,8 @@ function countMarkerLines(patch: string, re: RegExp): number {
 const OPENER_LINE_RE = /^<<<<<<<.*$/gm;
 const SEPARATOR_LINE_RE = /^=======\r?$/gm;
 const CLOSER_LINE_RE = /^>>>>>>>.*$/gm;
+const OPENER_LINE = '<<<<<<< SEARCH';
+const SEPARATOR_LINE = '=======';
 const CLOSER_LINE = '>>>>>>> REPLACE';
 
 interface MarkerCounts { opens: number; seps: number; closes: number; }
@@ -49,7 +51,40 @@ function countMarkers(patch: string): MarkerCounts {
 export function repairPatchMarkers(patch: string): { patch: string; repairs: string[] } {
     const repairs: string[] = [];
     if (!patch) return { patch, repairs };
-    const tokens = markerTokens(patch);
+    // Normalize near-miss markers FIRST: models count chevrons wrong all the
+    // time (live: '<<<<<< SEARCH' with 6, and a lowercase 'search'). The
+    // canonical grammar below is strict 7 - without this pass those lines are
+    // invisible to markerTokens and the patch dies as "no valid blocks" even
+    // though every hunk is present and well-formed. 5-7 chevrons with the
+    // right word is unambiguously a marker; anything else stays content.
+    let normalized = 0;
+    const canon = patch.split(/\r?\n/).map((line) => {
+        // Already-canonical lines pass through untouched (no repair note):
+        // only a line that actually CHANGES is a normalization.
+        if (/^<{5,7}\s*SEARCH\s*$/i.test(line)) {
+            if (line === OPENER_LINE) return line;
+            normalized++;
+            return OPENER_LINE;
+        }
+        if (/^>{5,7}\s*REPLACE\s*$/i.test(line)) {
+            if (line === CLOSER_LINE) return line;
+            normalized++;
+            return CLOSER_LINE;
+        }
+        if (/^={5,7}\s*$/.test(line)) {
+            if (line === SEPARATOR_LINE) return line;
+            normalized++;
+            return SEPARATOR_LINE;
+        }
+        return line;
+    }).join('\n');
+    if (normalized > 0) {
+        repairs.push(
+            `${normalized} marker line(s) had a non-standard shape (wrong chevron count or case) `
+            + `and were normalized to the canonical '${OPENER_LINE}' / '${SEPARATOR_LINE}' / '${CLOSER_LINE}'.`,
+        );
+    }
+    const tokens = markerTokens(normalized > 0 ? canon : patch);
     if (tokens.length < 2) return { patch, repairs };
     // The grammar is strictly O S C O S C …, so a missing FINAL closer shows
     // up as a sequence that stops right after a separator. Counting markers
@@ -61,10 +96,10 @@ export function repairPatchMarkers(patch: string): { patch: string; repairs: str
     for (let i = 0; i < tokens.length; i++) {
         if (tokens[i] !== grammar[i % 3]) return { patch, repairs };
     }
-    if (tokens.length % 3 !== 2) return { patch, repairs };
+    if (tokens.length % 3 !== 2) return { patch: normalized > 0 ? canon : patch, repairs };
     // Trailing whitespace/newlines are transport noise here; the closer must
     // sit on its own line directly after the replacement body.
-    const body = patch.replace(/[\s\uFEFF]+$/, '');
+    const body = (normalized > 0 ? canon : patch).replace(/[\s\uFEFF]+$/, '');
     repairs.push(
         `the final block had no closing '${CLOSER_LINE}' marker (a dropped or truncated closer); `
         + `it was closed at end-of-input - verify that last hunk landed completely.`,

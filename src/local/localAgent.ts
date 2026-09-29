@@ -482,13 +482,19 @@ export function providerHttpError(status: number, text: string): Error {
     return error;
 }
 
-/** Generous output cap derived from the context window (4k floor, 16k
+/** Generous output cap derived from the context window (8k floor, 16k
  *  ceiling). The Messages API REQUIRES max_tokens; the chat, Responses and
  *  Google transports get the same derived cap so a full-window prompt plus a
  *  provider's default output maximum cannot overrun the context. An explicit
- *  `request.maxTokens` always wins. */
+ *  `request.maxTokens` always wins.
+ *
+ *  The floor matters: tool calls carry WHOLE FILES (edit_file new_content).
+ *  A 4k floor truncated a ~15KB HTML write mid-JSON on a small-window model,
+ *  which the tool then reported as missing arguments - a resend death loop
+ *  (seen live). 8k still fits inside every real window with room for the
+ *  prompt, and providers clamp to the true remaining context anyway. */
 function derivedMaxTokens(windowTokens?: number | null): number {
-    return Math.min(16384, Math.max(4096, Math.floor((windowTokens ?? 8192) / 4)));
+    return Math.min(16384, Math.max(8192, Math.floor((windowTokens ?? 8192) / 4)));
 }
 
 /** The output cap actually sent: an explicit caller cap wins outright, else
