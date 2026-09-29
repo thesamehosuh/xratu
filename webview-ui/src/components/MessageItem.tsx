@@ -106,7 +106,30 @@ function taskListLabelOf(entry: object): unknown {
  *  raw JSON string; `label`/`task`/`content`/`step` aliases are tolerated
  *  (weak models). Malformed/legacy payloads return null so the row falls
  *  back to the plain tool pill. */
+/** Parsed step cache keyed by the step's args text. The memo that feeds the
+ *  interactive checklist re-runs on every streamed chunk (chat.messages
+ *  identity changes with each thinking/tool tick), and every re-parse minted
+ *  FRESH item objects - the editor keys rows by object identity, so all rows
+ *  remounted on every tick and the checkmarks flickered off/on the whole run
+ *  (seen live, even with the thinking pill closed). Same text -> same array
+ *  identity -> stable keys. Results are treated as read-only everywhere, so
+ *  sharing is safe. */
+const TASK_LIST_PARSE_CACHE = new Map<string, TaskListItem[] | null>();
+const TASK_LIST_PARSE_CACHE_MAX = 100;
+
 export function parseTaskListStep(text: string): TaskListItem[] | null {
+    const cached = TASK_LIST_PARSE_CACHE.get(text);
+    if (cached !== undefined) return cached;
+    const parsed = parseTaskListStepUncached(text);
+    if (TASK_LIST_PARSE_CACHE.size >= TASK_LIST_PARSE_CACHE_MAX) {
+        const first = TASK_LIST_PARSE_CACHE.keys().next().value;
+        if (first !== undefined) TASK_LIST_PARSE_CACHE.delete(first);
+    }
+    TASK_LIST_PARSE_CACHE.set(text, parsed);
+    return parsed;
+}
+
+function parseTaskListStepUncached(text: string): TaskListItem[] | null {
     try {
         const v: unknown = JSON.parse(text);
         const obj = v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
