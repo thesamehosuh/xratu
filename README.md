@@ -41,14 +41,54 @@ runtime. Everything runs inside the extension host, on your machine.
   others.
 - **Long sessions** - steer mid-task, edit & resend any message, image and
   PDF attachments, automatic context compaction.
+- **Proxy-aware** - follows your proxy settings, VS Code's, the environment,
+  or the OS system proxy; a scan finds the Clash/v2rayN client already
+  running on your machine. Per-MCP routing (auto / via proxy / direct).
+- **Persian-first** - fa UI, Jalali dates, Persian error explanations, and
+  colloquial Farsi replies when you ask for them.
 
 ## Models
 
 | Group | Providers |
 |-------|-----------|
 | Cloud | OpenAI, Google Gemini, OpenRouter, xAI, Groq, DeepSeek, Mistral, Perplexity, Cohere, Together, Fireworks, Cerebras, NVIDIA NIM, Hugging Face, SambaNova, Moonshot, Z.AI, OpenCode Zen |
+| Iranian | Kaya AI, Avalai, Metis AI, Liara AI, ArvanCloud AI, Navaan, GapGPT |
 | Local | Ollama, LM Studio, vLLM, llama.cpp |
 | Custom | Any OpenAI-compatible HTTPS endpoint |
+
+## For developers in Iran
+
+- **Iranian gateways as first-class presets** - Kaya AI, Avalai, Metis AI,
+  Liara AI, ArvanCloud AI, Navaan, and GapGPT sit in their own group in
+  Settings → API keys, take rial payment, and need no VPN. Usage costs show
+  in Toman on the Usage page.
+- **Fully local is fully offline** - a local runtime (Ollama, LM Studio,
+  vLLM, llama.cpp) makes the agent complete with zero network dependency.
+- **Proxy-native** - Iranian setups route through Clash/v2rayN "System
+  Proxy" mode; Xratu picks it up (no TUN needed), scans for the local
+  client and its ports, and routes MCP traffic per server.
+- **Persian in, Persian out** - fa UI, Jalali dates, Persian error
+  explanations, and with reply language set to Persian the agent writes
+  colloquial Farsi - the bundled `natural-farsi` skill is preloaded, so the
+  register holds from the first token.
+- **No circumvention advice** - when an endpoint is unreachable or a signup
+  fails, the agent maps working alternatives (domestic gateways, local
+  models, Iranian PaaS) instead of VPN guides.
+
+### Provider endpoints
+
+| Provider | Base URL | Notes |
+|----------|----------|-------|
+| Kaya AI | `https://kayaai.ir/api` | preset ships the endpoint |
+| Avalai | `https://api.avalai.ir/v1` | preset ships the endpoint |
+| GapGPT | `https://api.gapgpt.app/v1` | preset ships the endpoint |
+| Metis AI | per-service | paste the endpoint from your service page |
+| Liara AI | per-service | each AI service has its own URL |
+| ArvanCloud AI | per-service | paste the endpoint from your service page |
+| Navaan | per-service | paste the endpoint from your service page |
+
+All speak the OpenAI-compatible API. The first three work with nothing but
+the API key; the rest hand each service its own URL at signup.
 
 ## Getting started
 
@@ -122,6 +162,37 @@ description: Deploy the app to staging; use when the user asks to deploy or ship
 
 Extra files (scripts, references, templates) go next to the `SKILL.md`.
 Enable/disable skills in Settings → Servers & skills → Skills.
+
+### First-party skills
+
+Xratu ships six skills, seeded to `~/.agents/skills` on first run (so
+Claude Code, OpenCode, and the other agent tools see them too), editable
+like any skill, and switchable per skill in Settings → Servers & skills →
+Skills:
+
+| Skill | What it does |
+|-------|--------------|
+| `natural-farsi` | Writes Persian the way Iranian developers actually type - colloquial register (رو not را), no half-spaces, technical terms left in English. Preloaded automatically when reply language is Persian. |
+| `finglish-normalize` | Reads Finglish (Persian in Latin script) as Persian and matches the reply language and script to you. |
+| `jalali-dates` | Jalali (Shamsi) dates in prose; machine-readable dates stay ISO. |
+| `iran-dev-access` | What works from Iran and what to use instead - domestic gateways, local models, Iranian PaaS. |
+| `iran-connectivity-fallback` | A provider timing out repeatedly? Offers the alternatives already configured on your machine - no circumvention guides. |
+| `local-llm-low-ram` | Honest sizing math for running models locally on small machines. |
+
+## Proxy
+
+Settings → Proxy controls outbound routing:
+
+- **Modes** - `auto` (Xratu setting → VS Code → environment → OS system
+  proxy), `custom` (one explicit proxy URL plus a no-proxy list), or `off`.
+- **Local client scan** - finds the Clash family (Clash Verge Rev, mihomo,
+  Mihomo Party, Clash Nyanpasu, ClashX), v2rayN/v2rayA, or Surge already
+  running on your machine and locks to its ports. "System Proxy" mode is
+  enough - no TUN required.
+- **Per-MCP routing** - each MCP server can ride auto / via proxy /
+  direct, with a live connection test before you commit.
+- MCP marketplace catalogs are fetched host-side through the same proxy and
+  cached for 24 hours.
 
 ## Privacy
 
