@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
-import { resolveEditContent, resolveEditMode } from './tooling/editFileArgs';
+import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
 import {
     terminalToolDescription,
     terminalCommandParamDescription,
@@ -528,10 +528,19 @@ async function dispatchTool(
         if ('error' in resolvedMode) {
             return { content: [{ type: 'text', text: resolvedMode.error }], isError: true };
         }
+        // Arguments that never arrived intact say so honestly: the model sent
+        // SOMETHING, we could not parse it, and blaming `new_content` sent it
+        // into a resend loop on every large write.
+        if (args && args[UNPARSED_ARGS_KEY]) {
+            return {
+                content: [{ type: 'text', text: `Error: tool-call arguments arrived malformed and could not be parsed (received head: ${String(args[UNPARSED_ARGS_KEY])}). Resend the call with a single plain-JSON arguments object.` }],
+                isError: true,
+            };
+        }
         // Resolve the CONTENT for the same reason: an omitted key used to reach
         // preserveEol() unvalidated and crash with a raw TypeError instead of
-        // naming the missing argument.
-        const resolvedContent = resolveEditContent(args.new_content);
+        // naming the missing argument. Known alias keys count as present.
+        const resolvedContent = resolveEditContentFrom(args);
         if ('error' in resolvedContent) {
             return { content: [{ type: 'text', text: resolvedContent.error }], isError: true };
         }

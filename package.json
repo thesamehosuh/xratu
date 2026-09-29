@@ -203,6 +203,7 @@
     "test:host": "node test/run-host-tests.mjs",
     "test:sanitizer": "node test/test-sanitizer.mjs",
     "test:endpoint-guard": "node test/test-endpoint-guard.mjs",
+    "test:tool-args": "node test/test-tool-args.mjs",
     "test:error-explain": "node test/test-error-explain.mjs",
     "test:event-bounds": "node test/test-event-bounds.mjs",
     "test:base-url": "node test/test-base-url.mjs",
