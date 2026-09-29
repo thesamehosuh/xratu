@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
@@ -40,6 +40,7 @@ import { NotificationBanner } from './components/NotificationBanner';
 import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
+import { prefersReducedMotion } from './motion';
 import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy';
@@ -62,6 +63,44 @@ function toAttachmentMeta(attachments: ComposerAttachment[]) {
  *  transcript, so only a window is mounted - a long session must not grow the
  *  DOM without limit. Older bubbles stay reachable via "show earlier". */
 const HISTORY_PAGE_SIZE = 40;
+
+/** Overlay pages (credentials/settings/capabilities/usage/proxy) enter and
+ *  leave with motion - theme.css `.screen-overlay` / `.is-leaving`. A plain
+ *  conditional unmount cannot animate an exit, so the last page stays mounted
+ *  for one exit beat (170ms) while it fades; the chat behind it becomes
+ *  visible again the moment the leave starts. */
+function ScreenOverlay({ open, dir, children }: { open: boolean; dir: 'rtl' | 'ltr'; children: ReactNode }) {
+    const [mounted, setMounted] = useState(open);
+    const [leaving, setLeaving] = useState(false);
+    const latest = useRef<ReactNode>(null);
+    if (open) latest.current = children;
+    useEffect(() => {
+        if (open) {
+            setMounted(true);
+            setLeaving(false);
+            return;
+        }
+        if (!mounted) return;
+        setLeaving(true);
+        const ms = prefersReducedMotion() ? 0 : 170;
+        const timer = window.setTimeout(() => {
+            latest.current = null;
+            setMounted(false);
+            setLeaving(false);
+        }, ms);
+        return () => window.clearTimeout(timer);
+    }, [open, mounted]);
+    if (!mounted) return null;
+    return (
+        <div
+            className={`screen-overlay${leaving ? ' is-leaving' : ''}`}
+            dir={dir}
+            aria-hidden={leaving || undefined}
+        >
+            {latest.current}
+        </div>
+    );
+}
 
 export function App() {
     // 'boot' = waiting for the host's start-screen verdict (showWelcome /
@@ -1111,6 +1150,8 @@ export function App() {
         );
     }
 
+    const overlayOpen = overlay !== null;
+
     if (screen === 'boot') {
         // Empty shell until the host resolves the start screen - keeps the
         // locale/direction root mounted without flashing the welcome page.
@@ -1150,7 +1191,7 @@ export function App() {
             scroll position and mounted page survive the trip - and it drops the
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
-        <div className={`app${overlay ? ' behind' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <div className={`app${overlayOpen ? ' behind' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             <Toolbar
                 conn={conn}
                 yolo={yolo}
@@ -1308,7 +1349,7 @@ export function App() {
             )}
             {/* In-app banners sit above the composer card, same slot as the
                 byok-hint banner. */}
-            {!overlay && banner}
+            {!overlayOpen && banner}
             {/* Steers sent while busy wait for the current tool call to end.
                 A compact chip keeps each one visible until the host injects
                 it (then the real user bubble takes over). */}
@@ -1413,12 +1454,10 @@ export function App() {
         {/* The overlay renders as a SIBLING of the chat, so hiding the chat
             cannot hide it. The banner rides along: a notification has to stay
             readable above whatever screen is open. */}
-        {overlay && (
-            <div className="screen-overlay" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-                {overlay}
-                {banner}
-            </div>
-        )}
+        <ScreenOverlay open={overlayOpen} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+            {overlay}
+            {banner}
+        </ScreenOverlay>
         </>
     );
 }
