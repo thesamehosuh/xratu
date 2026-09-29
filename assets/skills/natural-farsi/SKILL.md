@@ -1,6 +1,6 @@
 ---
 name: natural-farsi
-description: How to write natural, informal Persian (Farsi) like a real person typing — the "no half-space, no diacritics" orthography, plus conversational tone, plus correct handling of mixed Persian/technical (RTL/LTR) content, plus which technical terms stay in English. Use this skill whenever writing, editing, or translating anything into Farsi: READMEs, docs, UI strings, chat replies, social posts, or emails — even when the user just asks to "write it in Persian" or "translate this to Farsi" without mentioning style. Also use it to review or fix existing Farsi text that reads stiff or formal, uses half-spaces or Arabic diacritics, translates technical terms that should stay English, or renders scrambled when Persian is mixed with URLs, paths, code, or identifiers in UI.
+description: How to write natural, informal Persian (Farsi) like a real person typing — the colloquial chat register (رو not را, همون not همان, میخوای not میخواهی), the "no half-space, no diacritics" orthography, conversational tone, and correct handling of mixed Persian/technical (RTL/LTR) content, plus which technical terms stay in English. Use this skill whenever writing, editing, or translating anything into Farsi: READMEs, docs, UI strings, chat replies, social posts, or emails — even when the user just asks to "write it in Persian" or "translate this to Farsi" without mentioning style. Also use it to review or fix existing Farsi text that reads stiff or formal, mixes registers, uses half-spaces or Arabic diacritics, translates technical terms that should stay English, or renders scrambled when Persian is mixed with URLs, paths, code, or identifiers in UI.
 ---
 
 # Natural, informal Farsi writing
@@ -9,6 +9,144 @@ Write Persian the way a real Persian speaker types in 2026: informal but
 polished, zero half-spaces, zero Arabic diacritics. The result should read
 like a good tech blog post or a smart friend explaining something — not like
 a formal letter, and not like translated text.
+
+## The register: colloquial morphology (the half everyone forgets)
+
+Persian has a register continuum. Name the target explicitly and never
+drift off it:
+
+| Level | What it is | Sample 3sg | Status |
+|---|---|---|---|
+| 1 | Literary/administrative (ادبی/اداری) | می‌باشد، می‌گردد | banned |
+| 2 | Standard written (کتابی/معیار) | است، میشود، میدهد، را، همان | banned |
+| 3 | **Colloquial written (محاوره‌ایِ نوشته‌شده)** | ـه، میشه، میده، رو، همون | **THE TARGET** |
+| 4 | Chat slang | دمت گرم، خفن | banned |
+
+Level 3 is how Iranians type in chats, Telegram, blogs and tech posts:
+informal **morphology and lexicon** with clean orthography (the rules below)
+and no slang. Orthography alone is not enough — a text with no half-spaces
+that says «فایل را میخواند» is still level 2.
+
+**Consistency law: register is a per-document property, enforced at the
+token level.** In level-3 output, ZERO level-2 tokens may appear — not in
+long explainers, not in bullet lists, not in change reports, not in UI
+strings, not in code comments. Mixing «هر کدوم رو جواب بدهی، من سوال بعدی
+را میپرسم» is the #1 failure mode. Pick level 3 and hold it.
+
+Formal (level 2) is allowed ONLY when the user writes formal Persian
+themselves or explicitly asks for a formal text — and even then level 1
+bureaucratic style is never right.
+
+### Function words
+
+| Written (banned) | Colloquial (use) | Notes |
+|---|---|---|
+| را | رو | the most visible marker — always, every sentence |
+| همان | همون | همان‌جا→همون‌جا، همان‌طور→همون‌طور، همان‌قدر→همون‌قدر |
+| آن / آن‌ها / آنجا | اون / اونا / اونجا | همین stays همین |
+| یک (indefinite article) | یه | یک فایل→یه فایل; counting numerals stay: یک، دو، سه |
+| خودتان | خودت | |
+| دیگر (="anymore/other") | دیگه | |
+| در (place) | توی | در stays for abstract uses: در کد، در عمل |
+| اینجا | اینجا | unchanged |
+
+**Address: implicit تو.** Speak to the reader as a colleague: «اگه بخوای
+میتونی…». Never شما / خودتان / میتوانید / کنید-as-politeness. Soften with
+لطفا / ممنون when needed, not with formal pronouns.
+
+### Verb endings
+
+Present stems; past stems are unchanged (کرد→کرد، رفت→رفت، گفت→گفت).
+Literary future (خواهم رفت) is banned — use the میـ present (میرم) or
+«قراره …».
+
+| Person | Written (banned) | Colloquial (use) |
+|---|---|---|
+| 1sg | می‌خواهم، می‌دانم، می‌توانم | میخوام، میدونم، میتونم |
+| 2sg | می‌خواهی، می‌دانی، می‌توانی | میخوای، میدونی، میتونی |
+| 3sg | می‌کند، می‌شود، می‌خواهد، می‌داند، می‌تواند | میکنه، میشه، میخواد، میدونه، میتونه |
+| 1pl | می‌خواهیم | میخوایم |
+| 2pl | می‌خواهید، بگویید، بیایید، بروید | میخواید، بگید، بیاین، برید |
+| 3pl | می‌کنند، می‌شوند، می‌خواهند | میکنن، میشن، میخوان |
+
+General shape: 3sg `ـد` → `ـه` (میکنه، میشه، میده، میذاره، میاره، میره،
+میاد، میخونه، مینویسه، میگیره، میزنه، میرسه، میشینه، میبینه، میشنوه،
+میخوره، میریزه، میچرخونه، میمونه، میگه); 3pl `ـند` → `ـن` (میکنن، میشن،
+میرن، میان، میدن، میگن). The `خوا-` family keeps `ـاد`: میخواد.
+
+Stem shifts behind the table (regular word families):
+
+- خوا- → خو- : میخوام / میخوای / میخواد / میخوان
+- گذار- → ذار- : میذارم / میذاره / بذار
+- آور- → آر- : میارم / میاره / بیار
+- گوی- → گو- : میگم / میگی / میگه / بگو / بگید
+- خوان- → خون- : میخونم / میخونه / بخون
+- دان- → دون- : میدونم / میدونی / میدونه / بدون / بدونید
+- توان- → تون- : میتونم / میتونی / میتونه / بتون
+- روی- (رفتن) → رو- : میرم / میری / میره / میرن
+- آی- (آمدن) → یا- : میام / میای / میاد / میان / بیا
+- نشین- → شین- : میشینه / بشین
+- چرخان- → چرخون- : میچرخونه، گردان- → گردون-
+
+High-frequency 2pl: کنید→کنین (present too: میکنید→میکنین)، بیایید→بیاین.
+Other 2pl keeps
+`ـید` minus the و of the stem: بخوانید→بخونید، بنشینید→بشینید،
+بیاورید→بیارید، بگذارید→بذارید.
+
+### Copula
+
+| Written (banned) | Colloquial (use) |
+|---|---|
+| است | attached `ـه`, no ZWNJ: اینه، اونه، خوبه، درسته، بسه، کافیه، ممکنه، خودشه، در دسترسه |
+| است (after a word ending in ه, where ـه merges badly) | هست: «فایل ساده هست» — never «ساده‌ست» (needs ZWNJ) and never «ساده است» |
+| نیست | نیست |
+| می‌باشد | (level 1) → هست / ـه |
+
+This is the cheapest consistency signal after رو: «این است»→«اینه».
+
+### Negatives
+
+نمی‌شود→نمیشه، نمی‌توانم→نمیتونم، نمی‌خواهم→نمیخوام، نمی‌دانم→نمیدونم،
+نمی‌شوند→نمیشن، نمی‌تواند→نمیتونه، نکنید→نکنین. (The نمی prefix itself
+follows the orthography rule: attached, no ZWNJ.)
+
+### Lexicon & connectives
+
+| Written (banned) | Colloquial (use) |
+|---|---|
+| چگونه | چطوری |
+| کدام | کدوم |
+| چیست / چه چیزی | چیه / چی |
+| کیست | کیه |
+| کجاست | کجاس |
+| اگر | اگه |
+| اکنون | الان |
+| سپس | بعدش / بعد |
+| زیرا / چرا که / از آنجا که | چون |
+| بنابراین | پس (docs) / واسه همین (chat) |
+| در صورتی که | اگه |
+| به منظور | برای |
+| می‌بایست / بایستی | باید |
+| نیاز دارد | لازم داره / باید |
+| امکان دارد | میشه / ممکنه |
+| نشان دادن | نشون دادن |
+| دانستن / توانستن | دونستن / تونستن |
+| آمدن | اومدن |
+| مجدداً | دوباره |
+| قابل ذکر است که | (delete — just say the thing) |
+| مورد استفاده قرار می‌گیرد | استفاده میشه |
+| حائز اهمیت است | مهمه |
+| جهت انجام | برای انجام |
+| کافی است | کافیه |
+
+### What stays as-is
+
+- No chat slang (دمت گرم، خفن) — informal morphology, not slang. Never mix
+  slang into level 3 either.
+- Technical terms follow the vocabulary list below.
+- Persian digits, `ها`/`های` and `تر`/`ترین` spacing — orthography rules below.
+- Relative words (امروز، فردا، الان) are fine in prose; exact dates follow
+  `jalali-dates`.
 
 ## The two hard orthography rules
 
@@ -22,11 +160,11 @@ nothing or a plain space, chosen per rule below.
 
 **Attach directly — the می/nمی verb prefix only:**
 
-- می‌شود → میشود
-- می‌کنند → میکنند
-- نمی‌شود → نمیشود
-- می‌خواهم → میخواهم
-- برمی‌گردد → برمیگردد
+Examples show the final form (the register table above also applies; the
+orthography step alone is just "drop the ZWNJ"):
+
+- می‌شود → میشه، می‌کنند → میکنن، نمی‌شود → نمیشه
+- می‌خواهم → میخوام، برمی‌گردد → برمیگرده
 
 **Full space — the ها/های plural suffix and the تر/ترین suffix:**
 
@@ -80,45 +218,18 @@ Strip every harakat and hamza mark. Persian letters (including آ) stay.
 
 ## Making it sound natural
 
-Orthography alone is not enough — the prose itself must feel human.
-
-### Prefer the conversational register
-
-- می‌باشد / میگردد → است / هست / میشود. (میباشد is wrong Persian anyway.)
-- پس از → بعد از؛ جهت (as "for") → برای؛ مجدداً → دوباره؛ قابل ذکر است که →
-  (delete — just say the thing).
-- Do not invent Persian jargon. Technical terms follow the vocabulary list
-  in the next section.
+Orthography and morphology are mechanical; rhythm is what makes it human.
 
 ### Sentence rhythm
 
 - Short sentences. One idea per sentence. Long ezafe chains are the #1
   giveaway of stiff Farsi — break them up.
-- Second person plural (شما) is fine and normal; the stiff third-person
-  passive ("انجام می‌گردد") is not.
+- Second person is the implicit تو (see above); the stiff third-person
+  passive ("انجام می‌گردد") is never right.
 - Dashes, colons, and short bullet lists are natural; nested formal clauses
   are not.
-
-### Words to swap for their everyday version
-
-| Stiff / formal | Natural |
-|----------------|---------|
-| می‌باشد | است / هست |
-| مجدداً | دوباره |
-| قابل ذکر است که | (delete) |
-| بنابراین | پس |
-| گردید / می‌گردد | شد / میشود |
-| مورد استفاده قرار می‌گیرد | استفاده میشود |
-| حائز اهمیت است | مهم است |
-| جهت انجام | برای انجام |
-
-### What "informal but polished" means
-
-The audience is a developer, the channel is documentation. So:
-
-- OK: میشود، نمیخواد، راحت، فقط، خیلی، کاملا
-- Not OK: chat slang like دمت گرم، خفن — informal orthography, not slang.
-- Never mix registers inside one document.
+- Do not invent Persian jargon. Technical terms follow the vocabulary list
+  below.
 
 ## Technical vocabulary (dev terms)
 
@@ -156,7 +267,8 @@ for runtime, بک اند for backend, کلید API for API key) - the list's poi
 never INVENT a translation, not to police transliteration.
 
 **Git commit messages are ALWAYS English**, whatever language the rest of the
-text is in (tooling, search, and team review all expect it).
+text is in (tooling, search, and team review all expect it), with
+Gregorian/ISO dates (see `jalali-dates`).
 
 When a term is not listed, prefer whichever form a working Iranian developer
 would type in a chat message to a teammate. If genuinely unsure, keep it in
@@ -203,13 +315,13 @@ of the URL or a Persian word order inverts, a run is not isolated.
 
 **Example 1 — README intro**
 
-Input (stiff, half-spaces, diacritics):
+Input (stiff, half-spaces, diacritics, level 1-2):
 > دستیار کدنویسی مبتنی بر هوش مصنوعیِ متن‌باز برای VS Code. بدون نیاز به
 > بک‌اند و حساب کاربری. تمامی عملیات به‌صورت محلی انجام می‌گردد.
 
-Output (natural):
-> ایجنت کدنویسی هوش مصنوعی متن باز برای VS Code. کلید خودتان یا یک رانتایم
-> محلی. همه چیز درون extension host و روی سیستم خودتان اجرا میشود.
+Output (level 3):
+> ایجنت کدنویسی هوش مصنوعی متن باز برای VS Code. کلید خودت یا یه رانتایم
+> محلی. همه چیز توی extension host و روی سیستم خودت اجرا میشه.
 
 **Example 2 — feature bullet**
 
@@ -218,8 +330,8 @@ Input:
 > به‌صورت قطعی اعمال می‌گردد.
 
 Output:
-> ویرایش فایل ها به تایید شما نیاز دارد و این محدودیت در سطح کد اعمال
-> میشود، نه در سطح پرامپت.
+> ویرایش فایل ها رو باید تایید کنی و این محدودیت توی کد اعمال میشه، نه توی
+> پرامپت.
 
 **Example 3 — UI string**
 
@@ -229,7 +341,17 @@ Input:
 Output:
 > تنظیمات ذخیره شد.
 
-**Example 4 — mixed line in a UI row**
+**Example 4 — code walkthrough (the classic drift trap)**
+
+Input (mixed registers — common raw LLM output):
+> آرگومان ها را میخواند، بعد `Game(...)` را میسازد و `game.run()` را صدا
+> میزند. همان طور که گفتم، این بخش مهم است و اگر آن را نخوانی گم میشوی.
+
+Output:
+> آرگومان ها رو میخونه، بعد `Game(...)` رو میسازه و `game.run()` رو صدا
+> میزنه. همون طور که گفتم، این بخش مهمه و اگه رو نخونی گم میشی.
+
+**Example 5 — mixed line in a UI row**
 
 Broken (label and URL share one run; the separator relocates):
 > `HTTP جریانی·https://mcp.example.com/mcp` rendered as a scrambled mash.
@@ -240,13 +362,29 @@ Fixed (isolated runs inside an LTR row):
 
 ## Checklist before delivering Farsi text
 
+Machine-checkable first; ear-check last. All greps are word-boundary (not
+inside longer words like راست / استفاده / پرداخت).
+
 1. No U+200C anywhere; می attaches, ها/های/تر/ترین spaced (exclusion list
    respected)
-2. No harakat, no hamza (check ً ِ ُ َ ٔ ء أ إ ؤ ئ)
-3. No میباشد / میگردد
-4. Long sentences split, ezafe chains broken
-5. Technical terms left in Latin where natives leave them
-6. Every mixed Persian/URL/path line rendered and read both ways; runs
+2. No harakat, no hamza (check ً ِ ُ َ ٔ ء أ إ ؤ ئ), no Arabic ي/ك
+3. Zero standalone را (رو only), zero همان/آن (همون/اون)
+4. Zero written verb endings: میدهد|میکند|میشود|دارد|میخواند|میداند|
+   میتواند|میگوید|میگذارد|میآید|میرود|می‌خواهی|می‌توانی|می‌دانی and
+   کنید|بگویید|بیایید|بخوانید|بدانید (کنین/بگید/بیاین/بخونید/بدونید)
+5. Zero standalone است (use ـه or هست), zero می‌باشد/میگردد
+6. Technical terms left in Latin where natives leave them
+7. Every mixed Persian/URL/path line rendered and read both ways; runs
    isolated
-7. Read it aloud in your head — if it sounds like a government letter,
-   rewrite it
+8. Read it aloud in your head — if it sounds like a government letter OR a
+   translated textbook, rewrite it
+
+The bundled `check-register.mjs` runs checks 1-5 mechanically:
+
+```bash
+node ~/.agents/skills/natural-farsi/check-register.mjs draft.txt
+# or: pbpaste | node ~/.agents/skills/natural-farsi/check-register.mjs
+```
+
+Run it on the FINAL Persian output only — quoted source text in a
+translation task is exempt (it is supposed to look wrong).
