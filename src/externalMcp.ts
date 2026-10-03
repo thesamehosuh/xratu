@@ -94,6 +94,16 @@ interface McpContentBlock {
 }
 
 /**
+ * Aggregate ceiling on ONE tool call's images. The per-image cap bounds a
+ * single block; nothing bounded the COUNT, so a server (or a bug) returning
+ * 50 max-size images got all 50 mapped - measured at 533 MB of base64 before
+ * any downstream context bound ran.
+ */
+export const MAX_TOOL_IMAGES_PER_CALL = 20;
+/** Aggregate ceiling on one call's decoded image bytes. */
+export const MAX_TOOL_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024;
+
+/**
  * Map an MCP `CallToolResult.content` array onto `{text, images}`.
  *
  * Three block shapes carry a picture:
@@ -103,10 +113,11 @@ interface McpContentBlock {
  *   - `{type:'text'}` with a bare data URL - tolerated, since a server that
  *     mislabels the block type should still show the user its picture.
  *
- * Refusals are explicit and per-block: an oversize image and an unsupported
- * media type both become a TEXT note naming the tool, so the model is never
- * left believing it saw something it did not. Dropping a truncated image
- * instead would be worse than admitting it is gone.
+ * Three independent limits, each with its own refusal note, so the model is
+ * never left believing it saw something it did not: a per-image size cap, an
+ * aggregate byte/count cap, and a provider-safe media-type allowlist. Images
+ * are DROPPED, never truncated - a truncated image is a corrupt image, which
+ * is worse than an honest note.
  */
 export function mapMcpToolContent(
     content: unknown,
@@ -115,6 +126,7 @@ export function mapMcpToolContent(
     if (!Array.isArray(content)) return { text: '', images: [] };
     const images: LocalToolImage[] = [];
     const texts: string[] = [];
+    let totalBytes = 0;
     for (const raw of content) {
         const block = (raw ?? {}) as McpContentBlock;
         const note = (text: string) => texts.push(`[${toolName}: ${text}]`);
@@ -141,6 +153,15 @@ export function mapMcpToolContent(
                 note(`image of ${(bytes / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_TOOL_IMAGE_BYTES / 1024 / 1024} MB limit and was omitted`);
                 continue;
             }
+            if (images.length >= MAX_TOOL_IMAGES_PER_CALL) {
+                note(`only the first ${MAX_TOOL_IMAGES_PER_CALL} images of this result were kept`);
+                continue;
+            }
+            if (totalBytes + bytes > MAX_TOOL_IMAGE_TOTAL_BYTES) {
+                note(`the remaining images exceed the ${MAX_TOOL_IMAGE_TOTAL_BYTES / 1024 / 1024} MB per-result total and were omitted`);
+                continue;
+            }
+            totalBytes += bytes;
             images.push({ mimeType, dataBase64: data });
             continue;
         }
@@ -155,6 +176,15 @@ export function mapMcpToolContent(
                 note(`embedded resource of ${(bytes / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_TOOL_IMAGE_BYTES / 1024 / 1024} MB limit and was omitted`);
                 continue;
             }
+            if (images.length >= MAX_TOOL_IMAGES_PER_CALL) {
+                note(`only the first ${MAX_TOOL_IMAGES_PER_CALL} images of this result were kept`);
+                continue;
+            }
+            if (totalBytes + bytes > MAX_TOOL_IMAGE_TOTAL_BYTES) {
+                note(`the remaining images exceed the ${MAX_TOOL_IMAGE_TOTAL_BYTES / 1024 / 1024} MB per-result total and were omitted`);
+                continue;
+            }
+            totalBytes += bytes;
             images.push({ mimeType, dataBase64: block.resource.blob });
             continue;
         }
@@ -505,8 +535,13 @@ export class ExternalMcpManager {
                     timeoutMs > 0 ? { timeout: timeoutMs } : undefined,
                 );
                 if (res.isError) {
-                    const errText = (res.content as Array<{ type: string; text?: string }> | undefined)
-                        ?.map((c) => c.text ?? '').join('\n') || 'Unknown tool error';
+                    // Same defensive block handling as a success, TEXT ONLY.
+                    // Two reasons: an image in an error payload is meaningless
+                    // (the error path reads text alone), and the old
+                    // `c.text ?? ''` threw on a non-object entry - INSIDE this
+                    // try, so the catch below turned the server's real failure
+                    // into a wasted reconnect plus a generic "MCP Call Error".
+                    const errText = mapMcpToolContent(res.content, toolName).text || 'Unknown tool error';
                     return textResult(`Error from MCP server '${serverName}': ${errText}`);
                 }
                 return mapMcpToolContent(res.content, toolName);

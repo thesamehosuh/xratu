@@ -69,6 +69,7 @@ const server = new Server({ name: 'shot', version: '1.0.0' }, { capabilities: { 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
     { name: 'browser_take_screenshot', description: 'Take a screenshot', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     { name: 'browser_navigate', description: 'Navigate', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
+    { name: 'browser_explode', description: 'Malformed error payload', inputSchema: { type: 'object', properties: {} } },
 ] }));
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (req.params.name === 'browser_take_screenshot') {
@@ -76,6 +77,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [
             { type: 'text', text: 'Screenshot of ' + (req.params.arguments?.url ?? 'about:blank') },
             { type: 'image', mimeType: 'image/png', data: PNG },
+        ] };
+    }
+    if (req.params.name === 'browser_explode') {
+        // An error result carrying an IMAGE-only entry, which IS accepted by
+        // the SDK's CallToolResultSchema. The old text-only mapper turned it
+        // into '' and the error surfaced as "Unknown tool error", hiding what
+        // the server actually said. (null entries are rejected by that same
+        // schema before reaching our mapper - covered in test-mcp-tool-images.)
+        return { isError: true, content: [
+            { type: 'image', mimeType: 'image/png', data: PNG },
+            { type: 'text', text: 'element @e5 not found' },
         ] };
     }
     return { content: [{ type: 'text', text: 'navigated' }] };
@@ -133,6 +145,19 @@ try {
     const bad = await call('mcp__shot__no_such_tool', {});
     ok('an unknown tool errors as text', typeof bad.text === 'string' && bad.text.length > 0, JSON.stringify(bad));
     eq_ok('an unknown tool returns no images', bad.images.length, 0);
+
+    // A malformed error payload must surface the server's real message. An
+    // image-only entry is the shape that actually gets through the SDK's
+    // CallToolResultSchema, and the old `c.text ?? ''` mapped it to '' - so the
+    // user saw "Unknown tool error" instead of the server's actual failure.
+    const exploded = await call('mcp__shot__browser_explode', {});
+    ok('an error payload with an image entry surfaces the real message',
+        /element @e5 not found/.test(exploded.text), exploded.text);
+    ok('it does not degrade to a generic call error',
+        !/MCP Call Error/.test(exploded.text), exploded.text);
+    ok('it is labelled as a server error',
+        /Error from MCP server/.test(exploded.text), exploded.text);
+    eq_ok('an error payload returns no images', exploded.images.length, 0);
 
     // An unreachable server must fail as text, never crash.
     const unreachable = await call('mcp__missing__tool', {});

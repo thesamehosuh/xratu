@@ -226,6 +226,16 @@ function base64OfBytes(n) {
         mapMcpToolContent([{ type: 'image', mimeType: 'image/png', data: 123 }]).images.length === 0);
     ok('a non-string resource blob does not throw',
         mapMcpToolContent([{ type: 'resource', resource: { mimeType: 'image/png', blob: {} } }]).images.length === 0);
+    // Regression: the isError path read `c.text` off unvalidated entries, so a
+    // null block threw INSIDE the try and the catch turned the server's real
+    // error into a generic "MCP Call Error" after a wasted reconnect retry.
+    ok('a null block in an ERROR payload does not throw',
+        (() => { try { mapMcpToolContent([null], 'browser_click'); return true; } catch { return false; } })());
+    ok('a null block in an ERROR payload keeps the sibling text',
+        mapMcpToolContent([null, { type: 'text', text: 'element not found' }], 'browser_click').text
+            === 'element not found');
+    ok('an image-only ERROR payload degrades to a note',
+        /image block|unsupported/.test(mapMcpToolContent([{ type: 'image', mimeType: 'application/octet-stream', data: PNG_1x1 }], 'browser_click').text));
     eq('a data URL with no comma is not an image',
         mapMcpToolContent([{ type: 'text', text: 'data:image/png;base64' }]).images.length, 0);
     eq('a non-base64 data URL is not an image',
@@ -245,8 +255,41 @@ function base64OfBytes(n) {
 
 // --- scale --------------------------------------------------------------
 {
-    const many = Array.from({ length: 200 }, () => ({ type: 'image', mimeType: 'image/png', data: 'QUFB' }));
-    eq('200 images are all mapped (the cap is per-image, not per-call)', mapMcpToolContent(many).images.length, 200);
+    // Count-capped now (see the aggregate section below); this asserts a
+    // modest burst still passes through untouched.
+    const many = Array.from({ length: 20 }, () => ({ type: 'image', mimeType: 'image/png', data: 'QUFB' }));
+    eq('a 20-image burst is all mapped', mapMcpToolContent(many).images.length, 20);
+}
+
+// --- scale: aggregate limits -------------------------------------------
+// Regression: the per-image cap bounded one block but nothing bounded the
+// COUNT, so 50 max-size images were all mapped - measured at 533 MB of base64
+// before any downstream context bound ran.
+{
+    const { MAX_TOOL_IMAGES_PER_CALL, MAX_TOOL_IMAGE_TOTAL_BYTES } = require('../out/externalMcp.js');
+    const many = Array.from({ length: MAX_TOOL_IMAGES_PER_CALL + 30 }, () => ({ type: 'image', mimeType: 'image/png', data: PNG_1x1 }));
+    const r = mapMcpToolContent(many, 'browser_take_screenshot');
+    eq('the image COUNT is capped per call', r.images.length, MAX_TOOL_IMAGES_PER_CALL);
+    ok('the count overflow is stated in text', /only the first \d+ images/.test(r.text), r.text.slice(0, 120));
+
+    // Aggregate bytes: images just under the per-image cap, enough of them to
+    // cross the per-result total.
+    const chunk = base64OfBytes(MAX_TOOL_IMAGE_BYTES - 1);
+    const heavy = Array.from({ length: 30 }, () => ({ type: 'image', mimeType: 'image/png', data: chunk }));
+    const h = mapMcpToolContent(heavy, 'browser_take_screenshot');
+    const kept = h.images.reduce((n, i) => n + base64ByteLength(i.dataBase64), 0);
+    ok('the aggregate BYTE total is capped',
+        kept <= MAX_TOOL_IMAGE_TOTAL_BYTES, `kept ${(kept / 1024 / 1024).toFixed(1)} MB of ${MAX_TOOL_IMAGE_TOTAL_BYTES / 1024 / 1024} MB`);
+    ok('the byte overflow is stated in text', /per-result total/.test(h.text), h.text.slice(0, 160));
+    ok('the caps did not swallow the text', typeof h.text === 'string');
+}
+{
+    // A result with exactly the cap is not truncated by it.
+    const { MAX_TOOL_IMAGES_PER_CALL } = require('../out/externalMcp.js');
+    const exact = Array.from({ length: MAX_TOOL_IMAGES_PER_CALL }, () => ({ type: 'image', mimeType: 'image/png', data: PNG_1x1 }));
+    const r = mapMcpToolContent(exact);
+    eq('exactly the cap is accepted whole', r.images.length, MAX_TOOL_IMAGES_PER_CALL);
+    ok('and no refusal note is emitted', r.text === '', r.text);
 }
 
 // --- mime allowlist ------------------------------------------------------
