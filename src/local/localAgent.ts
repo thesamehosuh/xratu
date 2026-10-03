@@ -14,7 +14,7 @@ import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { resolveAgentRounds } from '../tooling/agentRounds';
 import { normalizeBaseUrl } from './baseUrl';
 import { proxyFetch } from '../proxyFetch';
-import { supportsPromptCacheKey, isOpenRouterHost } from './apiStyle';
+import { supportsPromptCacheKey, isOpenRouterHost, type ApiStyle } from './apiStyle';
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 import type { ThinkingLevel } from './localTypes';
 
@@ -191,7 +191,14 @@ export interface LocalAgentMessage {
     content?: string | Array<{
         type: 'text' | 'image_url';
         text?: string;
-        image_url?: { url: string };
+        /**
+         * `width`/`height` are LOCAL bookkeeping for token estimation, never
+         * serialized (see `estimateImageTokens` and `stripLocalImageFields`).
+         * A producer that knows its own output size - a browser screenshot
+         * knows its viewport - sets them so the estimate is the real
+         * high-detail formula instead of the size-agnostic fallback.
+         */
+        image_url?: { url: string; width?: number; height?: number };
     }>;
     tool_calls?: Array<{
         id: string;
@@ -358,6 +365,21 @@ function toOpenAITools(tools: LocalToolDefinition[]): OpenAITool[] {
  */
 type ImageUrlFormat = 'data-uri' | 'base64';
 
+/**
+ * Whether the raw-base64 fallback is even meaningful for a given API style.
+ *
+ * `image_url.url` is a CHAT-COMPLETIONS field, and the raw-base64 form exists
+ * only to satisfy servers (LM Studio, Ollama's compat endpoint) that reject the
+ * standard `data:` URI there. The messages / responses / google transports have
+ * no such field: a data URI is the ONLY valid encoding and raw base64 is
+ * unparseable, so applying the swap unconditionally SILENTLY DROPPED every
+ * image on those three transports - the model got the text and no picture,
+ * with nothing logged. One matching gateway 400 was enough to trigger it.
+ */
+export function imageFallbackApplies(apiStyle: ApiStyle): boolean {
+    return apiStyle === 'chat';
+}
+
 /** Server 400s that indicate the image_url.url encoding was wrong. */
 const IMAGE_FORMAT_ERROR_RE = /must be a base64|base64 encoded image|unable to determine.+url|invalid image url/i;
 
@@ -435,7 +457,11 @@ export function toolResultContent(
         if (isProviderSafeImageMime(image.mimeType)) {
             content.push({
                 type: 'image_url',
-                image_url: { url: toolImageDataUrl(image, imageFormat) },
+                image_url: {
+                    url: toolImageDataUrl(image, imageFormat),
+                    ...(image.width ? { width: image.width } : {}),
+                    ...(image.height ? { height: image.height } : {}),
+                },
             });
         } else {
             content.push({
@@ -1036,14 +1062,37 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
     return messages.map((m) => {
         if (m.role === 'tool') {
             const { isError: _isError, ...wire } = m;
-            return wire;
+            return stripLocalImageFields(wire);
         }
         if (m.role === 'assistant') {
             const { providerBlocks: _providerBlocks, isError: _isError, ...wire } = m;
-            return wire;
+            return stripLocalImageFields(wire);
         }
-        return m;
+        return stripLocalImageFields(m);
     });
+}
+
+/**
+ * Drop the LOCAL `width`/`height` bookkeeping from `image_url` parts.
+ *
+ * The chat transport serializes `LocalAgentMessage` near-verbatim, so those
+ * estimation-only fields would otherwise reach the provider as unknown
+ * `image_url` keys - and strict OpenAI-compatible servers 400 on unknown
+ * fields (the same reason `prompt_cache_key` is not sent to arbitrary hosts).
+ * The other three styles rebuild every image block field by field and never
+ * carried the leak.
+ */
+function stripLocalImageFields(message: LocalAgentMessage): LocalAgentMessage {
+    if (!Array.isArray(message.content)) return message;
+    let changed = false;
+    const content = message.content.map((part) => {
+        if (part.type !== 'image_url') return part;
+        if (part.image_url?.width === undefined && part.image_url?.height === undefined) return part;
+        const { width: _w, height: _h, ...imageUrl } = part.image_url;
+        changed = true;
+        return { ...part, image_url: imageUrl };
+    });
+    return changed ? { ...message, content } : message;
 }
 
 function requestStreamingCompletion(
@@ -1779,14 +1828,21 @@ export function reencodeMessageImages(
             if (!payload) return part; // already raw base64, or not a data URL
             // NOTE one-way: a RAW base64 payload carries no media type, so
             // re-wrapping it in a data: URL would need a mime we no longer
-            // have. The swap is once-per-run (`imageFormatSwapped`), so this
-            // never happens on the real path; the guard is here so the function
-            // degrades to "leave it raw" instead of emitting a `data:;base64,`
-            // URL a provider would reject.
+            // have. The swap is once-per-run and chat-only (the raw form is
+            // valid only in `image_url.url`), so this never happens on the real
+            // path; the guard is here so the function degrades to "leave it raw"
+            // instead of emitting a `data:;base64,` URL a provider would reject.
+            // The estimation dimensions MUST be carried across: dropping them
+            // would silently downgrade the retry's context estimate to the
+            // length heuristic and under-charge a known-size screenshot.
             changed = true;
             return {
                 type: 'image_url' as const,
-                image_url: { url: format === 'base64' ? payload : `data:${mime};base64,${payload}` },
+                image_url: {
+                    url: format === 'base64' ? payload : `data:${mime};base64,${payload}`,
+                    ...(part.image_url.width !== undefined ? { width: part.image_url.width } : {}),
+                    ...(part.image_url.height !== undefined ? { height: part.image_url.height } : {}),
+                },
             };
         });
         if (changed) messages[i] = { ...messages[i], content: next };
@@ -2506,7 +2562,11 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
         for (const part of message.content) {
             if (part.type === 'text' && typeof part.text === 'string') texts.push(part.text);
             else if (part.type === 'image_url' && part.image_url?.url) {
-                imageTokens += estimateImageTokens(part.image_url.url);
+                imageTokens += estimateImageTokens({
+                    url: part.image_url.url,
+                    width: part.image_url.width,
+                    height: part.image_url.height,
+                });
             }
         }
         content = texts.join('');
@@ -2528,30 +2588,78 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
         + imageTokens;
 }
 
-/** Flat estimate for one image's tokens. Over-estimates deliberately: an
- *  under-count here means no compaction before a real overflow, and an
- *  over-count only costs an early compaction. Matches OpenAI's high-detail
- *  figure (a 1024x1024 tile ~1100 tokens) plus the low-detail base. */
+/** Flat estimate when an image's pixel size is unknown (an MCP server). */
 const IMAGE_TOKENS_FLAT_ESTIMATE = 1_100;
+/** Low-detail base cost, which every image pays before its tiles. */
+const IMAGE_TOKENS_BASE = 85;
+/** OpenAI high-detail tiles are 512x512. */
+const IMAGE_TILE_PX = 512;
+/** OpenAI high-detail resizes the shortest side to this. */
+const IMAGE_SHORT_SIDE_PX = 768;
+/** ...and then caps the longest side at this. */
+const IMAGE_LONG_SIDE_PX = 2048;
+/** Per-tile cost at high detail. */
+const IMAGE_TOKENS_PER_TILE = 1100;
 
 /**
- * Rough token cost of an inline image part. The wire string is opaque (base64,
- * possibly with a `data:` prefix, sometimes raw with no MIME), so the pixel
- * size is not recoverable from it in general - a flat, deliberately high
- * estimate is the honest answer. Cheap payload far above that size is
- * down-weighted: no encoder emits 100 KB of base64 for a small image, and
- * treating it as a full-size one would over-count by two orders of magnitude.
+ * OpenAI's high-detail dimension normalization: shortest side to 768, then
+ * longest side down to 2048, then tile at 512.
+ *
+ * The resize steps are not optional detail. Tiling the RAW dimensions
+ * over-counts a square (4096x4096 -> 64 tiles -> 70k tokens against a real
+ * 4,485, which would compact away the context for nothing) and, worse,
+ * UNDER-counts a tall page: a 1280x6000 full-page screenshot tiles to 3x12 =
+ * 40k naively, but after normalization the long side caps at 2048 and the
+ * real cost is 83k. Under-counting is the direction that overflows the
+ * window, and a tall capture is exactly what a browser tool produces.
  */
-export function estimateImageTokens(imageUrl: string): number {
-    const bytes = base64ByteLength(imageUrl.includes(',')
-        ? imageUrl.slice(imageUrl.indexOf(',') + 1)
-        : imageUrl);
-    if (bytes <= 0) return IMAGE_TOKENS_FLAT_ESTIMATE;
-    // Base64 inflates by 4/3; compare against a decoded payload of
-    // ~50 KB, which is comfortably a full-page screenshot.
-    if (bytes < 20_000) return 200;
-    return IMAGE_TOKENS_FLAT_ESTIMATE;
+function normalizeImageDimensions(width: number, height: number): { w: number; h: number } {
+    // Both steps are a single proportional scale, which is both simpler and
+    // impossible to get backwards the way per-side arithmetic can be.
+    let s = IMAGE_SHORT_SIDE_PX / Math.min(width, height);
+    let w = Math.round(width * s);
+    let h = Math.round(height * s);
+    const longest = Math.max(w, h);
+    if (longest > IMAGE_LONG_SIDE_PX) {
+        s = IMAGE_LONG_SIDE_PX / longest;
+        w = Math.round(w * s);
+        h = Math.round(h * s);
+    }
+    return { w: Math.max(1, w), h: Math.max(1, h) };
 }
+
+/**
+ * Rough token cost of an inline image.
+ *
+ * With known dimensions this is OpenAI's actual high-detail formula, so a
+ * producer that knows its own output size (a browser screenshot knows its
+ * viewport) gets a real number instead of a guess - which is why
+ * `LocalToolImage` carries `width`/`height`.
+ *
+ * MCP servers do not report a size, so those fall back to the payload length:
+ * under ~15 KB of base64 is a small icon (low-detail cost), anything bigger is
+ * treated as a full screenshot. That branch deliberately errs HIGH - an
+ * under-count means no compaction before a real overflow, an over-count only
+ * costs an early one.
+ */
+export function estimateImageTokens(image: {
+    url?: string;
+    width?: number;
+    height?: number;
+    dataBase64?: string;
+}): number {
+    const { width, height } = image;
+    if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
+        const { w, h } = normalizeImageDimensions(width, height);
+        const tiles = Math.ceil(w / IMAGE_TILE_PX) * Math.ceil(h / IMAGE_TILE_PX);
+        return IMAGE_TOKENS_BASE + tiles * IMAGE_TOKENS_PER_TILE;
+    }
+    const payload = image.url ?? image.dataBase64 ?? '';
+    const bytes = base64ByteLength(payload.includes(',') ? payload.slice(payload.indexOf(',') + 1) : payload);
+    if (bytes <= 0) return IMAGE_TOKENS_FLAT_ESTIMATE;
+    return bytes < 20_000 ? 200 : IMAGE_TOKENS_FLAT_ESTIMATE;
+}
+
 
 export function estimateRunTokens(messages: LocalAgentMessage[]): number {
     return messages.reduce((n, m) => n + estimateMessageTokens(m), 0);
@@ -3747,6 +3855,7 @@ export async function* runLocalAgent(
             // `attachments`, and gating on that alone would re-400 forever.
             if (
                 !imageFormatSwapped
+                && imageFallbackApplies(request.apiStyle ?? 'chat')
                 && (request.attachments?.length || messagesHaveImages(messages))
                 && requestError instanceof Error
                 && IMAGE_FORMAT_ERROR_RE.test(requestError.message)
