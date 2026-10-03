@@ -10,6 +10,7 @@ import {
     terminalCommandParamDescription,
     terminalFailureHint,
     appendHintToResult,
+    terminalSpawn,
 } from './tooling/shellPlatform';
 import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
@@ -692,8 +693,14 @@ async function dispatchTool(
             };
         }
         const isWindows = process.platform === 'win32';
-        const shellCmd = isWindows ? 'cmd.exe' : '/bin/bash';
-        const shellArgs = isWindows ? ['/d', '/s', '/c', command] : ['-c', command];
+        // The quoting decision lives in terminalSpawn: without
+        // windowsVerbatimArguments Node MSVCRT-escapes the command and
+        // cmd.exe tears it apart at the inner quotes.
+        const {
+            file: shellCmd,
+            args: shellArgs,
+            windowsVerbatimArguments,
+        } = terminalSpawn(process.platform, command);
         // Detached launches (GUI apps, dev servers): a blocking run would sit
         // on the idle/hard cap until the tool killed the process tree (live:
         // xdg-open held the call open until the timeout, and the kill took
@@ -704,6 +711,7 @@ async function dispatchTool(
                 stdio: 'ignore',
                 detached: true,
                 windowsHide: true,
+                windowsVerbatimArguments,
             });
             child.unref();
             return {
@@ -727,6 +735,7 @@ async function dispatchTool(
                 stdio: ['pipe', 'pipe', 'pipe'],
                 detached: !isWindows,
                 windowsHide: true,
+                windowsVerbatimArguments,
             });
             child.stdin.end();
             let stdout = '';
