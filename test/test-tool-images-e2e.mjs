@@ -27,6 +27,8 @@ const {
     toolResultContent,
     messagesHaveImages,
     reencodeMessageImages,
+    estimateImageTokens,
+    chatWireMessages,
 } = require('../out/local/localAgent.js');
 
 let failed = 0;
@@ -392,6 +394,140 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
     ok('an unsupported media type sends NO image block', !/"type":"image"/.test(raw), raw.slice(0, 300));
     ok('an unsupported media type is explained in text', /omitted/.test(raw));
     ok('an unsupported media type leaks no payload', !raw.includes('PHN2Zz48L3N2Zz4='));
+}
+
+// --- the data-uri -> raw-base64 fallback is CHAT-ONLY ---------------------
+// LM Studio / Ollama reject the OpenAI-standard `data:` URI in image_url.url,
+// and the recovery flips the encoding and retries. But `image_url.url` is a
+// CHAT-COMPLETIONS field: the raw-base64 form is valid only there. On the
+// messages / responses / google styles a data URI is the ONLY valid form, so
+// flipping silently DROPPED the image - the model got the text and no picture,
+// with nothing saying so.
+//
+// Regression: the swap fired on every style, so one matching gateway 400 was
+// enough to make images vanish on three of the four transports.
+for (const style of ['messages', 'responses', 'google']) {
+    const requests = [];
+    let round = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        const body = JSON.parse(String(init.body));
+        requests.push({ url, body });
+        const toolCallRound = round++ === 0;
+        if (toolCallRound) {
+            if (style === 'messages') {
+                return sse([
+                    frame({ type: 'message_start', message: { id: 'm1', role: 'assistant', model: 'test', content: [], usage: { input_tokens: 10, output_tokens: 0 } } }),
+                    frame({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call1', name: SHOT_TOOL[0].name, input: {} } }),
+                    frame({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: TOOL_CALL_ARGS } }),
+                    frame({ type: 'content_block_stop', index: 0 }),
+                    frame({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } }),
+                    frame({ type: 'message_stop' }),
+                ]);
+            }
+            if (style === 'responses') {
+                return sse([
+                    frame({ type: 'response.output_item.added', output_index: 0, item: { id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: '' } }),
+                    frame({ type: 'response.function_call_arguments.delta', item_id: 'fc1', delta: TOOL_CALL_ARGS }),
+                    frame({ type: 'response.output_item.done', output_index: 0, item: { id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: TOOL_CALL_ARGS } }),
+                    frame({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 }, output: [] } }),
+                ]);
+            }
+            return sse([
+                frame({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: SHOT_TOOL[0].name, args: { url: 'https://example.com' } } }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } }),
+            ]);
+        }
+        // A gateway 400 whose wording matches IMAGE_FORMAT_ERROR_RE.
+        return { ok: false, status: 400, json: async () => ({}), text: async () => "'url' field must be a base64 encoded image" };
+    };
+    try {
+        for await (const _ev of runLocalAgent(
+            {
+                baseUrl: 'https://example.invalid/v1',
+                apiKey: 'k',
+                model: 'test-model',
+                systemPrompt: 'You are a test agent.',
+                userText: 'screenshot the page',
+                tools: SHOT_TOOL,
+                maxRounds: 4,
+                contextWindow: 32768,
+                apiStyle: style,
+            },
+            { execute: async () => ({ output: 'Screenshot captured.', images: [IMG] }) },
+            { requestApproval: async () => ({}) },
+        )) { /* drain */ }
+    } catch { /* the turn ends in the provider error; we assert the wire, not the outcome */ } finally {
+        globalThis.fetch = original;
+    }
+    const lastBody = JSON.stringify(requests[requests.length - 1]?.body ?? {});
+    ok(`${style}: a matching 400 does NOT swap the encoding`, lastBody.includes(PNG_1x1),
+        'the image payload is absent from the final request');
+    ok(`${style}: the image is NOT silently dropped`,
+        /data:image\/png;base64,/.test(lastBody) || /"media_type":"image\/png"/.test(lastBody) || /"inlineData"/.test(lastBody),
+        lastBody.slice(0, 400));
+}
+
+// --- local-only image fields must never reach the wire ------------------
+// `width`/`height` exist purely so `estimateImageTokens` can use the real
+// high-detail formula. The chat transport serializes messages near-verbatim,
+// so those keys would go out as unknown `image_url` members - and strict
+// OpenAI-compatible servers 400 on unknown fields.
+{
+    const sized = toolResultContent('shot', [{ ...IMG, width: 1280, height: 800 }], 'data-uri');
+    ok('the internal part carries the dimensions', sized[1].image_url.width === 1280);
+    const wire = JSON.stringify(chatWireMessages([{ role: 'tool', tool_call_id: 'a', content: sized }]));
+    ok('the chat wire does NOT leak width', !/"width"/.test(wire), wire.slice(0, 200));
+    ok('the chat wire does NOT leak height', !/"height"/.test(wire), wire.slice(0, 200));
+    ok('the image itself still goes out', wire.includes(PNG_1x1));
+
+    // A size-less image (every MCP server) is untouched.
+    const plain = toolResultContent('shot', [IMG], 'data-uri');
+    const plainWire = JSON.stringify(chatWireMessages([{ role: 'tool', tool_call_id: 'b', content: plain }]));
+    ok('an unsized image is unaffected', plainWire.includes(PNG_1x1) && !/"width"/.test(plainWire));
+}
+{
+    // The estimator actually uses the dimensions when given them.
+    const px = (w, h) => estimateImageTokens({ width: w, height: h, dataBase64: 'x' });
+    // OpenAI high-detail: shortest side -> 768, longest side -> 2048, tile 512.
+    // Worked examples (proportional scaling, both steps):
+    //   1280x800  -> 1229x768        -> 3x2 tiles -> 85 + 6600 = 6685
+    //   4096x4096 -> 768x768         -> 2x2 tiles -> 85 + 4400 = 4485
+    //   1280x6000 -> 768x3600 -> 437x2048 -> 1x4 tiles -> 85 + 4400 = 4485
+    eq('a 1280x800 screenshot matches the high-detail figure', px(1280, 800), 85 + 6 * 1100);
+    // The resize steps are load-bearing. Tiling RAW dimensions over-counts a
+    // square (compacting away the context for nothing) and UNDER-counts a tall
+    // page - the exact shape a full-page browser capture has.
+    eq('a 4096x4096 square is NOT 64 tiles', px(4096, 4096), 85 + 4 * 1100);
+    ok('a square does not over-count', px(4096, 4096) < 6000, `got ${px(4096, 4096)}`);
+    eq('a tall full-page capture is not under-counted', px(1280, 6000), 85 + 4 * 1100);
+    ok('a 1920x1080 frame matches the high-detail figure', px(1920, 1080), 85 + 6 * 1100);
+    ok('a small icon is cheap', px(64, 64) < px(1280, 800), `icon=${px(64, 64)}`);
+    ok('every size stays within one order of magnitude of its true cost',
+        [[64, 64], [1280, 800], [1920, 1080], [4096, 4096], [1280, 6000]]
+            .every(([w, h]) => px(w, h) > 1000 && px(w, h) < 100_000));
+    ok('an unsized image still falls back to the length heuristic',
+        estimateImageTokens({ url: `data:image/png;base64,${PNG_1x1}` }) < 300);
+    ok('a zero/negative dimension is not trusted',
+        estimateImageTokens({ width: 0, height: 0, url: `data:image/png;base64,${PNG_1x1}` }) < 300);
+}
+{
+    // Regression: `reencodeMessageImages` rebuilt `image_url` with only `url`,
+    // discarding the dimensions - so after a chat fallback retry the estimator
+    // fell back to the length heuristic and charged ~1,100 for what is really
+    // a ~6,700-token screenshot, letting the retry overflow the window.
+    const msgs = [{
+        role: 'tool',
+        tool_call_id: 'a',
+        content: toolResultContent('shot', [{ ...IMG, width: 1280, height: 800 }], 'data-uri'),
+    }];
+    reencodeMessageImages(msgs, 'base64');
+    const part = msgs[0].content[1].image_url;
+    eq('the url is re-encoded', part.url, PNG_1x1);
+    eq('the width survives the re-encode', part.width, 1280);
+    eq('the height survives the re-encode', part.height, 800);
+    ok('so the estimator still charges the real tile cost',
+        estimateImageTokens({ url: part.url, width: part.width, height: part.height }) === 85 + 6 * 1100);
 }
 
 console.log(failed === 0
