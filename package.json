@@ -235,6 +235,7 @@
     "test:session-store": "node test/test-session-store.mjs",
     "test:python-workspace": "node test/test-python-workspace.mjs",
     "test:shell-platform": "node test/test-shell-platform.mjs",
+    "test:shell-quoting": "node test/test-shell-quoting.mjs",
     "test:process-tree": "node test/test-process-tree.mjs",
     "test:test-framework": "node test/test-test-framework.mjs",
     "test:edit-file-mode": "node test/test-edit-file-mode.mjs",

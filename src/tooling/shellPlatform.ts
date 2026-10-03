@@ -281,3 +281,39 @@ export function terminalCommandParamDescription(platform: NodeJS.Platform): stri
         ? 'Shell command for cmd.exe, e.g. "python test.py" or "findstr /s /n /i pattern *.ts" or "dir /b *.json"'
         : 'Shell command, e.g. "python test.py" or "cat data.csv | wc -l"';
 }
+/**
+ * The exact spawn invocation for the host shell.
+ *
+ * `windowsVerbatimArguments` is the load-bearing part on Windows. Without it
+ * Node applies MSVCRT quoting to each argv element: an element containing
+ * spaces gets wrapped in quotes, and quotes INSIDE it are escaped with
+ * backslashes. cmd.exe has no backslash escaping, so a command like
+ *
+ *   gh pr create --title "fix(windows): discover ripgrep"
+ *
+ * arrived with the title torn across several argv entries, each carrying a
+ * stray `"` - `gh` rejected it as `unknown arguments ["discover" "ripgrep"
+ * ...]`. That is not cosmetic: the user approved one command and a
+ * different one ran, and tools that take quoted arguments (gh, npm, tsc,
+ * git) fail in ways that look like their own bugs.
+ *
+ * With the flag set, Node hands the command to cmd.exe untouched and cmd
+ * applies its own rules, exactly as if the line were typed at a prompt.
+ * Verified against a .bat file - the literal ground truth for cmd.exe -
+ * across quoted titles, spaces in paths, `&`, `&&`, `%VAR%` and apostrophes.
+ *
+ * Returned as plain data rather than applied here so the decision is
+ * unit-testable without spawning anything.
+ */
+export function terminalSpawn(platform: NodeJS.Platform, command: string): {
+    file: string;
+    args: string[];
+    windowsVerbatimArguments: boolean;
+} {
+    const windows = platform === 'win32';
+    return {
+        file: windows ? 'cmd.exe' : '/bin/bash',
+        args: windows ? ['/d', '/s', '/c', command] : ['-c', command],
+        windowsVerbatimArguments: windows,
+    };
+}

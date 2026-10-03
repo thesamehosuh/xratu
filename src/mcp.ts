@@ -10,6 +10,7 @@ import {
     terminalCommandParamDescription,
     terminalFailureHint,
     appendHintToResult,
+    terminalSpawn,
 } from './tooling/shellPlatform';
 import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
@@ -58,27 +59,61 @@ const MUTATING_TOOLS = new Set([
 ]);
 
 /**
+ * Target-triple directories VS Code uses inside `@vscode/ripgrep-universal/bin`.
+ * Purely advisory: every candidate is filtered by `existsSync`, so listing the
+ * host's plausible triples costs nothing and survives upstream additions.
+ */
+function ripgrepTargets(platform: NodeJS.Platform, arch: string): string[] {
+    // Node reports armv7l as 'arm'; the npm triple spells it 'armhf'.
+    const a = arch === 'arm' ? 'armhf' : arch;
+    if (platform === 'win32') return [`win32-${a}`];
+    if (platform === 'darwin') return [`darwin-${a}`];
+    // Linux ships BOTH a glibc and a musl build; which one is on disk
+    // depends on the host, so offer both rather than guessing.
+    if (platform === 'linux') return [`linux-${a}`, `alpine-${a}`];
+    return [`${platform}-${a}`];
+}
+
+/**
  * Locate a ripgrep binary: PATH first (`rg`/`rg.exe`), then VS Code's own
  * bundled copy - either the VSCODE_RIPGREP_PATH hint or the well-known
- * `@vscode/ripgrep` location under the app root. Windows machines usually
- * have NO `rg` on PATH and no env hint either, so the app-root candidate is
- * what makes search work there at all. The probe is ASYNC and cached as a
- * promise: the old spawnSync blocked the extension host for up to 1.5s on
- * the first search of a session. `ripgrepCandidates` is pure (unit-tested).
+ * location under the app root. Windows machines usually have NO `rg` on PATH
+ * and no env hint either, so the app-root candidate is what makes search work
+ * there at all. The probe is ASYNC and cached as a promise: the old
+ * spawnSync blocked the extension host for up to 1.5s on the first search of a
+ * session. `ripgrepCandidates` is pure (unit-tested).
+ *
+ * The app-root layout matters and has changed twice:
+ *   - current VS Code unpacks native modules out of the asar, and ships
+ *     ripgrep as `@vscode/ripgrep-universal` under a platform-ARCH
+ *     directory: `node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/
+ *     win32-x64/rg.exe`;
+ *   - older VS Code used `node_modules/@vscode/ripgrep/bin/rg.exe`.
+ * Probing only the old layout is what made Windows search hard-error with
+ * "rg is not installed" on a VS Code that had it bundled all along.
  */
 export function ripgrepCandidates(opts: {
     env: Record<string, string | undefined>;
     appRoot: string | null;
     platform: NodeJS.Platform;
+    arch?: string;
 }): string[] {
     const out: string[] = [];
     const bundled = opts.env.VSCODE_RIPGREP_PATH;
     if (bundled) out.push(bundled);
     if (opts.appRoot) {
+        const exe = opts.platform === 'win32' ? 'rg.exe' : 'rg';
+        for (const target of ripgrepTargets(opts.platform, opts.arch ?? 'x64')) {
+            out.push(path.join(
+                opts.appRoot,
+                'node_modules.asar.unpacked', '@vscode', 'ripgrep-universal', 'bin',
+                target, exe,
+            ));
+        }
+        // Pre-universal VS Code layout, kept as a fallback.
         out.push(path.join(
             opts.appRoot,
-            'node_modules', '@vscode', 'ripgrep', 'bin',
-            opts.platform === 'win32' ? 'rg.exe' : 'rg',
+            'node_modules', '@vscode', 'ripgrep', 'bin', exe,
         ));
     }
     return out;
@@ -112,6 +147,7 @@ function probeRipgrep(): Promise<string | null> {
                 env: process.env,
                 appRoot: vscode.env.appRoot || null,
                 platform: process.platform,
+                arch: process.arch,
             })) {
                 if (fs.existsSync(candidate)) {
                     resolve(candidate);
@@ -657,8 +693,14 @@ async function dispatchTool(
             };
         }
         const isWindows = process.platform === 'win32';
-        const shellCmd = isWindows ? 'cmd.exe' : '/bin/bash';
-        const shellArgs = isWindows ? ['/d', '/s', '/c', command] : ['-c', command];
+        // The quoting decision lives in terminalSpawn: without
+        // windowsVerbatimArguments Node MSVCRT-escapes the command and
+        // cmd.exe tears it apart at the inner quotes.
+        const {
+            file: shellCmd,
+            args: shellArgs,
+            windowsVerbatimArguments,
+        } = terminalSpawn(process.platform, command);
         // Detached launches (GUI apps, dev servers): a blocking run would sit
         // on the idle/hard cap until the tool killed the process tree (live:
         // xdg-open held the call open until the timeout, and the kill took
@@ -669,6 +711,7 @@ async function dispatchTool(
                 stdio: 'ignore',
                 detached: true,
                 windowsHide: true,
+                windowsVerbatimArguments,
             });
             child.unref();
             return {
@@ -692,6 +735,7 @@ async function dispatchTool(
                 stdio: ['pipe', 'pipe', 'pipe'],
                 detached: !isWindows,
                 windowsHide: true,
+                windowsVerbatimArguments,
             });
             child.stdin.end();
             let stdout = '';
