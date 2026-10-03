@@ -5387,12 +5387,6 @@ pre.tool-cmd {
     cursor: wait;
 }
 
-/* --- Connection card (primary action) ------------------------------- */
-.cred-connect .cred-form {
-    padding: 12px;
-    background: var(--xratu-surface);
-}
-
 .cred-providers-inline {
     display: flex;
     gap: 6px;
@@ -5790,27 +5784,11 @@ pre.tool-cmd {
     flex: 0 0 auto;
 }
 
-.cred-form {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-    padding: 10px;
-    border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-list-hoverBackground);
-}
-
 .cred-form-provider {
     display: flex;
     align-items: center;
     gap: 8px;
     padding-bottom: 2px;
-}
-
-.cred-form-provider > div {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
 }
 
 .cred-form-provider strong {
