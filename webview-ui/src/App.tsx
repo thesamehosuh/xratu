@@ -575,10 +575,6 @@ export function App() {
         setVisibleBudget((budget) => budget + HISTORY_PAGE_SIZE);
     }, [chat.messages.length, visibleBudget]);
 
-    // ESC always cancels a live run - not just when the composer has focus
-    // (during a tool call or approval wait focus lives elsewhere). Inputs
-    // handle their own Escape (editing fields, menus), and an open popup
-    // consumes the first press, so those never double-fire a cancel.
     useEffect(() => {
         // Safety net: the host should always follow webviewReady with
         // showWelcome/showChat. Some failure paths (e.g. a session refresh
@@ -590,18 +586,47 @@ export function App() {
         return () => clearTimeout(timer);
     }, []);
 
+    /** Escape on an overlay screen means "go back" - never "cancel the run".
+     *  Every overlay keeps the chat MOUNTED behind it (see the render tail),
+     *  so cancelling from a subpage killed a run the user cannot even see,
+     *  and Escape on a subpage with nothing running did nothing at all.
+     *  Each overlay returns to wherever it was opened from, matching the
+     *  onBack it already renders. Returns true when it consumed the press. */
+    const backFromOverlay = useCallback((): boolean => {
+        switch (screen) {
+            case 'credentials': setScreen(credReturnTo); return true;
+            case 'capabilities': setScreen(capReturnTo); return true;
+            case 'usage': setScreen(usageReturnTo); return true;
+            case 'proxy': setScreen(proxyReturnTo); return true;
+            case 'settings': setScreen('chat'); return true;
+            default: return false;
+        }
+    }, [screen, credReturnTo, capReturnTo, usageReturnTo, proxyReturnTo]);
+
+    // ESC always cancels a live run - not just when the composer has focus
+    // (during a tool call or approval wait focus lives elsewhere). Inputs
+    // handle their own Escape (editing fields, menus), and an open popup
+    // consumes the first press, so those never double-fire a cancel. On a
+    // subpage Escape leaves instead - see backFromOverlay.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape' || !busyRef.current) return;
+            if (e.key !== 'Escape') return;
             const target = e.target as HTMLElement | null;
             if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
             if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop')) return;
+            // A subpage owns Escape first: leaving it is the expected
+            // meaning, and the run behind it must be left alone.
+            if (backFromOverlay()) {
+                e.preventDefault();
+                return;
+            }
+            if (!busyRef.current) return;
             e.preventDefault();
             send({ type: 'cancelRequest' });
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [send]);
+    }, [send, backFromOverlay]);
 
     useEffect(() => {
         send({ type: 'webviewReady' });

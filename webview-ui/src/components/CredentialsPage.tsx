@@ -397,7 +397,7 @@ export function CredentialsPage({
     );
 
     const renderProviderForm = () => (
-        <div className="cred-form">
+        <>
             {renderProviderCombobox()}
 
             <div className="cred-providers-inline" role="radiogroup" aria-label={t('credPopular')}>
@@ -440,13 +440,11 @@ export function CredentialsPage({
                 read right-to-left. Only the Latin brand name is isolated. */}
             <div className="cred-form-provider">
                 <ProviderMark provider={selectedPreset} />
-                <div>
-                    {/* No dir="ltr": it would make text-align:start resolve
-                        LEFT. Inheriting RTL keeps the label right-aligned
-                        while bidi still renders the Latin brand name LTR. */}
-                    <strong>{presetLabel(selectedPreset)}</strong>
-                    <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
-                </div>
+                {/* No dir="ltr": it would make text-align:start resolve
+                    LEFT. Inheriting RTL keeps the label right-aligned
+                    while bidi still renders the Latin brand name LTR. */}
+                <strong>{presetLabel(selectedPreset)}</strong>
+                <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
             </div>
 
             <label className="cred-field">
@@ -506,7 +504,7 @@ export function CredentialsPage({
                 <Lock size={11} />
                 <span>{t('credSecurityHint')}</span>
             </p>
-        </div>
+        </>
     );
 
     /** Every saved connection listed at page level. */
@@ -659,10 +657,6 @@ export function CredentialsPage({
                         ) : (
                             <span>{t('credLocalEmpty')}</span>
                         )}
-                        <button type="button" className="ghost-btn small" onClick={onDiscoverLocalModels}>
-                            <RefreshCw size={12} />
-                            {t('credLocalRetry')}
-                        </button>
                     </div>
                 )}
 
