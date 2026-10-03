@@ -297,10 +297,17 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
         }
 
         case 'toolResult': {
+            // Images ride WITH the result onto the same row - a screenshot is
+            // part of the answer to that call, not a separate message.
+            const images = msg.images?.length ? msg.images : undefined;
             // Pair GLOBALLY by callId first (see toolOutput: a steer splits the
             // bubble mid-run and the result must close the pill that owns the
             // call - not orphan a row on the fresh bubble).
-            const global = mapCallStep(state, msg.callId, (st) => ({ ...st, result: tOrRaw(msg.output) }));
+            const global = mapCallStep(state, msg.callId, (st) => ({
+                ...st,
+                result: tOrRaw(msg.output),
+                ...(images ? { images } : {}),
+            }));
             if (global) return global;
             const { state: s, id } = ensureStreaming(state);
             return {
@@ -327,7 +334,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         }
                     }
                     if (idx >= 0) {
-                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output) };
+                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), ...(images ? { images } : {}) };
                     } else {
                         // Orphan result - render as a completed standalone row,
                         // not a call-shaped row with an empty args section.
@@ -337,6 +344,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                             tool: msg.tool,
                             text: '',
                             result: tOrRaw(msg.output),
+                            ...(images ? { images } : {}),
                         });
                     }
                     return { ...m, steps };

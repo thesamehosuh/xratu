@@ -16,9 +16,23 @@
  *   - emits message keys in the SAME order the in-run loop produces them
  *     (chat tool rows: role, tool_call_id, content, isError).
  */
-import type { LocalAgentEvent, LocalAgentMessage } from './localAgent';
+import { base64ByteLength, type LocalAgentEvent, type LocalAgentMessage } from './localAgent';
 import type { LocalSessionHistoryMessage } from './localSessionStore';
 import { clipHistoryContent, clipToolCallArguments } from './historyBounds';
+
+/**
+ * What a persisted tool row remembers about an image it no longer carries:
+ * METADATA ONLY. The base64 payload is never written - a session file is
+ * rewritten on every turn, and a long session's screenshots would make it
+ * hundreds of MB. `toolResultReplayText` turns this into the note the model
+ * reads on the next request.
+ */
+export interface ToolImageMeta {
+    mimeType: string;
+    /** Decoded byte size of the original image. */
+    bytes: number;
+    caption?: string;
+}
 
 /**
  * The persisted transcript event for one model-ledger event (the shape the host
@@ -65,9 +79,42 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
             // keeping the exact flag makes the replayed tool row byte-identical
             // to the one the provider cached.
             ...(event.isError != null ? { isError: event.isError } : {}),
+            // Images persist as METADATA ONLY (never base64 - the session file
+            // is rewritten every turn). `historyRowFromEvent` substitutes the
+            // text note a replay needs from this.
+            ...(Array.isArray(event.images) && event.images.length
+                ? { images: event.images.map(toolImageMeta) }
+                : {}),
         };
     }
     return null;
+}
+
+/**
+ * The text a REPLAYED tool row carries when its images are gone. Only the
+ * metadata survived persistence, so this is the model's only signal that the
+ * picture it saw earlier is no longer attached.
+ */
+export function toolResultReplayText(output: string, images: unknown): string {
+    if (!Array.isArray(images) || images.length === 0) return output;
+    const sizes = images
+        .map((i: any) => (typeof i?.bytes === 'number' && i.bytes > 0
+            ? `${(i.bytes / 1024).toFixed(0)} KB`
+            : null))
+        .filter(Boolean);
+    const detail = sizes.length ? ` (${sizes.join(', ')})` : '';
+    const note = `[${images.length} image(s) from this tool result are not retained in session history${detail} - re-run the tool if you need to see them again]`;
+    return output ? `${output}\n${note}` : note;
+}
+
+/** Size/mime summary of a tool image, safe to write to disk. */
+function toolImageMeta(image: any): ToolImageMeta {
+    const dataBase64 = typeof image?.dataBase64 === 'string' ? image.dataBase64 : '';
+    return {
+        mimeType: typeof image?.mimeType === 'string' ? image.mimeType : '',
+        bytes: base64ByteLength(dataBase64),
+        ...(typeof image?.caption === 'string' && image.caption ? { caption: image.caption } : {}),
+    };
 }
 
 /**
@@ -91,7 +138,11 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
         return {
             role: 'tool',
             tool_call_id: event.id,
-            content: event.output,
+            // A replayed tool row has no images (only metadata was persisted),
+            // so the text must SAY so. Replaying the bare text would leave the
+            // model reading a screenshot description with no picture attached,
+            // which reads as a broken tool rather than a restored session.
+            content: toolResultReplayText(event.output, event.images),
             ...(event.isError != null ? { isError: event.isError } : {}),
         };
     }

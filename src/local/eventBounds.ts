@@ -51,6 +51,28 @@ export const DISPLAY_OUTPUT_LIMIT = 1500;
  *  value (see `clipDisplay`). */
 const CLIP_DISPLAY_MARKER_RE = /\[\+\d+ chars truncated\]$/;
 
+/** Decoded byte size of a tool_result's images, for aggregate budgeting. */
+function imageBytes(event: any): number {
+    const images = event?.images;
+    if (!Array.isArray(images) || images.length === 0) return 0;
+    let n = 0;
+    for (const img of images) {
+        const data = typeof img?.dataBase64 === 'string' ? img.dataBase64 : '';
+        n += Math.floor(data.length * 3 / 4);
+    }
+    return n;
+}
+
+/**
+ * The text a tool_result keeps after its images are reclaimed. The images are
+ * gone from the ledger, so the transcript must not still look like it is
+ * showing them.
+ */
+function imageDropNote(output: string, count: number): string {
+    const note = `[${count} image(s) dropped from this tool result to reclaim memory - re-run the tool if you need to see them again]`;
+    return output ? `${output}\n${note}` : note;
+}
+
 function clipDisplay(value: string, limit: number): string {
     if (value.length <= limit) return value;
     // Already clipped by an earlier pass: its marker sits INSIDE `limit`, so
@@ -144,6 +166,10 @@ export const EVENT_OUTPUT_BUDGET = 2_000_000;
  *  4. Provider carriers (`providerBlocks`/`reasoningContent`) are kept whole
  *     or dropped under `CARRIER_BUDGET` - the same `boundCarriers` policy the
  *     turn-end ledger trim applies, just applied while the run lives.
+ *  5. Tool IMAGES (base64 payloads on a `tool_result`) count toward the same
+ *     aggregate and are dropped oldest-first, BEFORE their text is touched:
+ *     one 8 MB screenshot dwarfs every output cap in this file, so accounting
+ *     only the text would let a screenshot run grow without bound.
  *
  * O(events) per call; called after each tool/assistant push and once when the
  * run settles.
@@ -161,9 +187,27 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
     }
 
     // 2. Aggregate tool-output budget, shrinking the OLDEST payloads first.
+    // Images are counted AND reclaimed first: a screenshot's base64 payload is
+    // orders of magnitude larger than any clipped text, and the text alone is
+    // what the transcript renders.
     let total = 0;
     for (const e of events) {
-        if (e?.type === 'tool_result' && typeof e.output === 'string') total += e.output.length;
+        if (e?.type === 'tool_result') {
+            if (typeof e.output === 'string') total += e.output.length;
+            total += imageBytes(e);
+        }
+    }
+    if (total > budget) {
+        for (let i = 0; i < events.length && total > budget; i++) {
+            const e = events[i];
+            if (e?.type !== 'tool_result' || !Array.isArray(e.images) || !e.images.length) continue;
+            const bytes = imageBytes(e);
+            if (bytes <= 0) continue;
+            const { images: _dropped, ...rest } = e;
+            total -= bytes;
+            events[i] = { ...rest, output: imageDropNote(e.output, e.images.length) };
+            changed = true;
+        }
     }
     if (total > budget) {
         for (let i = 0; i < events.length && total > budget; i++) {

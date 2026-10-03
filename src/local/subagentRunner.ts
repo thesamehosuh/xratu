@@ -68,6 +68,9 @@ export function wrapRestrictedExecutor(
     base: LocalToolExecutor,
     allowed: ReadonlySet<string>,
 ): LocalToolExecutor {
+    // An allowed call's result is returned VERBATIM, images included: a child
+    // shares the parent's multimodal tool-result contract, and rebuilding the
+    // result here would silently drop a child's screenshot.
     return {
         execute: async (call, onOutput) => {
             if (call.name === SUBAGENT_TOOL_NAME || !allowed.has(call.name)) {

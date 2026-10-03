@@ -23,6 +23,12 @@ import { mcpCleartextHeadersError } from './endpointGuard';
 import { getProxyDispatcher } from './proxyDispatcher';
 import { proxyFetch } from './proxyFetch';
 import { normalizeProxyRoute } from './proxy';
+import {
+    MAX_TOOL_IMAGE_BYTES,
+    base64ByteLength,
+    isProviderSafeImageMime,
+    type LocalToolImage,
+} from './local/localAgent';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
 // The MCP SDK's websocket client transport needs a WebSocket global under
@@ -58,6 +64,119 @@ export interface AggregatedTool {
     inputSchema: Record<string, unknown>;
     /** User trusts this tool - the approval gate is skipped for it. */
     autoApprove: boolean;
+}
+
+/**
+ * Result of one external MCP tool call.
+ *
+ * `images` exists because MCP servers return IMAGE content blocks and the old
+ * text-only mapping dropped them: `browser_take_screenshot` on Playwright /
+ * chrome-devtools MCP answers with `{type:'image', mimeType, data}`, which
+ * mapped to `c.text ?? ''` → an empty string. The model was told a screenshot
+ * had been taken and shown nothing.
+ */
+export interface ExternalToolResult {
+    text: string;
+    images: LocalToolImage[];
+}
+
+function textResult(text: string): ExternalToolResult {
+    return { text, images: [] };
+}
+
+/** One MCP content block, as loosely as the wire allows. */
+interface McpContentBlock {
+    type: string;
+    text?: string;
+    mimeType?: string;
+    data?: string;
+    resource?: { mimeType?: string; blob?: string; uri?: string };
+}
+
+/**
+ * Map an MCP `CallToolResult.content` array onto `{text, images}`.
+ *
+ * Three block shapes carry a picture:
+ *   - `{type:'image', mimeType, data}` - the standard image block;
+ *   - `{type:'resource', resource:{mimeType, blob}}` - an embedded binary
+ *     resource (some servers use this for screenshots instead);
+ *   - `{type:'text'}` with a bare data URL - tolerated, since a server that
+ *     mislabels the block type should still show the user its picture.
+ *
+ * Refusals are explicit and per-block: an oversize image and an unsupported
+ * media type both become a TEXT note naming the tool, so the model is never
+ * left believing it saw something it did not. Dropping a truncated image
+ * instead would be worse than admitting it is gone.
+ */
+export function mapMcpToolContent(
+    content: unknown,
+    toolName = 'tool',
+): ExternalToolResult {
+    if (!Array.isArray(content)) return { text: '', images: [] };
+    const images: LocalToolImage[] = [];
+    const texts: string[] = [];
+    for (const raw of content) {
+        const block = (raw ?? {}) as McpContentBlock;
+        const note = (text: string) => texts.push(`[${toolName}: ${text}]`);
+        if (block.type === 'image' || (block.type === 'text' && looksLikeDataUrl(block.text))) {
+            // Type-check before use: these fields come off the wire from a
+            // third-party server, and a non-string here would throw inside tool
+            // dispatch (losing the whole call) instead of degrading one image.
+            const mimeType = typeof block.mimeType === 'string' && block.mimeType
+                ? block.mimeType
+                : dataUrlMime(block.text);
+            const data = typeof block.data === 'string' && block.data
+                ? block.data
+                : dataUrlPayload(block.text);
+            if (!data) {
+                note('image block carried no data and was skipped');
+                continue;
+            }
+            if (!isProviderSafeImageMime(mimeType)) {
+                note(`image of unsupported type ${mimeType || 'unknown'} was not forwarded`);
+                continue;
+            }
+            const bytes = base64ByteLength(data);
+            if (bytes > MAX_TOOL_IMAGE_BYTES) {
+                note(`image of ${(bytes / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_TOOL_IMAGE_BYTES / 1024 / 1024} MB limit and was omitted`);
+                continue;
+            }
+            images.push({ mimeType, dataBase64: data });
+            continue;
+        }
+        if (block.type === 'resource' && typeof block.resource?.blob === 'string' && block.resource.blob) {
+            const mimeType = typeof block.resource.mimeType === 'string' ? block.resource.mimeType : '';
+            if (!isProviderSafeImageMime(mimeType)) {
+                note(`embedded resource of unsupported type ${mimeType || 'unknown'} was not forwarded`);
+                continue;
+            }
+            const bytes = base64ByteLength(block.resource.blob);
+            if (bytes > MAX_TOOL_IMAGE_BYTES) {
+                note(`embedded resource of ${(bytes / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_TOOL_IMAGE_BYTES / 1024 / 1024} MB limit and was omitted`);
+                continue;
+            }
+            images.push({ mimeType, dataBase64: block.resource.blob });
+            continue;
+        }
+        if (typeof block.text === 'string' && block.text) texts.push(block.text);
+    }
+    return { text: texts.join('\n'), images };
+}
+
+function looksLikeDataUrl(text: string | undefined): text is string {
+    return typeof text === 'string' && /^data:image\//i.test(text.trim());
+}
+
+function dataUrlMime(text: string | undefined): string {
+    const m = /^data:([^;,]+)[;,]/i.exec((text ?? '').trim());
+    return m ? m[1].toLowerCase() : '';
+}
+
+function dataUrlPayload(text: string | undefined): string {
+    const t = (text ?? '').trim();
+    const comma = t.indexOf(',');
+    if (comma < 0) return '';
+    return /;base64/i.test(t.slice(0, comma)) ? t.slice(comma + 1).trim() : '';
 }
 
 function resolveTransport(cfg: ExternalServerConfig): McpTransportType | null {
@@ -352,13 +471,13 @@ export class ExternalMcpManager {
     }
 
     /** Route a namespaced call. One transparent reconnect retry on stale clients. */
-    async callTool(namespaced: string, args: Record<string, unknown>): Promise<string> {
+    async callTool(namespaced: string, args: Record<string, unknown>): Promise<ExternalToolResult> {
         const rest = namespaced.startsWith(EXTERNAL_PREFIX)
             ? namespaced.slice(EXTERNAL_PREFIX.length)
             : namespaced;
         const sep = rest.indexOf('__');
         if (sep < 0) {
-            return `Error: malformed external tool name '${namespaced}'`;
+            return textResult(`Error: malformed external tool name '${namespaced}'`);
         }
         const serverName = rest.slice(0, sep);
         const toolName = rest.slice(sep + 2);
@@ -366,10 +485,10 @@ export class ExternalMcpManager {
         const config = await this.loadConfig();
         const cfg = config.servers[serverName];
         if (!cfg) {
-            return `Error: no MCP server configured under name '${serverName}'`;
+            return textResult(`Error: no MCP server configured under name '${serverName}'`);
         }
         if (cfg.disabled) {
-            return `Error: MCP server '${serverName}' is disabled`;
+            return textResult(`Error: MCP server '${serverName}' is disabled`);
         }
         const source = config.sources[serverName] ?? 'global';
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
@@ -377,7 +496,7 @@ export class ExternalMcpManager {
         for (let attempt = 0; attempt < 2; attempt++) {
             const state = await this.getState(serverName, cfg, source);
             if (!state) {
-                return `Error: MCP server '${serverName}' is not reachable`;
+                return textResult(`Error: MCP server '${serverName}' is not reachable`);
             }
             try {
                 const res = await state.client.callTool(
@@ -385,15 +504,12 @@ export class ExternalMcpManager {
                     undefined,
                     timeoutMs > 0 ? { timeout: timeoutMs } : undefined,
                 );
-                const content = res.content as Array<{ type: string; text?: string }> | undefined;
                 if (res.isError) {
-                    const errText = content?.map((c) => c.text ?? '').join('\n') || 'Unknown tool error';
-                    return `Error from MCP server '${serverName}': ${errText}`;
+                    const errText = (res.content as Array<{ type: string; text?: string }> | undefined)
+                        ?.map((c) => c.text ?? '').join('\n') || 'Unknown tool error';
+                    return textResult(`Error from MCP server '${serverName}': ${errText}`);
                 }
-                if (!content || content.length === 0) {
-                    return '';
-                }
-                return content.map((c) => c.text ?? '').join('\n');
+                return mapMcpToolContent(res.content, toolName);
             } catch (e) {
                 if (attempt === 0) {
                     // Stale connection - drop it so getState reconnects.
@@ -408,9 +524,9 @@ export class ExternalMcpManager {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.error(`xratu: callTool ${namespaced} failed:`, e);
                 this._markStatus(serverName, { state: 'error', lastError: msg }, source);
-                return `MCP Call Error (${serverName}/${toolName}): ${msg}`;
+                return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}`);
             }
         }
-        return `Error: MCP server '${serverName}' unreachable`;
+        return textResult(`Error: MCP server '${serverName}' unreachable`);
     }
 }

@@ -1223,16 +1223,54 @@ function GenericBody({ call, result }: { call: Step; result?: Step }) {
     );
 }
 
+/** Images a tool returned with its result (an MCP screenshot, mostly).
+ *
+ *  `dir="ltr"` on the wrapper regardless of locale: the caption may embed a URL
+ *  or a path, and an RTL paragraph would reorder it. Capped at MAX_RENDERED so
+ *  a server that returns twenty screenshots cannot flood the transcript; the
+ *  remainder is stated rather than hidden. */
+const MAX_RENDERED_TOOL_IMAGES = 4;
+
+function ToolImages({ call, result }: { call: Step; result?: Step }) {
+    const images = result?.images ?? call.images;
+    if (!images?.length) return null;
+    const shown = images.slice(0, MAX_RENDERED_TOOL_IMAGES);
+    const hidden = images.length - shown.length;
+    return (
+        <div className="tool-images" dir="ltr">
+            {shown.map((img, i) => (
+                <figure key={`${img.mimeType}-${i}`} className="tool-image">
+                    <img src={img.dataUrl} alt={img.caption ?? t('toolImageAlt')} loading="lazy" />
+                    {img.caption && <figcaption dir="ltr">{img.caption}</figcaption>}
+                </figure>
+            ))}
+            {hidden > 0 && <span className="tool-images-more">{tf('toolImagesMore', { count: String(hidden) })}</span>}
+        </div>
+    );
+}
+
 function ToolBody({ call, result }: { call: Step; result?: Step }) {
-    switch (toolFamily(call.tool)) {
-        case 'edit': return <EditBody call={call} result={result} />;
-        case 'terminal': return <TerminalBody call={call} result={result} />;
-        case 'read': return <ReadBody call={call} result={result} />;
-        case 'search': return <SearchBody call={call} result={result} />;
-        case 'web': return <WebBody call={call} result={result} />;
-        case 'subagent': return <SubagentBody call={call} result={result} />;
-        default: return <GenericBody call={call} result={result} />;
-    }
+    const body = (() => {
+        switch (toolFamily(call.tool)) {
+            case 'edit': return <EditBody call={call} result={result} />;
+            case 'terminal': return <TerminalBody call={call} result={result} />;
+            case 'read': return <ReadBody call={call} result={result} />;
+            case 'search': return <SearchBody call={call} result={result} />;
+            case 'web': return <WebBody call={call} result={result} />;
+            case 'subagent': return <SubagentBody call={call} result={result} />;
+            default: return <GenericBody call={call} result={result} />;
+        }
+    })();
+    // Images render for EVERY family, not just the generic one: the tool that
+    // returns them today is an MCP screenshot (family 'mcp'), but a built-in
+    // browser tool must render them too, and picking the family as the switch
+    // is exactly how that silently breaks later.
+    return (
+        <>
+            {body}
+            <ToolImages call={call} result={result} />
+        </>
+    );
 }
 
 /** A run of identical consecutive tool calls: one summary pill with an

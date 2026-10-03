@@ -3422,6 +3422,45 @@ button {
     max-height: 280px;
 }
 
+/* Images a tool returned with its result (MCP screenshots). Logical properties
+   only - a `margin-left` here would push the block the wrong way in RTL. */
+.tool-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 0 8px;
+}
+
+.tool-image {
+    margin: 0;
+    max-width: min(100%, 420px);
+}
+
+.tool-image img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 320px;
+    object-fit: contain;
+    object-position: start;
+    border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    border-radius: 3px;
+    background: var(--vscode-editor-background);
+}
+
+.tool-image figcaption {
+    margin-block-start: 3px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    overflow-wrap: anywhere;
+}
+
+.tool-images-more {
+    align-self: center;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
 /* Thinking rows render their pre DIRECTLY under <details> (no .step-body
    wrapper) - re-add the body inset here and give the pill a taller
    scroll window (reasoning blocks read better without cramped paging). */

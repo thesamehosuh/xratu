@@ -26,6 +26,77 @@ export interface LocalImageAttachment {
     dataBase64: string;
 }
 
+/**
+ * An image produced by a TOOL (not by the user): an MCP screenshot, a rendered
+ * chart, whatever a tool decides is worth showing the model. Kept distinct from
+ * `LocalImageAttachment` because the lifecycle differs - an attachment is a
+ * user-supplied prompt part, a tool image is tool OUTPUT that rides the tool
+ * result row.
+ *
+ * `width`/`height` are declared by the producer when it knows them. They are
+ * not on the wire, so they are the only way to estimate an image's token cost
+ * without decoding the base64 (see `estimateMessageTokens`); without them the
+ * estimate falls back to a conservative fixed figure.
+ */
+export interface LocalToolImage {
+    mimeType: string;
+    dataBase64: string;
+    /** Intrinsic pixel size, when the producer knows it. */
+    width?: number;
+    height?: number;
+    /** Short description shown in the transcript. Never sent to a provider. */
+    caption?: string;
+}
+
+/**
+ * Hard ceiling on a single inbound tool image. A buggy or hostile MCP server
+ * can return an arbitrarily large image block; without a cap one call can
+ * exhaust the context window (or the heap building the request body).
+ * Oversize images are DROPPED, never truncated - a truncated image is a
+ * corrupt image, which is worse for the model than an honest note.
+ */
+export const MAX_TOOL_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Media types every supported provider accepts in an inline image block.
+ * Anthropic is the strictest (image/jpeg, image/png, image/gif, image/webp);
+ * anything outside this set must be replaced by a text marker rather than
+ * forwarded, or the whole NEXT request is rejected with a 400.
+ */
+export const PROVIDER_SAFE_IMAGE_MIME = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+]);
+
+/** Whether a tool image can be forwarded to a provider as-is. */
+export function isProviderSafeImageMime(mimeType: string): boolean {
+    return PROVIDER_SAFE_IMAGE_MIME.has(String(mimeType || '').trim().toLowerCase());
+}
+
+/** Base64 payload size in bytes, without decoding it. Non-string input (a
+ *  malformed block from a third-party server) measures as 0 rather than
+ *  throwing - this runs inside tool dispatch, where an exception would take
+ *  down the whole call instead of degrading one image. */
+export function base64ByteLength(dataBase64: string): number {
+    if (typeof dataBase64 !== 'string') return 0;
+    const clean = dataBase64.replace(/\s/g, '');
+    if (!clean) return 0;
+    const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor(clean.length * 3 / 4) - padding);
+}
+
+/** `data:` URL for a tool image, honouring the negotiated wire format. */
+export function toolImageDataUrl(
+    image: LocalToolImage,
+    format: ImageUrlFormat,
+): string {
+    return format === 'base64'
+        ? image.dataBase64
+        : `data:${image.mimeType};base64,${image.dataBase64}`;
+}
+
 export interface LocalUsage {
     promptTokens: number | null;
     completionTokens: number | null;
@@ -52,11 +123,25 @@ export interface LocalToolDefinition {
     requiresApproval?: boolean;
 }
 
+/** What one tool execution hands back to the agent loop. */
+export interface LocalToolResult {
+    /** Text half of the result - always present, may be empty. */
+    output: string;
+    isError?: boolean;
+    /**
+     * Image half of the result. Optional everywhere so existing executors and
+     * the subagent wrapper need no change; when present the images ride the
+     * tool message as inline image blocks (after the text, so the model reads
+     * the description first - see the note at each serializer).
+     */
+    images?: LocalToolImage[];
+}
+
 export type LocalAgentEvent =
     | { type: 'chunk'; value: string }
     | { type: 'thinking'; value: string }
     | { type: 'toolCall'; id: string; tool: string; args: Record<string, unknown> }
-    | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean }
+    | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean; images?: LocalToolImage[] }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; id: string; value: string }
     /**
@@ -215,7 +300,7 @@ export interface LocalToolExecutor {
         /** Called with incremental output for long-running tools (terminal
          *  commands). Optional: executors may ignore it. */
         onOutput?: (chunk: string) => void,
-    ): Promise<{ output: string; isError?: boolean }>;
+    ): Promise<LocalToolResult>;
 }
 
 export interface LocalApprovalGate {
@@ -311,6 +396,54 @@ function toUserContent(request: LocalAgentRequest, imageFormat: ImageUrlFormat):
         });
     }
 
+    return content;
+}
+
+/** MIME type of a `data:` URL, or '' when the string is not one. */
+function dataUrlMime(url: string): string {
+    const m = /^data:([^;,]+)[;,]/i.exec(url.trim());
+    return m ? m[1] : '';
+}
+
+/** Base64 payload of a `data:` URL, or '' when absent / not base64. */
+function dataUrlPayload(url: string): string {
+    const t = url.trim();
+    const comma = t.indexOf(',');
+    if (comma < 0) return '';
+    return /;base64/i.test(t.slice(0, comma)) ? t.slice(comma + 1).trim() : '';
+}
+
+/**
+ * Tool-result message content: the text half, plus one inline image block per
+ * tool image. Text comes FIRST so the model reads what the tool did before it
+ * looks at the picture (Roo's `UseMcpToolTool` places images after text for
+ * the same reason).
+ *
+ * Images no provider can accept are replaced by a text marker rather than
+ * forwarded - one `image/svg+xml` block would otherwise 400 the next request
+ * for the whole conversation. Same rule as goose's Anthropic allow-list.
+ */
+export function toolResultContent(
+    text: string,
+    images: LocalToolImage[] | undefined,
+    imageFormat: ImageUrlFormat,
+): LocalAgentMessage['content'] {
+    if (!images?.length) return text;
+    const content: NonNullable<LocalAgentMessage['content']> = [];
+    if (text) content.push({ type: 'text', text });
+    for (const image of images) {
+        if (isProviderSafeImageMime(image.mimeType)) {
+            content.push({
+                type: 'image_url',
+                image_url: { url: toolImageDataUrl(image, imageFormat) },
+            });
+        } else {
+            content.push({
+                type: 'text',
+                text: `[image omitted: unsupported type ${image.mimeType || 'unknown'}]`,
+            });
+        }
+    }
     return content;
 }
 
@@ -1267,10 +1400,16 @@ function toMessagesBody(
             continue;
         }
         if (msg.role === 'tool') {
+            // A tool result may be MULTIModal (MCP screenshots, rendered
+            // output): `messagesContentBlocks` already maps both text and
+            // image_url parts onto Anthropic blocks, so a screenshot rides the
+            // tool_result instead of being dropped.
             const block: Record<string, unknown> = {
                 type: 'tool_result',
                 tool_use_id: msg.tool_call_id,
-                content: typeof msg.content === 'string' ? msg.content : '',
+                content: typeof msg.content === 'string'
+                    ? msg.content
+                    : messagesContentBlocks(msg.content),
             };
             // Surface failures so the model can react instead of treating a
             // denied/failed tool as success.
@@ -1588,6 +1727,82 @@ async function requestMessagesCompletion(
 // typed events (`response.output_text.delta`, `response.function_call_arguments
 // .delta`, `response.completed`) instead of chat-completion chunks.
 
+/**
+ * `{inlineData}` for a Google part. Accepts both wire encodings of an image:
+ * a `data:` URL (the negotiated default) and RAW base64 (the negotiated swap
+ * after a 400 - a bare base64 payload carries no MIME type, so we cannot
+ * recover it here and drop the part rather than send an invalid one).
+ */
+function googleInlineData(url: string): { inlineData: { mimeType: string; data: string } } | null {
+    const mime = dataUrlMime(url);
+    const data = dataUrlPayload(url);
+    if (!mime || !data) return null;
+    return { inlineData: { mimeType: mime, data } };
+}
+
+/**
+ * Whether a Google content part belongs to a tool-result turn (a
+ * functionResponse, or an inlineData that rode along with one). Used to decide
+ * whether another tool result merges into the existing user turn.
+ */
+function isGoogleToolResultPart(part: any): boolean {
+    return !!part && (!!part.functionResponse || !!part.inlineData);
+}
+
+/** Whether any message carries an inline image part. */
+export function messagesHaveImages(messages: LocalAgentMessage[]): boolean {
+    return messages.some((m) => Array.isArray(m.content)
+        && m.content.some((p) => p.type === 'image_url' && p.image_url?.url));
+}
+
+/**
+ * Re-encode every inline image in `messages` to `format`, in place.
+ *
+ * Needed when the data-URI → raw-base64 fallback fires mid-run: a tool result
+ * was encoded with the format in force when the tool ran, so without this the
+ * retry would re-send the exact payload the server just rejected. Mutating
+ * `messages` is safe for the same reason the opener swap is - the images live
+ * in the current turn, which compaction never rewrites.
+ */
+export function reencodeMessageImages(
+    messages: LocalAgentMessage[],
+    format: ImageUrlFormat,
+): void {
+    for (let i = 0; i < messages.length; i++) {
+        const content = messages[i].content;
+        if (!Array.isArray(content)) continue;
+        let changed = false;
+        const next = content.map((part) => {
+            if (part.type !== 'image_url' || !part.image_url?.url) return part;
+            const mime = dataUrlMime(part.image_url.url);
+            const payload = dataUrlPayload(part.image_url.url);
+            if (!payload) return part; // already raw base64, or not a data URL
+            // NOTE one-way: a RAW base64 payload carries no media type, so
+            // re-wrapping it in a data: URL would need a mime we no longer
+            // have. The swap is once-per-run (`imageFormatSwapped`), so this
+            // never happens on the real path; the guard is here so the function
+            // degrades to "leave it raw" instead of emitting a `data:;base64,`
+            // URL a provider would reject.
+            changed = true;
+            return {
+                type: 'image_url' as const,
+                image_url: { url: format === 'base64' ? payload : `data:${mime};base64,${payload}` },
+            };
+        });
+        if (changed) messages[i] = { ...messages[i], content: next };
+    }
+}
+
+/** The concatenated text parts of a message, ignoring any image parts. */
+function textPartOf(content: LocalAgentMessage['content']): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+        .filter((p) => p.type === 'text' && typeof p.text === 'string')
+        .map((p) => (p as { text: string }).text)
+        .join('\n');
+}
+
 function responsesUserContent(content: LocalAgentMessage['content']): any[] {
     if (typeof content === 'string') return content ? [{ type: 'input_text', text: content }] : [];
     if (!Array.isArray(content)) return [];
@@ -1648,11 +1863,36 @@ function toResponsesBody(
             continue;
         }
         if (msg.role === 'tool') {
+            // `function_call_output.output` is a TEXT field. A multimodal tool
+            // result therefore splits: the text goes in the call output, and
+            // any images follow as a separate user message. This is what goose
+            // does for the same reason (formats/openai.rs:352-401) - lifting
+            // the image rather than dropping it.
+            const text = typeof msg.content === 'string' ? msg.content : textPartOf(msg.content);
             input.push({
                 type: 'function_call_output',
                 call_id: msg.tool_call_id,
-                output: typeof msg.content === 'string' ? msg.content : '',
+                output: text,
             });
+            if (Array.isArray(msg.content)) {
+                const imageParts = msg.content.filter(
+                    (p) => p.type === 'image_url' && p.image_url?.url,
+                ) as Array<{ type: 'image_url'; image_url: { url: string } }>;
+                if (imageParts.length) {
+                    input.push({
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'input_text',
+                                text: imageParts.length === 1
+                                    ? 'Image returned by the previous tool call:'
+                                    : `Images returned by the previous tool call (${imageParts.length}):`,
+                            },
+                            ...imageParts.map((p) => ({ type: 'input_image', image_url: p.image_url.url })),
+                        ],
+                    });
+                }
+            }
             continue;
         }
     }
@@ -1968,13 +2208,23 @@ function toGoogleBody(
             // Google matches a function response by NAME, not by call id.
             const name = toolNameById.get(msg.tool_call_id ?? '') ?? 'tool';
             const part = {
-                functionResponse: { name, response: { result: typeof msg.content === 'string' ? msg.content : '' } },
+                functionResponse: { name, response: { result: textPartOf(msg.content) } },
             };
             const last = contents[contents.length - 1];
-            if (last && last.role === 'user' && last.parts.every((p: any) => p.functionResponse)) {
-                last.parts.push(part);
+            // A multimodal tool result rides the SAME user turn as its
+            // functionResponse: Google requires alternating user/model contents,
+            // so a separate turn for the image would be rejected. `inlineData`
+            // alongside a functionResponse is a legal part mix.
+            const imageParts = Array.isArray(msg.content)
+                ? msg.content
+                    .filter((p) => p.type === 'image_url' && p.image_url?.url)
+                    .map((p) => googleInlineData((p as { image_url: { url: string } }).image_url.url))
+                    .filter((p): p is { inlineData: { mimeType: string; data: string } } => p !== null)
+                : [];
+            if (last && last.role === 'user' && last.parts.every(isGoogleToolResultPart)) {
+                last.parts.push(part, ...imageParts);
             } else {
-                contents.push({ role: 'user', parts: [part] });
+                contents.push({ role: 'user', parts: [part, ...imageParts] });
             }
             continue;
         }
@@ -2242,11 +2492,27 @@ function toolRequiresApproval(name: string, definitions: LocalToolDefinition[]):
 }
 
 export function estimateMessageTokens(message: LocalAgentMessage): number {
-    const content = typeof message.content === 'string'
-        ? message.content
-        : Array.isArray(message.content)
-            ? JSON.stringify(message.content)
-            : '';
+    // Image parts must NOT go through JSON.stringify: a 300 KB screenshot is
+    // ~400 KB of base64 text, which at 3 chars/token estimates as ~130k tokens
+    // against a real cost of ~1.1k. That single mis-estimate triggers compaction
+    // on nearly every run that takes a screenshot. Images get a tile estimate;
+    // only the TEXT parts are counted by length.
+    let content: string;
+    let imageTokens = 0;
+    if (typeof message.content === 'string') {
+        content = message.content;
+    } else if (Array.isArray(message.content)) {
+        const texts: string[] = [];
+        for (const part of message.content) {
+            if (part.type === 'text' && typeof part.text === 'string') texts.push(part.text);
+            else if (part.type === 'image_url' && part.image_url?.url) {
+                imageTokens += estimateImageTokens(part.image_url.url);
+            }
+        }
+        content = texts.join('');
+    } else {
+        content = '';
+    }
     const calls = message.tool_calls ? JSON.stringify(message.tool_calls) : '';
     // Provider-native reasoning blocks are RESENT on the continuation, so
     // their tokens count too - otherwise a reasoning-heavy turn is
@@ -2258,7 +2524,33 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
     const reasoning = message.reasoningContent ?? '';
     // ~3 chars/token. This errs HIGH (over-budget) - the safe direction, so
     // the model sees slightly more usage than reality and never overruns.
-    return Math.ceil((content.length + calls.length + provider.length + reasoning.length) / 3);
+    return Math.ceil((content.length + calls.length + provider.length + reasoning.length) / 3)
+        + imageTokens;
+}
+
+/** Flat estimate for one image's tokens. Over-estimates deliberately: an
+ *  under-count here means no compaction before a real overflow, and an
+ *  over-count only costs an early compaction. Matches OpenAI's high-detail
+ *  figure (a 1024x1024 tile ~1100 tokens) plus the low-detail base. */
+const IMAGE_TOKENS_FLAT_ESTIMATE = 1_100;
+
+/**
+ * Rough token cost of an inline image part. The wire string is opaque (base64,
+ * possibly with a `data:` prefix, sometimes raw with no MIME), so the pixel
+ * size is not recoverable from it in general - a flat, deliberately high
+ * estimate is the honest answer. Cheap payload far above that size is
+ * down-weighted: no encoder emits 100 KB of base64 for a small image, and
+ * treating it as a full-size one would over-count by two orders of magnitude.
+ */
+export function estimateImageTokens(imageUrl: string): number {
+    const bytes = base64ByteLength(imageUrl.includes(',')
+        ? imageUrl.slice(imageUrl.indexOf(',') + 1)
+        : imageUrl);
+    if (bytes <= 0) return IMAGE_TOKENS_FLAT_ESTIMATE;
+    // Base64 inflates by 4/3; compare against a decoded payload of
+    // ~50 KB, which is comfortably a full-page screenshot.
+    if (bytes < 20_000) return 200;
+    return IMAGE_TOKENS_FLAT_ESTIMATE;
 }
 
 export function estimateRunTokens(messages: LocalAgentMessage[]): number {
@@ -2512,14 +2804,20 @@ export function elideOldToolResults(
     const limit = Math.min(beforeIndex, messages.length);
     const idxs: number[] = [];
     for (let i = 1; i < limit; i++) {
-        if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
+        // Multimodal tool results count too - a screenshot is usually the
+        // LARGEST thing in the turn, and this is the cheap tier that runs
+        // before any summarization.
+        if (messages[i].role === 'tool' && typeof messages[i].content !== 'undefined') idxs.push(i);
     }
     if (idxs.length <= keepLast) return 0;
     const before = estimateRunTokens(messages);
     for (const i of idxs.slice(0, idxs.length - keepLast)) {
-        const current = messages[i].content as string;
-        if (current === TOOL_RESULT_ELISION_MARKER) continue;
-        if (TOOL_RESULT_ELISION_MARKER.length >= current.length) continue;
+        const current = messages[i].content;
+        if (typeof current === 'string' && current === TOOL_RESULT_ELISION_MARKER) continue;
+        // Only replace when the marker is genuinely SMALLER, or we would RAISE
+        // occupancy while the caller subtracts a zero reclaim (see the note on
+        // this function).
+        if (contentChars(current) <= TOOL_RESULT_ELISION_MARKER.length) continue;
         messages[i] = { ...messages[i], content: TOOL_RESULT_ELISION_MARKER };
     }
     return Math.max(0, before - estimateRunTokens(messages));
@@ -2552,9 +2850,12 @@ export function boundToolResults(
 ): boolean {
     if (!windowTokens || windowTokens < 1024) return false;
 
+    // Index every tool message, NOT just the string-content ones: a tool result
+    // carrying an image has ARRAY content, and skipping those would let an
+    // arbitrarily large multimodal result bypass both caps entirely.
     const idxs: number[] = [];
     for (let i = 1; i < messages.length; i++) {
-        if (messages[i].role === 'tool' && typeof messages[i].content === 'string') idxs.push(i);
+        if (messages[i].role === 'tool' && typeof messages[i].content !== 'undefined') idxs.push(i);
     }
     if (!idxs.length) return false;
 
@@ -2572,39 +2873,84 @@ export function boundToolResults(
 
     // Pass 1: per-result cap.
     for (const i of idxs) {
-        const text = messages[i].content as string;
-        if (text.length > perResultCap) {
-            messages[i] = { ...messages[i], content: clipForSummary(text, perResultCap) };
+        if (contentChars(messages[i].content) > perResultCap) {
+            messages[i] = { ...messages[i], content: clipToolContent(messages[i].content, perResultCap) };
             changed = true;
         }
-        total += (messages[i].content as string).length;
+        total += contentChars(messages[i].content);
     }
     if (total <= totalBudget) return changed;
 
     // Pass 2: shrink the OLDEST results toward the floor.
     for (const i of idxs) {
         if (total <= totalBudget) break;
-        const text = messages[i].content as string;
+        const text = contentText(messages[i].content);
         if (text.length <= TOOL_RESULT_MIN_CHARS) continue;
         const target = Math.max(TOOL_RESULT_MIN_CHARS, text.length - (total - totalBudget));
         if (target >= text.length) continue;
-        const clipped = clipForSummary(text, target);
-        messages[i] = { ...messages[i], content: clipped };
-        total -= text.length - clipped.length;
+        const before = contentChars(messages[i].content);
+        messages[i] = { ...messages[i], content: clipToolContent(messages[i].content, target) };
+        total -= before - contentChars(messages[i].content);
         changed = true;
     }
 
     // Pass 3: the floor is not enough (many results / schema-heavy window) -
     // omit the OLDEST results outright so the budget is always enforced.
+    // Keyed on the whole message's weight, not just its text: an image still
+    // riding along (because its text alone was under the floor) has to be
+    // reclaimable too, or a run of screenshot-only results is unshrinkable.
     for (const i of idxs) {
         if (total <= totalBudget) break;
-        const text = messages[i].content as string;
-        if (text.length <= TOOL_RESULT_OMISSION.length) continue;
+        const before = contentChars(messages[i].content);
+        if (before <= TOOL_RESULT_OMISSION.length) continue;
         messages[i] = { ...messages[i], content: TOOL_RESULT_OMISSION };
-        total -= text.length - TOOL_RESULT_OMISSION.length;
+        total -= before - TOOL_RESULT_OMISSION.length;
         changed = true;
     }
     return changed;
+}
+
+/** The TEXT of a tool message regardless of whether images ride along. */
+function contentText(content: LocalAgentMessage['content']): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+        .filter((p) => p.type === 'text' && typeof p.text === 'string')
+        .map((p) => (p as { text: string }).text)
+        .join('\n');
+}
+
+/**
+ * Budget weight of a tool message. Images count at their base64 length so a
+ * screenshot cannot hide from the budget - a 1 MB image is ~1.3 MB of wire
+ * string and roughly two orders of magnitude more tokens than its text.
+ */
+function contentChars(content: LocalAgentMessage['content']): number {
+    if (typeof content === 'string') return content.length;
+    if (!Array.isArray(content)) return 0;
+    let n = 0;
+    for (const part of content) {
+        if (part.type === 'text') n += (part.text ?? '').length;
+        else if (part.type === 'image_url') n += (part.image_url?.url ?? '').length;
+    }
+    return n;
+}
+
+/**
+ * Clip a tool message to `allowance` chars, dropping its IMAGES first (they
+ * are the bulk and the text is what the model reasons over) and clipping the
+ * text to what remains. Never leaves the model believing an image is still
+ * there: the drop is recorded in the text it will read.
+ */
+function clipToolContent(content: LocalAgentMessage['content'], allowance: number): LocalAgentMessage['content'] {
+    if (typeof content === 'string') return clipForSummary(content, allowance);
+    if (!Array.isArray(content)) return content;
+    const images = content.filter((p) => p.type === 'image_url');
+    if (!images.length) return clipForSummary(contentText(content), allowance);
+    const notice = `[${images.length} image(s) omitted to reclaim context - re-run the tool if you need to see them again]`;
+    const text = contentText(content);
+    const room = Math.max(0, allowance - notice.length);
+    return [notice, clipForSummary(text, room)].join('\n');
 }
 
 // --- AI compaction for the local loop ---
@@ -3396,9 +3742,12 @@ export async function* runLocalAgent(
             // Some local servers (LM Studio, Ollama) reject the OpenAI-standard
             // data: URI in image_url.url and demand raw base64 - flip the
             // encoding ONCE and retry the round instead of failing the turn.
+            // The trigger is ANY image on the wire, including one a TOOL
+            // returned: a turn whose only picture is an MCP screenshot has no
+            // `attachments`, and gating on that alone would re-400 forever.
             if (
                 !imageFormatSwapped
-                && request.attachments?.length
+                && (request.attachments?.length || messagesHaveImages(messages))
                 && requestError instanceof Error
                 && IMAGE_FORMAT_ERROR_RE.test(requestError.message)
             ) {
@@ -3416,6 +3765,10 @@ export async function* runLocalAgent(
                     if (openerIndex >= 0) messages[openerIndex] = currentTurnMessage;
                     else messages = buildMessages();
                 }
+                // Tool-result images were encoded with the format in force when
+                // the tool ran, so they need the same flip - otherwise the retry
+                // sends the exact payload the server just rejected.
+                reencodeMessageImages(messages, imageFormat);
                 requestError = null;
                 round--;
                 continue;
@@ -3653,13 +4006,19 @@ export async function* runLocalAgent(
             if (execError) throw execError;
             if (!result) throw new Error('Tool executor returned no result.');
 
-            messages.push({ role: 'tool', tool_call_id: call.id, content: result.output, isError: result.isError === true });
+            messages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: toolResultContent(result.output, result.images, imageFormat),
+                isError: result.isError === true,
+            });
             yield {
                 type: 'toolResult',
                 id: call.id,
                 tool: call.name,
                 output: result.output,
                 isError: result.isError,
+                ...(result.images?.length ? { images: result.images } : {}),
             };
         }
 
