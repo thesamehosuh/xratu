@@ -28,7 +28,7 @@ import {
     parseUserQuestionArgs,
     type UserQuestionGate,
 } from './tooling/userQuestion';
-import type { LocalToolDefinition } from './local/localAgent';
+import type { LocalToolDefinition, LocalToolResult } from './local/localAgent';
 import {
     SUBAGENT_TOOL_NAME,
     buildTaskToolDescription,
@@ -1314,13 +1314,14 @@ export async function executeLocalTool(
     onOutput?: (chunk: string) => void,
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
-): Promise<{ output: string; isError?: boolean }> {
+): Promise<LocalToolResult> {
     try {
         if (name.startsWith(EXTERNAL_PREFIX)) {
             if (!externalMcp) {
                 return { output: 'Error: external MCP servers are not available in this session.', isError: true };
             }
-            return { output: await externalMcp.callTool(name, args ?? {}) };
+            const r = await externalMcp.callTool(name, args ?? {});
+            return { output: r.text, ...(r.images.length ? { images: r.images } : {}) };
         }
         // Resolve model-drift tool NAMES first (write_file -> edit_file etc.),
         // then fill `path` from known aliases: a model that sends `file_path`

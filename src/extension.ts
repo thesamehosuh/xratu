@@ -9,6 +9,20 @@ import { promisify } from 'util';
 import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor, killRunningTerminalCommands } from './mcp';
+
+/**
+ * A tool image in the shape the WEBVIEW wants: a `data:` URL, so the row can
+ * render it with a plain `<img src>`. Built host-side so the base64 payload
+ * never crosses the message boundary as a separate field the webview has to
+ * re-assemble, and so the preview cannot be cached with a mismatched mime.
+ */
+function toToolImageView(image: LocalToolImage): { mimeType: string; dataUrl: string; caption?: string } {
+    return {
+        mimeType: image.mimeType,
+        dataUrl: `data:${image.mimeType};base64,${image.dataBase64}`,
+        ...(image.caption ? { caption: image.caption } : {}),
+    };
+}
 import {
     type UserQuestion,
     type UserQuestionGate,
@@ -29,7 +43,7 @@ import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
 import { ExternalMcpManager } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
-import type { LocalToolExecutor } from './local/localAgent';
+import type { LocalToolExecutor, LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
 import { SUBAGENT_TOOL_NAME, discoverSubagents, filterToolsForSubagent } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
@@ -3484,6 +3498,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     tool: event.tool,
                     output: event.output,
                     callId: event.id,
+                    // Images the tool returned (MCP screenshots etc). The
+                    // webview renders them but never sends them back; the
+                    // persisted row keeps metadata only (historyRows).
+                    ...(event.images?.length
+                        ? { images: event.images.map(toToolImageView) }
+                        : {}),
                 });
                 break;
             }

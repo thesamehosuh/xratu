@@ -205,6 +205,20 @@ export interface AttachmentMeta {
     previewDataUrl?: string;
 }
 
+/**
+ * An image a TOOL returned (an MCP screenshot, rendered output). Carried as a
+ * ready `data:` URL so the row renders it with a plain `<img src>`.
+ *
+ * Live-run only: the host persists image METADATA, never the payload, so a
+ * restored session shows the text note without the picture (see
+ * `historyRows.toolResultReplayText`).
+ */
+export interface ToolImageView {
+    mimeType: string;
+    dataUrl: string;
+    caption?: string;
+}
+
 export type ApprovalResolution = 'approved' | 'rejected' | 'mixed';
 
 export interface SavedCredential {
@@ -272,7 +286,7 @@ export type FromExtensionMessage =
     // html so the thinking pill renders formatted reasoning while streaming.
     | { type: 'thinkingHtml'; value: string }
     | { type: 'toolCall'; tool: string; args: string; callId?: string }
-    | { type: 'toolResult'; tool: string; output: string; callId?: string }
+    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[] }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; callId?: string; value: string }
     // Mid-run cumulative usage (emitted after each model round) - lets the
@@ -712,6 +726,8 @@ export interface Step {
     callId?: string;
     /** Filled when the matching tool_result arrives (Cline-style paired row). */
     result?: string;
+    /** Images the tool returned with its result (MCP screenshots). */
+    images?: ToolImageView[];
     /** Live output streamed WHILE a long tool (terminal command) runs, shown
      *  under the call row until the final result replaces it. */
     live?: string;
