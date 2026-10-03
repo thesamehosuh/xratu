@@ -96,6 +96,13 @@ const cases = [
     `${node} "it's got an apostrophe"`,
     `${node} "percent %PATH% literal"`,
     `${node} --pattern "*.ts" path`,
+    // cmd.exe separators. The tail command proves both sides still agree: a
+    // quoting regression would let the separator split the command and the
+    // spawned output would diverge from the .bat reference.
+    `${node} "quoted arg" & echo after-amp`,
+    `${node} "quoted arg" && echo after-andamp`,
+    // A separator INSIDE quotes must not act as a separator.
+    `${node} "a & b"`,
 ];
 
 for (const command of cases) {
