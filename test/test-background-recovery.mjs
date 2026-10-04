@@ -86,17 +86,16 @@ ok('a live process we captured is recognised as ours',
     // The async path is the ONLY path on Windows, so it needs its own
     // assertion: it must eventually deliver a real token that `isOurProcess`
     // accepts, rather than leaving the job permanently unverified.
+    // Called ONCE and then waited on. An earlier version re-invoked it every
+    // 200ms, which on windows meant dozens of concurrent PowerShell starts -
+    // the pile-up is what starved the probe, not the probe itself.
     const upgraded = await new Promise((resolve) => {
-        const end = Date.now() + 15_000;
-        const tick = () => {
-            const seen = [];
-            captureIdentityAsync(child.pid, (id) => seen.push(id));
-            const good = seen.find((id) => id.token !== 'unverified');
-            if (good) return resolve(good);
-            if (Date.now() > end) return resolve(seen[0] ?? null);
-            setTimeout(tick, 200);
-        };
-        tick();
+        const seen = [];
+        captureIdentityAsync(child.pid, (id) => {
+            seen.push(id);
+            if (id.token !== 'unverified') resolve(id);
+        });
+        setTimeout(() => resolve(seen[0] ?? null), 30_000);
     });
     ok('the async path delivers a real token', !!upgraded && upgraded.token !== 'unverified',
         JSON.stringify(upgraded));

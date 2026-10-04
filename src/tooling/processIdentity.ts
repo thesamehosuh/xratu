@@ -107,15 +107,19 @@ export function processStartToken(pid: number): string | null {
             const out = cp.execFileSync(
                 'powershell.exe',
                 ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                    // Get-Process, NOT Get-CimInstance: the CIM subsystem has
+                    // to warm up on a cold runner and regularly blew past any
+                    // sane timeout here. StartTime is the same value.
+                    //
                     // ToUniversalTime, not the local DateTime: the capture and
                     // the post-restart verification can straddle a DST change,
                     // and a shifted offset would serialize to a different
                     // string - so a perfectly healthy job would look recycled.
-                    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`],
+                    `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`],
                 // Bounded hard, and stdin ignored: this runs on a path that can
                 // block the extension host, so it must never inherit a stdin
                 // pipe or wait on an interactive prompt.
-                { encoding: 'utf-8', timeout: 2000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
+                { encoding: 'utf-8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
             ).trim();
             return out ? `win32:${out}` : null;
         } catch {
@@ -180,16 +184,34 @@ export function captureIdentityAsync(
     void new Promise<string | null>((resolve) => {
         const child = cp.spawn('powershell.exe', [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+            // Get-Process rather than Get-CimInstance (the CIM subsystem is
+            // slow to warm on a cold runner and was timing out).
             // ToUniversalTime: a capture and a post-restart verification can
             // straddle a DST change, and a shifted offset serializes to a
             // different string - a healthy job would look recycled.
-            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`,
-        ], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+            `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
+            // stderr is PIPED, not ignored: it is how a failing probe explains
+            // itself. Still no stdin, so it can never wait on a prompt.
+        ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         let out = '';
-        const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 5000);
+        let stderr = '';
+        // Generous: a one-shot probe behind a cold PowerShell start, and giving
+        // up early just leaves the job permanently unverified.
+        const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 20_000);
+        child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
         child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
         child.on('error', () => { clearTimeout(timer); resolve(null); });
-        child.on('close', () => { clearTimeout(timer); resolve(out.trim() || null); });
+        child.on('close', () => {
+            clearTimeout(timer);
+            const value = out.trim();
+            if (!value && stderr.trim()) {
+                // Without this the probe fails SILENTLY on a host where the
+                // command is unavailable (AppLocker, a stripped PATH), and
+                // recovery quietly stops working with nothing to show for it.
+                console.warn(`xratu: process identity probe failed on windows: ${stderr.trim().slice(0, 200)}`);
+            }
+            resolve(value || null);
+        });
     }).then((token) => { apply({ pid, token: token ?? 'unverified' }); });
 }
 
