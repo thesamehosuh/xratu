@@ -915,9 +915,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private static readonly MAX_SUBAGENT_CHATS = 4;
 
     /** Registry backing the live chat's delegated runs, created on first use
-     *  and re-touched (LRU) on every access. */
+     *  and re-touched (LRU) on every access.
+     *
+     *  The EPHEMERAL id is preferred over the stored one: a chat's first send
+     *  creates the ephemeral id, and persisting that same chat then assigns a
+     *  stored id WITHOUT clearing the ephemeral one. Keying on the stored id
+     *  first would move the registry out from under the run that is still live,
+     *  so a task_id reported in the first turn would be unresolvable in the
+     *  second. The ephemeral id is assigned once per live chat and every path
+     *  that adopts a different chat clears it (see _restoreLocalSession), so
+     *  preferring it can never point one chat's key at another's runs. */
     private _subagentRuns(): SubagentRunRegistry {
-        const key = this._sessionId ?? this._ephemeralSessionId ?? '';
+        const key = this._ephemeralSessionId ?? this._sessionId ?? '';
         const existing = this._subagentRunsByChat.get(key);
         if (existing) {
             this._subagentRunsByChat.delete(key);
@@ -937,7 +946,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Drop the live chat's resumable runs (history cleared / chat deleted). */
     private _forgetSubagentRuns(): void {
-        this._subagentRunsByChat.delete(this._sessionId ?? this._ephemeralSessionId ?? '');
+        this._subagentRunsByChat.delete(this._ephemeralSessionId ?? this._sessionId ?? '');
     }
 
     /** Every tool name a subagent could be offered in this workspace: the
@@ -5604,6 +5613,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
         this._restoreReplayBoundary(snapshot.replayUserTurns);
+        // Adopting a stored session REPLACES the live chat identity. A stale
+        // ephemeral id (from the chat this webview was showing before the
+        // reload) must not survive as the subagent-registry key, or the
+        // restored chat could resolve a task_id against the PREVIOUS chat's
+        // runs - one conversation's context leaking into another. Forgetting
+        // here costs a resume; the alternative costs isolation, so forget.
+        if (this._ephemeralSessionId) {
+            this._forgetSubagentRuns();
+            this._ephemeralSessionId = null;
+        }
         this._sessionId = snapshot.sessionId;
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {

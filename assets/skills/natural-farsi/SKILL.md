@@ -200,11 +200,11 @@ orthography step alone is just "drop the ZWNJ"):
 compounds; a half-space after them is always wrong):
 
 - نگرانی‌م → نگرانیم، آزادی‌تان → آزادیتان
-- کدوم‌ها → کدوم ها (this one is the ها-plural, so it takes a space)
-- سالم‌ان → سالم ان، وابسته‌ن → وابسته نیستن، نتیجه‌اش → نتیجه اش
+- نتیجه‌اش → نتیجهاش (possessive enclitic, same rule)
 
 **Full space — the ها/های plural suffix and the تر/ترین suffix:**
 
+- کدوم‌ها → کدوم ها
 - فایل‌ها → فایل ها
 - مهارت‌های ایجنت → مهارت های ایجنت
 - Checkpoint‌ها → Checkpoint ها (even after Latin words: PR ها)
@@ -218,6 +218,8 @@ compounds; a half-space after them is always wrong):
 
 - متن‌باز → متن باز، به‌طور → به طور، گردش‌کار → گردش کار
 - کرده‌اید → کرده اید، خوش‌آمد → خوش آمد، برنامه‌ریزی → برنامه ریزی
+- The colloquial copula ان is a separate word, not a pronoun:
+  سالم‌ان → سالم ان، وابسته‌ن → وابسته ان
 
 **Keep attached — standalone words that merely contain the same letters:**
 

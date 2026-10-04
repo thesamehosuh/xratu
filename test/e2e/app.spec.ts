@@ -685,7 +685,11 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
     // The host owns the blob: the switch only moves when the host echoes it.
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: { terminal: true } } });
     await expect(switches.nth(1)).toHaveAttribute('aria-checked', 'true');
-    await hostMessage(page, { type: 'openChat' });
+    // Back to the chat screen (there is no `openChat` message - an unknown one
+    // leaves Settings on top, and the transcript below would then be asserted
+    // while hidden, which passes without proving anything).
+    await hostMessage(page, { type: 'showChat' });
+    await expect(page.locator('.composer-input')).toBeVisible();
     expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
         .toEqual([true, true]);
 });

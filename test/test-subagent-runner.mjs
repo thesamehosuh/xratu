@@ -653,5 +653,83 @@ function childContext(extra = {}) {
     check('parent completed after the denied call and both children', finalMessage?.text, 'Denied one, both reports are in.');
 }
 
+// ---------------------------------------------------------------------------
+// 7. The parallel cap is a SLOT COUNT, not a batch size. The setting, the
+// README and the task-tool description all promise that the remaining calls
+// start "as slots free up" - a batched implementation would hold call 3 until
+// calls 1 AND 2 had both settled. Both properties are pinned here.
+// ---------------------------------------------------------------------------
+{
+    const PROBE = { name: 'probe', description: 'p', inputSchema: { type: 'object' }, requiresApproval: false };
+    /** Three calls: #0 and #2 finish at once, #1 hangs, so a slot frees while
+     *  another call is still running - the exact case batching gets wrong. */
+    const runCapped = async (limit) => {
+        const events = [];
+        let inFlight = 0;
+        let maxInFlight = 0;
+        const delays = [10, 400, 10];
+        const toolCalls = delays.map((_, n) => ({
+            index: n, id: `c${n}`, type: 'function',
+            function: { name: 'probe', arguments: JSON.stringify({ n }) },
+        }));
+        const handlers = [
+            () => sse([
+                frame({ choices: [{ delta: { tool_calls: toolCalls } }] }),
+                usageFrame,
+                'data: [DONE]\n\n',
+            ]),
+            () => textReply('all done'),
+        ];
+        const results = [];
+        await withMockFetch(handlers, async () => {
+            for await (const event of runLocalAgent(
+                {
+                    baseUrl: 'https://example.invalid/v1',
+                    apiKey: 'k',
+                    model: 'test-model',
+                    systemPrompt: 'Parent prompt',
+                    userText: 'run three probes',
+                    history: [],
+                    tools: [PROBE],
+                    apiStyle: 'chat',
+                    contextWindow: 100000,
+                    parallelTools: ['probe'],
+                    parallelToolLimit: limit,
+                },
+                {
+                    execute: async (call) => {
+                        const n = Number(call.arguments.n);
+                        events.push(`start:${n}`);
+                        inFlight++;
+                        maxInFlight = Math.max(maxInFlight, inFlight);
+                        await new Promise((resolve) => setTimeout(resolve, delays[n]));
+                        events.push(`end:${n}`);
+                        inFlight--;
+                        return { output: `probe ${n}` };
+                    },
+                },
+                { requestApproval: async () => ({}) },
+            )) {
+                if (event.type === 'toolResult') results.push(event.output);
+            }
+        });
+        return { events, maxInFlight, results };
+    };
+
+    const capped = await runCapped(2);
+    check('the cap is respected (never a third concurrent call)', capped.maxInFlight, 2);
+    ok('a queued call starts as soon as ONE slot frees (start:2 precedes end:1)',
+        capped.events.indexOf('start:2') > -1
+        && capped.events.indexOf('start:2') < capped.events.indexOf('end:1'),
+        capped.events.join(' '));
+    check('every call still ran', capped.results.length, 3);
+
+    const serial = await runCapped(1);
+    check('a cap of 1 never overlaps two calls', serial.maxInFlight, 1);
+    check('a serial cap keeps the emitted order', serial.events.join(' '),
+        'start:0 end:0 start:1 end:1 start:2 end:2');
+    check('a serial cap still runs every call', serial.results.length, 3);
+}
+
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
 process.exit(failed === 0 ? 0 : 1);

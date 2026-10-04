@@ -151,25 +151,49 @@ function isAcronym(tok) {
 /** Replace every non-prose span with spaces, preserving length and newlines
  *  so findings keep their original line/column. */
 function maskNonProse(lines) {
-  let inFence = false;
+  // The OPENING marker is remembered, not just "are we inside a fence": a
+  // `~~~` line inside a ``` block is content, and toggling on it would let the
+  // rest of the block reach the language checks as prose.
+  let fence = null;
   return lines.map((raw) => {
-    if (/^\s*(?:```|~~~)/.test(raw)) {
-      inFence = !inFence;
+    const open = /^\s*(```|~~~)/.exec(raw);
+    if (open) {
+      if (!fence) fence = open[1];
+      else if (fence === open[1]) fence = null;
       return '';
     }
-    if (inFence) return '';
+    if (fence) return '';
     let s = raw;
-    // fenced/inline code, HTML tags, URLs, markdown link targets
+    // fenced/inline code, HTML tags, URLs, markdown link targets.
+    // The tag mask is TAG-SHAPED (`<` `/`? letter) so comparison prose
+    // (a < b and c > d) stays visible to the Latin-word checks.
     s = s.replace(/`[^`]*`/g, (m) => ' '.repeat(m.length));
-    s = s.replace(/<[^>]*>/g, (m) => ' '.repeat(m.length));
+    s = s.replace(/<\/?[A-Za-z][^>]*>/g, (m) => ' '.repeat(m.length));
     s = s.replace(/\bhttps?:\/\/\S+/g, (m) => ' '.repeat(m.length));
     s = s.replace(/\]\([^)]*\)/g, (m) => ' '.repeat(m.length));
     return s;
   });
 }
 
-const PERSIAN_RE = /[\u0600-\u06FF]/;
+/** An Arabic-script LETTER - not punctuation, not Arabic-Indic digits - and
+ *  including the presentation forms. A range test (`\u0600-\u06FF`) would let a
+ *  lone `،` or `٥` satisfy "this text is Persian" and let an Arabic-punctuation
+ *  segment count as Persian in the one-language rule. */
+const PERSIAN_RE = /(?=\p{Script_Extensions=Arabic})\p{L}/u;
+const PERSIAN_ANY = /(?=\p{Script_Extensions=Arabic})\p{L}/gu;
+const countPersian = (s) => (s.match(PERSIAN_ANY) ?? []).length;
 const LATIN_RE = /[A-Za-z]/;
+
+/** Sentence-ish segments of a prose line. A period is NOT a sentence end when it
+ *  sits inside a version token (`v1.2`) or a known abbreviation (`e.g.`) -
+ *  splitting there would leave sub-3-word fragments and let the whole English
+ *  sentence slip through the `en-sentence` check. */
+function splitSentences(prose) {
+  const guarded = prose
+    .replace(/(\d)\.(\d)/g, '$1\u0000$2')
+    .replace(/\b(?:e\.g|i\.e|etc|vs|approx|no|fig)\./gi, (m) => m.replace(/\./g, '\u0000'));
+  return guarded.split(/[.!?؟؛\n]+/).map((s) => s.replace(/\u0000/g, '.'));
+}
 
 function languageFindings(lines, label, opts) {
   const findings = [];
@@ -192,7 +216,7 @@ function languageFindings(lines, label, opts) {
     const prose = masked[i];
     // NOTE the brackets: an unbracketed /Ae-Zz/g is the literal sequence, not a
     // character class, and silently matches nothing in Persian text.
-    const persianChars = (prose.match(/[\u0600-\u06FF]/g) || []).length;
+    const persianChars = countPersian(prose);
     const latinChars = (prose.match(/[A-Za-z]/g) || []).length;
 
     // Tier B/C/D: any bare Latin word in prose. On a line with no Persian at
@@ -223,7 +247,7 @@ function languageFindings(lines, label, opts) {
     lines.forEach((raw, i) => {
       const prose = masked[i];
       if (!LATIN_RE.test(prose)) return;
-      for (const seg of prose.split(/[.!?؟؛\n]+/)) {
+      for (const seg of splitSentences(prose)) {
         if (!LATIN_RE.test(seg)) continue;
         if (PERSIAN_RE.test(seg)) continue;
         const words = seg.trim().split(/\s+/).filter(Boolean);
@@ -328,12 +352,34 @@ function checkLanguageSelftest(state) {
   // A whole English document, and the escape hatch for translating FROM one.
   langCheck(state, 'english document flagged', 'This is an English source document.\nWith several lines here.',
     ['no-persian']);
+  langCheck(state, 'english document allowed', 'This is an English source document.\nWith several lines here.',
+    [], { allowNoPersian: true });
+  // An abbreviation or a version token must not hide the sentence around it:
+  // splitting there would leave sub-3-word fragments and report nothing.
+  langCheck(state, 'abbreviation and version inside an english sentence',
+    'باشه.\nTry e.g. v1.2 now.', ['en-sentence']);
+  // A `~~~` line inside a ``` block is CODE, not a fence close: the rest of the
+  // block must stay masked.
+  langCheck(state, 'tilde line inside a backtick fence',
+    '```bash\n~~~ not a close\nthis command line is english\n```\nو بعدش `print(1)` اجرا شد.', []);
+  // Comparison prose is not a tag: `a < b and c > d` must stay visible (five bare
+// Latin words), where the old broad mask swallowed `b and c`.
+  langCheck(state, 'angle-bracketed comparison is not masked',
+    'مثلا a < b and c > d رو ببین.', ['latin-word', 'latin-word', 'latin-word', 'latin-word', 'latin-word']);
   // Clean Persian with tier-A vocabulary must stay clean.
   langCheck(state, 'clean persian', 'همه ۲۲۲ تست سبزن و باید commit کنی.', []);
 }
 
 function main() {
   const argv = process.argv.slice(2);
+  // Validate BEFORE the --selftest early exit, so a typo fails in every mode:
+  // a misspelled `--allow-no-persian` silently lints an English source as a
+  // Persian reply and reports no-persian against the translator's own input.
+  const unknown = argv.filter((a) => a.startsWith('--') && a !== '--selftest' && a !== '--allow-no-persian');
+  if (unknown.length) {
+    console.error(`check-register: unknown option(s): ${unknown.join(' ')}\n  usage: check-register.mjs [--allow-no-persian] [--selftest] [file.txt ...]`);
+    process.exit(2);
+  }
   if (argv.includes('--selftest')) {
     process.exit(selftest() ? 0 : 1);
   }
