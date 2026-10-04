@@ -137,14 +137,62 @@ export function processStartToken(pid: number): string | null {
     }
 }
 
-/** Capture the identity of a pid right after spawning it. */
+/**
+ * Capture the identity of a pid right after spawning it.
+ *
+ * Synchronous, and only correct on hosts where reading the start time is
+ * cheap: Linux reads `/proc`, macOS shells out to `ps` for a few hundred
+ * milliseconds at worst. On Windows the equivalent needs PowerShell, and the
+ * synchronous form froze the extension host for the call's whole 2s timeout on
+ * every background spawn - which is the exact thing this repo forbids (see the
+ * notes on `spawnSync` in mcp.ts and the async rule in shadowGit.ts). Windows
+ * therefore uses `captureIdentityAsync`.
+ */
 export function captureIdentity(pid: number | undefined): ProcessIdentity | null {
     if (!pid || pid <= 0) return null;
+    if (process.platform === 'win32') return null;
     const token = processStartToken(pid);
     // No token is still recorded, with an explicit marker: refusing to persist
     // the job would lose it, and pretending the pid alone is an identity is the
     // bug this module exists to prevent. `isOurProcess` then refuses to act.
     return { pid, token: token ?? 'unverified' };
+}
+
+/**
+ * Asynchronous identity capture, for the one host that needs a subprocess.
+ *
+ * Returns immediately with an unverified placeholder - enough for the job to
+ * exist and be listed - and calls `apply` with the real identity once the
+ * answer lands. Until then `isOurProcess` refuses the job, so the window where
+ * the identity is unknown is a window where nothing can be killed on its word.
+ */
+export function captureIdentityAsync(
+    pid: number | undefined,
+    apply: (identity: ProcessIdentity) => void,
+): void {
+    if (!pid || pid <= 0) return;
+    if (process.platform !== 'win32') {
+        const identity = captureIdentity(pid);
+        if (identity) apply(identity);
+        return;
+    }
+    // Still pending: recorded as unverified so a checkpoint written in the
+    // meantime is honest about not knowing.
+    apply({ pid, token: 'unverified' });
+    void new Promise<string | null>((resolve) => {
+        const child = cp.spawn('powershell.exe', [
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+            // ToUniversalTime: a capture and a post-restart verification can
+            // straddle a DST change, and a shifted offset serializes to a
+            // different string - a healthy job would look recycled.
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`,
+        ], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+        let out = '';
+        const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 5000);
+        child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+        child.on('error', () => { clearTimeout(timer); resolve(null); });
+        child.on('close', () => { clearTimeout(timer); resolve(out.trim() || null); });
+    }).then((token) => { apply({ pid, token: token ?? 'unverified' }); });
 }
 
 /**

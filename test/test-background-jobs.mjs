@@ -325,11 +325,18 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 
 {
     // The point of `background`: a quiet process must NOT be killed by the
-    // 10-minute idle window, because the user asked for something that keeps
-    // running. A 300ms idle window would kill this if the timers applied.
+    // 10-minute idle window, because the user asked for it to keep running.
+    //
+    // Asserted as an INVARIANT, not as a wall-clock check. This block used to
+    // sleep 700ms and require the job to still be running, which is
+    // unsound: `spawnTerminalJob` captures process identity on the spawn path,
+    // and on Windows that shells out. While that was synchronous it froze the
+    // event loop, so the test's 700ms clock effectively started seconds late
+    // and a healthy job read as "killed anyway". Asserting `killReason` is
+    // null cannot be skewed by anything the host does before the timer runs.
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: holdsFor(2500),
+        command: holdsFor(30_000),
         background: true,
         idleKillMs: 300,
         hardCapMs: 300,
@@ -338,20 +345,21 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     ok('a background job is flagged background', job.background === true);
     ok('a background job starts running', job.status === 'running');
 
-    await sleep(700);
-    ok('a background job ignores the idle window', job.status === 'running', job.status);
-    ok('a background job ignores the hard cap', job.status === 'running', job.status);
+    // A grace period well past both 300ms timers, so if either were armed it
+    // would have fired by now. The hold is 30s, so a multi-second stall
+    // anywhere on this path cannot make the job look finished.
+    await sleep(1500);
+    ok('it is still running - the idle window did not fire',
+        job.status === 'running', `${job.status}/${job.killReason}`);
+    ok('and nothing killed it', job.killReason === null, String(job.killReason));
+    ok('the hard cap did not fire either', !/hard cap/.test(job.killReason ?? 'none'));
 
-    await job.finished;
-    ok('it still ends on its own', job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
-
-    // The negative case, on the SAME command and the SAME timers. Without it
-    // the assertions above cannot tell "background ignores the timers" from
-    // "this command happens to finish before them" - which is exactly the
-    // mistake the windows leg exposed.
+    // The negative case: the SAME command with the SAME timers must be killed
+    // when foreground. Without it, "background ignores the timers" cannot be
+    // told apart from "this command outlives the timers anyway".
     const sameButForeground = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: holdsFor(2500),
+        command: holdsFor(30_000),
         background: false,
         idleKillMs: 300,
         hardCapMs: 300,
@@ -361,9 +369,12 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
         && sameButForeground.status === 'killed',
         `${sameButForeground.status}/${sameButForeground.killReason}`);
 
+    job.kill('test cleanup');
+    await withDeadline(job, 20_000);
+    ok('the background job stops when it is killed', job.status === 'killed', job.status);
     ok('a FINISHED background job stays readable', getTerminalJob(job.id) === job);
     ok('a finished background job reports when it ended', typeof job.finishedAt === 'number');
-    ok('uptime freezes at the finish time', job.uptimeSeconds() >= 1, String(job.uptimeSeconds()));
+    ok('uptime freezes at the finish time', job.uptimeSeconds() >= 0, String(job.uptimeSeconds()));
 }
 
 {

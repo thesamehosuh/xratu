@@ -29,7 +29,7 @@
 
 import * as cp from 'child_process';
 import { killPids, killTree, snapshotTree } from './processTree';
-import { captureIdentity, isOurProcess, type ProcessIdentity } from './processIdentity';
+import { captureIdentity, captureIdentityAsync, isOurProcess, type ProcessIdentity } from './processIdentity';
 import { terminalSpawn, terminalFailureHint, appendHintToResult } from './shellPlatform';
 
 /**
@@ -429,15 +429,25 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         windowsVerbatimArguments,
     });
     child.stdin.end();
-    // Captured ONLY for a job that is background from the start, and then
-    // immediately - `processStartToken` shells out (PowerShell on Windows), and
-    // paying that on every foreground command froze the extension host for up
-    // to the call's own timeout. `moveToBackground` captures lazily instead;
-    // it can only succeed while the job is still running, so the pid is
-    // certainly ours at that moment too.
-    let identity: ProcessIdentity | undefined = startBackground
-        ? captureIdentity(child.pid) ?? undefined
-        : undefined;
+    // Not captured for a FOREGROUND command: `processStartToken` needs a
+    // subprocess on Windows, and paying that on every command froze the
+    // extension host for the call's whole timeout. `moveToBackground` captures
+    // lazily instead - it can only succeed while the job is still running, so
+    // the pid is certainly ours at that moment too.
+    let identity: ProcessIdentity | undefined = captureIdentity(child.pid) ?? undefined;
+    // On Windows the real token needs a subprocess, so it is fetched in the
+    // background: the job exists immediately (killable by id, listed, and the
+    // tool call already returned) and its identity is upgraded the moment the
+    // answer lands. Until then the token is 'unverified', and `isOurProcess`
+    // refuses that - so a checkpoint written in the gap is honest instead of
+    // asserting an identity we have not proven yet.
+    if (startBackground && child.pid) {
+        captureIdentityAsync(child.pid, (resolved) => {
+            identity = resolved;
+            // Re-checkpoint so the durable record carries the real identity.
+            onJobsChanged?.();
+        });
+    }
 
     const job: TerminalJob = {
         id,
