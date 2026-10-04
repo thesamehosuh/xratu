@@ -65,6 +65,24 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 /** Liveness poll. On Windows a terminated child's pid can stay openable
  *  while our ChildProcess handle lives, so callers pair this with `exit`. */
+/**
+ * A command guaranteed to still be running after `ms`.
+ *
+ * NOT `ping -n 2`: on a runner with an instant loopback it returns straight
+ * away, so a job meant to outlive a 700ms check had already exited and the
+ * timer assertions were really asserting timing luck. node is already running
+ * this test, so asking node to hold a timer is the one wait that behaves the
+ * same on both legs.
+ *
+ * Invoked as bare `node`, not the absolute execPath: on Windows the install
+ * path contains a space ("C:\\Program Files\\nodejs") and quoting it inside
+ * the cmd.exe line mangled the command.
+ */
+const holdsFor = (ms) => sh(
+    `${JSON.stringify(process.execPath)} -e ${JSON.stringify(`setTimeout(()=>{},${ms})`)}`,
+    `node -e ${JSON.stringify(`setTimeout(()=>{},${ms})`)}`,
+);
+
 const waitDead = async (pid, ms = 10_000) => {
     const end = Date.now() + ms;
     while (Date.now() < end && alivePid(pid)) await sleep(50);
@@ -297,7 +315,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // running. A 300ms idle window would kill this if the timers applied.
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 1; echo bg-done', 'ping -n 2 127.0.0.1 > nul & echo bg-done'),
+        command: `${holdsFor(2500)} && echo bg-done`,
         background: true,
         idleKillMs: 300,
         hardCapMs: 300,
@@ -638,9 +656,13 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
+        // Bare `node` on Windows: the absolute execPath lives under
+        // "C:\\Program Files\\nodejs", and quoting that inside the cmd.exe
+        // line left the command unrunnable, so the parent never printed its
+        // grandchild pid.
         command: sh(
             `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(marker)}`,
-            `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(marker)}`,
+            `node ${JSON.stringify(script)} ${JSON.stringify(marker)}`,
         ),
         idleKillMs: 600_000,
         hardCapMs: 600_000,
@@ -653,7 +675,8 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
         if (m) grandchild = Number(m[0]);
         else await sleep(50);
     }
-    ok('the spawned tree reported a grandchild pid', !!grandchild, JSON.stringify(job.stdout));
+    ok('the spawned tree reported a grandchild pid', !!grandchild,
+        `status=${job.status} exit=${job.exitCode} stdout=${JSON.stringify(job.stdout)} stderr=${JSON.stringify(job.stderr)}`);
     // Guards the assertion below against being vacuous: if the grandchild were
     // already dead before the kill, "the marker never appeared" would prove
     // nothing about the tree kill at all.
