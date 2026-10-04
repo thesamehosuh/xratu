@@ -66,21 +66,30 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Liveness poll. On Windows a terminated child's pid can stay openable
  *  while our ChildProcess handle lives, so callers pair this with `exit`. */
 /**
- * A command guaranteed to still be running after `ms`.
+ * A command that is guaranteed to still be running after `ms`.
  *
- * NOT `ping -n 2`: on a runner with an instant loopback it returns straight
- * away, so a job meant to outlive a 700ms check had already exited and the
- * timer assertions were really asserting timing luck. node is already running
- * this test, so asking node to hold a timer is the one wait that behaves the
- * same on both legs.
+ * Two things this must NOT be:
  *
- * Invoked as bare `node`, not the absolute execPath: on Windows the install
- * path contains a space ("C:\\Program Files\\nodejs") and quoting it inside
- * the cmd.exe line mangled the command.
+ *  - `ping -n 2`, which is only a ~1s wait when loopback behaves. On a runner
+ *    where it returns sooner, a job meant to outlive a 700ms check had already
+ *    exited and the timer assertions were asserting timing luck.
+ *  - `node -e "<source>"`, whose quoted source does not survive cmd.exe's
+ *    `/s` quote stripping - the command failed outright and the job exited at
+ *    once, which is exactly the failure the windows CI leg reported.
+ *
+ * So: a real script file holding a real timer, invoked as bare `node`. Both
+ * forms are shell-quote-free beyond one quoted path, and the tree-kill test
+ * already proves the bare-`node` form runs on windows.
  */
+const HOLD_SCRIPT = join(mkdtempSync(join(tmpdir(), 'xratu-hold-')), 'hold.js');
+writeFileSync(HOLD_SCRIPT, [
+    'const ms = Number(process.argv[2] || 1000);',
+    "setTimeout(() => { console.log('held'); }, ms);",
+].join('\n'), 'utf8');
+
 const holdsFor = (ms) => sh(
-    `${JSON.stringify(process.execPath)} -e ${JSON.stringify(`setTimeout(()=>{},${ms})`)}`,
-    `node -e ${JSON.stringify(`setTimeout(()=>{},${ms})`)}`,
+    `${JSON.stringify(process.execPath)} ${JSON.stringify(HOLD_SCRIPT)} ${ms}`,
+    `node ${JSON.stringify(HOLD_SCRIPT)} ${ms}`,
 );
 
 const waitDead = async (pid, ms = 10_000) => {
@@ -315,7 +324,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // running. A 300ms idle window would kill this if the timers applied.
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: `${holdsFor(2500)} && echo bg-done`,
+        command: holdsFor(2500),
         background: true,
         idleKillMs: 300,
         hardCapMs: 300,
@@ -330,6 +339,23 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 
     await job.finished;
     ok('it still ends on its own', job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
+
+    // The negative case, on the SAME command and the SAME timers. Without it
+    // the assertions above cannot tell "background ignores the timers" from
+    // "this command happens to finish before them" - which is exactly the
+    // mistake the windows leg exposed.
+    const sameButForeground = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: holdsFor(2500),
+        background: false,
+        idleKillMs: 300,
+        hardCapMs: 300,
+    });
+    ok('the very same command IS killed by the same timers when foreground',
+        await withDeadline(sameButForeground) === 'finished'
+        && sameButForeground.status === 'killed',
+        `${sameButForeground.status}/${sameButForeground.killReason}`);
+
     ok('a FINISHED background job stays readable', getTerminalJob(job.id) === job);
     ok('a finished background job reports when it ended', typeof job.finishedAt === 'number');
     ok('uptime freezes at the finish time', job.uptimeSeconds() >= 1, String(job.uptimeSeconds()));
