@@ -19,6 +19,7 @@ const suites = [
     { entry: 'webview-ui/test/decision-card-render.test.tsx', outfile: 'dist-tests/decision-card-render-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/message-list-paging.test.tsx', outfile: 'dist-tests/message-list-paging-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/tool-pill-grouping.test.tsx', outfile: 'dist-tests/tool-pill-grouping-test.cjs', jsx: 'automatic' },
+    { entry: 'webview-ui/test/background-tools.test.tsx', outfile: 'dist-tests/background-tools-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/local-agent.test.ts', outfile: 'dist-tests/local-agent-test.cjs' },
     { entry: 'webview-ui/test/mention.test.ts', outfile: 'dist-tests/mention-test.cjs' },
     { entry: 'webview-ui/test/datetime.test.ts', outfile: 'dist-tests/datetime-test.cjs' },

@@ -17,6 +17,7 @@ import {
     CodeXml,
     Copy,
     CornerDownRight,
+    Cpu,
     ExternalLink,
     FilePen,
     FileText,
@@ -29,6 +30,7 @@ import {
     Image as ImageIcon,
     Globe,
     ListChecks,
+    Minimize2,
     Package,
     PackagePlus,
     Paperclip,
@@ -264,6 +266,9 @@ const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
     { re: /^skill$/, icon: BookOpen },
     { re: /terminal|command/, icon: SquareTerminal },
+    // Before the generic fallbacks: `process` shares no substring with any
+    // other family, so without its own row it rendered as a bare wrench.
+    { re: /^process$/, icon: Cpu },
     { re: /grep/, icon: Search },
     { re: /glob/, icon: Search },
     { re: /read_files|file_info/, icon: FileText },
@@ -295,6 +300,7 @@ const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
+    { re: /^process$/, key: 'toolProcess' },
     { re: /^ask_user_question$/, key: 'toolAskUserQuestion' },
     { re: /^task$/, key: 'toolTask' },
     { re: /^read_file$/, key: 'toolReadFile' },
@@ -1397,7 +1403,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 't
     );
 }
 
-function ActivityRow({ row, running, isLast, onOpenDiff, prefs }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs }) {
+function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, onKillBackground, prefs }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; onBackgroundTerminal?: (callId: string) => void; onKillBackground?: (jobId: string) => void; prefs?: TranscriptPrefs }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
@@ -1547,6 +1553,45 @@ function ActivityRow({ row, running, isLast, onOpenDiff, prefs }: { row: Exclude
                         <span className="step-status spinner" aria-hidden="true" />
                     )}
                     {editStat && <EditStatsText stats={editStat} />}
+                    {/* A running terminal command holds the whole turn, so the
+                        * only escape is releasing it while the process lives on.
+                        * Offered exactly while it is running and NOT already
+                        * backgrounded - after that the stop control replaces it,
+                        * so the same call can never be handed off twice. */}
+                    {row.call.background ? (
+                        <button
+                            type="button"
+                            className="icon-btn-mini"
+                            title={t('bgStopTitle')}
+                            aria-label={t('bgStop')}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onKillBackground?.(row.call.background!.jobId);
+                            }}
+                        >
+                            <X size={12} />
+                        </button>
+                    ) : family === 'terminal' && !done ? (
+                        <button
+                            type="button"
+                            className="icon-btn-mini"
+                            title={t('bgRunInBackgroundTitle')}
+                            aria-label={t('bgRunInBackground')}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const callId = row.call.callId;
+                                if (callId) onBackgroundTerminal?.(callId);
+                            }}
+                        >
+                            {/* Minimize2, not CornerDownRight: the latter is
+                                *  already the "steer the running agent" glyph,
+                                *  and reusing it made this read as a second
+                                *  steer control rather than "send it away". */}
+                            <Minimize2 size={12} />
+                        </button>
+                    ) : null}
                     {termExit !== null && (
                         <span className={`step-stat ${termExit === '0' ? 'ok' : 'd'}`} dir="ltr">
                             {t('termExitCode')} {termExit}
@@ -2592,7 +2637,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2694,7 +2739,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                         ) : row.kind === 'decision' ? (
                             <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} />
+                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={onBackgroundTerminal} onKillBackground={onKillBackground} prefs={transcriptPrefs} />
                         )
                     )}
                     {showWorking && (
@@ -2899,6 +2944,10 @@ interface MessageItemProps {
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** Open the native diff editor for a completed edit step (or group). */
     onOpenDiff?: OpenDiffHandler;
+    /** Release the turn while a running terminal command keeps going. */
+    onBackgroundTerminal?: (callId: string) => void;
+    /** Stop a background job the user is watching. */
+    onKillBackground?: (jobId: string) => void;
     /** 0-based index among USER messages; undefined for non-user bubbles. */
     userIndex?: number;
     isLastAssistant?: boolean;
@@ -2930,6 +2979,8 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.onEditMessage === b.onEditMessage &&
     a.onRestoreCheckpoint === b.onRestoreCheckpoint &&
     a.onOpenDiff === b.onOpenDiff &&
+    a.onBackgroundTerminal === b.onBackgroundTerminal &&
+    a.onKillBackground === b.onKillBackground &&
     a.userIndex === b.userIndex &&
     a.isLastAssistant === b.isLastAssistant &&
     a.busy === b.busy &&

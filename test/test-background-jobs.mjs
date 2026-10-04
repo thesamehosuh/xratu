@@ -1,0 +1,581 @@
+#!/usr/bin/env node
+/**
+ * Terminal job ownership tests for `src/tooling/backgroundJobs.ts`.
+ *
+ * Covers the extraction of the spawn/collect/kill lifecycle out of `mcp.ts`
+ * into an OWNED job, plus the two properties the inline version got for free
+ * and an owner can easily lose:
+ *
+ *  - a successful run that writes to stderr is reported as SUCCESS (one
+ *    neutral OUTPUT block), because git's "Switched to branch ...", curl
+ *    progress and npm notices otherwise read as a failure to the model;
+ *  - a failed run keeps stdout and stderr SEPARATE. The extraction initially
+ *    collapsed them into one merged buffer, which printed the same text under
+ *    both headings.
+ *
+ * Real processes are spawned here, so this runs unchanged on the ubuntu and
+ * windows CI legs.
+ *
+ * Run (after `npx tsc -p . --outDir out`):  node test/test-background-jobs.mjs
+ */
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const {
+    DEFAULT_LOG_LINES,
+    FINISHED_RETENTION_MS,
+    MAX_BACKGROUND_JOBS,
+    MAX_READBACK_CHARS,
+    MAX_STREAM_CHARS,
+    awaitTerminalJob,
+    clipTail,
+    describeBackgroundHandoff,
+    describeTerminalJob,
+    formatJobCompletion,
+    formatTerminalResult,
+    getJobByCallId,
+    getTerminalJob,
+    killForegroundJobs,
+    listTerminalJobs,
+    markCompletionConsumed,
+    onJobEvent,
+    readJobOutput,
+    spawnTerminalJob,
+    waitForTerminalJob,
+} = require('../out/tooling/backgroundJobs.js');
+
+let failed = 0;
+const ok = (name, cond, detail = '') => {
+    if (!cond) failed++;
+    console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond || !detail ? '' : ` (${detail})`}`);
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isWindows = process.platform === 'win32';
+
+/** A command that works the same in cmd.exe and bash. */
+const sh = (posix, windows) => (isWindows ? windows : posix);
+
+// ---------------------------------------------------------------- pure bits
+
+ok('clipTail keeps short text whole', clipTail('abc') === 'abc');
+ok('clipTail keeps the tail, not the head', clipTail('0123456789', 4) === '6789');
+ok('clipTail is exactly at the cap', clipTail('x'.repeat(10), 10) === 'x'.repeat(10));
+ok('clipTail clips at one char over the cap', clipTail('x'.repeat(11), 10) === 'x'.repeat(10));
+
+ok('the stream cap is 200k', MAX_STREAM_CHARS === 200_000);
+
+// --------------------------------------------------------- result formatting
+
+const fakeJob = (over) => ({
+    id: 'job-fake',
+    command: 'demo',
+    cwd: '/tmp',
+    pid: 1,
+    startedAt: 0,
+    status: 'exited',
+    exitCode: 0,
+    killReason: null,
+    error: null,
+    stdout: '',
+    stderr: '',
+    output: '',
+    kill() {},
+    finished: Promise.resolve(),
+    ...over,
+});
+
+{
+    const text = formatTerminalResult(fakeJob({
+        stdout: 'Switched to branch main\n',
+        stderr: 'npm notice New minor version available\n',
+    }), process.platform);
+    ok('a success that wrote to stderr still reads as one OUTPUT block',
+        text.startsWith('OUTPUT:\n') && !text.includes('STDERR:'),
+        JSON.stringify(text.slice(0, 80)));
+    ok('the successful run keeps the stderr notice in the output',
+        text.includes('npm notice New minor version available'));
+    ok('a clean run is not an error', formatTerminalResult(fakeJob({}), process.platform) === 'OUTPUT:\n(no output)');
+}
+
+{
+    const text = formatTerminalResult(fakeJob({ status: 'exited', exitCode: 2, stdout: 'out-line', stderr: 'err-line' }), process.platform);
+    ok('a failure splits the streams', text.includes('STDOUT:\nout-line') && text.includes('STDERR:\nerr-line'), JSON.stringify(text.slice(0, 120)));
+    ok('the two streams are not the same text', !text.includes('STDOUT:\nout-line\nSTDERR:\nout-line'));
+    ok('a non-zero exit is reported', text.includes('Exit code: 2'));
+}
+
+{
+    const text = formatTerminalResult(fakeJob({ status: 'killed', killReason: 'cancelled by the user', stdout: 'partial' }), process.platform);
+    ok('a killed job names the reason', text.includes('killed (cancelled by the user)'), JSON.stringify(text.slice(-120)));
+    ok('a killed job does not also print an exit code', !text.includes('Exit code:'));
+}
+
+{
+    const text = formatTerminalResult(fakeJob({ status: 'failed', error: new Error('spawn boom') }), process.platform);
+    ok('a spawn failure surfaces the message', text.includes('Error: spawn boom'), JSON.stringify(text.slice(-80)));
+}
+
+// --------------------------------------------------------------- real spawns
+
+{
+    const before = listTerminalJobs().length;
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo hello-stdout; echo hello-stderr 1>&2', 'echo hello-stdout & echo hello-stderr 1>&2'),
+    });
+    ok('a live job is listed', listTerminalJobs().length === before + 1);
+    ok('a live job is retrievable by id', getTerminalJob(job.id) === job);
+    ok('an unknown id resolves to undefined', getTerminalJob('job-does-not-exist') === undefined);
+    ok('a live job starts out running', job.status === 'running' && job.exitCode === null);
+
+    const result = await awaitTerminalJob(job, process.platform);
+    ok('a clean run exits 0', job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
+    ok('stdout and stderr are captured apart',
+        job.stdout.includes('hello-stdout') && job.stderr.includes('hello-stderr'),
+        `${JSON.stringify(job.stdout)} / ${JSON.stringify(job.stderr)}`);
+    ok('the merged view interleaves both', job.output.includes('hello-stdout') && job.output.includes('hello-stderr'));
+    ok('a clean run is not an error', result.isError === false);
+    ok('a finished job leaves the registry', listTerminalJobs().length === before, String(listTerminalJobs().length));
+    ok('a finished job is no longer retrievable', getTerminalJob(job.id) === undefined);
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo out; echo err 1>&2; exit 3', 'echo out & echo err 1>&2 & exit 3'),
+    });
+    const result = await awaitTerminalJob(job, process.platform);
+    ok('a failing run reports isError', result.isError === true);
+    ok('a failing run keeps its code', job.exitCode === 3, String(job.exitCode));
+    ok('a failing run still carries both streams',
+        result.text.includes('STDOUT:\nout') && result.text.includes('STDERR:\nerr'),
+        JSON.stringify(result.text.slice(0, 120)));
+}
+
+{
+    const chunks = [];
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('printf "a\\nb\\nc\\n"', 'echo a& echo b& echo c'),
+        onOutput: (chunk) => chunks.push(chunk),
+    });
+    await awaitTerminalJob(job, process.platform);
+    ok('output streams to the UI as it arrives', chunks.join('').includes('a'), JSON.stringify(chunks));
+}
+
+{
+    // A live job is killable and the tree kill reaches the group.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        // Long windows so only the kill can end it.
+        idleKillMs: 600_000,
+        hardCapMs: 600_000,
+    });
+    const pid = job.pid;
+    ok('a background-able job reports a pid', typeof pid === 'number' && pid > 0, String(pid));
+    await sleep(300);
+    killForegroundJobs('test kill');
+    await job.finished;
+    ok('killForegroundJobs ends the job', job.status === 'killed', job.status);
+    ok('the kill reason reaches the result', job.killReason === 'test kill', String(job.killReason));
+    if (!isWindows) {
+        const end = Date.now() + 5000;
+        let dead = false;
+        while (Date.now() < end && !dead) {
+            try { process.kill(pid, 0); } catch { dead = true; break; }
+            await sleep(50);
+        }
+        ok('the process tree is actually gone', dead, `pid ${pid}`);
+    }
+    ok('a killed job leaves the registry', listTerminalJobs().every((j) => j.id !== job.id));
+}
+
+{
+    // kill() is idempotent: a second request must not re-signal or throw.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        idleKillMs: 600_000,
+        hardCapMs: 600_000,
+    });
+    await sleep(200);
+    job.kill('first');
+    job.kill('second');
+    await job.finished;
+    ok('a repeated kill keeps the first reason', job.killReason === 'first', String(job.killReason));
+}
+
+{
+    // Output resets the idle window, so a process that keeps reporting
+    // progress outlives a window far shorter than its total runtime. This is
+    // what lets a slow build survive the idle kill.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh(
+            'for i in 1 2 3 4 5 6 7 8; do echo tick; sleep 0.1; done',
+            'for /L %i in (1,1,8) do @(echo tick & ping -n 2 127.0.0.1 > nul)',
+        ),
+        idleKillMs: 400,
+        hardCapMs: 600_000,
+    });
+    await job.finished;
+    ok('output resets the idle window, so a chatty process survives it',
+        job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
+    ok('its progress output is retained', (job.stdout.match(/tick/g) ?? []).length === 8, job.stdout);
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        idleKillMs: 200,
+        hardCapMs: 600_000,
+    });
+    await job.finished;
+    ok('a permanently silent process is killed by the idle window', job.status === 'killed', job.status);
+    ok('the idle reason names the window', /no output/.test(job.killReason ?? ''), String(job.killReason));
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        idleKillMs: 600_000,
+        hardCapMs: 400,
+    });
+    await job.finished;
+    ok('the hard cap is absolute', job.status === 'killed' && /hard cap/.test(job.killReason ?? ''), String(job.killReason));
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: 'this-command-does-not-exist-anywhere-9f3a',
+    });
+    const result = await awaitTerminalJob(job, process.platform);
+    ok('a nonexistent command is an error, not a hang', result.isError === true, JSON.stringify(result.text.slice(0, 200)));
+}
+
+ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0, JSON.stringify(listTerminalJobs().map((j) => j.id)));
+
+// ------------------------------------------------------------ background mode
+
+{
+    // The point of `background`: a quiet process must NOT be killed by the
+    // 10-minute idle window, because the user asked for something that keeps
+    // running. A 300ms idle window would kill this if the timers applied.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 1; echo bg-done', 'ping -n 2 127.0.0.1 > nul & echo bg-done'),
+        background: true,
+        idleKillMs: 300,
+        hardCapMs: 300,
+    });
+    ok('a background job is registered', getTerminalJob(job.id) === job);
+    ok('a background job is flagged background', job.background === true);
+    ok('a background job starts running', job.status === 'running');
+
+    await sleep(700);
+    ok('a background job ignores the idle window', job.status === 'running', job.status);
+    ok('a background job ignores the hard cap', job.status === 'running', job.status);
+
+    await job.finished;
+    ok('it still ends on its own', job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
+    ok('a FINISHED background job stays readable', getTerminalJob(job.id) === job);
+    ok('a finished background job reports when it ended', typeof job.finishedAt === 'number');
+    ok('uptime freezes at the finish time', job.uptimeSeconds() >= 1, String(job.uptimeSeconds()));
+}
+
+{
+    // A user cancel must not take out something the user deliberately kept
+    // running. This is the regression that makes `background` safe to offer.
+    const bg = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        background: true,
+    });
+    const fg = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        background: false,
+    });
+    ok('a foreground cancel signals exactly one job', killForegroundJobs('test cancel') === 1, 'counted wrong');
+    await fg.finished;
+    await sleep(200);
+    ok('the foreground job was killed', fg.status === 'killed', fg.status);
+    ok('the background job survived the cancel', bg.status === 'running', bg.status);
+    bg.kill('test cleanup');
+    await bg.finished;
+}
+
+{
+    // The cap must REFUSE, not evict a LIVE job: silently killing the oldest
+    // running dev server is worse than telling the model to clean up.
+    const spawned = [];
+    let refusal = null;
+    try {
+        for (let i = 0; i < MAX_BACKGROUND_JOBS + 2; i++) {
+            spawned.push(spawnTerminalJob({
+                workspaceRoot: process.cwd(),
+                command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+                background: true,
+            }));
+        }
+    } catch (e) {
+        refusal = e;
+    }
+    ok('the background cap refuses the over-limit spawn', refusal !== null, 'no refusal thrown');
+    ok('the refusal names the limit', /too many background jobs running/.test(refusal?.message ?? ''), refusal?.message);
+    ok('the refusal points at the `process` tool', /action "list"/.test(refusal?.message ?? ''), refusal?.message);
+    ok('the refusal names the oldest live job', /oldest is job-/.test(refusal?.message ?? ''), refusal?.message);
+    ok('every job it accepted is still running', spawned.every((j) => j.status === 'running'), 'a live job was evicted');
+    ok('no live job was dropped to make room', spawned.length === MAX_BACKGROUND_JOBS, String(spawned.length));
+    for (const j of spawned) j.kill('test cleanup');
+    await Promise.all(spawned.map((j) => j.finished));
+}
+
+{
+    // Finished jobs hold no process, so they must not block a new spawn: the
+    // cap bounds LIVE processes. Without this the model hits "too many" after
+    // a handful of quick commands and cannot recover without a wait.
+    const quick = [];
+    for (let i = 0; i < MAX_BACKGROUND_JOBS + 4; i++) {
+        quick.push(spawnTerminalJob({
+            workspaceRoot: process.cwd(),
+            command: sh(`echo quick-${i}`, `echo quick-${i}`),
+            background: true,
+        }));
+        await quick[i].finished;
+    }
+    ok('finished background jobs never block a later spawn', true);
+    ok('the cap only counts running jobs', quick.length === MAX_BACKGROUND_JOBS + 4, String(quick.length));
+    ok('each finished job kept its own output', quick.every((j) => j.output.includes('quick-')), 'output lost');
+}
+
+{
+    ok('the retention window is 30 minutes', FINISHED_RETENTION_MS === 30 * 60_000);
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo one; echo two; echo three', 'echo one& echo two& echo three'),
+        background: true,
+    });
+    await job.finished;
+
+    ok('readback defaults to the whole short log', readJobOutput(job).includes('three'), readJobOutput(job));
+    ok('readback labels the window without counting a phantom trailing line',
+        /showing lines 1-3 of 3/.test(readJobOutput(job)), JSON.stringify(readJobOutput(job).split('\n')[0]));
+
+    const firstOnly = readJobOutput(job, { limit: 1, offset: 0 });
+    ok('limit returns only that many lines', firstOnly.includes('one') && !firstOnly.includes('two'), JSON.stringify(firstOnly));
+
+    const paged = readJobOutput(job, { limit: 1, offset: 2 });
+    ok('offset pages forward', paged.includes('three') && !paged.includes('one'), JSON.stringify(paged));
+
+    // The default window is the NEWEST output: a 50k-line dev-server log is
+    // useless if `log` hands back the lines from before it started.
+    const long = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('for i in $(seq 1 40); do echo line-$i; done', 'for /L %i in (1,1,40) do @echo line-%i'),
+        background: true,
+    });
+    await long.finished;
+    const tail = readJobOutput(long, { limit: 3 });
+    ok('the default window is the tail, not the head',
+        tail.includes('line-40') && !tail.includes('line-1\n'), JSON.stringify(tail.slice(0, 120)));
+    ok('the tail window reports where it sits', /showing lines 38-40 of 40/.test(tail), JSON.stringify(tail.split('\n')[0]));
+    ok('the head is still reachable with an explicit offset',
+        readJobOutput(long, { offset: 0, limit: 2 }).includes('line-1'),
+        JSON.stringify(readJobOutput(long, { offset: 0, limit: 2 })));
+
+    const past = readJobOutput(job, { offset: 99 });
+    ok('an offset past the end is not an error', past.includes('(no output)'), JSON.stringify(past));
+
+    const capped = readJobOutput(job, { maxChars: 10 });
+    ok('a maxChars cap never exceeds the cap', readJobOutput(job, { maxChars: 10 }).length < 200, String(capped.length));
+    ok('the default readback cap is 20k', MAX_READBACK_CHARS === 20_000);
+    ok('the default log window is 200 lines', DEFAULT_LOG_LINES === 200);
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        background: true,
+    });
+    const started = Date.now();
+    const ended = await waitForTerminalJob(job, 400);
+    ok('wait reports "still running" instead of pretending it ended', ended === false);
+    ok('wait actually waited about as long as asked', Date.now() - started >= 350, String(Date.now() - started));
+    ok('the job is genuinely still running', job.status === 'running');
+
+    job.kill('test cleanup');
+    await job.finished;
+    ok('wait on an ended job returns immediately', await waitForTerminalJob(job, 60_000) === true);
+}
+
+{
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo listing-me', 'echo listing-me'),
+        background: true,
+    });
+    await job.finished;
+    const line = describeTerminalJob(job);
+    ok('describe names the job id', line.startsWith(job.id), line);
+    ok('describe marks it background', line.includes('background'), line);
+    ok('describe reports the exit code', /exited with code 0/.test(line), line);
+    ok('describe repeats the command', line.includes('$ echo listing-me'), line);
+    job.kill('cleanup');
+    await job.finished;
+}
+
+// Finished background jobs stay in the registry for their retention window by
+// design, so the suite's own ending assertion is about LIVE processes leaking,
+// not about the map being empty.
+{
+    const live = listTerminalJobs().filter((j) => j.status === 'running');
+    for (const j of live) j.kill('test cleanup');
+    await Promise.all(live.map((j) => j.finished));
+    ok('no running job leaked after the suite',
+        listTerminalJobs().every((j) => j.status !== 'running'),
+        JSON.stringify(listTerminalJobs().filter((j) => j.status === 'running').map((j) => j.id)));
+}
+
+{
+    // The USER releasing the turn must settle the tool call without touching
+    // the process. This is the whole point of `released`: a tool call that
+    // awaited `finished` would hold the turn until the idle cap killed the dev
+    // server the user was trying to keep.
+    const events = [];
+    const unsubscribe = onJobEvent((e) => events.push(e));
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 1; echo released-ok', 'ping -n 2 127.0.0.1 > nul & echo released-ok'),
+        idleKillMs: 400,
+        hardCapMs: 400,
+        callId: 'call-abc',
+    });
+    ok('a job records the tool call it belongs to', job.callId === 'call-abc', String(job.callId));
+    ok('the job is findable from its tool call id', getJobByCallId('call-abc') === job);
+    ok('an unknown call id resolves to undefined', getJobByCallId('call-nope') === undefined);
+    ok('a foreground job does not announce itself as backgrounded',
+        events.every((e) => e.kind !== 'started'));
+
+    ok('a running foreground job can be released', job.moveToBackground(true) === true);
+    ok('releasing twice reports honestly', job.moveToBackground(true) === false);
+    ok('it is now a background job', job.background === true);
+    ok('the transcript records that the USER did it', job.backgroundedByUser === true);
+    ok('the released promise resolved as backgrounded', await job.released === 'backgrounded');
+
+    await sleep(700);
+    ok('releasing dropped the idle timer, so it is not killed',
+        job.status === 'running', `${job.status}/${job.killReason}`);
+    ok('a cancel no longer reaches it', killForegroundJobs('test') === 0, 'it was signalled');
+
+    const started = events.filter((e) => e.kind === 'started');
+    ok('exactly one started event fired', started.length === 1, String(started.length));
+    ok('the started event names the job', started[0]?.jobId === job.id);
+    ok('the started event names the tool call', started[0]?.callId === 'call-abc');
+    ok('the started event records the user', started[0]?.byUser === true);
+
+    await job.finished;
+    ok('it ends on its own afterwards', job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
+    const settled = events.filter((e) => e.kind === 'settled');
+    ok('exactly one settled event fired', settled.length === 1, String(settled.length));
+    ok('the settled notice carries the job id', settled[0]?.notice.jobId === job.id);
+    ok('the settled notice carries the exit code', settled[0]?.notice.exitCode === 0);
+    ok('a settled job leaves the call index', getJobByCallId('call-abc') === undefined);
+    unsubscribe();
+}
+
+{
+    // A job the model already read must not be announced again.
+    const events = [];
+    const unsubscribe = onJobEvent((e) => events.push(e));
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo consumed', 'echo consumed'),
+        background: true,
+    });
+    await job.finished;
+    ok('a background spawn announces itself', events.some((e) => e.kind === 'started' && e.byUser === false));
+    ok('a fresh completion still notifies', events.some((e) => e.kind === 'settled'));
+
+    markCompletionConsumed(job.id);
+    const late = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo consumed2', 'echo consumed2'),
+        background: true,
+    });
+    const before = events.filter((e) => e.kind === 'settled').length;
+    markCompletionConsumed(late.id);
+    await late.finished;
+    ok('a consumed job is not announced again',
+        events.filter((e) => e.kind === 'settled').length === before,
+        String(events.filter((e) => e.kind === 'settled').length - before));
+    unsubscribe();
+}
+
+{
+    // A broken listener must not stop the others from being told, or one dead
+    // webview silently swallows every future completion notice.
+    const seen = [];
+    const bad = onJobEvent(() => { throw new Error('listener exploded'); });
+    const good = onJobEvent((e) => seen.push(e.kind));
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('echo resilient', 'echo resilient'),
+        background: true,
+    });
+    await job.finished;
+    ok('a throwing listener does not block the others', seen.includes('settled'), JSON.stringify(seen));
+    bad();
+    good();
+}
+
+{
+    const notice = formatJobCompletion({
+        jobId: 'job-x',
+        command: 'npm run dev',
+        status: 'exited',
+        exitCode: 1,
+        killReason: null,
+        error: null,
+        output: 'boom\n',
+    });
+    ok('the notice brackets itself so it is not read as the user',
+        notice.startsWith('[background job job-x exited with code 1]'), JSON.stringify(notice.slice(0, 60)));
+    ok('the notice repeats the command', notice.includes('npm run dev'));
+    ok('the notice carries the tail', notice.includes('boom'));
+    ok('the notice names the process tool and the job id',
+        /action 'log', jobId 'job-x'/.test(notice), notice);
+    ok('a success reads as success', /completed successfully/.test(formatJobCompletion({
+        jobId: 'j', command: 'c', status: 'exited', exitCode: 0, killReason: null, error: null, output: '',
+    })));
+    ok('a stop says it was stopped', /was stopped \(the reason\)/.test(formatJobCompletion({
+        jobId: 'j', command: 'c', status: 'killed', exitCode: null, killReason: 'the reason', error: null, output: '',
+    })));
+}
+
+{
+    // One handoff story for both paths: the model asking and the user pressing
+    // the button must not be able to tell the agent different things.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        background: true,
+    });
+    const text = describeBackgroundHandoff(job);
+    ok('the handoff names the job', text.includes(job.id), JSON.stringify(text.slice(0, 80)));
+    ok('the handoff names the command', text.includes('sleep 30'));
+    ok('the handoff says nothing will stop it', /nothing will stop it automatically/.test(text));
+    ok('the handoff points at the process tool', /action 'poll'/.test(text) && /action 'kill'/.test(text));
+    job.kill('test cleanup');
+    await job.finished;
+}
+
+console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
+process.exit(failed ? 1 : 0);

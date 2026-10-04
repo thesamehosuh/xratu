@@ -660,6 +660,23 @@ const fa = {
     notifCpRestoreFailed: 'بازیابی نقطه بازرسی ناموفق بود: {error}',
     notifEditFailed: 'ویرایش پیام ناموفق بود: {error}',
     notifRegenerateFailed: 'تولید دوباره ناموفق بود: {error}',
+    notifBackgroundJobDone: 'پس زمینه {command} تمام شد ({outcome}).',
+    notifBackgroundJobGone: 'این دستور دیگه در حال اجرا نیست.',
+    notifBackgroundAdopted: '{count} پروسه در پس زمینه از قبلین اجرا مونده و دوباره به دست اومد.',
+
+    // Background jobs
+    toolProcess: 'مدیریت پروسه',
+    bgJobBadge: '{count} پروسه در حال اجرا',
+    bgRunInBackground: 'اجرا در پس زمینه',
+    bgRunInBackgroundTitle: 'این دستور متوقف نمیشه و در پس زمینه ادامه پیدا میکنه. دستور بعدی همین حالا اجرا میشه.',
+    bgBackgrounded: 'در پس زمینه',
+    bgBackgroundedTitle: 'این دستور در پس زمینه ادامه داره و با پایان این نوبت متوقف نمیشه.',
+    bgStop: 'متوقف کردن',
+    bgStopTitle: 'این پروسه و زیرپروسه هاش رو میکشه',
+    bgExitCode: 'کد خروج',
+    bgUptime: 'مدت اجرا',
+    bgNoJobs: 'هیچ پروسه ای در پس زمینه نیست.',
+    bgNoticeLabel: 'اتمام پروسه در پس زمینه',
 
     // Language setting
     settingsLanguage: 'زبان',
@@ -1339,6 +1356,23 @@ const en: Record<keyof typeof fa, string> = {
     notifCpRestoreFailed: 'Checkpoint restore failed: {error}',
     notifEditFailed: 'Editing the message failed: {error}',
     notifRegenerateFailed: 'Regeneration failed: {error}',
+    notifBackgroundJobDone: 'Background {command} finished ({outcome}).',
+    notifBackgroundJobGone: 'That command is no longer running.',
+    notifBackgroundAdopted: '{count} background process(es) from the previous session were recovered.',
+
+    // Background jobs
+    toolProcess: 'Manage background processes',
+    bgJobBadge: '{count} background process(es)',
+    bgRunInBackground: 'Run in background',
+    bgRunInBackgroundTitle: 'This command keeps running and will not be stopped. The next command starts now.',
+    bgBackgrounded: 'In background',
+    bgBackgroundedTitle: 'This command is running in the background and will not stop when the turn ends.',
+    bgStop: 'Stop',
+    bgStopTitle: 'Kill this process and its children',
+    bgExitCode: 'exit code',
+    bgUptime: 'uptime',
+    bgNoJobs: 'No background processes.',
+    bgNoticeLabel: 'Background process finished',
 
     settingsLanguage: 'Interface language',
     settingsLanguageDesc: 'UI messages and notifications',

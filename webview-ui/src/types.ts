@@ -140,7 +140,16 @@ export type ToExtensionMessage =
      *  the edit ran; without one the host reconstructs the diff from `args`
      *  (what restored history offers). A group pill sends every call so the
      *  host can QuickPick the file. */
-    | { type: 'openDiff'; edits: OpenDiffEdit[] };
+    | { type: 'openDiff'; edits: OpenDiffEdit[] }
+    /** Move a RUNNING terminal command into the background: the turn is
+     *  released with the output so far, the process keeps running, and the
+     *  agent is told its job id. A scope reduction, not an expansion, so it
+     *  does not re-ask for approval. */
+    | { type: 'backgroundTerminal'; callId: string }
+    /** Kill a background job the user started watching. The same tree kill the
+     *  `process` tool performs; offered in the UI because after the turn ends
+     *  the transcript is the only place the user can still see it. */
+    | { type: 'killBackgroundJob'; jobId: string };
 
 export type DiscoveredLocalRuntime = {
     id: string;
@@ -299,6 +308,15 @@ export type FromExtensionMessage =
     | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[] }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; callId?: string; value: string }
+    /** A terminal call was moved to the background (model- or user-initiated).
+     *  `callId` matches the Step; `jobId` is what the `process` tool acts on. */
+    | { type: 'terminalBackgrounded'; callId?: string; jobId: string; byUser: boolean }
+    /** A background job was stopped from the UI - clears the row's background
+     *  marker so it cannot offer a stop for a job that no longer exists. */
+    | { type: 'backgroundJobStopped'; jobId: string }
+    /** Live background jobs, for the composer badge. Refreshed on every
+     *  background/kill/settle so the count cannot drift from reality. */
+    | { type: 'backgroundJobs'; jobs: BackgroundJobView[] }
     // Mid-run cumulative usage (emitted after each model round) - lets the
     // context meter track tool/thinking
     // growth WHILE the response streams instead of only at fullResponse.
@@ -730,6 +748,16 @@ export interface DecisionPayload {
     answer?: string | null;
 }
 
+/** How a terminal call ended up running in the background. */
+export interface BackgroundStep {
+    /** Server-side job id the `process` tool acts on. */
+    jobId: string;
+    /** True when the USER pressed the button rather than the model passing
+     *  background=true - rendered differently so the transcript records who
+     *  made the call. */
+    byUser: boolean;
+}
+
 export interface Step {
     id: string;
     kind: StepKind;
@@ -745,12 +773,26 @@ export interface Step {
     /** Live output streamed WHILE a long tool (terminal command) runs, shown
      *  under the call row until the final result replaces it. */
     live?: string;
+    /** Set once this terminal call was moved to the background - by the model
+     *  (background=true) or by the user pressing "Run in background". The row
+     *  stays interactive: it can still be stopped, and it no longer offers
+     *  the background button. */
+    background?: BackgroundStep;
     /** Wall-clock span of a thinking segment (webview-side timing). */
     startedAt?: number;
     endedAt?: number;
     /** Final host-rendered markdown for a 'text' segment (applied by
      *  fullResponse when segmentsHtml lines up with the streamed steps). */
     html?: string;
+}
+
+/** One live background job as the composer badge sees it. */
+export interface BackgroundJobView {
+    jobId: string;
+    command: string;
+    running: boolean;
+    /** Whole seconds since it started. */
+    uptimeSeconds: number;
 }
 
 export type MessageStatus = 'streaming' | 'done' | 'error';

@@ -3412,6 +3412,68 @@ button {
     background: var(--xratu-accent-faint);
 }
 
+/* Live background jobs, pinned above the composer. A backgrounded job outlives
+   its turn AND its transcript row once the chat scrolls, so this is the only
+   place the user can still see it and stop it. Logical props only - it has to
+   flip for RTL without a second rule. */
+.bg-jobs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--xratu-gap-xs, 4px);
+    align-items: center;
+    padding: 0 var(--xratu-pad) var(--xratu-gap-xs, 4px);
+}
+
+.bg-job {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--xratu-gap-xs, 4px);
+    max-width: 100%;
+    padding: 2px var(--xratu-gap-xs, 4px);
+    border: 1px solid var(--vscode-panel-border, transparent);
+    border-radius: var(--xratu-radius-sm, 4px);
+    background: var(--xratu-accent-faint);
+    color: var(--vscode-foreground);
+    font-size: var(--xratu-font-xs, 11px);
+    line-height: 1.5;
+}
+
+.bg-job-cmd {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* Commands, paths and pids are LTR content even in an RTL layout. */
+    direction: ltr;
+    unicode-bidi: isolate;
+    opacity: 0.85;
+}
+
+.bg-job-up {
+    opacity: 0.7;
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+.bg-job-stop {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+}
+
+.bg-job-stop:hover {
+    color: var(--vscode-errorForeground, #f85149);
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+}
+
 /* Unparseable patch: NEVER wrap the markers into a wall. Plain monospace on
    the message surface (no box), with a no-wrap horizontal scroll. */
 .step pre.pill-patch-pre {

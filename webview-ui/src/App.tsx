@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
+import { ChevronDown, CornerDownRight, Cpu, Link, ListChecks, X } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
@@ -940,6 +940,17 @@ export function App() {
         [send]
     );
 
+    // A running terminal command holds the whole turn, so this is the only way
+    // out of one that will not exit: release the turn, keep the process.
+    const handleBackgroundTerminal = useCallback(
+        (callId: string) => send({ type: 'backgroundTerminal', callId }),
+        [send]
+    );
+    const handleKillBackground = useCallback(
+        (jobId: string) => send({ type: 'killBackgroundJob', jobId }),
+        [send]
+    );
+
     // Task-list edit: optimistic local update + host persistence (the host
     // stores the per-session override and echoes taskListState back).
     const handleTaskListEdit = useCallback(
@@ -1365,6 +1376,8 @@ export function App() {
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     onOpenDiff={handleOpenDiff}
+                    onBackgroundTerminal={handleBackgroundTerminal}
+                    onKillBackground={handleKillBackground}
                     taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
                     firstVisible={firstVisible}
                     onShowEarlier={showEarlier}
@@ -1419,6 +1432,29 @@ export function App() {
                             <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
                             <span className="queued-steer-label">{t('steerQueued')}</span>
                             <span className="queued-steer-text" dir="auto">{s.label}</span>
+                        </span>
+                    ))}
+                </div>
+            )}
+            {/* Live background jobs. A backgrounded process outlives its turn
+                and, once the chat scrolls, its transcript row - this is the only
+                place the user can still see it and stop it. */}
+            {chat.backgroundJobs.some((j) => j.running) && (
+                <div className="bg-jobs" aria-label={t('bgJobBadge')}>
+                    {chat.backgroundJobs.filter((j) => j.running).map((j) => (
+                        <span className="bg-job" key={j.jobId}>
+                            <Cpu size={11} aria-hidden="true" />
+                            <span className="bg-job-cmd" title={j.command} dir="ltr">{j.command}</span>
+                            <span className="bg-job-up" dir="ltr">{j.uptimeSeconds}s</span>
+                            <button
+                                type="button"
+                                className="bg-job-stop"
+                                title={t('bgStopTitle')}
+                                aria-label={t('bgStop')}
+                                onClick={() => handleKillBackground(j.jobId)}
+                            >
+                                <X size={11} />
+                            </button>
                         </span>
                     ))}
                 </div>

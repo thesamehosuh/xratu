@@ -1,4 +1,4 @@
-import type { ChatMessage, FromExtensionMessage, Step } from './types';
+import type { BackgroundJobView, ChatMessage, FromExtensionMessage, Step } from './types';
 import { t, tf, tOrRaw } from './i18n';
 import type { Cost } from './cost';
 
@@ -15,6 +15,10 @@ export interface ChatState {
     /** Cumulative session spend, HOST-provided and monotonic: a rewind or
      *  checkpoint restore does not refund already-spent tokens. */
     sessionCost: Cost | null;
+    /** Live background jobs, HOST-provided. Not derived from the transcript on
+     *  purpose: a job keeps running after its turn ends and after a history
+     *  reload, so the badge must not depend on a message row existing. */
+    backgroundJobs: BackgroundJobView[];
 }
 
 let _id = 0;
@@ -23,7 +27,7 @@ export function nextId(): string {
 }
 
 export function createInitialChatState(): ChatState {
-    return { messages: [], busy: false, streamingId: null, lastUsage: null, sessionCost: null };
+    return { messages: [], busy: false, streamingId: null, lastUsage: null, sessionCost: null, backgroundJobs: [] };
 }
 
 function append(state: ChatState, msg: ChatMessage): ChatState {
@@ -380,6 +384,43 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 }),
             };
         }
+
+        case 'terminalBackgrounded': {
+            // The row keeps its partial output and gains a stop control; the
+            // button is replaced by that control, so the action cannot be
+            // pressed twice on the same call.
+            const marked = (st: Step): Step => (st.background
+                ? st
+                : { ...st, background: { jobId: msg.jobId, byUser: msg.byUser } });
+            const global = mapCallStep(state, msg.callId, marked);
+            if (global) return global;
+            const { state: s, id } = ensureStreaming(state);
+            return {
+                ...s,
+                messages: s.messages.map((m) => (m.id !== id ? m : {
+                    ...m,
+                    steps: m.steps.map((st) => (st.kind === 'toolCall' && st.open && !st.callId ? marked(st) : st)),
+                })),
+            };
+        }
+
+        case 'backgroundJobStopped':
+            // Drop the marker so the row stops offering a stop for a job that
+            // no longer exists. The job itself is the host's business.
+            return {
+                ...state,
+                messages: state.messages.map((m) => (m.steps.some((st) => st.background?.jobId === msg.jobId)
+                    ? {
+                        ...m,
+                        steps: m.steps.map((st) => (st.background?.jobId === msg.jobId
+                            ? { ...st, background: undefined }
+                            : st)),
+                    }
+                    : m)),
+            };
+
+        case 'backgroundJobs':
+            return { ...state, backgroundJobs: msg.jobs };
 
         case 'sessionCost':
             // Host-owned cumulative spend. Kept OUT of the message list so a

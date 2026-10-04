@@ -32,6 +32,10 @@ runtime. Everything runs inside the extension host, on your machine.
   auto-approve if you trust a workflow, YOLO mode if you don't want the gate.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
+- **Background processes** - a dev server, watcher or GUI app keeps running
+  while the agent moves on, with a job handle to read its output and stop it.
+  You can also send a running command to the background yourself. See
+  [Background processes](#background-processes).
 - **Checkpoints** - shadow-git snapshots before sends and edits, restorable
   anytime. Your real git repo is never touched.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
@@ -106,6 +110,56 @@ via **Code → Extensions → ⋯ → Install from VSIX…**
 2. Pick a preset or a local runtime, paste your API key, choose a model.
 3. Chat. Approve edits and commands as the agent works - or turn on
    auto-approval once you trust the loop.
+
+## Background processes
+
+A dev server does not exit, so a foreground `run_terminal_command` would sit on
+its idle timer and eventually get killed - taking the server with it. Pass
+`background: true` instead and the command is released immediately, keeps
+running, and hands back a job id.
+
+```jsonc
+// the agent's call
+{ "command": "npm run dev", "background": true }
+
+// later, in the same or a later turn
+{ "action": "poll", "jobId": "job-3" }   // is it up, and what did it print
+{ "action": "log",  "jobId": "job-3" }   // page the transcript with offset/limit
+{ "action": "wait", "jobId": "job-3" }   // block until it exits, or the timeout
+{ "action": "kill", "jobId": "job-3" }   // stop it and its children
+{ "action": "list" }                     // everything this session still knows
+```
+
+When a background job exits you get an in-app banner, and the agent is told at
+the next turn boundary so it can react without polling.
+
+**You can also background a running command yourself.** While a terminal command
+is running, its row in the transcript has a *run in background* button. The turn
+is released with the output so far and the process lives on. That is a scope
+reduction - the command already ran and was already approved - so it does not
+ask again. Live jobs also appear above the composer with a stop button, because
+after the turn ends the transcript is the only place left to see them.
+
+What this deliberately does **not** do:
+
+- **Nothing auto-kills a background job.** Not a timeout, not a cancel, not the
+  end of the turn, and not closing the window. The agent is told to kill what it
+  starts; if it forgets, you stop it from the badge. `cancelRequest` only stops
+  commands that are still holding the turn.
+- **Plan mode drops both tools.** A plan is read-only reconnaissance.
+- **Subagents cannot start background jobs.** A child's job would outlive the
+  delegation with nobody left to stop it. A child that needs to wait uses
+  `process(action='wait')`.
+- **`process` takes no pid.** It can only name a job this session minted, which
+  is why it needs no approval prompt of its own; `kill` acts on jobs, never on
+  an arbitrary OS process.
+
+Across a window reload the jobs are checkpointed with their process identity -
+pid *plus* the kernel's start time - because pid numbers get recycled, and a
+recycled number must never be killed on the strength of a matching number. Jobs
+that survive are re-adopted (status and stop still work; output is gone, and the
+tool says so rather than pretending the process printed nothing). Up to 16 run
+at once; a 17th is refused with a message naming the oldest one.
 
 ## MCP servers
 
