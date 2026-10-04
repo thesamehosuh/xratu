@@ -131,8 +131,25 @@ async function validatePublicUrl(url: string): Promise<string> {
     if (parsed.username || parsed.password) {
         throw new Error('URLs with embedded credentials are not allowed');
     }
-    if (!isProxyConfigured(url)) {
-        const host = parsed.hostname.replace(/\.+$/, '').toLowerCase();
+    // `URL.hostname` keeps the brackets on an IPv6 literal, and dns.lookup
+    // cannot resolve the bracketed form - strip them so literals are judged as
+    // literals (and stop failing closed as "Host could not be resolved").
+    const host = parsed.hostname.replace(/\.+$/, '').toLowerCase();
+    const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+
+    if (isIPv4(bare) || expandIpv6(bare)) {
+        // An IP literal needs NO name resolution, so the "the proxy resolves it
+        // for us" argument that lets hostnames skip the blocklist does not
+        // apply. Validating these unconditionally is what keeps the guard
+        // meaningful for the audience this product actually serves: with a
+        // Clash/sing-box system proxy configured (source: 'system'), the old
+        // `if (!isProxyConfigured(url))` skipped the ENTIRE check, so
+        // fetch_url reached 169.254.169.254 (cloud metadata), 127.0.0.1:9229
+        // (Chrome DevTools) and the local Ollama - un-approved, in plan mode.
+        if (isForbiddenAddress(bare)) {
+            throw new Error(`Refusing non-public destination: ${bare}`);
+        }
+    } else if (!isProxyConfigured(url)) {
         let infos: dns.LookupAddress[];
         try {
             infos = await dns.promises.lookup(host, { all: true });

@@ -12,15 +12,47 @@ export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and cl
  *  technical terms untranslated (the #1 failure mode of weaker/local models). */
 export const REPLY_LANGUAGE_FA =
     "Language: reply to the user in Persian (Farsi) - every message of the conversation, not just the first. " +
+    "This includes the one-line notes between tool calls: a short \"Commit 3: the harness.\" is shown to the " +
+    "user just like your final answer, so it is Persian too - \"Commit 3: هارنس.\" " +
     "Keep code, identifiers, file paths, commands, and true jargon in English - never translate them into " +
     "invented Persian (the writing rules below carry the closed list of terms that qualify). Any other " +
     "technical word goes in Persian script: a transliteration like رانتایم or a real Persian word like چاپ. " +
     "Never write an English sentence or paragraph inside a Persian reply. " +
     "Every update_task_list label is Persian too - it is user-facing UI, not an internal artifact.";
 export const REPLY_LANGUAGE_EN = "Language: reply to the user in English.";
+/** `auto` no longer means "say nothing": the narration guarantee (below) has to
+ *  reach it too, and a bare commit rule was not enough. Still no language is
+ *  PINNED here - the user's message language decides, as `auto` promises. */
+export const REPLY_LANGUAGE_AUTO =
+    "Language: match the language the user writes in - every message, not just the first.";
+
+/**
+ * Narration between tool calls is user-visible text. Needed in EVERY mode,
+ * `auto` included, and it is a separate directive from the language one because
+ * the failure is NOT language detection: the model treats a short note emitted
+ * next to a tool call as internal scratchpad and writes it in English.
+ *
+ * Observed in a real session whose replyLanguage was `auto`: the long messages
+ * were Persian, the one-liners between tool calls were English ("Commit 3: the
+ * simulation harness.", "The tool needs a branch name."), and the model had
+ * already loaded the natural-farsi skill, so no amount of writing-rules text
+ * fixed it. What was missing is the statement that there IS no private
+ * scratchpad except the reasoning channel.
+ */
+export const REPLY_VISIBLE_NARRATION =
+    "Every text block you emit is read by the user in the transcript, INCLUDING the short notes you write " +
+    "BETWEEN tool calls. Never treat text next to a tool call as internal or as thinking: your reasoning " +
+    "channel is the only private space you have, and it is the only part that may stay in English. If you " +
+    "would think something without saying it, either say it in the reply language or leave it in the " +
+    "reasoning channel - do not park it in the transcript in another language.";
+
 /** Applies in EVERY mode (fa/en/auto): the user's standing decision is that
- *  the agent's git commits are English regardless of reply language. */
-export const REPLY_COMMIT_MESSAGES = "Git commit messages are ALWAYS English, whatever language you are replying in.";
+ *  the agent's git commits are English regardless of reply language. Scoped to
+ *  the message ARGUMENT on purpose - worded loosely it bled into the narration
+ *  around a commit, which is user-visible and must stay in the reply language. */
+export const REPLY_COMMIT_MESSAGES =
+    "Git commit MESSAGES (the message argument itself) are ALWAYS English, whatever language you are " +
+    "replying in; the text you write AROUND a commit in the transcript still follows the reply language.";
 
 /**
  * The inputs that shape the local system prompt.
@@ -71,7 +103,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- `ask_user_question` shows the user a decision card (2-4 options, one recommended) and returns their pick. Use it for genuine user-owned choices (preferences, tradeoffs, ambiguous direction) instead of asking a multiple-choice question in prose; never for permission requests, and never for what you can decide or verify yourself.",
     ];
     if (inputs.replyLanguage === 'fa') {
-        parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`);
+        parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
         if (inputs.farsiSkill) {
             parts.push(
                 "",
@@ -80,9 +112,9 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
             );
         }
     } else if (inputs.replyLanguage === 'en') {
-        parts.push("", `${REPLY_LANGUAGE_EN} ${REPLY_COMMIT_MESSAGES}`);
+        parts.push("", `${REPLY_LANGUAGE_EN} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
     } else {
-        parts.push("", REPLY_COMMIT_MESSAGES);
+        parts.push("", `${REPLY_LANGUAGE_AUTO} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
     }
     if (inputs.planMode) {
         // Per-turn plan guidance for the local runtime.

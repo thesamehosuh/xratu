@@ -103,7 +103,10 @@ const CHAR_RULES = [
   ['zwnj', new RegExp(ZWNJ, 'g'), 'U+200C half-space — remove it (see skill orthography rules)'],
   ['diacritic', /[\u064b-\u0655\u0670]/, 'Arabic harakat/hamza mark — strip it'],
   ['tatweel', new RegExp(TATWEEL, 'g'), 'tatweel/kashida — remove it (clitics attach without it)'],
-  ['hamza-letter', /[\u0621\u0623\u0624\u0626]/, 'hamza letter — use the plain Persian letter'],
+  // ئ (U+0626) is deliberately NOT here: it is a real Persian letter, not an
+  // Arabic loan spelling — جزئیات، ارائه، مطمئن، مسائل، سوئیچ، رئیس are all
+  // spelled with it. Only the Arabic hamza carriers are wrong in Persian.
+  ['hamza-letter', /[\u0621\u0623\u0624\u0625]/, 'Arabic hamza carrier (ء أ إ ؤ) — use the plain Persian letter'],
   ['arabic-yeh-kaf', new RegExp(`[${ARABIC_YEH}${ARABIC_KAF}]`), 'Arabic yeh/kaf — use Persian yeh (U+06CC) / kaf (U+06A9)'],
   ['me-glued-alef', new RegExp(`می${ALEF_MADDA}`), 'me-prefix glued to alef madda — keep a boundary: می آید / میاورد (minus half-space)'],
 ];
@@ -299,6 +302,8 @@ function selftest() {
     [`نمی${ZWNJ}شود و نمیخواهد و می${ZWNJ}کنند.`, ['zwnj', 'zwnj', 'verb-3sg', 'verb-3sg', 'verb-3pl']],
     [`کاملا${'\u064b'}`, ['diacritic']],
     ['مسأله', ['hamza-letter']],
+    // ئ is a Persian letter, not an Arabic hamza: these must stay clean.
+    ['جزئیات مهمه. ارائه دهنده ایرانیه و مطمئن باش.', []],
     [`می${ALEF_MADDA}رود`, ['me-glued-alef']],
     [`این می${ALEF_MADDA}ید`, ['me-glued-alef', 'verb-3sg']],
   ];

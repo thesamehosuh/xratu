@@ -28,7 +28,7 @@ import type {
 import { createInitialChatState, reduceChat } from './state';
 import { Toolbar, type SessionsScope } from './components/Toolbar';
 import { MessageList } from './components/MessageList';
-import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep } from './components/MessageItem';
+import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep, toolCallFailed } from './components/MessageItem';
 import { CredentialsPage } from './components/CredentialsPage';
 import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
@@ -153,6 +153,10 @@ export function App() {
     // Workspace-relative path of the file open in the active editor - the
     // host pushes it on focus/editor changes; suggestion workflows name it.
     const [activeFile, setActiveFile] = useState<string | null>(null);
+    // Host-classified workspace, used only to pick the empty-state suggestion
+    // set. Default 'project' so a host that does not send it (or a workspace
+    // that has since gained files) keeps the established-project chips.
+    const [workspaceKind, setWorkspaceKind] = useState<'empty' | 'bare' | 'project'>('project');
     const [showJump, setShowJump] = useState(false);
     const [modelInfo, setModelInfo] = useState<{
         defaultModel: string;
@@ -648,6 +652,7 @@ export function App() {
                     break;
                 case 'showChat':
                     setScreen('chat');
+                    if (msg.workspaceKind) setWorkspaceKind(msg.workspaceKind);
                     break;
                 case 'sessionState':
                     setCurrentSessionId(msg.id);
@@ -961,6 +966,15 @@ export function App() {
             for (let j = m.steps.length - 1; j >= 0; j--) {
                 const s = m.steps[j];
                 if (s.kind === 'toolCall' && s.tool === TASK_LIST_TOOL) {
+                    // A FAILED update is hidden from the transcript (it never
+                    // became UI), so it must not take the checklist down with
+                    // it - skip it BEFORE parsing. Checking afterwards was too
+                    // late: a rejected call whose args still parse returned
+                    // its own stepId, no row carries that id, and the checklist
+                    // that DID land stopped being current - silently losing
+                    // its edit controls. An unparseable list that did NOT fail
+                    // is the run's own broken state: nothing to bind to.
+                    if (toolCallFailed(s)) continue;
                     const parsed = parseTaskListStep(s.text);
                     if (!parsed) return null;
                     return {
@@ -1343,6 +1357,7 @@ export function App() {
                     setupMode={byokHint && !byokError}
                     onOpenCredentials={(target) => send({ type: 'openCredentials', target })}
                     activeFile={activeFile}
+                    workspaceKind={workspaceKind}
                     onPickSuggestion={(text) => setInjectedText({ id: Date.now(), text })}
                     onApprovalDecision={handleApprovalDecision}
                     onDecisionResponse={handleDecisionResponse}

@@ -1,5 +1,5 @@
 import { forwardRef, type Ref } from 'react';
-import { Bug, ChevronUp, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Unlink, Zap } from 'lucide-react';
+import { Bug, ChevronUp, ClipboardList, FolderInput, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Sparkles, Unlink, Wrench, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ChatMessage, ConnectionStatus, OpenDiffEdit } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
@@ -38,6 +38,9 @@ interface MessageListProps {
     /** Workspace-relative path of the file open in the active editor
      *  (host-pushed) - file-dependent suggestions name it. */
     activeFile?: string | null;
+    /** Host-classified workspace. Anything other than 'project' swaps the
+     *  empty-state chips for starting-from-scratch ones. */
+    workspaceKind?: 'empty' | 'bare' | 'project';
     /** Interactive view for the current update_task_list step (see
      *  MessageItem). Undefined when the session has no task list. */
     taskList?: TaskListView;
@@ -55,15 +58,30 @@ interface MessageListProps {
 // composer types out and auto-sends. File-dependent suggestions name the
 // active editor file when one exists, and fall back to a "pick the most
 // central file yourself" directive so the agent always has a starting move.
-const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; filePromptKey: Parameters<typeof t>[0]; anyPromptKey?: Parameters<typeof t>[0] }> = [
-    { icon: FolderTree, key: 'suggestExplore', filePromptKey: 'suggestExplorePrompt' },
-    { icon: Bug, key: 'suggestBug', filePromptKey: 'suggestBugPromptFile', anyPromptKey: 'suggestBugPromptAny' },
-    { icon: FlaskConical, key: 'suggestTest', filePromptKey: 'suggestTestPromptFile', anyPromptKey: 'suggestTestPromptAny' },
-    { icon: Zap, key: 'suggestOptimize', filePromptKey: 'suggestOptimizePromptFile', anyPromptKey: 'suggestOptimizePromptAny' },
+type Suggestion = { icon: LucideIcon; key: Parameters<typeof t>[0]; filePromptKey?: Parameters<typeof t>[0]; promptKey: Parameters<typeof t>[0] };
+
+const SUGGESTIONS: Suggestion[] = [
+    { icon: FolderTree, key: 'suggestExplore', filePromptKey: 'suggestExplorePrompt', promptKey: 'suggestExplorePrompt' },
+    { icon: Bug, key: 'suggestBug', filePromptKey: 'suggestBugPromptFile', promptKey: 'suggestBugPromptAny' },
+    { icon: FlaskConical, key: 'suggestTest', filePromptKey: 'suggestTestPromptFile', promptKey: 'suggestTestPromptAny' },
+    { icon: Zap, key: 'suggestOptimize', filePromptKey: 'suggestOptimizePromptFile', promptKey: 'suggestOptimizePromptAny' },
+];
+
+// Nothing to maintain yet: every chip above is a task ON a codebase ("tour
+// this codebase", "hunt for bugs in the central file"), so in a folder with
+// no project in it they are all dead on arrival. These four cover the
+// distinct reasons someone opens an empty folder - start something, set the
+// folder up, plan before building, or bring existing code in. None of them
+// names a file, so none of them has a file/no-file prompt variant.
+const SUGGESTIONS_FRESH: Suggestion[] = [
+    { icon: Sparkles, key: 'suggestNewProject', promptKey: 'suggestNewProjectPrompt' },
+    { icon: Wrench, key: 'suggestSetupFolder', promptKey: 'suggestSetupFolderPrompt' },
+    { icon: ClipboardList, key: 'suggestPlanFirst', promptKey: 'suggestPlanFirstPrompt' },
+    { icon: FolderInput, key: 'suggestImportCode', promptKey: 'suggestImportCodePrompt' },
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -125,25 +143,28 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     <h2>{t('emptyTitle')}</h2>
                     <p>{t('emptySub')}</p>
                     <div className="chip-row">
-                        {SUGGESTIONS.map(({ icon: Icon, key, filePromptKey, anyPromptKey }, i) => {
-                            // {file} templates need an open editor; without one
-                            // the "any" variant tells the agent to pick itself.
-                            const template = activeFile || !anyPromptKey ? filePromptKey : anyPromptKey;
-                            const prompt = t(template).replace('{file}', activeFile ?? '');
-                            return (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    className="chip chip-suggest"
-                                    disabled={busy}
-                                    style={{ animationDelay: `${i * 70}ms` }}
-                                    onClick={() => onPickSuggestion(prompt)}
-                                >
-                                    <Icon size={14} />
-                                    {t(key)}
-                                </button>
-                            );
-                        })}
+                        {(workspaceKind && workspaceKind !== 'project' ? SUGGESTIONS_FRESH : SUGGESTIONS)
+                            .map(({ icon: Icon, key, filePromptKey, promptKey }, i) => {
+                                // {file} templates need an open editor; without one
+                                // the "any" variant tells the agent to pick itself.
+                                // The fresh-workspace set has no file variant at all -
+                                // there is no file to name.
+                                const template = activeFile && filePromptKey ? filePromptKey : promptKey;
+                                const prompt = t(template).replace('{file}', activeFile ?? '');
+                                return (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        className="chip chip-suggest"
+                                        disabled={busy}
+                                        style={{ animationDelay: `${i * 70}ms` }}
+                                        onClick={() => onPickSuggestion(prompt)}
+                                    >
+                                        <Icon size={14} />
+                                        {t(key)}
+                                    </button>
+                                );
+                            })}
                     </div>
                 </div>
             )}

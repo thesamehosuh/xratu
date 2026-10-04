@@ -42,6 +42,12 @@ const GIT_TIMEOUT = 20_000;
 export const EXPANSION_MUTATING_TOOL_NAMES = new Set([
     'git_commit', 'move_file', 'copy_file', 'delete_file', 'git_branch', 'git_checkout',
     'git_pull', 'git_push', 'git_merge', 'install_dependency',
+    // `run_tests` executes the project's own build/test code and writes build
+    // artifacts (target/, __pycache__/, .pytest_cache/, coverage/), so it is a
+    // MUTATION like any other: it must be approval-gated and must be absent in
+    // plan mode. It used to be classified read-only, which put arbitrary code
+    // execution behind no user gate and left it available while planning.
+    'run_tests',
 ]);
 
 const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[] = [], approval = false) => ({
@@ -109,7 +115,7 @@ export const XRATU_EXPANSION_TOOLS = [
     }, ['revision'], true),
     tool('run_tests', 'Run an allowlisted project test framework and return normalized results. Python frameworks (pytest/unittest) automatically run under the project virtualenv when one exists (.venv/venv/env in the workspace root or the manifest directory, then $VIRTUAL_ENV) - never the system Python - and the result reports which interpreter ran (python_source).', {
         target: { type: 'string' }, framework: { type: 'string', enum: ['auto','pytest','unittest','jest','vitest','cargo','go','maven','gradle','dotnet','rspec','phpunit','swift'] }, pattern: { type: 'string' }, timeout_seconds: { type: 'number', minimum: 1, maximum: 600 }, extra_args: { type: 'array', items: { type: 'string' }, maxItems: 30 },
-    }),
+    }, [], true),
     tool('check_dependencies', 'Inspect project dependency files and installed package-manager information.', {
         ecosystem: { type: 'string', enum: ['auto','node','python','rust','go','java','dotnet','ruby','php','swift'] },
     }),
@@ -166,6 +172,56 @@ function safeRef(value: unknown, label: string): string {
     const s = String(value ?? '');
     if (!s || s.startsWith('-')) throw new Error(`Invalid ${label}: ${JSON.stringify(s.slice(0, 60))}`);
     return s;
+}
+
+/**
+ * `extra_args` is an argv passthrough into a runner that LOADS AND EXECUTES
+ * code, so flags that make it read a config/plugin/manifest from outside the
+ * project are refused. Without this, `extra_args: ['--manifest-path',
+ * '/outside/Cargo.toml']` ran that crate's build.rs, and the jest/vitest /
+ * gradle / mocha equivalents executed arbitrary out-of-tree files - all of it
+ * behind whatever gate the tool itself carries, which is exactly the wrong
+ * place to enforce containment.
+ *
+ * A denylist rather than an allowlist on purpose: verbosity, filters, reporters
+ * and parallelism flags are legitimate and unguessable in bulk, whereas
+ * "loads code from a path you chose" is a short, stable list. Normalized on the
+ * token BEFORE `=` so `--config=/x`, `--config /x` and `-c /x` are all caught.
+ */
+const UNSAFE_TEST_ARG_FLAGS = new Set([
+    'c', 'config', 'config-file',            // jest/vitest/mocha/pytest config file
+    'p', 'plugin',                            // pytest -p loads a plugin module
+    'r', 'require', 'preload',                // mocha/node module preload
+    'manifest-path',                          // cargo: builds an out-of-tree crate
+    'init-script',                            // gradle: executes a script from anywhere
+    'rootdir', 'target-dir', 'classpath',
+    'setup-file', 'setupfiles', 'setupfilesafterenv', 'globalsetup', 'global-setup',
+    'global-teardown',
+]);
+
+function safeExtraArgs(extra: string[]): string[] {
+    for (const arg of extra) {
+        if (typeof arg !== 'string' || !arg.startsWith('-')) continue;
+        // Normalize on the token BEFORE `=` and before an ATTACHED short-flag
+        // value: runners accept `-cfile`, `-c=file` and `-c file` alike
+        // (pytest's `-pNAME` has no separator at all), so stripping only the
+        // leading dashes turned `-c/outside/conf.js` into the never-matching
+        // `c/outside/conf.js`. A single-dash token is therefore matched on its
+        // first character as well as on its whole body.
+        const long = arg.startsWith('--');
+        const body = arg.replace(/^--?/, '').split('=')[0].toLowerCase();
+        const shortHead = long ? '' : body.slice(0, 1);
+        const flag = UNSAFE_TEST_ARG_FLAGS.has(body) ? body
+            : shortHead && UNSAFE_TEST_ARG_FLAGS.has(shortHead) ? shortHead
+                : '';
+        if (flag) {
+            throw new Error(
+                `Refusing run_tests extra_args flag '--${flag}': it makes the test runner load code or config from a path you choose, ` +
+                `which would run files outside the workspace. Remove it, or use run_terminal_command (which is approval-gated) if you really need it.`
+            );
+        }
+    }
+    return extra;
 }
 
 function ignoredFallback(name: string): boolean {
@@ -602,10 +658,43 @@ export async function handleExpansionTool(name: string, args: any, runtime: Expa
                 // Target args are workspace-root-relative, but python runs use
                 // the manifest dir as cwd - rebase to absolute so pytest does
                 // not look for src/src/... (seen live).
+                //
+                // The path is also CONFINED: an absolute path or `../..` here
+                // made the runner collect and execute files from anywhere on
+                // disk (proven with cargo: `--manifest-path /outside/Cargo.toml`
+                // executed that crate's build.rs). pytest node ids
+                // (`tests/test_x.py::TestCase::test_y`) keep their selectors -
+                // only the leading path component is a path.
+                //
+                // And a target is never a FLAG. For the non-python runners the
+                // confined value is not substituted (they want a repo-relative
+                // selector), so `target: '--manifest-path=/outside/Cargo.toml'`
+                // landed in argv as a flag and bypassed safeExtraArgs, which
+                // only covers extra_args - while `full()` accepted it, because
+                // a leading-dash name is a legal relative filename inside the
+                // workspace. Confining a path is not the same as refusing an
+                // argument that is not one.
                 const rawTarget = String(args.target || '');
-                const target = framework === 'pytest' && rawTarget ? path.resolve(runtime.workspaceRoot, rawTarget) : rawTarget;
-                const argv = commandForFramework(framework, target, String(args.pattern || ''), Array.isArray(args.extra_args) ? args.extra_args : [], py.python);
+                let target = rawTarget;
+                if (rawTarget) {
+                    if (rawTarget.startsWith('-')) {
+                        throw new Error(
+                            `Refusing run_tests target: it must be a path or a test selector, not a flag ` +
+                            `('${rawTarget.slice(0, 60)}'). Flags belong in extra_args, which is checked.`
+                        );
+                    }
+                    const [pathPart] = rawTarget.split('::');
+                    const confined = full(runtime, pathPart);
+                    if (framework === 'pytest' || framework === 'unittest') {
+                        target = rawTarget.includes('::') ? `${confined}${rawTarget.slice(pathPart.length)}` : confined;
+                    }
+                }
+                const extra = safeExtraArgs(Array.isArray(args.extra_args) ? args.extra_args : []);
+                const argv = commandForFramework(framework, target, String(args.pattern || ''), extra, py.python);
                 if (!argv) return textResult(`Unsupported test framework: ${framework}`, true);
+                // Mutating (writes build artifacts): take the turn's restore
+                // point before the runner touches the workspace.
+                await runtime.ensureTurnSnapshot(runtime.workspaceRoot, 'before run_tests');
                 const timeout = Math.max(1, Math.min(600, Number(args.timeout_seconds) || 120));
                 const started = Date.now();
                 const r = await runProcess(runtime, argv, timeout, (framework === 'pytest' || framework === 'unittest') ? py.cwd : undefined);

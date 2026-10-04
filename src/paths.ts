@@ -319,34 +319,49 @@ export function sanitizePath(userPath: string, workspaceRoot: string): string {
     }
     const fullPath = path.normalize(path.isAbsolute(userPath) ? userPath : path.join(realRoot, userPath));
     // Resolve symlinks to prevent traversal via symlinked directories.
-    // Use realpathSync on the parent (which must exist) + basename to handle
-    // the case where the target file doesn't exist yet (e.g. edit_file create).
+    //
+    // A single realpathSync is not enough for a file that does not exist yet
+    // (edit_file create, apply_patch new file), and resolving only the PARENT
+    // walked up exactly one level: for `<ws>/link/sub/new.txt` where `link`
+    // points outside, realpathSync(parent) also failed, so the fallback kept
+    // the LEXICAL path, containment passed on the string, and the
+    // `mkdirSync(dirname, {recursive:true})` that every write tool does then
+    // followed the symlink and wrote outside the workspace. So walk up to the
+    // DEEPEST EXISTING ancestor, re-append what is left, and refuse any
+    // component that has a directory entry but no resolvable target.
     let resolved: string;
-    try {
-        resolved = fs.realpathSync(fullPath);
-    } catch {
-        // ENOENT has two very different causes: the final component simply
-        // doesn't exist yet (safe - resolve the parent), OR the component is
-        // a DANGLING SYMLINK whose target is missing (unsafe - falling back
-        // to parent+basename keeps the symlink path, containment passes, and
-        // a subsequent write creates the link's target ANYWHERE). Distinguish
-        // with lstat: a dangling link has a directory entry.
-        let linkExists = false;
+    let probe = fullPath;
+    const trailing: string[] = [];
+    for (;;) {
         try {
-            fs.lstatSync(fullPath);
-            linkExists = true;
-        } catch { /* genuinely absent - safe to fall back */ }
-        if (linkExists) {
-            throw new Error(`Path '${userPath}' is a symlink whose target does not exist (refused).`);
-        }
-        const parent = path.dirname(fullPath);
-        const base = path.basename(fullPath);
-        try {
-            resolved = path.join(fs.realpathSync(parent), base);
+            const realAncestor = fs.realpathSync(probe);
+            resolved = trailing.length ? path.join(realAncestor, ...trailing) : realAncestor;
+            break;
         } catch {
-            // Parent doesn't exist either - fall back to normalized path
-            // (the write will fail with ENOENT, which is safe)
-            resolved = fullPath;
+            // A directory entry that cannot be resolved is a DANGLING SYMLINK
+            // (its target is missing). Falling back to parent+basename would
+            // keep the symlink path, pass containment, and a subsequent write
+            // would create the link's target ANYWHERE. Distinguish with lstat:
+            // a dangling link has a directory entry, a genuinely absent path
+            // does not.
+            let linkExists = false;
+            try {
+                fs.lstatSync(probe);
+                linkExists = true;
+            } catch { /* genuinely absent - keep walking up */ }
+            if (linkExists) {
+                throw new Error(`Path '${userPath}' is a symlink whose target does not exist (refused).`);
+            }
+            const parent = path.dirname(probe);
+            if (parent === probe) {
+                // Reached the filesystem root without finding anything that
+                // exists; the normalized path is the best answer available and
+                // containment below still applies.
+                resolved = fullPath;
+                break;
+            }
+            trailing.unshift(path.basename(probe));
+            probe = parent;
         }
     }
     const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;

@@ -262,7 +262,11 @@ export interface SessionMeta {
 export type FromExtensionMessage =
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
     | { type: 'showWelcome' }
-    | { type: 'showChat' }
+    /** Enter the chat view. `workspaceKind` picks the empty-state suggestion
+     *  set - the default chips all assume an established project, so an empty
+     *  or not-yet-started folder gets starting-from-scratch prompts instead.
+     *  Absent (older host) means "assume a project". */
+    | { type: 'showChat'; workspaceKind?: 'empty' | 'bare' | 'project' }
     | { type: 'restoreUser'; value: string; attachments?: AttachmentMeta[]; cp?: string }
     /** Live turn: the host created the pre-prompt shadow checkpoint for the
      *  userIndex-th user message - attaches the restore point to that bubble. */

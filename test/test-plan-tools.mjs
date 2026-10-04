@@ -47,8 +47,19 @@ check('plan: no task delegation', planNames.has('task'), false);
 check('run: task available', runNames.has('task'), true);
 
 // Mutating tools must be gone in plan mode.
-for (const name of ['edit_file', 'replace_in_file', 'apply_patch', 'run_terminal_command', 'delete_file', 'move_file', 'copy_file', 'git_commit', 'git_push']) {
+// `run_tests` was read-only-classified, so it stayed available while planning
+// even though it executes the project's build/test code and writes artifacts.
+for (const name of ['edit_file', 'replace_in_file', 'apply_patch', 'run_terminal_command', 'delete_file', 'move_file', 'copy_file', 'git_commit', 'git_push', 'run_tests']) {
     check(`plan: no ${name}`, planNames.has(name), false);
+}
+
+// The approval gate itself: a mutating tool that survives into a normal run
+// must actually require approval. `run_tests` was classified read-only, so it
+// took no approval while still executing project build/test code.
+const runTools = getLocalToolDefinitions({ plan: false, subagents });
+for (const name of ['run_tests', 'install_dependency', 'run_terminal_command', 'git_push']) {
+    const tool = runTools.find((t) => t.name === name);
+    check(`run: ${name} requires approval`, tool ? tool.requiresApproval : false, true);
 }
 
 // Read tools stay (planning needs them).

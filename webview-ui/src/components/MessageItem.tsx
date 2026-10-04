@@ -271,6 +271,10 @@ const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /list_files|dir/, icon: FolderOpen },
     { re: /directory_tree/, icon: FolderTree },
     { re: /edit|replace|patch/, icon: FilePen },
+    // Whole-file writers carry no "edit/replace/patch" substring, so they used
+    // to fall through to the generic Wrench - the one edit-family tool that did
+    // not read as a file edit.
+    { re: /^write_file$|^create_file$/, icon: FilePen },
     { re: /copy_file/, icon: Copy },
     { re: /move_file/, icon: FilePen },
     { re: /delete_file/, icon: Trash2 },
@@ -388,6 +392,14 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
             }
         } else if (s.kind === 'toolCall') {
             if (s.tool === TASK_LIST_TOOL) {
+                // A FAILED update is invisible. The checklist is derived from
+                // the args, so a rejected list never became UI in the first
+                // place, and the model already has the error text to retry
+                // from - a red pill here would put a failure marker in the
+                // transcript for internal bookkeeping. An unparseable list
+                // that did NOT fail still falls back to a pill (see
+                // TaskListRow): that is real information about the run.
+                if (toolCallFailed(s)) continue;
                 // Rendered as the interactive checklist, not a pill. The call
                 // row carries the list; a paired result row is redundant.
                 rows.push({ key: s.id, kind: 'taskList', step: s });
@@ -473,6 +485,14 @@ const ERROR_RESULT_RE = /^error\b/i;
 
 function toolRowFailed(call: Step, result?: Step): boolean {
     return ERROR_RESULT_RE.test(resultTextOf(call, result).trim());
+}
+
+/** Did THIS call step come back as an error? The result text is attached to
+ *  the call step itself (the reducer pairs them by callId), so a lone step is
+ *  enough. Exported because the task-list CHECKLIST and the transcript rows
+ *  must agree on which updates failed - see `taskListView` in App.tsx. */
+export function toolCallFailed(step: Step): boolean {
+    return toolRowFailed(step);
 }
 
 function argString(args: Record<string, unknown> | null, key: string): string | undefined {
@@ -597,6 +617,16 @@ function diffBlockLines(search: string, replace: string): BlockDiffLine[] | null
  *  stale (clipping) as late highlight landings shifted heights. */
 const BLOCK_DIFF_RENDER_ROWS = 160;
 
+/** "+N more lines" expander, shared by every line view that caps its render. */
+function DiffMoreLines({ hidden, onExpand }: { hidden: number; onExpand: () => void }) {
+    if (hidden <= 0) return null;
+    return (
+        <button type="button" className="pill-diff-more" dir="ltr" onClick={onExpand}>
+            {tf('diffMoreLines', { count: String(hidden) })}
+        </button>
+    );
+}
+
 /** One apply_patch block: LCS-diffed against the target file's language and
  *  SHIKI-highlighted per line. `del` lines consume the SEARCH text's
  *  highlighted lines in order, `add`/`same` lines the REPLACE text's - the
@@ -640,11 +670,7 @@ function PillDiffBlock({ block, lang }: { block: PatchBlock; lang: string }) {
                     </div>
                 );
             })}
-            {hidden > 0 ? (
-                <button type="button" className="pill-diff-more" dir="ltr" onClick={() => setExpanded(true)}>
-                    + {hidden} more lines
-                </button>
-            ) : null}
+            <DiffMoreLines hidden={hidden} onExpand={() => setExpanded(true)} />
         </div>
     );
 }
@@ -725,6 +751,36 @@ function UnifiedDiffView({ lines }: { lines: UnifiedLine[] }) {
                         <span className="pill-diff-code">{l.text}</span>
                     </div>
                 ))}
+            </div>
+        </div>
+    );
+}
+
+/** Whole-file body for a write (create / overwrite / append): the edit diff
+ *  surface with EVERY line rendered as context. There is no before-state to
+ *  diff against, so the green/red tint and the gutter mark are omitted - but
+ *  the block, gutter width, spacing and syntax highlighting are the diff's,
+ *  so a create pill reads as an edit pill instead of terminal output.
+ *  Highlight absent (unmapped language, async not landed, failure) → the raw
+ *  line, ESCAPED (model-controlled + dangerouslySetInnerHTML). */
+function CodeLinesView({ code, lang }: { code: string; lang: string }) {
+    const highlighted = useHighlightedCode(code, lang);
+    const [expanded, setExpanded] = useState(false);
+    const lines = highlighted.length > 0 ? highlighted : code.split('\n').map(escapeHtml);
+    const shown = expanded ? lines : lines.slice(0, BLOCK_DIFF_RENDER_ROWS);
+    const hidden = lines.length - shown.length;
+    return (
+        <div className="pill-diff" dir="ltr">
+            {/* .pill-diff spaces its children (separate SEARCH/REPLACE blocks);
+                the lines must sit inside ONE block or every line gains that gap. */}
+            <div className="pill-diff-block">
+                {shown.map((h, i) => (
+                    <div key={i} className="pill-diff-line" dir="ltr">
+                        <span className="pill-diff-mark" aria-hidden="true" />
+                        <span className="pill-diff-code" dangerouslySetInnerHTML={{ __html: h || '&nbsp;' }} />
+                    </div>
+                ))}
+                <DiffMoreLines hidden={hidden} onExpand={() => setExpanded(true)} />
             </div>
         </div>
     );
@@ -831,7 +887,7 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
                 effective !== undefined ? (
                     <PatchBlocksView patch={effective} lang={extToLang(path ?? '')} />
                 ) : content !== undefined ? (
-                    <HighlightedPre code={truncateArg(content)} lang={extToLang(path ?? '')} />
+                    <CodeLinesView code={truncateArg(content)} lang={extToLang(path ?? '')} />
                 ) : (
                     <ArgView call={call} />
                 )
@@ -843,22 +899,6 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
             )}
             {failed && <ResultLine text={resultTextOf(call, result)} />}
         </div>
-    );
-}
-
-/** Shiki-highlighted code block; renders RAW (escaped-by-React) text until
- *  the async highlight lands or on any failure/unmapped language. Per-LINE
- *  spans: shiki line markup is unbalanced after the class="line" strip, so
- *  each line gets its own element - exactly like ApprovalDiffView's cells. */
-function HighlightedPre({ code, lang, className }: { code: string; lang: string; className?: string }) {
-    const lines = useHighlightedCode(code, lang);
-    if (lines.length === 0) return <pre className={className} dir="ltr">{code}</pre>;
-    return (
-        <pre className={className} dir="ltr">
-            {lines.map((h, i) => (
-                <div key={i} className="pill-diff-line" dangerouslySetInnerHTML={{ __html: h || '&nbsp;' }} />
-            ))}
-        </pre>
     );
 }
 
@@ -947,8 +987,8 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
                         </>
                     ) : content !== undefined ? (
                         <>
-                            {path && <PathLine path={path} />}
-                            <HighlightedPre code={truncateArg(content)} lang={extToLang(path ?? '')} />
+                            <EditFileHead path={path} stats={null} />
+                            <CodeLinesView code={truncateArg(content)} lang={extToLang(path ?? '')} />
                         </>
                     ) : (
                         <>
@@ -959,7 +999,11 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
                 </>
             ) : (
                 <>
-                    {path && <PathLine path={path} />}
+                    {/* Same header the finished body renders, so the path does
+                        not jump style the moment the write completes. */}
+                    {content !== undefined
+                        ? <EditFileHead path={path} stats={null} />
+                        : path && <PathLine path={path} />}
                     <div className="tool-loading">
                         <span className="spinner" aria-hidden="true" />
                         <span>{t('toolRunning')}</span>
@@ -1301,13 +1345,17 @@ function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 't
                     <span className="step-label" dir={isEdit ? undefined : fa === tool ? 'ltr' : undefined}>
                         {isEdit ? tf('editedFiles', { count: String(row.calls.length) }) : fa}
                     </span>
+                    {/* No success tick on any tool pill: the row's own state is
+                        already visible (body rendered, chevron, stats) and a
+                        green check reads as a verdict it cannot back up - it sat
+                        beside a non-zero exit code, or beside an edit that
+                        changed nothing. Failure is the only thing worth a
+                        marker, and it keeps its X. */}
                     {anyFailed ? (
                         <X size={13} className="step-status err" />
-                    ) : allDone ? (
-                        <Check size={13} className="step-status ok" />
-                    ) : (
+                    ) : !allDone ? (
                         <span className="step-status spinner" aria-hidden="true" />
-                    )}
+                    ) : null}
                     {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
                     {isEdit && (
                         <button
@@ -1448,6 +1496,12 @@ function ActivityRow({ row, running, isLast, onOpenDiff, prefs }: { row: Exclude
                         ref={(el) => { thinkRef.current = el; }}
                         onScroll={onThinkScroll}
                         className="step-think-body"
+                        // Reasoning is emitted in ENGLISH whatever the UI locale
+                        // is, so this body is pinned LTR - otherwise Persian
+                        // chrome reorders English prose and drags terminal
+                        // punctuation to the start of the last line. The pill
+                        // LABEL above stays locale-direction (it is translated).
+                        dir="ltr"
                     >
                         <RenderedMarkdown html={row.step.html} streaming={active} />
                     </div>
@@ -1481,12 +1535,14 @@ function ActivityRow({ row, running, isLast, onOpenDiff, prefs }: { row: Exclude
                         {fa}
                     </span>
                     {summaryCmd && <span className="step-cmd" dir="ltr">{summaryCmd}</span>}
+                    {/* No success tick on any tool pill: the row's own state is
+                        already visible (body rendered, chevron, stats) and a
+                        green check reads as a verdict it cannot back up - it
+                        sat beside a non-zero exit code, or beside an edit that
+                        changed nothing. Failure is the only thing worth a
+                        marker, and it keeps its X. */}
                     {done ? (
-                        failed ? (
-                            <X size={13} className="step-status err" />
-                        ) : (
-                            <Check size={13} className="step-status ok" />
-                        )
+                        failed ? <X size={13} className="step-status err" /> : null
                     ) : (
                         <span className="step-status spinner" aria-hidden="true" />
                     )}

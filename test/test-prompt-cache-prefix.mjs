@@ -22,7 +22,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
+const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_LANGUAGE_AUTO, REPLY_VISIBLE_NARRATION, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -221,17 +221,20 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
 }
 
 // ---------------------------------------------------------------------------
-// Reply language: fa/en add their language block; auto/omitted add NO language
-// block - only the standing commit rule, which applies in every mode (commits
-// are English whatever the reply language is).
+// Reply language: every mode states the language AND the narration guarantee.
+// `auto` used to add no language block at all, which is how a real `auto`
+// session ended up with English one-liners between tool calls while every long
+// message was Persian.
 // ---------------------------------------------------------------------------
 {
     const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
     const autoPrompt = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'auto' });
     const legacyPrompt = buildLocalSystemPrompt(inputs);
-    ok('auto adds no language block', !autoPrompt.includes('Language: reply'));
     ok('omitted replyLanguage == auto', autoPrompt === legacyPrompt);
     ok('auto still enforces English commit messages', autoPrompt.includes(REPLY_COMMIT_MESSAGES));
+    ok('auto now states the language rule', autoPrompt.includes(REPLY_LANGUAGE_AUTO));
+    ok('auto pins no specific language',
+        !autoPrompt.includes(REPLY_LANGUAGE_FA) && !autoPrompt.includes(REPLY_LANGUAGE_EN));
 
     const fa = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
     ok('fa adds the Persian directive', fa.includes(REPLY_LANGUAGE_FA));
@@ -241,6 +244,35 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     const en = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'en' });
     ok('en adds the English directive', en.includes(REPLY_LANGUAGE_EN));
     ok('en and fa blocks differ', !en.includes(REPLY_LANGUAGE_FA));
+}
+
+// ---------------------------------------------------------------------------
+// Narration between tool calls is user-visible in EVERY mode. This is the
+// regression: a short note emitted next to a tool call is rendered in the
+// transcript, so it must follow the reply language like any other message.
+// ---------------------------------------------------------------------------
+{
+    const inputs = { rulesContext: 'RULES', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
+    for (const mode of ['fa', 'en', 'auto', undefined]) {
+        const prompt = buildLocalSystemPrompt({ ...inputs, replyLanguage: mode });
+        ok(`narration directive present (${mode ?? 'omitted'})`,
+            prompt.includes(REPLY_VISIBLE_NARRATION));
+        // The directive has to say the reasoning channel is the ONLY English
+        // part, otherwise it reads as "also keep prose English somewhere".
+        ok(`names the reasoning channel as the only English part (${mode ?? 'omitted'})`,
+            /reasoning channel is the only private space/.test(prompt)
+            && /only part that may stay in English/.test(prompt));
+        // A vague commit rule bled into the narration around a commit. This
+        // must be checked on the PROMPT, not on the constant: asserting the
+        // constant contains a phrase is loop-invariant and passes whether or
+        // not the rule ever reaches the model.
+        ok(`commit rule is scoped to the message argument (${mode ?? 'omitted'})`,
+            prompt.includes('the message argument itself'));
+    }
+    // The fa directive names the concrete failure (a one-liner next to a tool
+    // call) rather than only saying "every message".
+    ok('fa directive covers the notes between tool calls',
+        REPLY_LANGUAGE_FA.includes('notes between tool calls'));
 }
 
 // ---------------------------------------------------------------------------
