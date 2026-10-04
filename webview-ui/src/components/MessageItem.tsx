@@ -1946,11 +1946,9 @@ function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind
         <div className="task-list-inline" id={isCurrent ? 'xratu-task-list' : undefined}>
             <div className="task-list-inline-head">
                 <ListChecks size={13} className="step-icon" />
-                {!row.step.result ? (
-                    <span className="step-status spinner" aria-hidden="true" />
-                ) : (
-                    <Check size={13} className="step-status ok" />
-                )}
+                {/* No success tick here either, for the same reason as the
+                    tool pills: the completed count beside it is the state. */}
+                {!row.step.result && <span className="step-status spinner" aria-hidden="true" />}
                 <span className="task-list-progress" dir="ltr" title={t('taskListTitle')}>
                     {tasks.filter((task) => task.status === 'completed').length}/{tasks.length}
                 </span>

@@ -3412,66 +3412,241 @@ button {
     background: var(--xratu-accent-faint);
 }
 
-/* Live background jobs, pinned above the composer. A backgrounded job outlives
-   its turn AND its transcript row once the chat scrolls, so this is the only
-   place the user can still see it and stop it. Logical props only - it has to
-   flip for RTL without a second rule. */
+/* Live background jobs: a dock floating just above the composer card.
+
+   Two things this must never do again:
+   - shrink. It is a flex item in the .app column; without flex: 0 0 auto a
+     short panel squashes it to a few pixels, the rows overflow it, and the
+     composer paints over them. What is left is a bare hairline with the
+     contents gone - which is exactly how it read for a while.
+   - decorate. No accent border, no separators, no glow: the dock sits next to
+     a card that is already the loudest surface in the panel, and anything
+     tinted competes with the composer instead of belonging to it. Colour here
+     means one thing only - the dot that says a job is alive.
+
+   Inset further than the composer card (which starts at 13px) so it reads as
+   a tab hanging off the input box, not as a second panel. Logical properties
+   throughout so it flips for RTL without a second rule. */
 .bg-jobs {
+    flex: 0 0 auto;
+    position: relative;
+    /* Above the card, not beside it: the SAME surface colour as .composer and
+       no bottom edge of its own. The negative bottom margin eats exactly
+       .input-bar's 10px top padding and stops ON the card's top border, so the
+       lid touches the box and that 1px line still draws the join. One pixel
+       more (-11px) and the dock swallows the border, which reads as the input
+       box losing its outline the moment a job starts - a card that changes
+       shape because something else happened is worse than a visible seam.
+       Inset a little wider than the card: a narrower lid frames the input box
+       instead of pretending to be one. */
+    z-index: 1;
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--xratu-gap-xs, 4px);
+    flex-direction: column;
+    margin: 6px 20px -10px;
+    border: 1px solid var(--vscode-input-border);
+    border-block-end: none;
+    border-radius: var(--xratu-radius, 10px) var(--xratu-radius, 10px) 0 0;
+    background: var(--xratu-surface-inset);
+    color: var(--vscode-foreground);
+    overflow: hidden;
+}
+
+.bg-jobs-head {
+    display: flex;
     align-items: center;
-    padding: 0 var(--xratu-pad) var(--xratu-gap-xs, 4px);
+    gap: 4px;
+    min-width: 0;
+    padding-inline-end: 4px;
+}
+
+.bg-jobs-toggle {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 7px 10px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: var(--xratu-fs-sm, 11px);
+    line-height: 1.4;
+    text-align: start;
+    cursor: pointer;
+}
+
+.bg-jobs-toggle:hover .bg-jobs-title {
+    color: var(--vscode-foreground);
+}
+
+.bg-jobs-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    transition: color var(--xratu-dur-1) var(--xratu-ease-settle);
+}
+
+/* Only visible while folded - expanded, every row carries its own dot and a
+   second one up here would double the signal. */
+.bg-jobs:not(.open) .bg-jobs-head .bg-job-dot {
+    display: block;
+}
+
+.bg-jobs.open .bg-jobs-head .bg-job-dot {
+    display: none;
+}
+
+/* Up/down only: a left/right fold reads backwards under RTL. */
+.bg-jobs-caret {
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
+}
+
+.bg-jobs:not(.open) .bg-jobs-caret {
+    transform: rotate(180deg);
+}
+
+.bg-jobs-stopall {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    border: none;
+    border-radius: var(--xratu-radius-xs);
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font-family: inherit;
+    font-size: var(--xratu-fs-xs, 10.5px);
+    cursor: pointer;
+    transition: color var(--xratu-dur-1) var(--xratu-ease-settle);
+}
+
+.bg-jobs-stopall:hover {
+    color: var(--vscode-errorForeground, #f85149);
+}
+
+/* Up to 16 jobs can be live at once. The list scrolls INSIDE the dock instead
+   of growing, so a busy machine can never push the composer off-screen. No
+   separators: row rhythm is spacing, and a rule between rows reads as a table
+   where nothing is a table. */
+.bg-jobs-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0 0 4px;
+    list-style: none;
+    max-height: 132px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .bg-job {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: var(--xratu-gap-xs, 4px);
-    max-width: 100%;
-    padding: 2px var(--xratu-gap-xs, 4px);
-    border: 1px solid var(--vscode-panel-border, transparent);
-    border-radius: var(--xratu-radius-sm, 4px);
-    background: var(--xratu-accent-faint);
-    color: var(--vscode-foreground);
-    font-size: var(--xratu-font-xs, 11px);
+    gap: 7px;
+    min-width: 0;
+    padding: 3px 8px 3px 10px;
+    border-radius: var(--xratu-radius-xs);
+    font-size: var(--xratu-fs-sm, 11px);
     line-height: 1.5;
 }
 
+/* Alive - and alive is all this can claim. A job listed here has not exited
+   yet, which is not the same as healthy. */
+.bg-job-dot {
+    flex: 0 0 auto;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--xratu-accent);
+    animation: bg-job-pulse 1.8s var(--xratu-ease-flow) infinite;
+}
+
+@keyframes bg-job-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .bg-job-dot {
+        animation: none;
+    }
+}
+
 .bg-job-cmd {
+    flex: 1 1 auto;
+    /* min-width: 0 is what makes the ellipsis engage: a nowrap flex child
+       otherwise refuses to shrink below its content width, and the row - not
+       the dock - is what overflows the panel. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     /* Commands, paths and pids are LTR content even in an RTL layout. */
     direction: ltr;
     unicode-bidi: isolate;
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-foreground);
     opacity: 0.85;
 }
 
 .bg-job-up {
-    opacity: 0.7;
+    flex: 0 0 auto;
+    color: var(--vscode-descriptionForeground);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--xratu-fs-xs, 10.5px);
     direction: ltr;
     unicode-bidi: isolate;
 }
 
+/* Copy and stop stay out of the way until the row is hovered or the control
+   itself is focused - a dock of four always-on buttons per row is noise. */
+.bg-job-copy,
 .bg-job-stop {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border: none;
     border-radius: var(--xratu-radius-xs);
     background: transparent;
     color: var(--vscode-descriptionForeground);
+    opacity: 0;
     cursor: pointer;
+    transition: opacity var(--xratu-dur-1) var(--xratu-ease-settle), color var(--xratu-dur-1) var(--xratu-ease-settle), background var(--xratu-dur-1) var(--xratu-ease-settle);
+}
+
+.bg-job:hover .bg-job-copy,
+.bg-job:hover .bg-job-stop,
+.bg-job-copy:focus-visible,
+.bg-job-stop:focus-visible {
+    opacity: 1;
+}
+
+/* Colour only on hover. A fill under an 11px icon is a flash, not a target,
+   and the rows stay flat so the commands remain the only thing in the dock
+   that reads as content. */
+.bg-job-copy:hover {
+    color: var(--vscode-foreground);
 }
 
 .bg-job-stop:hover {
     color: var(--vscode-errorForeground, #f85149);
-    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+}
+
+/* Touch and forced-colours have no hover to reveal on: the controls must be
+   there before the pointer arrives, or never. */
+@media (hover: none) {
+    .bg-job-copy,
+    .bg-job-stop {
+        opacity: 1;
+    }
 }
 
 /* Unparseable patch: NEVER wrap the markers into a wall. Plain monospace on

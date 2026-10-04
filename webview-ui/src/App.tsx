@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, CornerDownRight, Cpu, Link, ListChecks, X } from 'lucide-react';
+import { ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
@@ -58,6 +58,16 @@ function toAttachmentMeta(attachments: ComposerAttachment[]) {
             ? `data:${a.mimeType};base64,${a.dataBase64}`
             : undefined,
     }));
+}
+
+/** Live-job uptime, compact. Deliberately unit-suffixed and left-to-right:
+ *  a dev server that has been up four hours should not read as `14400s`, and
+ *  the numbers must not reorder in an RTL layout. */
+function formatUptime(seconds: number) {
+    const s = Math.max(0, Math.floor(seconds));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
 /** Trailing bubbles mounted by default. The live session keeps its full
@@ -959,6 +969,12 @@ export function App() {
         [chat.backgroundJobs],
     );
 
+    // Folded by default: a dev server left running all day must not hold composer
+    // space, and the folded line still names the single job or counts the rest.
+    // It never auto-opens - the count and the caret are the whole affordance,
+    // and a strip that re-expands itself is a strip you cannot get rid of.
+    const [bgJobsOpen, setBgJobsOpen] = useState(false);
+
     // Task-list edit: optimistic local update + host persistence (the host
     // stores the per-session override and echoes taskListState back).
     const handleTaskListEdit = useCallback(
@@ -1446,25 +1462,77 @@ export function App() {
             )}
             {/* Live background jobs. A backgrounded process outlives its turn
                 and, once the chat scrolls, its transcript row - this is the only
-                place the user can still see it and stop it. */}
+                place the user can still see it and stop it. A card, not a chip
+                per job: the commands are long, so each row owns the width and
+                truncates instead of the strip overflowing the panel. */}
+            {/* Live background jobs, docked UNDER the composer card and inset from its
+                sides: it reads as part of the input box rather than as a
+                floating panel, and it folds away to a one-line summary so a
+                dev server left running all day never holds composer space.
+                A backgrounded process outlives its turn and, once the chat
+                scrolls, its transcript row - this is the only place the user
+                can still see it and stop it. */}
             {liveJobs.length > 0 && (
-                <div className="bg-jobs" aria-label={tf('bgJobBadge', { count: String(liveJobs.length) })}>
-                    {liveJobs.map((j) => (
-                        <span className="bg-job" key={j.jobId}>
-                            <Cpu size={11} aria-hidden="true" />
-                            <span className="bg-job-cmd" title={j.command} dir="ltr">{j.command}</span>
-                            <span className="bg-job-up" dir="ltr">{j.uptimeSeconds}s</span>
+                <div className={`bg-jobs${bgJobsOpen ? ' open' : ''}`} aria-label={tf('bgJobBadge', { count: String(liveJobs.length) })}>
+                    <div className="bg-jobs-head">
+                        <button
+                            type="button"
+                            className="bg-jobs-toggle"
+                            aria-expanded={bgJobsOpen}
+                            onClick={() => setBgJobsOpen((o) => !o)}
+                        >
+                            <span className="bg-job-dot" aria-hidden="true" />
+                            {/* Folded, the dock counts rather than names: one
+                                line can hold exactly one honest label, and
+                                "what is running" is the question a lid
+                                invites. The commands are one click away. */}
+                            <span className="bg-jobs-title">
+                                {liveJobs.length === 1
+                                    ? t('bgJobsRunningOne')
+                                    : tf('bgJobsRunning', { count: String(liveJobs.length) })}
+                            </span>
+                            <ChevronDown size={12} className="bg-jobs-caret" aria-hidden="true" />
+                        </button>
+                        {bgJobsOpen && liveJobs.length > 1 && (
                             <button
                                 type="button"
-                                className="bg-job-stop"
-                                title={t('bgStopTitle')}
-                                aria-label={t('bgStop')}
-                                onClick={() => handleKillBackground(j.jobId)}
+                                className="bg-jobs-stopall"
+                                title={t('bgStopAllTitle')}
+                                onClick={() => liveJobs.forEach((j) => handleKillBackground(j.jobId))}
                             >
-                                <X size={11} />
+                                {t('bgStopAll')}
                             </button>
-                        </span>
-                    ))}
+                        )}
+                    </div>
+                    {bgJobsOpen && (
+                        <ul className="bg-jobs-list">
+                            {liveJobs.map((j) => (
+                                <li className="bg-job" key={j.jobId}>
+                                    <span className="bg-job-dot" aria-hidden="true" />
+                                    <span className="bg-job-cmd" title={j.command} dir="ltr">{j.command}</span>
+                                    <button
+                                        type="button"
+                                        className="bg-job-copy"
+                                        title={t('bgCopyCmd')}
+                                        aria-label={t('bgCopyCmd')}
+                                        onClick={() => send({ type: 'copyToClipboard', value: j.command })}
+                                    >
+                                        <Copy size={11} aria-hidden="true" />
+                                    </button>
+                                    <span className="bg-job-up" dir="ltr">{formatUptime(j.uptimeSeconds)}</span>
+                                    <button
+                                        type="button"
+                                        className="bg-job-stop"
+                                        title={t('bgStopTitle')}
+                                        aria-label={t('bgStop')}
+                                        onClick={() => handleKillBackground(j.jobId)}
+                                    >
+                                        <X size={11} aria-hidden="true" />
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
             <InputBar

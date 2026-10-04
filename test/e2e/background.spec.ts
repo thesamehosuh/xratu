@@ -80,6 +80,7 @@ test('a backgrounded call swaps the handoff for a stop that posts the job id', a
 
 test('the composer badge lists live jobs and stops them', async ({ page }) => {
     await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
 
     // Nothing until the host reports jobs.
@@ -95,6 +96,11 @@ test('the composer badge lists live jobs and stops them', async ({ page }) => {
         ],
     });
 
+    // Folded by default: the dock is one line until asked.
+    await expect(page.locator('.bg-job')).toHaveCount(0);
+    await expect(page.locator('.bg-jobs-title')).toHaveText('2 background tasks running');
+
+    await page.locator('.bg-jobs-toggle').click();
     const chips = page.locator('.bg-job');
     await expect(chips).toHaveCount(2);
     await expect(chips.first().locator('.bg-job-cmd')).toHaveText('npm run dev');
@@ -114,7 +120,7 @@ test('stopping the last job empties the badge', async ({ page }) => {
         type: 'backgroundJobs',
         jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }],
     });
-    await expect(page.locator('.bg-job')).toHaveCount(1);
+    await expect(page.locator('.bg-jobs')).toHaveCount(1);
 
     await hostMessage(page, { type: 'backgroundJobs', jobs: [] });
     await expect(page.locator('.bg-jobs')).toHaveCount(0);
@@ -130,9 +136,117 @@ test('the badge survives into the en locale without breaking direction', async (
     });
 
     await expect(page.locator('.app')).toHaveAttribute('dir', 'ltr');
+    await page.locator('.bg-jobs-toggle').click();
     await expect(page.locator('.bg-job')).toHaveCount(1);
     // The action label must be the English one, not the raw key.
     await expect(page.locator('.bg-job-stop')).toHaveAttribute('aria-label', 'Stop');
+});
+
+test('a short panel keeps the strip whole instead of squeezing it to a hairline', async ({ page }) => {
+    // The strip is a flex item in the .app column. Without flex: 0 0 auto a
+    // short panel shrinks it to a few pixels, the rows overflow it, and the
+    // composer paints over them - the card reads as a bare accent line with
+    // nothing in it. Assert the geometry, not just the markup.
+    await page.setViewportSize({ width: 420, height: 300 });
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, {
+        type: 'backgroundJobs',
+        jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }],
+    });
+    await page.locator('.bg-jobs-toggle').click();
+    await expect(page.locator('.bg-job')).toHaveCount(1);
+
+    const box = await page.evaluate(() => {
+        const strip = document.querySelector('.bg-jobs')!.getBoundingClientRect();
+        const row = document.querySelector('.bg-job')!.getBoundingClientRect();
+        const composer = document.querySelector('.composer')!.getBoundingClientRect();
+        const atRow = document.elementFromPoint(Math.round(strip.x + strip.width / 2), Math.round(row.y + row.height / 2));
+        return {
+            rowInsideStrip: row.top >= strip.top - 0.5 && row.bottom <= strip.bottom + 0.5,
+            // The dock stops exactly ON the composer's top edge: touching it,
+            // never over it. A pixel deeper and the card loses its top border
+            // the moment a job starts.
+            seam: Math.round(strip.bottom - composer.top),
+            // If the composer covered the row, the hit at its centre would
+            // land on the composer, not inside the dock.
+            rowHit: atRow instanceof HTMLElement ? Boolean(atRow.closest('.bg-jobs')) : false,
+            // ...and half a pixel inside the card's top border must still be
+            // the composer, or the dock is painting over its outline.
+            topBorderHit: (() => {
+                const el = document.elementFromPoint(Math.round(composer.left + composer.width / 2), Math.round(composer.top + 0.5));
+                return el instanceof HTMLElement && el.classList.contains('composer');
+            })(),
+        };
+    });
+    expect(box.rowInsideStrip).toBe(true);
+    expect(box.rowHit).toBe(true);
+    expect(box.seam).toBe(0);
+    expect(box.topBorderHit).toBe(true);
+});
+
+test('the strip header folds the job list and opens it again', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, {
+        type: 'backgroundJobs',
+        jobs: [
+            { jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 },
+            { jobId: 'job-2', command: 'npm run watch', running: true, uptimeSeconds: 9 },
+        ],
+    });
+    await expect(page.locator('.bg-jobs-toggle')).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.bg-job')).toHaveCount(0);
+
+    await page.locator('.bg-jobs-toggle').click();
+    await expect(page.locator('.bg-jobs-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.bg-job')).toHaveCount(2);
+
+    await page.locator('.bg-jobs-toggle').click();
+    await expect(page.locator('.bg-job')).toHaveCount(0);
+});
+
+test('a folded dock counts the jobs, singular and plural', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, {
+        type: 'backgroundJobs',
+        jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }],
+    });
+    // English has to agree with the count: "1 background tasks running" is
+    // the kind of thing that makes a whole UI look unfinished.
+    await expect(page.locator('.bg-jobs-title')).toHaveText('1 background task running');
+
+    await hostMessage(page, {
+        type: 'backgroundJobs',
+        jobs: [
+            { jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 4 },
+            { jobId: 'job-2', command: 'npm run watch', running: true, uptimeSeconds: 1 },
+        ],
+    });
+    await expect(page.locator('.bg-jobs-title')).toHaveText('2 background tasks running');
+});
+
+test('copy and stop-all act on the jobs from the expanded dock', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, {
+        type: 'backgroundJobs',
+        jobs: [
+            { jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 },
+            { jobId: 'job-2', command: 'npm run watch', running: true, uptimeSeconds: 1 },
+        ],
+    });
+    await page.locator('.bg-jobs-toggle').click();
+
+    await page.locator('.bg-job-copy').first().click();
+    await page.locator('.bg-jobs-stopall').click();
+
+    const sent = await sentMessages(page);
+    expect(sent).toContainEqual({ type: 'copyToClipboard', value: 'npm run dev' });
+    expect(sent).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
+    expect(sent).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-2' });
 });
 
 test('the process tool row renders with its own label and no handoff button', async ({ page }) => {

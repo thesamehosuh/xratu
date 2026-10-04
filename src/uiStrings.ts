@@ -32,7 +32,6 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     notifCpRestoreFailed: { fa: 'بازیابی نقطه بازرسی ناموفق بود: {error}', en: 'Checkpoint restore failed: {error}' },
     notifEditFailed: { fa: 'ویرایش پیام ناموفق بود: {error}', en: 'Editing the message failed: {error}' },
     notifRegenerateFailed: { fa: 'تولید دوباره ناموفق بود: {error}', en: 'Regeneration failed: {error}' },
-    notifBackgroundJobDone: { fa: 'پس زمینه {command} تمام شد ({outcome}).', en: 'Background {command} finished ({outcome}).' },
     notifBackgroundJobGone: { fa: 'این دستور دیگه در حال اجرا نیست.', en: 'That command is no longer running.' },
     notifBackgroundAdopted: { fa: '{count} پروسه در پس زمینه از قبل اجرا مونده و دوباره به دست اومد.', en: '{count} background process(es) from the previous session were recovered.' },
     notifBackgroundUnrecoverable: { fa: '{count} پروسه در پس زمینه قابل بازیابی نبود و رها شد.', en: '{count} background process record(s) could not be verified and were dropped.' },
