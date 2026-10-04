@@ -22,6 +22,7 @@ export function getUiLocale(): UiLocale {
 const STRINGS: Record<string, { fa: string; en: string }> = {
     notifNoFolder: { fa: 'هیچ پوشه ای باز نیست.', en: 'No folder is open.' },
     notifNoCheckpoints: { fa: 'هنوز نقطه بازیابی وجود ندارد.', en: 'No checkpoints yet.' },
+    notifCheckpointsUnavailable: { fa: 'نقاط بازیابی در دسترس نیست: {error}', en: 'Checkpoints are unavailable: {error}' },
     notifRestoreConfirm: { fa: 'فایل های ورک اسپیس به {target} برمیگردند. ادامه؟', en: 'Workspace files will be restored to {target}. Continue?' },
     notifRestoreAction: { fa: 'بازیابی', en: 'Restore' },
     notifCancel: { fa: 'لغو', en: 'Cancel' },

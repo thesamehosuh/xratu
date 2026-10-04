@@ -83,6 +83,29 @@ function shortSha(sha: string): string {
     return (sha || '').slice(0, 12);
 }
 
+/**
+ * Where checkpoint failures are reported.
+ *
+ * `console.error` alone was not enough: a failed snapshot is swallowed so it
+ * cannot block the user's action, which meant a workspace whose checkpointing
+ * was broken (stale ref lock, inherited `commit.gpgsign`, git missing) showed
+ * NO sign of trouble at all - edits landed with no restorable point while the
+ * checkpoint picker still listed old entries and looked healthy. The host wires
+ * this to the Xratu output channel so the failure is at least inspectable.
+ */
+let _checkpointDiagnostics: ((message: string) => void) | null = null;
+
+export function setCheckpointDiagnostics(fn: ((message: string) => void) | null): void {
+    _checkpointDiagnostics = fn;
+}
+
+function report(message: string, err?: unknown): void {
+    const detail = err === undefined ? '' : `: ${err instanceof Error ? err.message : String(err)}`;
+    const line = `xratu checkpoints - ${message}${detail}`;
+    if (_checkpointDiagnostics) _checkpointDiagnostics(line);
+    else console.error(line);
+}
+
 export class ShadowCheckpointStore {
     /** Turn-scoped snapshot bookkeeping: one automatic snapshot per turn. */
     private _turnSnapshotDone = false;
@@ -100,12 +123,38 @@ export class ShadowCheckpointStore {
     }
 
     private env(workspaceRoot: string): NodeJS.ProcessEnv {
+        const dir = this.repoDir(workspaceRoot);
+        // The shadow repo must behave identically on every machine, so the
+        // user's global/system git config is NEUTRALIZED, not merely
+        // overridden key by key. Inheriting it broke checkpointing outright:
+        //   commit.gpgsign=true -> every commit died with "gpg failed to sign
+        //     the data" (no pinentry in a hidden console), silently, because
+        //     ensureTurnSnapshot only console.errors;
+        //   filter.lfs.*       -> `git add --all` stored POINTER files, and a
+        //     restore wrote pointers over the user's real content
+        //     (core.autocrlf=false does not disable filters);
+        //   core.hooksPath     -> a post-commit hook ran on every checkpoint
+        //     (--no-verify only skips pre-commit/commit-msg).
+        // GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM need a path that git will read as
+        // empty, and `os.devNull` is not a valid path on Windows - so point at
+        // a real empty file we own inside the shadow dir.
         return {
             ...process.env,
-            GIT_DIR: this.repoDir(workspaceRoot),
+            GIT_DIR: dir,
             GIT_WORK_TREE: workspaceRoot,
-            GIT_INDEX_FILE: path.join(this.repoDir(workspaceRoot), 'index'),
+            GIT_INDEX_FILE: path.join(dir, 'index'),
+            GIT_CONFIG_GLOBAL: this.emptyConfigPath(dir),
+            GIT_CONFIG_SYSTEM: this.emptyConfigPath(dir),
         };
+    }
+
+    /** An existing, permanently empty config file for git to read. */
+    private emptyConfigPath(dir: string): string {
+        const p = path.join(dir, 'xratu-empty-config');
+        try {
+            if (!fs.existsSync(p)) fs.writeFileSync(p, '');
+        } catch { /* best effort - a missing file reads as empty anyway */ }
+        return p;
     }
 
     private gitAsync(args: string[], workspaceRoot: string, timeoutMs = 20000): Promise<GitResult> {
@@ -123,7 +172,9 @@ export class ShadowCheckpointStore {
 
     /** Repo-local behaviors that must NOT inherit the user's global git
      *  config: byte-exact restores (no CRLF/LF rewriting), no filemode churn
-     *  on Windows network drives, and long-path support on Windows. */
+     *  on Windows network drives, and long-path support on Windows.
+     *  `commit.gpgsign=false` is belt-and-braces for an already-created shadow
+     *  repo; the real fix for inherited config is GIT_CONFIG_GLOBAL in env(). */
     private repoConfigArgs(): string[] {
         return [
             '-c', 'core.autocrlf=false',
@@ -133,6 +184,7 @@ export class ShadowCheckpointStore {
             // ("\\346...") fail existsSync/rmSync below and silently survive
             // a checkpoint restore.
             '-c', 'core.quotePath=false',
+            '-c', 'commit.gpgsign=false',
         ];
     }
 
@@ -177,19 +229,43 @@ export class ShadowCheckpointStore {
                 fs.writeFileSync(excludePath, SHADOW_EXCLUDES.join('\n') + '\n', 'utf-8');
             } catch { /* excludes are an optimization, not a requirement */ }
         }
-        this.clearStaleIndexLock(dir);
+        this.clearStaleLocks(dir);
     }
 
-    /** A killed process (reload mid-snapshot) leaves index.lock behind and
-     *  EVERY later git call fails until it is removed.  This store is the
-     *  only writer, so any lock older than a minute is ours and stale. */
-    private clearStaleIndexLock(dir: string): void {
-        const lockPath = path.join(dir, 'index.lock');
-        try {
-            if (!fs.existsSync(lockPath)) return;
-            const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-            if (ageMs > 60_000) fs.rmSync(lockPath, { force: true });
-        } catch { /* best effort */ }
+    /** A killed process (reload mid-snapshot, or a `git commit` terminated by
+     *  the 20s gitExec timeout - on Windows TerminateProcess gives git no
+     *  chance to clean up) leaves LOCK FILES behind, and every later git call
+     *  that needs the same lock fails until they are removed. Only clearing
+     *  `index.lock` was not enough: `git commit` locks the ref HEAD points at,
+     *  leaving `refs/heads/<branch>.lock` / `HEAD.lock`, and NOTHING ever
+     *  removed those - so one killed commit bricked checkpointing for that
+     *  workspace permanently, with no user-visible signal (ensureTurnSnapshot
+     *  swallows to console.error and the old checkpoints keep showing in the
+     *  picker, so the feature looks alive while it is dead).
+     *
+     *  This store is the only writer, so any lock older than a minute is ours
+     *  and stale. */
+    private clearStaleLocks(dir: string): void {
+        const stale = (p: string): void => {
+            try {
+                if (!fs.existsSync(p)) return;
+                const ageMs = Date.now() - fs.statSync(p).mtimeMs;
+                if (ageMs > 60_000) fs.rmSync(p, { force: true });
+            } catch { /* best effort */ }
+        };
+        stale(path.join(dir, 'index.lock'));
+        stale(path.join(dir, 'HEAD.lock'));
+        // Ref locks live one level down in refs/heads and refs/tags (a packed
+        // or worktree layout can add more); sweep the known dirs rather than
+        // walking, so this stays cheap on the per-operation hot path.
+        for (const scope of ['heads', 'tags']) {
+            const scopeDir = path.join(dir, 'refs', scope);
+            let names: string[];
+            try { names = fs.readdirSync(scopeDir); } catch { continue; }
+            for (const name of names) {
+                if (name.endsWith('.lock')) stale(path.join(scopeDir, name));
+            }
+        }
     }
 
     /**
@@ -203,8 +279,10 @@ export class ShadowCheckpointStore {
         try {
             await this.createCheckpoint(workspaceRoot, description);
         } catch (e) {
-            // A failed checkpoint must not block the user's requested action.
-            console.error('xratu: turn snapshot failed:', e);
+            // A failed checkpoint must not block the user's requested action -
+            // but it MUST be reported, or the workspace silently loses its
+            // undo points (see `report`).
+            report(`turn snapshot FAILED ("${description}") - edits this turn are NOT restorable`, e);
         }
     }
 
@@ -302,10 +380,20 @@ export class ShadowCheckpointStore {
         // cannot delete); everything else was just rewritten above.
         const head = (await this.gitAsync(['rev-parse', 'HEAD'], workspaceRoot)).stdout.trim();
         if (head && head !== sha) {
+            // --no-renames is REQUIRED here: with rename detection on (the
+            // default since git 2.9) a rename between the two trees is
+            // reported as a single `R` entry, whose destination is not `A`, so
+            // --diff-filter=A drops it and the tail deletes nothing - leaving
+            // the file at BOTH the old and new path after a "successful"
+            // restore. Without renames git reports `D old` + `A new`, which is
+            // exactly what this loop needs.
             const added = await this.gitAsync(
-                [...this.repoConfigArgs(), 'diff', '--name-only', '--diff-filter=A', `${sha}..${head}`],
+                [...this.repoConfigArgs(), 'diff', '--name-only', '--no-renames', '--diff-filter=A', `${sha}..${head}`],
                 workspaceRoot
             );
+            if (added.code !== 0) {
+                throw new Error(`Restore failed while removing files added after the checkpoint: ${added.stderr.trim() || `git exited ${added.code}`}`);
+            }
             for (const rel of added.stdout.split('\n')) {
                 const relTrimmed = rel.trim();
                 if (!relTrimmed) continue;

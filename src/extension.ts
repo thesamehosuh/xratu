@@ -40,7 +40,7 @@ import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
 import { parseTranscriptPrefs, withTranscriptPref } from './transcriptPrefs';
-import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
+import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics } from './shadowGit';
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
@@ -1462,7 +1462,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this.notifyBanner('error', 'notifNoFolder');
             return;
         }
-        const listing = await this._checkpoints.listCheckpoints(folder.uri.fsPath, 20);
+        // listCheckpoints throws when the shadow store cannot be initialized (git
+        // missing, unwritable storage). Callers `void` this flow, so an
+        // uncaught throw became an unhandled rejection and the restore button
+        // silently did nothing - the palette path surfaced the same failure.
+        let listing: string;
+        try {
+            listing = await this._checkpoints.listCheckpoints(folder.uri.fsPath, 20);
+        } catch (e) {
+            const error = e instanceof Error ? e.message : String(e);
+            diagnosticsChannel?.appendLine(`xratu checkpoints - list failed: ${error}`);
+            this.notifyBanner('error', 'notifCheckpointsUnavailable', { error });
+            return;
+        }
         const entries = listing.split('\n').filter((l) => l.includes('|'));
         if (entries.length === 0 || listing === 'No checkpoints found.') {
             this.notifyBanner('info', 'notifNoCheckpoints');
@@ -6976,6 +6988,9 @@ export function activate(context: vscode.ExtensionContext) {
     const checkpoints = new ShadowCheckpointStore(context);
     diagnosticsChannel = vscode.window.createOutputChannel('Xratu');
     context.subscriptions.push(diagnosticsChannel);
+    // Checkpoint failures are swallowed so they cannot block a user action;
+    // route them here so a workspace that has lost its undo points says so.
+    setCheckpointDiagnostics((message) => diagnosticsChannel?.appendLine(message));
     const mcpConfigStore = new McpConfigStore(context);
     const externalMcp = new ExternalMcpManager(() => mcpConfigStore.load());
     externalMcpInstance = externalMcp;

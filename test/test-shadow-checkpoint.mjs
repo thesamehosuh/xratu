@@ -11,10 +11,11 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-shadow-checkpoint.mjs
  */
 import { createRequire } from 'module';
-import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { createHash } from 'crypto';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync,
+    renameSync, utimesSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
 
 const require = createRequire(import.meta.url);
 const { ShadowCheckpointStore, EmptySeedError } = require('../out/shadowGit.js');
@@ -91,6 +92,115 @@ try {
         threw = true;
     }
     ok('unknown sha throws', threw);
+
+    // --- a RENAME is undone, not left duplicated ---
+    // Regression: the delete tail filtered with `--diff-filter=A`, but
+    // `diff.renames` defaults to true, so a rename between the two trees was
+    // reported as a single `R` entry whose destination is not `A`. The filter
+    // dropped it, the tail deleted nothing, and the file survived at BOTH the
+    // old and the new path while the restore reported success.
+    writeFileSync(join(work, 'keep.txt'), 'keep\n');
+    const shaRename = await store.createCheckpoint(work, 'before rename');
+    renameSync(join(work, 'a.txt'), join(work, 'renamed.txt'));
+    ok('rename applied', existsSync(join(work, 'renamed.txt')) && !existsSync(join(work, 'a.txt')));
+    const rr = await store.restoreCheckpoint(work, shaRename);
+    ok('rename restore reports changed', rr.changed === true, JSON.stringify(rr));
+    ok('rename: original path restored', existsSync(join(work, 'a.txt')));
+    ok('rename: duplicate at the new path removed', !existsSync(join(work, 'renamed.txt')),
+        'file survived at BOTH paths');
+
+    // --- stale ref locks do not brick the store ---
+    // Regression: only `index.lock` was ever cleared. A `git commit` killed by
+    // the 20s timeout (on Windows TerminateProcess gives git no cleanup chance)
+    // leaves `refs/heads/<branch>.lock`, and NOTHING removed it - so every
+    // later checkpoint and every restore failed forever, silently, because
+    // ensureTurnSnapshot only console.errored.
+    const shadowDir = join(storageRoot, 'checkpoints',
+        createHash('sha1').update(work).digest('hex').slice(0, 16));
+    for (const lockRel of [
+        join('refs', 'heads', 'master.lock'),
+        join('refs', 'heads', 'main.lock'),
+        join('HEAD.lock'),
+        'index.lock',
+    ]) {
+        const lockPath = join(shadowDir, lockRel);
+        mkdirSync(dirname(lockPath), { recursive: true });
+        writeFileSync(lockPath, '');
+        // Backdate past the 60s staleness heuristic.
+        const old = new Date(Date.now() - 600_000);
+        utimesSync(lockPath, old, old);
+    }
+    writeFileSync(join(work, 'after-lock.txt'), 'changed\n');
+    let lockRecovered = false;
+    let lockErr = '';
+    try {
+        const after = await store.restoreCheckpoint(work, shaRename);
+        lockRecovered = after.changed === true;
+    } catch (e) {
+        lockErr = e instanceof Error ? e.message : String(e);
+    }
+    ok('stale ref locks do not brick the store', lockRecovered, lockErr);
+    for (const lockRel of [join('refs', 'heads', 'master.lock'), 'HEAD.lock', 'index.lock']) {
+        ok(`stale lock cleared: ${lockRel}`, !existsSync(join(shadowDir, lockRel)));
+    }
+
+    // --- a FRESH lock (another git running) is NOT deleted ---
+    // The staleness heuristic must not stomp a lock a live process holds. Such
+    // a lock must fail the commit loudly - that is correct, it means another
+    // git really is running - but the file itself must survive.
+    mkdirSync(join(shadowDir, 'refs', 'heads'), { recursive: true });
+    const freshLock = join(shadowDir, 'refs', 'heads', 'master.lock');
+    writeFileSync(freshLock, '');
+    let freshThrew = false;
+    try {
+        await store.createCheckpoint(work, 'fresh lock probe');
+    } catch {
+        freshThrew = true;
+    }
+    ok('fresh ref lock blocks the commit (loudly)', freshThrew);
+    ok('fresh (non-stale) ref lock is left alone', existsSync(freshLock));
+    rmSync(freshLock, { force: true });
+
+    // --- the shadow repo ignores the user's GLOBAL git config ---
+    // Regression: env() passed process.env through with no
+    // GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM, so `commit.gpgsign = true` in
+    // ~/.gitconfig killed EVERY commit ("gpg failed to sign the data" - no
+    // pinentry in a hidden console) and `core.hooksPath` ran a post-commit
+    // hook on every checkpoint. Both failed silently.
+    const gpgWork = mkdtempSync(join(tmpdir(), 'xratu-cp-gpg-'));
+    const gpgHome = mkdtempSync(join(tmpdir(), 'xratu-cp-home-'));
+    const hookFired = join(gpgHome, 'hook-fired');
+    try {
+        mkdirSync(join(gpgHome, 'hooks'), { recursive: true });
+        const hook = join(gpgHome, 'hooks', 'post-commit');
+        writeFileSync(hook, `#!/bin/sh\necho ran > "${hookFired}"\n`);
+        chmodSync(hook, 0o755);
+        writeFileSync(join(gpgHome, '.gitconfig'),
+            `[user]\n\tname = T\n\temail = t@example.invalid\n`
+            + `[commit]\n\tgpgsign = true\n`
+            + `[core]\n\thooksPath = ${join(gpgHome, 'hooks').replace(/\\/g, '/')}\n`);
+        writeFileSync(join(gpgWork, 'f.txt'), 'f\n');
+
+        const prevHome = process.env.HOME;
+        const prevUserProfile = process.env.USERPROFILE;
+        let gpgSha = '';
+        let gpgErr = '';
+        try {
+            process.env.HOME = gpgHome;
+            process.env.USERPROFILE = gpgHome;
+            gpgSha = await store.createCheckpoint(gpgWork, 'under hostile global config');
+        } catch (e) {
+            gpgErr = e instanceof Error ? e.message : String(e);
+        } finally {
+            if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+            if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+        }
+        ok('checkpoint survives commit.gpgsign=true in global config', !!gpgSha, gpgErr);
+        ok('global core.hooksPath post-commit hook does NOT run', !existsSync(hookFired));
+    } finally {
+        rmSync(gpgWork, { recursive: true, force: true });
+        rmSync(gpgHome, { recursive: true, force: true });
+    }
 
     // --- empty seed refused ---
     const seedWork = mkdtempSync(join(tmpdir(), 'xratu-cp-seed-'));
