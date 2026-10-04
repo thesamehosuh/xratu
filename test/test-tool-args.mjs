@@ -90,6 +90,55 @@ eq('empty canonical path falls through to alias', withPathAlias({ path: '  ', fi
 eq('no path at all leaves args unchanged', withPathAlias({ other: 1 }).path, undefined);
 
 
+// --- path guard: symlinked directory cannot smuggle a write out of the tree
+// Regression: `sanitizePath` resolved symlinks with realpathSync(fullPath), and
+// on failure fell back to realpathSync(dirname) + basename - walking up exactly
+// ONE level. For `<ws>/link/sub/new.txt` where `link` points outside, both
+// realpath calls failed, so the LEXICAL path was returned, containment passed
+// on the string, and the `mkdirSync(dirname, {recursive:true})` every write
+// tool performs followed the symlink and wrote outside the workspace.
+{
+    const fs = require('node:fs');
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-paths-'));
+    const ws = path.join(base, 'ws');
+    const outside = path.join(base, 'outside');
+    fs.mkdirSync(path.join(ws, 'real'), { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(ws, 'real', 'inside.txt'), 'x\n');
+    fs.symlinkSync(outside, path.join(ws, 'escape'), 'dir');
+    fs.symlinkSync(path.join(ws, 'real'), path.join(ws, 'alias'), 'dir');
+    fs.symlinkSync(path.join(base, 'no-such-target'), path.join(ws, 'dangle'));
+
+    const refused = (p) => {
+        try { sanitizePath(p, ws); return false; } catch (e) { return /outside the workspace|symlink/.test(e.message); }
+    };
+    ok('symlink escape: direct target refused', refused('escape/x.txt'));
+    ok('symlink escape: NEW dir under the link refused', refused('escape/sub/x.txt'));
+    ok('symlink escape: 2 new levels refused', refused('escape/sub/deep/x.txt'));
+    ok('dangling symlink refused as the final component', refused('dangle'));
+    ok('dangling symlink refused inside it', refused('dangle/planted.txt'));
+
+    // The guard must not start rejecting ordinary work: a symlink whose target
+    // is INSIDE the workspace still resolves, and new files still pass.
+    ok('symlink that stays inside the workspace is allowed',
+        sanitizePath('alias/new.txt', ws) === path.join(fs.realpathSync(path.join(ws, 'real')), 'new.txt'));
+    ok('new nested file in a plain dir allowed',
+        sanitizePath('real/a/b/c.txt', ws).endsWith(path.join('real', 'a', 'b', 'c.txt')));
+    ok('existing file resolves', sanitizePath('real/inside.txt', ws).endsWith('inside.txt'));
+
+    // And the full write path a tool performs must never land outside.
+    let escapedWrite = false;
+    try {
+        const escaped = sanitizePath('escape/sub/written.txt', ws);
+        fs.mkdirSync(path.dirname(escaped), { recursive: true });
+        fs.writeFileSync(escaped, 'x');
+        escapedWrite = fs.existsSync(path.join(outside, 'sub', 'written.txt'));
+    } catch { /* refused before the write - which is the point */ }
+    ok('write through the link does NOT land outside', !escapedWrite);
+
+    fs.rmSync(base, { recursive: true, force: true });
+}
+
 // --- tool-name resolution (live: "Unknown tool: write_file" dead ends)
 const { resolveToolName, TOOL_NAME_ALIASES } = require('../out/tooling/toolNames.js');
 const KNOWN = ['edit_file', 'read_file', 'apply_patch', 'run_terminal_command', 'grep_search'];
