@@ -49,6 +49,22 @@ const write = (root, rel, body = '') => {
     writeFileSync(full, body);
 };
 
+/** Does this host let us create a symlink? Windows needs Developer Mode or
+ *  elevation; without it `symlinkSync` throws EPERM. Probed once, by actually
+ *  trying, because there is no reliable capability check. */
+let symlinkAllowed = true;
+try {
+    const probeDir = mkdtempSync(join(tmpdir(), 'xratu-wsk-probe-'));
+    try {
+        symlinkSync(join(probeDir, 'a'), join(probeDir, 'b'));
+    } finally {
+        rmSync(probeDir, { recursive: true, force: true });
+    }
+} catch {
+    symlinkAllowed = false;
+}
+const canSymlink = () => symlinkAllowed;
+
 try {
     // --- empty -------------------------------------------------------------
     eq('literally empty folder is empty', classify(() => {}), 'empty');
@@ -124,8 +140,13 @@ try {
     const links = mkdtempSync(join(tmpdir(), 'xratu-wsk-link-'));
     try {
         write(links, 'package.json', '{}');
-        symlinkSync(join(links, 'gone'), join(links, 'dangling'));
-        eq('a dangling symlink does not throw', classifyWorkspace(links), 'project');
+        // Creating a symlink needs Developer Mode or elevation on Windows and
+        // throws EPERM without them, so the assertion is skipped rather than
+        // failing the whole suite on a dev machine that lacks the privilege.
+        if (canSymlink()) {
+            symlinkSync(join(links, 'gone'), join(links, 'dangling'));
+            eq('a dangling symlink does not throw', classifyWorkspace(links), 'project');
+        }
     } finally {
         rmSync(links, { recursive: true, force: true });
     }

@@ -771,7 +771,12 @@ test('an empty or bare workspace gets starting-from-scratch chips', async ({ pag
     expect(await page.locator('.chip-suggest').allInnerTexts())
         .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
 
-    // A host that does not send the field must not lose the default set.
+    // A host that does not send the field keeps the default set. This needs a
+    // fresh page: the step above left `workspaceKind` at 'project', and the
+    // app only overwrites it when the field is present, so asserting here
+    // would pass even if the default were wrong.
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
     expect(await page.locator('.chip-suggest').allInnerTexts())
         .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);

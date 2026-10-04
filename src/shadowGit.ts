@@ -69,6 +69,16 @@ function gitExec(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Pro
     });
 }
 
+/** Inherited git variables that relocate a repository's refs/objects. The
+ *  shadow store is the only writer and must only ever write inside its own
+ *  dir, so these are deleted from the inherited environment (see `env`). */
+const INHERITED_GIT_REPO_VARS = [
+    'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_NAMESPACE',
+];
+
 /** Extra patterns excluded ONLY from the shadow repo (never shipped anywhere). */
 const SHADOW_EXCLUDES = [
     '.git',
@@ -138,8 +148,19 @@ export class ShadowCheckpointStore {
         // GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM need a path that git will read as
         // empty, and `os.devNull` is not a valid path on Windows - so point at
         // a real empty file we own inside the shadow dir.
+        //
+        // The repository-LOCATION variables have to be DROPPED, not overridden:
+        // `...process.env` inherits them, and a host that exports them (a git
+        // hook, a submodule-aware tool, a CI wrapper) makes GIT_DIR alone stop
+        // being a confinement. GIT_COMMON_DIR moves refs and objects to the
+        // shared repo and GIT_OBJECT_DIRECTORY redirects where objects are
+        // WRITTEN - either one turns a checkpoint into a write in the USER's
+        // repository, which is the one thing this store must never do. GIT_DIR,
+        // GIT_WORK_TREE and GIT_INDEX_FILE are set below and win regardless.
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        for (const k of INHERITED_GIT_REPO_VARS) delete env[k];
         return {
-            ...process.env,
+            ...env,
             GIT_DIR: dir,
             GIT_WORK_TREE: workspaceRoot,
             GIT_INDEX_FILE: path.join(dir, 'index'),

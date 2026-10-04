@@ -262,9 +262,12 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
         ok(`names the reasoning channel as the only English part (${mode ?? 'omitted'})`,
             /reasoning channel is the only private space/.test(prompt)
             && /only part that may stay in English/.test(prompt));
-        // A vague commit rule bled into the narration around a commit.
+        // A vague commit rule bled into the narration around a commit. This
+        // must be checked on the PROMPT, not on the constant: asserting the
+        // constant contains a phrase is loop-invariant and passes whether or
+        // not the rule ever reaches the model.
         ok(`commit rule is scoped to the message argument (${mode ?? 'omitted'})`,
-            REPLY_COMMIT_MESSAGES.includes('the message argument itself'));
+            prompt.includes('the message argument itself'));
     }
     // The fa directive names the concrete failure (a one-liner next to a tool
     // call) rather than only saying "every message".

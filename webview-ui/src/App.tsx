@@ -966,16 +966,17 @@ export function App() {
             for (let j = m.steps.length - 1; j >= 0; j--) {
                 const s = m.steps[j];
                 if (s.kind === 'toolCall' && s.tool === TASK_LIST_TOOL) {
-                    const parsed = parseTaskListStep(s.text);
                     // A FAILED update is hidden from the transcript (it never
                     // became UI), so it must not take the checklist down with
-                    // it: keep scanning and bind to the last list that LANDED.
-                    // An unparseable list that did NOT fail is the run's own
-                    // broken state - there is nothing to bind to.
-                    if (!parsed) {
-                        if (toolCallFailed(s)) continue;
-                        return null;
-                    }
+                    // it - skip it BEFORE parsing. Checking afterwards was too
+                    // late: a rejected call whose args still parse returned
+                    // its own stepId, no row carries that id, and the checklist
+                    // that DID land stopped being current - silently losing
+                    // its edit controls. An unparseable list that did NOT fail
+                    // is the run's own broken state: nothing to bind to.
+                    if (toolCallFailed(s)) continue;
+                    const parsed = parseTaskListStep(s.text);
+                    if (!parsed) return null;
                     return {
                         stepId: s.id,
                         tasks: taskList ?? parsed,

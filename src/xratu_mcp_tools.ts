@@ -195,14 +195,26 @@ const UNSAFE_TEST_ARG_FLAGS = new Set([
     'manifest-path',                          // cargo: builds an out-of-tree crate
     'init-script',                            // gradle: executes a script from anywhere
     'rootdir', 'target-dir', 'classpath',
-    'setup-file', 'setupfiles', 'globalsetup', 'global-setup',
+    'setup-file', 'setupfiles', 'setupfilesafterenv', 'globalsetup', 'global-setup',
+    'global-teardown',
 ]);
 
 function safeExtraArgs(extra: string[]): string[] {
     for (const arg of extra) {
         if (typeof arg !== 'string' || !arg.startsWith('-')) continue;
-        const flag = arg.replace(/^--?/, '').split('=')[0].toLowerCase();
-        if (UNSAFE_TEST_ARG_FLAGS.has(flag)) {
+        // Normalize on the token BEFORE `=` and before an ATTACHED short-flag
+        // value: runners accept `-cfile`, `-c=file` and `-c file` alike
+        // (pytest's `-pNAME` has no separator at all), so stripping only the
+        // leading dashes turned `-c/outside/conf.js` into the never-matching
+        // `c/outside/conf.js`. A single-dash token is therefore matched on its
+        // first character as well as on its whole body.
+        const long = arg.startsWith('--');
+        const body = arg.replace(/^--?/, '').split('=')[0].toLowerCase();
+        const shortHead = long ? '' : body.slice(0, 1);
+        const flag = UNSAFE_TEST_ARG_FLAGS.has(body) ? body
+            : shortHead && UNSAFE_TEST_ARG_FLAGS.has(shortHead) ? shortHead
+                : '';
+        if (flag) {
             throw new Error(
                 `Refusing run_tests extra_args flag '--${flag}': it makes the test runner load code or config from a path you choose, ` +
                 `which would run files outside the workspace. Remove it, or use run_terminal_command (which is approval-gated) if you really need it.`
@@ -653,9 +665,24 @@ export async function handleExpansionTool(name: string, args: any, runtime: Expa
                 // executed that crate's build.rs). pytest node ids
                 // (`tests/test_x.py::TestCase::test_y`) keep their selectors -
                 // only the leading path component is a path.
+                //
+                // And a target is never a FLAG. For the non-python runners the
+                // confined value is not substituted (they want a repo-relative
+                // selector), so `target: '--manifest-path=/outside/Cargo.toml'`
+                // landed in argv as a flag and bypassed safeExtraArgs, which
+                // only covers extra_args - while `full()` accepted it, because
+                // a leading-dash name is a legal relative filename inside the
+                // workspace. Confining a path is not the same as refusing an
+                // argument that is not one.
                 const rawTarget = String(args.target || '');
                 let target = rawTarget;
                 if (rawTarget) {
+                    if (rawTarget.startsWith('-')) {
+                        throw new Error(
+                            `Refusing run_tests target: it must be a path or a test selector, not a flag ` +
+                            `('${rawTarget.slice(0, 60)}'). Flags belong in extra_args, which is checked.`
+                        );
+                    }
                     const [pathPart] = rawTarget.split('::');
                     const confined = full(runtime, pathPart);
                     if (framework === 'pytest' || framework === 'unittest') {

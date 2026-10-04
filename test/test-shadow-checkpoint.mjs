@@ -12,6 +12,7 @@
  */
 import { createRequire } from 'module';
 import { createHash } from 'crypto';
+import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync,
     renameSync, utimesSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
@@ -149,7 +150,15 @@ try {
     // a lock must fail the commit loudly - that is correct, it means another
     // git really is running - but the file itself must survive.
     mkdirSync(join(shadowDir, 'refs', 'heads'), { recursive: true });
-    const freshLock = join(shadowDir, 'refs', 'heads', 'master.lock');
+    // The branch the shadow repo actually uses, not a hardcoded `master`:
+    // init.defaultBranch may be `main` (or anything else), and a lock on a
+    // branch HEAD does not point at blocks nothing - the probe would then fail
+    // for the wrong reason and the assertion would be a coin flip per machine.
+    const activeBranch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], {
+        env: { ...process.env, GIT_DIR: shadowDir },
+        encoding: 'utf-8',
+    }).trim();
+    const freshLock = join(shadowDir, 'refs', 'heads', `${activeBranch}.lock`);
     writeFileSync(freshLock, '');
     let freshThrew = false;
     try {
