@@ -248,10 +248,14 @@ Strip every harakat and hamza mark. Persian letters (including آ) stay.
   مصنوعیِ شما → مصنوعی شما
 - Hamza on heh (ٔ): جلسهٔ → جلسه، صفحهٔ → صفحه، تاریخچهٔ → تاریخچه،
   ریشهٔ → ریشه
-- Hamza inside words: تأیید → تایید، مسأله/مسئله → مساله، سؤال → سوال،
-  مؤثر → موثر
+- Arabic hamza carriers (ء أ إ ؤ) inside words: تأیید → تایید، مسأله → مساله،
+  سؤال → سوال، مؤثر → موثر
 - فرآیند → فرایند
 - Keep آ (alef madda) — it is a letter, not a diacritic: آفلاین، آرام
+- Keep ئ (U+0626) — it is a PERSIAN letter, not an Arabic hamza. جزئیات،
+  ارائه، مطمئن، مسائل، رئیس، سوئیچ are all spelled with it and must stay.
+  Only the carrier hamzas (ء أ إ ؤ) get stripped; blanket-banning ئ breaks
+  ordinary Persian words.
 - Use Persian ی (U+06CC) and ک (U+06A9), never Arabic ي (U+064A) or ك
   (U+0643)
 
@@ -515,7 +519,8 @@ inside longer words like راست / استفاده / پرداخت).
 
 1. No U+200C anywhere; می attaches, enclitics attach, ها/های/تر/ترین spaced
    (exclusion list respected)
-2. No harakat, no hamza (check ً ِ ُ َ ٔ ء أ إ ؤ ئ), no Arabic ي/ك
+2. No harakat, no Arabic hamza carriers (check ً ِ ُ َ ٔ ء أ إ ؤ), no Arabic
+   ي/ك — ئ is fine, it is a Persian letter
 3. Zero standalone را (رو only), zero همان/آن (همون/اون)
 4. Zero written verb endings: میدهد|میکند|میشود|دارد|میخواند|میداند|
    میتواند|میگوید|میگذارد|میآید|میرود|می‌خواهی|می‌توانی|می‌دانی and
