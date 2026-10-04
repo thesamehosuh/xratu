@@ -254,6 +254,7 @@
     "test:shell-platform": "node test/test-shell-platform.mjs",
     "test:shell-quoting": "node test/test-shell-quoting.mjs",
     "test:process-tree": "node test/test-process-tree.mjs",
+    "test:shiki-langs": "node test/test-shiki-langs.mjs",
     "test:background-jobs": "node test/test-background-jobs.mjs",
     "test:background-tool-surface": "node test/test-background-tool-surface.mjs",
     "test:background-recovery": "node test/test-background-recovery.mjs",
