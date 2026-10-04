@@ -693,3 +693,96 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
     expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
         .toEqual([true, true]);
 });
+
+test('the reasoning body stays LTR in fa - reasoning is always English', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'fa' });
+    await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
+    await hostMessage(page, { type: 'startResponse' });
+    // `thinkingHtml` patches the LATEST thinking step, so create it first.
+    await hostMessage(page, { type: 'thinking', value: 'seed' });
+    await hostMessage(page, {
+        type: 'thinkingHtml',
+        value: '<p>English reasoning that must not be reordered by the UI locale.</p>',
+    });
+    const body = page.locator('.step-think-body');
+    await expect(body).toHaveAttribute('dir', 'ltr');
+    expect(await body.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+    // The pill LABEL is translated, so it keeps the locale direction.
+    await expect(page.locator('.step-think .step-label').first())
+        .toHaveCSS('direction', 'rtl');
+});
+
+test('suggestion chips read RTL in fa - icon on the leading (right) edge', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'fa' });
+    const chip = page.locator('.chip-suggest').first();
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveCSS('direction', 'rtl');
+    // A flex row's main axis follows `direction`, so the leading icon belongs
+    // on the RIGHT under RTL. It used to be pinned to the physical left by a
+    // `row-reverse` override, which stranded the Persian label on the right
+    // edge and made the row read LTR.
+    const side = await chip.evaluate((el) => {
+        const svg = el.querySelector('svg');
+        if (!svg) return 'no-icon';
+        const c = el.getBoundingClientRect();
+        const s = svg.getBoundingClientRect();
+        return s.left - c.left < c.right - s.right ? 'left' : 'right';
+    });
+    expect(side).toBe('right');
+});
+
+test('en keeps suggestion chip icons on the left', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    const chip = page.locator('.chip-suggest').first();
+    await expect(chip).toBeVisible();
+    const side = await chip.evaluate((el) => {
+        const svg = el.querySelector('svg');
+        if (!svg) return 'no-icon';
+        const c = el.getBoundingClientRect();
+        const s = svg.getBoundingClientRect();
+        return s.left - c.left < c.right - s.right ? 'left' : 'right';
+    });
+    expect(side).toBe('left');
+});
+
+test('an empty or bare workspace gets starting-from-scratch chips', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+
+    // The default chips are all maintenance ON a codebase, so they cannot
+    // fire in a folder with nothing in it.
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
+    await expect(page.locator('.chip-suggest')).toHaveCount(4);
+    expect(await page.locator('.chip-suggest').allInnerTexts())
+        .toEqual(['Build something new', 'Set up this folder', 'Plan it with me first', 'Bring my code in']);
+
+    // 'bare' (a README but no project) is the same case for the chips.
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'bare' });
+    expect((await page.locator('.chip-suggest').allInnerTexts())[0]).toBe('Build something new');
+
+    // A real project keeps the established-project set.
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'project' });
+    expect(await page.locator('.chip-suggest').allInnerTexts())
+        .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+
+    // A host that does not send the field must not lose the default set.
+    await hostMessage(page, { type: 'showChat' });
+    expect(await page.locator('.chip-suggest').allInnerTexts())
+        .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+});
+
+test('the fresh-workspace chips type a prompt with no {file} placeholder', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
+    // No editor is open, so a file-dependent template would resolve to its
+    // "any" variant; the fresh set has no file variant at all.
+    await page.locator('.chip-suggest').first().click();
+    await expect(page.locator('.composer-input')).toHaveValue(/This folder is empty/);
+});

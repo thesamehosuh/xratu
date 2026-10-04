@@ -138,5 +138,44 @@ ok(parseTaskListArgs('not json') === null, 'host parser: garbage rejected');
     ok(other !== null && other !== a, 'parse identity: different text is a different array');
 }
 
+// 10. A FAILED update is invisible. `s3` in the fixture above is exactly that:
+//     the host rejected the list, so `_taskListWriteListener` never fired and
+//     the list never became the session's checklist. It used to render as a
+//     red pill - or, worse, an inline checklist with a GREEN tick on a call
+//     the host had rejected. The transcript must show neither the failure nor
+//     the rejected list; the last list that LANDED (s4) stays on screen.
+{
+    const failedOnly: ChatMessage[] = [{
+        id: 'f1', role: 'assistant', text: 'x', status: 'done', createdAt: 3, steps: [
+            { id: 'f2', kind: 'toolCall', tool: 'update_task_list', text: TASK_ARGS_OK, result: 'Error: tasks must be a non-empty array' },
+        ],
+    }];
+    const failedHtml = render(failedOnly);
+    ok(!failedHtml.includes('Scaffold project'), 'a failed update shows no rejected list');
+    ok(!failedHtml.includes('non-empty array'), 'a failed update shows no error text');
+    ok(!failedHtml.includes('task-list'), 'a failed update renders no checklist');
+    ok(!failedHtml.includes('step-status err'), 'a failed update paints no failure pill');
+
+    // Unparseable AND failed: hidden by the same rule (the pill fallback only
+    // exists for a call the host ACCEPTED but whose shape we cannot read).
+    const garbageFailed = render([{
+        id: 'f3', role: 'assistant', text: 'x', status: 'done', createdAt: 4, steps: [
+            { id: 'f4', kind: 'toolCall', tool: 'update_task_list', text: TASK_ARGS_GARBAGE, result: 'Error: task[0] needs a label' },
+        ],
+    }]);
+    ok(!garbageFailed.includes('task-list') && !garbageFailed.includes('step-status err'),
+        'an unparseable + failed update is hidden too');
+
+    // A non-failed update the host accepted keeps its checklist - only the
+    // FAILURE is suppressed, never a successful update.
+    const accepted = render([{
+        id: 'f5', role: 'assistant', text: 'x', status: 'done', createdAt: 5, steps: [
+            { id: 'f6', kind: 'toolCall', tool: 'update_task_list', text: TASK_ARGS_OK, result: 'Task list updated (2 items).' },
+        ],
+    }]);
+    ok(accepted.includes('task-list') && accepted.includes('Scaffold project'),
+        'an accepted update still renders its checklist');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

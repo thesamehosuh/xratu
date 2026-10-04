@@ -2050,13 +2050,13 @@ button {
     background: var(--xratu-accent-faint);
 }
 
-/* Chip icons are leading marks, not arrows: they stay pinned to the physical
-   LEFT in every locale so the row of chips reads as one aligned column. The
-   label itself keeps its own direction (the anonymous flex item inherits the
-   chip's direction), only the box order flips. */
-[dir='rtl'] .chip {
-    flex-direction: row-reverse;
-}
+/* Chip icons are LEADING marks: they sit on the chip's own start edge, so in
+   RTL they land on the right - which is what the flex `row` default already
+   does, because a flex container's main axis follows its `direction`. There
+   is deliberately no `[dir='rtl']` override here: forcing `row-reverse` put the
+   icon on the physical left and left the Persian label stranded against the
+   right edge, so the row read LTR in an RTL UI. The icons still line up as one
+   column, just on the locale's start side. */
 
 /* Suggestion chips ride in one after another - the stagger is the hook. */
 .chip-suggest {
@@ -3275,12 +3275,21 @@ button {
 
 /* Reasoning gets no rail: its body is a wall of prose/code with nothing for a
    line to point back at, so the rail advertised structure that isn't there.
-   The indent alone still aligns the body with the pill label. The markdown
-   path (`.step-think-body`) inherits the pill's direction, so logical props
-   land on the right side under RTL. */
+   The indent alone still aligns the body with the pill label. */
 .step-think[open] > .step-think-body {
     margin-inline-start: 6px;
     padding-inline-start: 14px;
+}
+
+/* The reasoning body carries dir="ltr" (it is always English), so under the
+   RTL UI `inline-start` resolves to the LEFT - which would hang the indent on
+   the chevron side. Pin it physically to the pill's own start edge instead,
+   exactly as the raw <pre> fallback does below. */
+[dir='rtl'] .step-think[open] > .step-think-body {
+    margin-inline-start: 0;
+    padding-inline-start: 0;
+    margin-right: 6px;
+    padding-right: 14px;
 }
 
 /* Raw reasoning renders in a `<pre dir="ltr">` (its content is code). The dir

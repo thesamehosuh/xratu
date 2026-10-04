@@ -150,6 +150,14 @@ const fa = {
     suggestBug: 'دنبال باگ بگرد',
     suggestTest: 'تست براش بنویس',
     suggestOptimize: 'بهینه ترش کن',
+    // Shown instead of the four above when the host reports a workspace with
+    // no project in it. The default set is all maintenance ON a codebase, so
+    // these cover the four reasons someone opens an empty folder: build
+    // something, set the folder up, plan before building, bring code in.
+    suggestNewProject: 'یه چیزی بسازیم',
+    suggestSetupFolder: 'این پوشه رو راه بنداز',
+    suggestPlanFirst: 'اول برنامه ریزی کنیم',
+    suggestImportCode: 'کدم رو بیارم تو',
     // Workflow prompts the chips type out and auto-send - explicit steps so
     // the agent starts using its tools instead of asking which file.
     suggestExplorePrompt: 'این پروژه رو کاوش کن: از ساختار پروژه شروع کن، نقطه های ورود رو پیدا کن، بعد انگار تازه واردم توضیح بده قطعه های اصلی چطوری به هم وصل میشن. آخرش بگو اول کدوم ۳ فایل رو بخونم و چرا.',
@@ -159,6 +167,10 @@ const fa = {
     suggestTestPromptAny: 'قلب این پروژه رو پیدا کن، مهم ترین فایل سورسش رو انتخاب کن، مهم ترین تابعش رو پیدا کن و تو یه فایل تست مناسب براش تست بنویس. اگه میتونی تست ها رو اجرا کن، بعد بگو هر تست داره از چی محافظت میکنه.',
     suggestOptimizePromptFile: 'فایل باز تو ادیتورم «{file}» رو باز کن و بدترین مشکل کارایی رو پیدا کن: توضیح بده کجای کار کنده، بعد یه بازنویسی مشخص قبل/بعد نشون بده و همونی که بیشترین اثر رو داره اعمال کن.',
     suggestOptimizePromptAny: 'از ساختار پروژه، سنگین ترین فایل سورس رو پیدا کن و بخونش، بدترین مشکل کارایی رو پیدا کن، بعد یه بازنویسی مشخص قبل/بعد نشون بده و همونی که بیشترین اثر رو داره اعمال کن.',
+    suggestNewProjectPrompt: 'این پوشه خالیه. اول ازم بپرس میخوام چی بسازم، هر بار یه سوال، و تا وقتی تایید نکردم هیچ کدی ننویس. بعد از تاییدم: یه استک مناسب انتخاب کن و تو یه خط بگو چرا، پروژه رو از صفر بچین، یه راه تست با یه تست واقعی اضافه کن، یه README کوتاه بنویس، بعد یه بار اجراش کن و خروجی واقعی رو بذار تو تا ببینم کار میکنه.',
+    suggestSetupFolderPrompt: 'این پوشه رو مثل یه پروژه واقعی راه بنداز: یه مخزن گیت با یه commit اولیه منطقی، فایل هایی که نباید برن تو مخزن رو نادیده بگیر، یه README که بگه این چیه و چطوری اجراش کنم، یه راه تست با یه تست نمونه، و یه تنظیم فرمت و لینت. درخت فایلی که ساختی رو نشونم بده و بگو هر تصمیم بر چه اساسی بود. اگه استک مبهمه حدس نزن، بپرس.',
+    suggestPlanFirstPrompt: 'فعلا چیزی نساز. ازم بپرس میخوام چی درست کنم: چیکار میکنه، کی ازش استفاده میکنه، و نباید چیکار کنه. هر بار یه سوال، و چیزی که فهمیدی رو برام تکرار کن. بعد یه برنامه به شکل لیست کار بنویس، با تصمیم هایی که گرفتی و ریسک هاش، و قبل از دست زدن به حتی یه فایل منتظر تاییدم بمون.',
+    suggestImportCodePrompt: 'این کد از قبل یه جای دیگه هست. ازم بپرس کجاست و چه شکلیه: یه پوشه، یه فایل زیپ، یه مخزن گیت، یا یه فایل تنها. بعد کمکم کن بیارمش اینجا و کار کنه: وابستگی ها رو وصل کن، یه تست یا یه نقطه ورود قابل اجرا اضافه کن، و بگو برای اینکه اجرا بشه چی رو عوض کردی. چیزی رو که نخواستم بازسازی نکن.',
     jumpToBottom: 'رفتن به پایین',
 
     // MessageItem
@@ -222,6 +234,7 @@ const fa = {
     termStderr: 'خطا ها',
     termExitCode: 'کد خروج',
     editedFiles: '{count} فایل ویرایش شد',
+    diffMoreLines: '+{count} خط بیشتر',
     openDiff: 'باز کردن diff در ویرایشگر',
     openDiffFailed: 'diff برای این ویرایش قابل نمایش نیست.',
     openDiffPick: 'کدوم فایل؟',
@@ -824,6 +837,11 @@ const en: Record<keyof typeof fa, string> = {
     suggestBug: 'Hunt for bugs',
     suggestTest: 'Write tests',
     suggestOptimize: 'Optimize it',
+    // Empty/bare-workspace set - see the fa note above.
+    suggestNewProject: 'Build something new',
+    suggestSetupFolder: 'Set up this folder',
+    suggestPlanFirst: 'Plan it with me first',
+    suggestImportCode: 'Bring my code in',
     // Workflow prompts the chips type out and auto-send - explicit steps so
     // the agent starts using its tools instead of asking which file.
     suggestExplorePrompt: 'Explore this project: start from the project structure, find the entry points, then walk me through how the main pieces fit together like I\'m new here. Finish with the 3 files I should read first and why.',
@@ -833,6 +851,10 @@ const en: Record<keyof typeof fa, string> = {
     suggestTestPromptAny: 'Find the heart of this project, its most important source file, pick its most important function, and write tests for it in a proper test file. Run the tests if you can, then tell me what each one protects.',
     suggestOptimizePromptFile: 'Open {file} (the file I have open in my editor) and find its worst performance problem: explain what makes it slow, show a concrete before/after refactor, then apply the one with the biggest payoff.',
     suggestOptimizePromptAny: 'Scan the project structure for the heaviest source file, read it, find its worst performance problem, then show a concrete before/after refactor and apply the one with the biggest payoff.',
+    suggestNewProjectPrompt: 'This folder is empty. First ask me what I want to build, one question at a time, and do not write any code until I confirm. Once I confirm: pick a stack that fits and say why in one line, build the project from scratch, add a test setup with one real test, write a short README, then run it once and paste the actual output so I can see it works.',
+    suggestSetupFolderPrompt: 'Set this folder up as a real project: git init with a sensible first commit, a .gitignore matched to the stack, a README that says what this is and how to run it, a test runner wired up with one example test, and a formatter and linter configured. Show me the file tree you created and what each decision was based on. If the stack is ambiguous, do not guess - ask.',
+    suggestPlanFirstPrompt: 'Do not build anything yet. Ask me what I want to make (what it does, who uses it, and what it must not do), one question at a time, and reflect back what you understood. Then draft a plan as a task list, with the decisions you made and the risks, and wait for my approval before touching a single file.',
+    suggestImportCodePrompt: 'I already have this code somewhere else. Ask me where it is and what shape it is in (a folder, a zip file, a git repo, or a single file), then help me get it in here and working: wire up the dependencies, add a test or a runnable entry point, and tell me what you had to change to make it run. Do not restructure anything I did not ask about.',
     jumpToBottom: 'Jump to bottom',
 
     stepsAria: 'Agent steps',
@@ -895,6 +917,7 @@ const en: Record<keyof typeof fa, string> = {
     termStderr: 'Errors',
     termExitCode: 'exit code',
     editedFiles: '{count} files edited',
+    diffMoreLines: '+{count} more lines',
     openDiff: 'Open diff in editor',
     openDiffFailed: 'No diff to show for this edit.',
     openDiffPick: 'Which file?',

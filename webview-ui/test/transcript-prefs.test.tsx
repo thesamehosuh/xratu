@@ -150,9 +150,121 @@ eq(openCount(html), 1, 'commands on with diffs off: only the command pill');
 // --- the classifier still routes the families the switches are named for ---
 
 eq(toolFamily('apply_patch'), 'edit', 'diff tools route to edit');
+eq(toolFamily('create_file'), 'edit', 'whole-file writers route to edit too');
 eq(toolFamily('run_terminal_command'), 'terminal', 'command tools route to terminal');
 eq(toolFamily('mcp__github__create_issue'), 'mcp', 'external tools keep their own family');
 eq(toolFamily(undefined), 'generic', 'an unknown tool falls back');
+
+// --- a whole-file writer renders on the EDIT surface ---------------------
+//
+// create_file/write_file carry new_content, not a patch. Their body used to
+// fall through to the generic ArgView dump - a bare monospace <pre>, which is
+// exactly how a terminal command pill looks. They must render the same diff
+// surface as apply_patch (path header + one row per line), minus the green/red
+// tint because there is no before-state to diff against.
+
+const createStep: Step = {
+    id: 'w1',
+    kind: 'toolCall',
+    tool: 'create_file',
+    text: JSON.stringify({ path: 'src/new.ts', new_content: 'const a = 1;\nconst b = 2;' }),
+    callId: 'w1',
+    result: 'created',
+};
+
+function renderStep(step: Step): string {
+    const messages: ChatMessage[] = [{
+        id: 'm1',
+        role: 'assistant' as const,
+        text: 'done',
+        steps: [step],
+        status: 'done',
+        createdAt: 0,
+    }];
+    return renderToString(createElement(MessageList, {
+        messages,
+        onScroll: () => {},
+        onPickSuggestion: () => {},
+        firstVisible: 0,
+    }));
+}
+
+/** The pill's icon <svg> as markup - the only way to tell which glyph a
+ *  TOOL_ICONS entry picked, since they are all inline SVGs. */
+const iconMarkup = (html: string): string =>
+    /<svg[^>]*step-icon[^>]*>[\s\S]*?<\/svg>/.exec(html)?.[0] ?? '';
+
+const createHtml = renderStep(createStep);
+ok(createHtml.includes('src/new.ts') && createHtml.includes('edit-file-path'),
+    'a create pill renders the same path header a patch pill does');
+eq((createHtml.match(/pill-diff-line/g) ?? []).length, 2,
+    'a create pill renders one diff row per written line');
+ok(!createHtml.includes('pill-diff-line add') && !createHtml.includes('pill-diff-line del'),
+    'a create pill tints nothing - there is no before-state to diff against');
+ok(!createHtml.includes('arg-view'),
+    'a create pill never falls back to the raw argument dump');
+
+eq(iconMarkup(createHtml), iconMarkup(renderStep(diffStep)),
+    'a create pill wears the same icon as the other edit tools');
+ok(iconMarkup(createHtml) !== iconMarkup(renderStep(termStep)),
+    'and not the generic fallback the command pill-adjacent tools get');
+
+// --- a tool pill never carries a success tick ------------------------------
+//
+// The exit code IS the verdict, and it colors itself red for a non-zero exit.
+// A green tick beside "exit code 1" read as success - and worse, a non-zero
+// exit never trips `toolRowFailed` (the result text starts with "Command:"),
+// so that tick was UNCONDITIONAL: every finished command showed one whatever
+// happened. Success is not marked at all now (the finished body, the chevron
+// and the stats already say it), and failure keeps its X.
+
+const exitHtml = (code: number): string => renderStep({
+    id: 't2',
+    kind: 'toolCall',
+    tool: 'run_terminal_command',
+    text: JSON.stringify({ command: 'npm test' }),
+    callId: 't2',
+    result: `STDOUT:\nall good\nExit code: ${code}`,
+});
+
+/** The pill's own status readout text (locale-formatted label + value).
+ *  React SSR splits adjacent text nodes with `<!-- -->` markers, so they are
+ *  stripped before reading the text. */
+const statText = (html: string): string =>
+    (/class="step-stat[^"]*"[^>]*>([\s\S]*?)<\/span>/.exec(html)?.[1] ?? '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .trim();
+
+// Neither a passing nor a failing exit wears a tick any more; the non-zero
+// code colors its own readout.
+ok(!exitHtml(0).includes('step-status'),
+    'exit code 0 shows no tick at all');
+ok(exitHtml(0).includes('step-stat ok') && statText(exitHtml(0)).endsWith('0'),
+    'and its readout stays green with the code');
+ok(!exitHtml(1).includes('step-status'),
+    'a non-zero exit shows no tick beside it either');
+ok(exitHtml(1).includes('step-stat d') && statText(exitHtml(1)).endsWith('1'),
+    'a non-zero exit tints its own readout and keeps the code');
+// No exit code in the output at all -> still nothing. The tick meant nothing
+// here either; the row is simply finished.
+ok(!renderStep({ ...termStep, result: 'STDOUT:\nkilled' }).includes('step-status'),
+    'a command with no parsable exit code gets no tick');
+
+// The X survives: a tool that DID fail is still marked.
+const failHtml = renderStep({
+    id: 't3',
+    kind: 'toolCall',
+    tool: 'run_terminal_command',
+    text: JSON.stringify({ command: 'npm test' }),
+    callId: 't3',
+    result: 'Error: command failed',
+});
+ok(failHtml.includes('step-status err') && !failHtml.includes('step-status ok'),
+    'a failing command pill keeps its X and gains no tick');
+// The same holds for a read: success is unmarked, failure keeps the X.
+ok(!renderStep({ ...termStep, id: 'r1', callId: 'r1', tool: 'read_file',
+    text: JSON.stringify({ path: 'a.ts' }), result: 'contents' }).includes('step-status'),
+    'a successful read pill is unmarked too');
 
 console.log(fail === 0 ? `transcript-prefs: ${pass} checks passed` : `transcript-prefs: ${fail} FAILURE(S)`);
 process.exit(fail === 0 ? 0 : 1);

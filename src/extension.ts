@@ -35,6 +35,7 @@ import {
     type ProxyTestResult,
 } from './proxyTest';
 import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
+import { classifyWorkspace } from './workspaceKind';
 import { editDiffFromArgs } from './editDiff';
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
@@ -1617,7 +1618,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         await this._restoreLocalSession();
         this._restoreChatUI();
-        this._view.webview.postMessage({ type: 'showChat' });
+        // workspaceKind picks the empty-state suggestion set: the default chips
+        // all assume an established project ("tour this codebase", "hunt for
+        // bugs"), which is dead on arrival in a folder that has nothing in it.
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        this._view.webview.postMessage({
+            type: 'showChat',
+            workspaceKind: root ? classifyWorkspace(root) : 'empty',
+        });
         this._pushSessionState();
         void this._fetchModels();
     }
