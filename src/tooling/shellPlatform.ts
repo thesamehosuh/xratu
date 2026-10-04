@@ -255,8 +255,8 @@ export function terminalToolDescription(platform: NodeJS.Platform): string {
         : 'stdin is closed (immediate EOF) - the command must not wait for interactive input; use flags like `yes`/`-y` or `</dev/null` semantics instead.';
 
     const watch = win
-        ? 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for watchers, start them detached with `start /b` and return.'
-        : 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for watchers, start them detached with `&` and return.';
+        ? 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for a dev server, watcher or anything that does not exit on its own, pass background=true so the turn is released and the process is tracked (a shell-level `start /b` loses the output and the handle).'
+        : 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for a dev server, watcher or anything that does not exit on its own, pass background=true so the turn is released and the process is tracked (a trailing `&` loses the output and the handle).';
 
     const probes = win
         ? 'dir/type/findstr/where'

@@ -660,6 +660,19 @@ const fa = {
     notifCpRestoreFailed: 'بازیابی نقطه بازرسی ناموفق بود: {error}',
     notifEditFailed: 'ویرایش پیام ناموفق بود: {error}',
     notifRegenerateFailed: 'تولید دوباره ناموفق بود: {error}',
+    notifBackgroundJobDone: 'پس زمینه {command} تمام شد ({outcome}).',
+    notifBackgroundJobGone: 'این دستور دیگه در حال اجرا نیست.',
+    notifBackgroundAdopted: '{count} پروسه در پس زمینه از قبل اجرا مونده و دوباره به دست اومد.',
+    notifBackgroundUnrecoverable: '{count} پروسه در پس زمینه قابل بازیابی نبود و رها شد.',
+    notifBackgroundAlreadyRunning: 'این دستور همین حالا در پس زمینه در حال اجراست.',
+
+    // Background jobs
+    toolProcess: 'مدیریت پروسه',
+    bgJobBadge: '{count} پروسه در حال اجرا',
+    bgRunInBackground: 'اجرا در پس زمینه',
+    bgRunInBackgroundTitle: 'این دستور متوقف نمیشه و در پس زمینه ادامه پیدا میکنه. دستور بعدی همین حالا اجرا میشه.',
+    bgStop: 'متوقف کردن',
+    bgStopTitle: 'این پروسه و زیرپروسه هاش رو میکشه',
 
     // Language setting
     settingsLanguage: 'زبان',
@@ -1339,6 +1352,19 @@ const en: Record<keyof typeof fa, string> = {
     notifCpRestoreFailed: 'Checkpoint restore failed: {error}',
     notifEditFailed: 'Editing the message failed: {error}',
     notifRegenerateFailed: 'Regeneration failed: {error}',
+    notifBackgroundJobDone: 'Background {command} finished ({outcome}).',
+    notifBackgroundJobGone: 'That command is no longer running.',
+    notifBackgroundAdopted: '{count} background process(es) from the previous session were recovered.',
+    notifBackgroundUnrecoverable: '{count} background process record(s) could not be verified and were dropped.',
+    notifBackgroundAlreadyRunning: 'That command is already running in the background.',
+
+    // Background jobs
+    toolProcess: 'Manage background processes',
+    bgJobBadge: '{count} background process(es)',
+    bgRunInBackground: 'Run in background',
+    bgRunInBackgroundTitle: 'This command keeps running and will not be stopped. The next command starts now.',
+    bgStop: 'Stop',
+    bgStopTitle: 'Kill this process and its children',
 
     settingsLanguage: 'Interface language',
     settingsLanguageDesc: 'UI messages and notifications',

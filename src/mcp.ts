@@ -8,9 +8,6 @@ import { resolveToolName } from './tooling/toolNames';
 import {
     terminalToolDescription,
     terminalCommandParamDescription,
-    terminalFailureHint,
-    appendHintToResult,
-    terminalSpawn,
 } from './tooling/shellPlatform';
 import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
@@ -21,7 +18,22 @@ import {
     EXPANSION_MUTATING_TOOL_NAMES,
     type ExpansionToolRuntime,
 } from './xratu_mcp_tools';
-import { killTree } from './tooling/processTree';
+import {
+    DEFAULT_LOG_LINES,
+    DEFAULT_WAIT_MS,
+    MAX_READBACK_CHARS,
+    MAX_WAIT_MS,
+    awaitTerminalJob,
+    describeBackgroundHandoff,
+    describeTerminalJob,
+    formatTerminalResult,
+    getTerminalJob,
+    listTerminalJobs,
+    markCompletionConsumed,
+    readJobOutput,
+    spawnTerminalJob,
+    waitForTerminalJob,
+} from './tooling/backgroundJobs';
 import {
     USER_QUESTION_TOOL_NAME,
     formatUserQuestionResult,
@@ -57,6 +69,15 @@ const MUTATING_TOOLS = new Set([
     'run_terminal_command',
     ...EXPANSION_MUTATING_TOOL_NAMES,
 ]);
+
+/**
+ * Dropped in PLAN MODE without being approval-gated. A plan is a read-only
+ * reconnaissance pass: it must not stop processes, and there can be no
+ * background job to inspect anyway because the only tool that starts one is
+ * itself dropped. Kept separate from MUTATING_TOOLS because `poll`/`log` on
+ * `process` are reads and must not cost an approval prompt.
+ */
+const PLAN_MODE_DENIED_TOOLS = new Set(['process']);
 
 /**
  * Target-triple directories VS Code uses inside `@vscode/ripgrep-universal/bin`.
@@ -292,9 +313,44 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
             type: 'object',
             properties: {
                 command: { type: 'string', description: terminalCommandParamDescription(process.platform) },
-                detach: { type: 'boolean', description: 'Launch and return immediately without waiting for exit (GUI apps, dev servers, xdg-open). The process is not owned, timed out, or killed by this tool. Output is not captured.' }
+                background: {
+                    type: 'boolean',
+                    description: 'Return immediately and let the command keep running (dev servers, file watchers, GUI apps like xdg-open). Skips both timeouts, so nothing will stop it later - not a cancel, not a turn ending - and it is your job to `process`-kill it when you are done. You get a job id back to poll, log or kill.'
+                },
+                // Deprecated alias, still accepted so an older session that
+                // learned `detach` keeps working instead of silently blocking.
+                detach: { type: 'boolean', description: 'Deprecated alias for background.' }
             },
             required: ['command']
+        }
+    },
+    {
+        name: 'process',
+        // NOT approval-gated, and that is deliberate: every job id it accepts
+        // was minted by this extension for this session, `kill` acts only on
+        // such an id, and there is no way to name an arbitrary OS pid - so
+        // `kill` terminates a process WE started, not one the user owns.
+        // Gating the read actions would mean an approval prompt per poll.
+        description: [
+            'Manages commands started with run_terminal_command(background=true).',
+            'Actions:',
+            '- list: every job this session still knows about, running or recently finished.',
+            '- poll: is it still running, and what is the newest output.',
+            '- log: page through its output with offset/limit when the tail is not enough.',
+            '- wait: block until it finishes or the timeout elapses; reports "still running" rather than pretending it ended.',
+            '- kill: stop it and its child processes.',
+            'Finished jobs stay readable for a while after they exit, so a poll after a long turn still finds them.',
+        ].join(' '),
+        inputSchema: {
+            type: 'object',
+            properties: {
+                action: { type: 'string', enum: ['list', 'poll', 'log', 'wait', 'kill'], description: 'What to do.' },
+                jobId: { type: 'string', description: 'Job id from run_terminal_command or list. Not needed for list.' },
+                offset: { type: 'number', description: 'First line to return for log (default: the newest 200 lines).' },
+                limit: { type: 'number', description: 'Max lines for log (default 200).' },
+                timeout: { type: 'number', description: `Seconds wait may block, default ${DEFAULT_WAIT_MS / 1000}, max ${MAX_WAIT_MS / 1000}.` }
+            },
+            required: ['action']
         }
     },
     {
@@ -476,7 +532,7 @@ export function getLocalToolDefinitions(opts?: {
     const yolo = !!opts?.yolo;
     const plan = !!opts?.plan;
     const builtin = BUILTIN_TOOL_DEFINITIONS
-        .filter((tool) => !plan || !MUTATING_TOOLS.has(tool.name))
+        .filter((tool) => !plan || (!MUTATING_TOOLS.has(tool.name) && !PLAN_MODE_DENIED_TOOLS.has(tool.name)))
         .map((tool) => ({
             name: tool.name,
             description: tool.description,
@@ -535,6 +591,104 @@ export function getLocalToolDefinitions(opts?: {
     return [...builtin, ...web, ...taskDefs, ...skillDefs, ...external];
 }
 
+/**
+ * The `process` tool: inspect and stop jobs this session started.
+ *
+ * `kill` takes a job id and nothing else. There is deliberately no pid
+ * parameter, so this tool cannot reach a process the extension did not start -
+ * which is why it is not approval-gated (see its definition above).
+ *
+ * Note the deliberate ASYMMETRY with the `nested` guard on spawning: a child
+ * cannot start a background job, but it CAN kill one, because the jobs are
+ * session-wide and not owned by whoever started them. That is the useful
+ * direction - a child handed a job id to shut down is the common case - and the
+ * risky direction is bounded, since it can only name jobs this session minted.
+ */
+async function dispatchProcessTool(args: any): Promise<{
+    content: Array<{ type: 'text'; text: string }>;
+    isError?: boolean;
+}> {
+    const text = (body: string, isError?: boolean): {
+        content: Array<{ type: 'text'; text: string }>;
+        isError?: boolean;
+    } => ({ content: [{ type: 'text', text: body }], isError });
+    const action = String(args?.action ?? '').trim();
+    const known = ['list', 'poll', 'log', 'wait', 'kill'];
+    if (!known.includes(action)) {
+        return text(`Error: unknown action '${action || '(missing)'}'. Use one of: ${known.join(', ')}.`, true);
+    }
+
+    if (action === 'list') {
+        const all = listTerminalJobs();
+        if (!all.length) {
+            return text('No background jobs. Start one with run_terminal_command and background=true.');
+        }
+        const running = all.filter((job) => job.status === 'running').length;
+        return text([
+            `${all.length} job(s), ${running} still running:`,
+            '',
+            ...all.map(describeTerminalJob),
+        ].join('\n'));
+    }
+
+    const jobId = String(args?.jobId ?? '').trim();
+    const job = getTerminalJob(jobId);
+    if (!job) {
+        // Never echo a caller-supplied string into a "did you mean" without
+        // bounding it, and never pretend a job exists that the registry does
+        // not have - a wrong id must read as wrong, not as "no output".
+        const hint = jobId ? ` (got '${jobId.slice(0, 64)}')` : '';
+        return text(`Error: no such job${hint}. Use action 'list' to see the jobs this session knows about.`, true);
+    }
+
+    const numberArg = (value: unknown, fallback: number) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    if (action === 'poll') {
+        return text(`${describeTerminalJob(job)}\n\n${readJobOutput(job)}`);
+    }
+    if (action === 'log') {
+        // The model now holds the transcript, so a later completion notice
+        // would only repeat it.
+        markCompletionConsumed(job.id);
+        return text(readJobOutput(job, {
+            // `undefined`, not 0: an absent offset means "the newest lines",
+            // while an explicit 0 means "from the beginning". Coercing the
+            // absent case to 0 silently disabled the tail window and made `log`
+            // return a 50k-line log's oldest 200 lines.
+            ...(args?.offset === undefined ? {} : { offset: numberArg(args?.offset, 0) }),
+            limit: numberArg(args?.limit, DEFAULT_LOG_LINES),
+        }));
+    }
+    if (action === 'wait') {
+        const seconds = numberArg(args?.timeout, DEFAULT_WAIT_MS / 1000);
+        const capped = Math.min(Math.max(seconds, 0), MAX_WAIT_MS / 1000);
+        const ended = await waitForTerminalJob(job, capped * 1000);
+        if (!ended) {
+            return text(`${describeTerminalJob(job)}\n\nStill running after ${capped}s - it did NOT finish. Its output so far:\n\n${readJobOutput(job)}`);
+        }
+        markCompletionConsumed(job.id);
+        return text(finishedJobReport(job));
+    }
+    // kill
+    if (job.status !== 'running') {
+        return text(`${job.id} already ${job.status === 'killed' ? 'killed' : `finished (${describeTerminalJob(job)})`}. Nothing to stop.`);
+    }
+    job.kill('killed by the agent');
+    await job.finished;
+    // The kill path hands back the full finished report, so the notice would
+    // be a duplicate.
+    markCompletionConsumed(job.id);
+    return text(finishedJobReport(job));
+}
+
+/** The finished-job report the `process` tool returns for wait/kill. */
+function finishedJobReport(job: import('./tooling/backgroundJobs').TerminalJob): string {
+    return formatTerminalResult(job, process.platform);
+}
+
 /** Shared dispatch: executes a single built-in or expansion tool.
  *  `skillResolver` (when provided) performs the single discovery+authorization
  *  pass for the `skill` tool - the model cannot load a user-disabled skill
@@ -556,6 +710,13 @@ async function dispatchTool(
      *  parent run's executor: interactive questions stay at the root thread
      *  (a delegated child has no user of its own to ask). */
     decisionGate?: UserQuestionGate,
+    /** Server-side tool_call_id of the call being executed. The webview's
+     *  "run in background" button can only name the row it is drawn on, so
+     *  this is how a running command is found again from the UI. */
+    callId?: string,
+    /** True inside a delegated subagent. A child gets its own tools but not
+     *  the parent's ability to leave work running behind it. */
+    nested = false,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     if (name === 'edit_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
@@ -692,145 +853,60 @@ async function dispatchTool(
                 isError: true
             };
         }
-        const isWindows = process.platform === 'win32';
-        // The quoting decision lives in terminalSpawn: without
-        // windowsVerbatimArguments Node MSVCRT-escapes the command and
-        // cmd.exe tears it apart at the inner quotes.
-        const {
-            file: shellCmd,
-            args: shellArgs,
-            windowsVerbatimArguments,
-        } = terminalSpawn(process.platform, command);
-        // Detached launches (GUI apps, dev servers): a blocking run would sit
-        // on the idle/hard cap until the tool killed the process tree (live:
-        // xdg-open held the call open until the timeout, and the kill took
-        // the launched app down with it).
-        if (args.detach) {
-            const child = cp.spawn(shellCmd, shellArgs, {
-                cwd: workspaceRoot,
-                stdio: 'ignore',
-                detached: true,
-                windowsHide: true,
-                windowsVerbatimArguments,
-            });
-            child.unref();
-            return {
-                content: [{
-                    type: 'text',
-                    text: `Launched detached: ${command}${child.pid ? ` (pid ${child.pid})` : ''}. The tool does not wait for, capture, or kill this process - do not expect its output.`,
-                }],
-            };
+        // Background launch (dev servers, watchers, GUI apps): the turn must be
+        // released while the process keeps running. Waiting would sit on the
+        // idle/hard cap until the tool killed the tree (live: xdg-open held
+        // the call open until the timeout, and the kill took the launched app
+        // down with it), and a shell-level `&`/`start /b` loses the output and
+        // the handle entirely.
+        // `detach` was the old spelling and models in older sessions still
+        // send it. Without this alias it would be silently IGNORED (the schema
+        // has no additionalProperties:false), so a `xdg-open` would run in the
+        // foreground and sit on the 10-minute idle cap - exactly the regression
+        // the deleted detached branch existed to prevent.
+        if (args.background === true || args.detach === true) {
+            // A child must not leave work running behind it. The job would
+            // outlive the delegation, keep a port or a file handle open, and
+            // report its completion into a conversation that has already
+            // moved on - the exact "leaked dev server with no owner" failure.
+            // `process(action='wait')` is the child's way to wait for a long
+            // command instead.
+            if (nested) {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: 'Error: a delegated subagent cannot start a background process - it would outlive this task with nobody left to stop it. Run the command in the foreground, or start it with background=true from the main conversation and poll it with the `process` tool.',
+                    }],
+                    isError: true,
+                };
+            }
+            // Throws when the background cap is reached - the reservation has
+            // to happen before the spawn or the extra process is already
+            // running with nothing pointing at it.
+            const job = spawnTerminalJob({ workspaceRoot, command, onOutput, background: true, callId });
+            return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
         }
-        // Inactivity vs hard cap: a QUIET-but-working process (a release
-        // build, a slow test) must not die on the idle window - only the
-        // absolute ceiling ends it. Anything streaming output resets idle.
-        const IDLE_KILL_MS = 600_000;
-        const HARD_CAP_MS = 1_800_000;
-        return new Promise((resolve) => {
-            const child = cp.spawn(shellCmd, shellArgs, {
-                cwd: workspaceRoot,
-                // stdin is a pipe we close IMMEDIATELY: readers of stdin
-                // (bare `tail`, `cat`, ...) get EOF and exit instead of
-                // blocking forever on an ignored fd.
-                stdio: ['pipe', 'pipe', 'pipe'],
-                detached: !isWindows,
-                windowsHide: true,
-                windowsVerbatimArguments,
-            });
-            child.stdin.end();
-            let stdout = '';
-            let stderr = '';
-            let killReason: string | null = null;
-            let done = false;
-            let killFallback: NodeJS.Timeout;
-            let idleTimer: NodeJS.Timeout;
-            const hardTimer = setTimeout(() => kill('the 30-minute hard cap'), HARD_CAP_MS);
-            const kill = (why: string) => {
-                killReason = why;
-                try {
-                    // cmd.exe (/c) and bash (-c) spawn grandchildren; killing
-                    // only the direct child would leave them running (servers
-                    // started by the command keep holding ports/files).
-                    if (isWindows) void killTree(child.pid);
-                    else if (child.pid) process.kill(-child.pid, 'SIGKILL');
-                } catch { /* gone */ }
-                // 'close' normally fires once the killed process group's stdio
-                // streams end - but if it never does (durable grandchildren on
-                // the pipes), the promise must still resolve. The done latch
-                // makes a late 'close' a no-op.
-                clearTimeout(killFallback);
-                killFallback = setTimeout(() => finish(null), 5000);
-            };
-            // Registered so a user cancel stops this command NOW instead of
-            // waiting out the idle/hard cap.
-            activeTerminalKills.add(kill);
-            const resetIdle = () => {
-                clearTimeout(idleTimer);
-                idleTimer = setTimeout(
-                    () => kill(`no output for ${Math.round(IDLE_KILL_MS / 60_000)} minutes`),
-                    IDLE_KILL_MS
-                );
-            };
-            const finish = (code: number | null, err?: Error) => {
-                if (done) return;
-                done = true;
-                activeTerminalKills.delete(kill);
-                clearTimeout(idleTimer);
-                clearTimeout(hardTimer);
-                clearTimeout(killFallback);
-                child.stdout.removeAllListeners();
-                child.stderr.removeAllListeners();
-                // A command that SUCCEEDED can still write to stderr - git's
-                // "Switched to branch …", curl progress, npm notices. Printing
-                // that under a bare "STDERR:" heading reads as a failure to the
-                // user AND to the model, so a successful run gets one neutral
-                // OUTPUT block; only a FAILED run is split into the two.
-                const succeeded = !killReason && !err && code === 0;
-                let result = succeeded
-                    ? `OUTPUT:\n${[stdout, stderr].filter((part) => part.length > 0).join('\n') || '(no output)'}`
-                    : `STDOUT:\n${stdout || '(empty)'}\nSTDERR:\n${stderr || '(empty)'}`;
-                if (killReason) {
-                    result += `\nError: killed (${killReason}). If this was a long quiet build, redirect output to a file and poll it in chunks; the hard cap is 30 minutes.`;
-                } else if (err) {
-                    result += `\nError: ${err.message}`;
-                } else if (code !== 0) {
-                    result += `\nExit code: ${code}`;
-                }
-                // Dialect correction ON the failure. "is not recognized as an
-                // internal or external command" does not tell the model which
-                // of its habits to drop; naming the replacement (built-in tool
-                // or cmd.exe equivalent) ends it in one round instead of five.
-                const hint = !killReason && !err && code !== 0
-                    ? terminalFailureHint(process.platform, stderr)
-                    : null;
-                resolve({
-                    content: [{ type: 'text', text: appendHintToResult(result, hint) }],
-                    isError: !!killReason || !!err || code !== 0,
-                });
-            };
-            resetIdle();
-            child.stdout.on('data', (d: Buffer) => {
-                const chunk = d.toString();
-                stdout += chunk;
-                // Cap CONTINUOUSLY (like runProcess): chatty output (`yes`, a
-                // huge log) can reach GBs inside the timeout window - the
-                // slice at finish() runs long after the extension host has OOM'd.
-                if (stdout.length > 200000) stdout = stdout.slice(-200000);
-                // Stream to the UI as it arrives (the model still gets the
-                // capped result at exit; this is for the human watching).
-                onOutput?.(chunk);
-                resetIdle();
-            });
-            child.stderr.on('data', (d: Buffer) => {
-                const chunk = d.toString();
-                stderr += chunk;
-                if (stderr.length > 200000) stderr = stderr.slice(-200000);
-                onOutput?.(chunk);
-                resetIdle();
-            });
-            child.on('error', (e) => finish(null, e));
-            child.on('close', (code) => finish(code));
-        });
+        // The spawn/collect/kill lifecycle lives in backgroundJobs so the
+        // process is OWNED rather than trapped inside this promise. `released`
+        // (not `finished`) is what this awaits: the call returns when the
+        // process ends OR when the user releases the turn from the UI, and
+        // waiting on `finished` alone is what used to hang a turn on a dev
+        // server until the idle cap killed it.
+        const job = spawnTerminalJob({ workspaceRoot, command, onOutput, callId });
+        if (await job.released === 'backgrounded') {
+            // The user can release the turn at the same moment the command
+            // exits. If it has already finished, hand back its REAL result -
+            // a handoff saying "output so far, still running" about a command
+            // that just exited misreports it, and the exit code is the whole
+            // point of the call.
+            if (job.status === 'running') {
+                return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+            }
+        }
+        const result = await awaitTerminalJob(job, process.platform);
+        return { content: [{ type: 'text', text: result.text }], isError: result.isError };
+    } else if (name === 'process') {
+        return await dispatchProcessTool(args);
     } else if (name === 'grep_search') {
         const rg = await findRipgrep();
         if (!rg) {
@@ -1314,6 +1390,8 @@ export async function executeLocalTool(
     onOutput?: (chunk: string) => void,
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
+    callId?: string,
+    nested?: boolean,
 ): Promise<LocalToolResult> {
     try {
         if (name.startsWith(EXTERNAL_PREFIX)) {
@@ -1327,28 +1405,11 @@ export async function executeLocalTool(
         // then fill `path` from known aliases: a model that sends `file_path`
         // used to hit a raw Node TypeError deep in sanitizePath.
         const named = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
-        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate);
+        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         return { output: `Error: ${err.message}`, isError: true };
     }
-}
-
-/** Kill handles for terminal commands that are still running, so a user cancel
- *  can stop one immediately instead of waiting out the idle/hard cap. */
-const activeTerminalKills = new Set<(why: string) => void>();
-
-/** Kill every running terminal command (the composer's stop button). Returns
- *  how many were signalled. */
-export function killRunningTerminalCommands(why = 'cancelled by the user'): number {
-    let killed = 0;
-    for (const kill of [...activeTerminalKills]) {
-        try {
-            kill(why);
-            killed += 1;
-        } catch { /* already gone */ }
-    }
-    return killed;
 }
 
 /** Bridge-local adapter: wraps executeLocalTool to match the LocalToolExecutor
@@ -1360,9 +1421,11 @@ export function createLocalToolExecutor(
     skillResolver?: (name: string) => SkillResolution,
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
+    /** Marks this executor as a delegated child's. */
+    opts?: { nested?: boolean },
 ): import('./local/localAgent').LocalToolExecutor {
     return {
         execute: async (call, onOutput) =>
-            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate),
+            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested),
     };
 }

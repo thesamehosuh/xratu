@@ -8,7 +8,20 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import MarkdownIt from 'markdown-it';
 import { createHighlighter } from 'shiki';
-import { getLocalToolDefinitions, createLocalToolExecutor, killRunningTerminalCommands } from './mcp';
+import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
+import {
+    adoptDetachedJob,
+    adoptableJobRecords,
+    formatJobCompletion,
+    getJobByCallId,
+    getTerminalJob,
+    killForegroundJobs,
+    listTerminalJobs,
+    onJobEvent,
+    setJobChangeListener,
+    type JobEvent,
+} from './tooling/backgroundJobs';
+import { BackgroundJobStore } from './tooling/backgroundJobStore';
 
 /**
  * A tool image in the shape the WEBVIEW wants: a `data:` URL, so the row can
@@ -434,11 +447,74 @@ function _sanitizeHtml(html: string): string {
     return result;
 }
 
+/**
+ * Grammars bundled into the host highlighter.
+ *
+ * The list is deliberately broad, because a fence tagged with a language that
+ * is NOT loaded makes `codeToHtml` THROW, and every throw fell through the
+ * silent catch in `highlightCode` into the plain monochrome fallback. With the
+ * original twelve names, `tsx`, `jsx`, `go`, `rust`, `c`, `cpp`, `java`,
+ * `kotlin`, `swift`, `toml`, `dockerfile`, `scss` and `vue` - all everyday
+ * fences - rendered as unstyled text with no error reported anywhere.
+ *
+ * Shiki resolves each canonical name together with its aliases, so loading
+ * `typescript` also covers `ts`, `csharp` covers `c#`/`cs`, and so on.
+ *
+ * Every name here must be a real bundled grammar: a single unknown entry makes
+ * `createHighlighter` reject, which is the very failure being fixed here. A
+ * name is only added after being checked against `createHighlighter` - which
+ * is why `env` and `gitignore`, despite looking plausible, are absent.
+ */
+const SHIKI_LANGS = [
+    'javascript', 'typescript', 'tsx', 'jsx',
+    'python', 'java', 'c', 'cpp', 'csharp', 'objective-c', 'vb',
+    'go', 'rust', 'ruby', 'php', 'swift', 'kotlin', 'scala',
+    'dart', 'lua', 'r', 'perl', 'haskell', 'elixir', 'clojure', 'zig',
+    'sql', 'bash', 'powershell', 'cmd', 'bat',
+    'json', 'yaml', 'toml', 'ini', 'csv',
+    'html', 'css', 'scss', 'markdown', 'xml', 'diff',
+    'dockerfile', 'makefile', 'cmake', 'graphql', 'nginx', 'vue',
+    'latex', 'plaintext',
+] as const;
+
+/** Every loaded id and alias, so `highlightCode` can check membership in O(1)
+ *  instead of letting an unknown language throw. */
+let shikiLoadedLangs: Set<string> | null = null;
+
+/** A highlighting failure is reported once, not once per code block. */
+let shikiWarned = false;
+
 async function initShiki() {
     shikiHighlighter = await createHighlighter({
         themes: ['github-dark', 'github-light'],
-        langs: ['python', 'typescript', 'javascript', 'html', 'css', 'json', 'bash', 'markdown', 'sql', 'yaml', 'xml', 'diff'],
+        langs: [...SHIKI_LANGS],
     });
+    shikiLoadedLangs = new Set(shikiHighlighter.getLoadedLanguages());
+}
+
+/**
+ * Initialise the highlighter, retrying once.
+ *
+ * `shikiHighlighter` gates every fence: while it is null `highlightCode`
+ * emits the plain fallback, and nothing re-renders those blocks afterwards.
+ * A single failed init therefore silently discoloured every code block for the
+ * rest of the session - which is the whole of the reported "shiki is not
+ * working" symptom, and it cleared only because the extension was reloaded.
+ * Retrying costs one extra startup pass and downgrades a permanently broken
+ * session to a briefly delayed one.
+ */
+async function ensureShiki(): Promise<void> {
+    if (shikiHighlighter) return;
+    try {
+        await initShiki();
+    } catch (err) {
+        console.error('xratu: shiki init failed, retrying once:', err);
+        try {
+            await initShiki();
+        } catch (retryErr) {
+            console.error('xratu: shiki unavailable; code will render unhighlighted:', retryErr);
+        }
+    }
 }
 
 function looksLikeFilePath(value: string): boolean {
@@ -461,14 +537,22 @@ function languageLabel(lang: string): string {
     if (!normalized) return 'code';
     const aliases: Record<string, string> = {
         js: 'javascript',
+        jsx: 'jsx',
         ts: 'typescript',
+        tsx: 'tsx',
         py: 'python',
         sh: 'bash',
         shell: 'bash',
+        zsh: 'bash',
         yml: 'yaml',
         md: 'markdown',
         rs: 'rust',
-        cs: 'c#',
+        // 'c#' is an alias shiki resolves, but the canonical name keeps the
+        // loaded-languages membership check predictable.
+        cs: 'csharp',
+        'c++': 'cpp',
+        htm: 'html',
+        dockerfile: 'dockerfile',
     };
     return aliases[normalized] ?? normalized;
 }
@@ -478,11 +562,23 @@ function highlightCode(str: string, lang: string, live: boolean): string {
     // inserts the result straight into .code-surface, and bare text there
     // collapses newlines (no white-space: pre on the surface div).
     if (live || !lang || !shikiHighlighter) return `<pre><code>${escapeHtml(str)}</code></pre>`;
+    // Guard the language rather than letting `codeToHtml` throw on it. Shiki's
+    // own `fallbackLanguage` does not cover a grammar that is not loaded at
+    // all - it still throws - so membership is checked here and an unknown
+    // fence falls back to the plaintext grammar, which still yields a themed
+    // block instead of bare text.
+    const resolved = shikiLoadedLangs?.has(lang) ? lang : 'plaintext';
     try {
         const theme = vscode.window.activeColorTheme?.kind === vscode.ColorThemeKind.Light
             ? 'github-light' : 'github-dark';
-        return shikiHighlighter.codeToHtml(str, { lang, theme });
-    } catch {
+        return shikiHighlighter.codeToHtml(str, { lang: resolved, theme });
+    } catch (err) {
+        // This catch used to be empty, which is why an entire session could
+        // render monochrome with nothing in any log to explain it.
+        if (!shikiWarned) {
+            shikiWarned = true;
+            console.error(`xratu: shiki failed for lang "${lang}"; rendering plain text:`, err);
+        }
         return `<pre><code>${escapeHtml(str)}</code></pre>`;
     }
 }
@@ -849,7 +945,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
          *  for steers routed from a plain askQuestion race (the webview
          *  already rendered that user row). */
         steerId?: string;
+        /** A background-job completion rather than something the user typed.
+         *  Rendered as a system notice so the transcript never implies the
+         *  user said it, but delivered on the same rail. */
+        system?: boolean;
     }> = [];
+    /** Completion reports for background jobs that ended while no run was
+     *  live. Held rather than auto-woken: a job exiting is not a user request,
+     *  and starting a turn to announce it would spend tokens unprompted. They
+     *  join the next turn's context at its first round boundary. */
+    private _pendingJobNotices: string[] = [];
+    /** Dropped by `deactivate` so a reload leaves no listener posting into a
+     *  disposed webview. */
+    private _unsubscribeJobEvents: (() => void) | null = null;
+    /** Checkpoint for background jobs, so a window reload does not orphan the
+     *  processes the user asked to keep running. */
+    private _backgroundJobs: BackgroundJobStore | null = null;
     /** Identity of the current chat turn. `_handleSteer` captures it BEFORE
      *  its async attachment work and re-checks before queueing: a steer
      *  whose targeted run settled meanwhile (success, cancel or a noRun
@@ -1138,6 +1249,44 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 this._view?.webview.postMessage({ type: 'planMode', enabled: false });
             }
         });
+        // Background jobs live in a module-level registry that outlives the
+        // view, so the listener is dropped on dispose - otherwise a window
+        // reload leaves a closure posting banners into a dead webview.
+        this._unsubscribeJobEvents = onJobEvent((event) => this._handleJobEvent(event));
+    }
+
+    /** Point the job registry at its checkpoint file. Called from `activate`
+     *  once globalStorage is known; the registry itself stays storage-agnostic. */
+    attachBackgroundJobStore(store: BackgroundJobStore): void {
+        this._backgroundJobs = store;
+        setJobChangeListener(() => {
+            void store.save(adoptableJobRecords());
+        });
+    }
+
+    /** Tell the user that processes from a previous window survived, so a
+     *  reload does not look like it silently lost them. */
+    reportAdoptedJobs(count: number): void {
+        this.notifyBanner('info', 'notifBackgroundAdopted', { count: String(count) });
+        // The badge is populated from this push alone, so a recovered job that
+        // nobody sends another event for would sit running with no chip until
+        // something unrelated happened to refresh the list.
+        this._postBackgroundJobs();
+    }
+
+    /** Records we could NOT re-prove as still ours. Surfaced rather than
+     *  dropped quietly: the common cause is a host that cannot read process
+     *  start times, which disables recovery entirely. */
+    reportUnrecoverableJobs(count: number): void {
+        console.warn(`xratu: ${count} background job record(s) could not be verified as still running and were dropped`);
+        this.notifyBanner('warning', 'notifBackgroundUnrecoverable', { count: String(count) });
+    }
+
+    /** Release the job-event listener. Registered as a subscription so VS Code
+     *  disposes it on deactivate / window reload. */
+    disposeJobEvents(): void {
+        this._unsubscribeJobEvents?.();
+        this._unsubscribeJobEvents = null;
     }
 
     /** Provider-reported context windows, per host. Persisted so a mid-session
@@ -3177,6 +3326,124 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'steerApplied', steerId, mode });
     }
 
+    /**
+     * The user pressed "run in background" on a running command row.
+     *
+     * The turn is released and the process lives on: `moveToBackground` settles
+     * the tool call's `released` promise, which is what unblocks the agent
+     * loop. No approval is re-requested - this is a scope REDUCTION (the
+     * command was already approved and is already running), and asking again
+     * would train the user to click through dialogs for a strictly safer state.
+     */
+    private _backgroundTerminalCall(callId: string | undefined): void {
+        const job = getJobByCallId(callId);
+        if (!job) {
+            // The command may have finished (or been killed) between the row
+            // rendering and the click. Say so instead of silently doing nothing.
+            this.notifyBanner('info', 'notifBackgroundJobGone');
+            return;
+        }
+        if (!job.moveToBackground(true)) {
+            // Two different failures share this return: the command already
+            // exited, or it is ALREADY background (the model backgrounded it
+            // and the button press raced the echo). Saying "no longer running"
+            // about a live background job is simply wrong.
+            this.notifyBanner(job.status === 'running' ? 'info' : 'warning',
+                job.status === 'running' ? 'notifBackgroundAlreadyRunning' : 'notifBackgroundJobGone');
+            return;
+        }
+        this._view?.webview.postMessage({
+            type: 'terminalBackgrounded',
+            callId: job.callId,
+            jobId: job.id,
+            byUser: true,
+        });
+        this._postBackgroundJobs();
+    }
+
+    /** Stop a background job from the UI. */
+    private async _killBackgroundJob(jobId: string): Promise<void> {
+        const job = getTerminalJob(jobId);
+        if (!job || job.status !== 'running') {
+            this._postBackgroundJobs();
+            return;
+        }
+        job.kill('stopped from the chat panel');
+        await job.finished;
+        this._view?.webview.postMessage({ type: 'backgroundJobStopped', jobId });
+        this._postBackgroundJobs();
+    }
+
+    /** Push the live job list the composer badge renders. */
+    private _postBackgroundJobs(): void {
+        this._view?.webview.postMessage({
+            type: 'backgroundJobs',
+            jobs: listTerminalJobs()
+                .filter((j) => j.background)
+                .map((j) => ({
+                    jobId: j.id,
+                    command: j.command,
+                    running: j.status === 'running',
+                    uptimeSeconds: j.uptimeSeconds(),
+                })),
+        });
+    }
+
+    /**
+     * A background job reached a terminal state.
+     *
+     * Delivered on the steer rail so it joins the conversation at a round
+     * boundary (after tool results, before the next model request) rather than
+     * being spliced between a tool result and an assistant message - splicing
+     * would break message-role alternation and invalidate the prompt cache.
+     *
+     * When no run is live the report is HELD rather than turned into a turn of
+     * its own: the user did not ask anything, and waking the agent to announce
+     * a dev server exiting spends their tokens without being asked. The
+     * in-app banner still tells the human immediately.
+     */
+    private _handleJobEvent(event: JobEvent): void {
+        if (event.kind === 'started') {
+            // Mark the row so it swaps its "run in background" button for a
+            // stop control, and refresh the composer badge. Without this a
+            // model-started job is invisible outside its own tool result.
+            this._view?.webview.postMessage({
+                type: 'terminalBackgrounded',
+                callId: event.callId,
+                jobId: event.jobId,
+                byUser: event.byUser,
+            });
+            this._postBackgroundJobs();
+            return;
+        }
+        const notice = event.notice;
+        const text = formatJobCompletion(notice);
+        if (this._localRunActive) {
+            this._localSteerQueue.push({ text, system: true });
+        } else {
+            this._pendingJobNotices.push(text);
+            // Bounded: each notice carries a job's output tail, and a watcher
+            // that restarts while the user is away could otherwise hand dozens
+            // of them to the next turn - token spend nobody asked for, pushing
+            // the context toward overflow. The most recent are the useful ones.
+            if (this._pendingJobNotices.length > MAX_PENDING_JOB_NOTICES) {
+                this._pendingJobNotices.splice(0, this._pendingJobNotices.length - MAX_PENDING_JOB_NOTICES);
+            }
+        }
+        this._postBackgroundJobs();
+        const outcome = notice.status === 'exited' && notice.exitCode === 0 ? 'info' : 'warning';
+        this.notifyBanner(outcome, 'notifBackgroundJobDone', {
+            command: notice.command,
+            outcome: notice.status === 'killed'
+                ? (notice.killReason ?? 'stopped')
+                : notice.status === 'failed'
+                    ? (notice.error?.message ?? 'failed to start')
+                    : notice.status === 'exited'
+                        ? `exit ${notice.exitCode}`
+                        : notice.status,
+        });
+    }
+
     /** Drop queued steers from `fromIndex` on (a session switch, a no-run
      *  guard, or an empty completion) and release their held webview bubbles
      *  so they cannot render later in the wrong session. */
@@ -3370,6 +3637,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         skillName,
                         new Set(this._disabledSkillIds()),
                     ),
+                    // A delegated child must not leave a background process
+                    // behind it - see the `nested` guard in mcp.ts.
+                    undefined,
+                    undefined,
+                    { nested: true },
                 ),
                 approvalGate: localApprovalGate,
                 onUsage: (usage) => {
@@ -4247,12 +4519,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         case 'notificationAction':
                             this._resolveNotification(data.id, data.action ?? null);
                             break;
+                        case 'backgroundTerminal':
+                            this._backgroundTerminalCall(data.callId);
+                            break;
+                        case 'killBackgroundJob':
+                            void this._killBackgroundJob(data.jobId);
+                            break;
                         case 'cancelRequest':
                             // Stop a running terminal command NOW. The loop's
                             // abort only takes effect at a round boundary, so
                             // without this a long command keeps running (and
                             // keeps holding its ports/files) until the idle cap.
-                            killRunningTerminalCommands();
+                            killForegroundJobs();
                             this._cancelActiveRequests();
                             break;
                         case 'restoreCheckpoint':
@@ -6183,6 +6461,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // cleanup in the outer finally below.
         this._localRunActive = true;
         this._localTurnToken += 1;
+        // Completions that landed while no run was live become part of this
+        // turn's context now. They are NOT auto-woken into a turn of their own:
+        // a background job exiting is not the user asking for anything, and
+        // starting a turn unprompted spends the user's tokens. They ride the
+        // steer queue, so the loop delivers them at its first round boundary.
+        if (this._pendingJobNotices.length) {
+            for (const notice of this._pendingJobNotices.splice(0)) {
+                this._localSteerQueue.push({ text: notice, system: true });
+            }
+        }
         if (!opts?.steerCarry) {
             // The run that OWNS _localRunActive publishes a settlement
             // deferred - session-wiping flows await it before exposing the
@@ -6992,6 +7280,10 @@ async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void
     }
 }
 
+/** Cap on completion reports held while no run is live. Each carries a job's
+ *  output tail, and they are all delivered to the next turn. */
+const MAX_PENDING_JOB_NOTICES = 16;
+
 export function activate(context: vscode.ExtensionContext) {
     const checkpoints = new ShadowCheckpointStore(context);
     diagnosticsChannel = vscode.window.createOutputChannel('Xratu');
@@ -7021,13 +7313,40 @@ export function activate(context: vscode.ExtensionContext) {
     seedBundledSkills(context).catch((e) =>
         console.error('xratu: bundled skills seed failed:', e));
 
-    initShiki().catch(err => console.error('Shiki init failed:', err));
+    // Not awaited: activation must not block on the highlighter. `ensureShiki`
+    // owns the retry so a transient failure cannot leave `shikiHighlighter`
+    // null for the whole session.
+    void ensureShiki();
 
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(XratuChatViewProvider.viewType, provider)
     );
+
+    // The job-event listener lives in a module-level registry, so it has
+    // to be dropped explicitly - VS Code disposing the subscriptions is what
+    // guarantees a window reload leaves nothing posting into a dead webview.
+    context.subscriptions.push({ dispose: () => provider.disposeJobEvents() });
+
+    // Adopt background jobs a previous host window left running. A reload must
+    // not turn the user's dev server into an unstoppable orphan - but nothing is
+    // adopted on the strength of a pid alone: `load` re-proves each recorded
+    // process identity first, because pid numbers are recycled.
+    const backgroundJobs = new BackgroundJobStore(context.globalStorageUri.fsPath);
+    provider.attachBackgroundJobStore(backgroundJobs);
+    void backgroundJobs.load().then(({ alive, dropped }) => {
+        for (const record of alive) {
+            adoptDetachedJob(record);
+        }
+        if (alive.length) provider.reportAdoptedJobs(alive.length);
+        // The dropped list is the interesting half: it is every record that
+        // could NOT be re-proven as ours (recycled pid, malformed file, or a
+        // host with no way to read process start times). Reporting it is the
+        // difference between "nothing to recover" and "recovery is broken and
+        // we are staying quiet about it".
+        if (dropped.length) provider.reportUnrecoverableJobs(dropped.length);
+    }).catch(() => undefined);
 
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider('xratu-diff', provider)
@@ -7138,6 +7457,11 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+    // Background jobs are the user's own processes (a dev server, a watcher)
+    // that they explicitly asked to keep running. They are checkpointed, NOT
+    // killed: killing them on a window reload would take down the thing the
+    // user started. `adoptDetachedJob` re-adopts them on the next activate.
+    setJobChangeListener(undefined);
     // External stdio MCP servers are child processes - without this they
     // outlive extension-host reloads until the process dies on its own.
     void externalMcpInstance?.stopAll();

@@ -26,6 +26,10 @@ interface MessageListProps {
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** Open the native diff editor for a completed edit step. */
     onOpenDiff?: (edits: OpenDiffEdit[]) => void;
+    /** Release the turn while a running terminal command keeps going. */
+    onBackgroundTerminal?: (callId: string) => void;
+    /** Stop a background job the user is watching. */
+    onKillBackground?: (jobId: string) => void;
     /** A run is in flight - footer actions hide while true. */
     busy?: boolean;
     /** Connection status - drives corner-bracket color on bubbles. */
@@ -81,7 +85,7 @@ const SUGGESTIONS_FRESH: Suggestion[] = [
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -190,6 +194,8 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
                     onOpenDiff={onOpenDiff}
+                    onBackgroundTerminal={onBackgroundTerminal}
+                    onKillBackground={onKillBackground}
                     userIndex={userIndexOf.get(m.id)}
                     isLastAssistant={m.id === lastAssistantId}
                     busy={busy}

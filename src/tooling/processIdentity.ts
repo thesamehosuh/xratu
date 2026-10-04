@@ -1,0 +1,267 @@
+/**
+ * Process IDENTITY, not just process id.
+ *
+ * A pid alone is not an identity: the OS recycles pid numbers once a process
+ * exits and is reaped, so a pid written to disk now can name a completely
+ * unrelated process after a reboot. Acting on it - and `killTree` is a TREE
+ * kill - would take down whatever the user happens to be running. This is not
+ * hypothetical: it has been observed in the wild as a recycled number landing
+ * on a desktop session leader, whose whole tree then got terminated.
+ *
+ * So a persisted job records the pid AND a token derived from the kernel's own
+ * start time for that process. The pair only matches if BOTH the number and the
+ * incarnation agree, which is what makes "is this still my job?" answerable
+ * across a restart.
+ *
+ * Kept free of the `vscode` import so it is unit-testable in plain node.
+ */
+
+import * as cp from 'child_process';
+import * as fs from 'fs';
+
+/** Recorded identity of a process we spawned. */
+export interface ProcessIdentity {
+    pid: number;
+    /** Opaque, platform-specific incarnation token. Never compare pids alone. */
+    token: string;
+}
+
+let bootIdCache: string | null = null;
+let posixBootCache: string | null = null;
+
+/**
+ * macOS/BSD boot time. The POSIX token is only second-resolution, so without
+ * this a record old enough to span a reboot could match an unrelated process
+ * that happens to share a wall-clock second - the recycled-number hazard this
+ * module exists to prevent.
+ */
+function posixBootId(): string {
+    if (posixBootCache !== null) return posixBootCache;
+    posixBootCache = 'unknown-boot';
+    if (process.platform === 'darwin') {
+        try {
+            const out = cp.execFileSync('sysctl', ['-n', 'kern.boottime'], {
+                encoding: 'utf-8',
+                timeout: 2000,
+                stdio: ['ignore', 'pipe', 'ignore'],
+            });
+            const secs = /sec\s*=\s*(\d+)/.exec(out)?.[1];
+            if (secs) posixBootCache = secs;
+        } catch { /* keep the placeholder */ }
+    }
+    return posixBootCache;
+}
+
+/**
+ * Linux boot id, so tokens cannot collide across reboots. Read once and
+ * cached: it cannot change while the host runs, and `/proc` may be absent on
+ * non-Linux hosts.
+ */
+function bootId(): string {
+    if (bootIdCache !== null) return bootIdCache;
+    bootIdCache = 'unknown-boot';
+    if (process.platform === 'linux') {
+        try {
+            const out = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim();
+            if (out) bootIdCache = out;
+        } catch { /* keep the placeholder */ }
+    }
+    return bootIdCache;
+}
+
+/**
+ * Field 22 of `/proc/<pid>/stat` is `starttime` - clock ticks since boot at
+ * which the process started. Parsed by hand because the second field is the
+ * comm string in parentheses and may itself contain spaces or parentheses,
+ * so a naive split on whitespace is wrong for a process named `my prog) x`.
+ */
+function linuxStartTime(pid: number): string | null {
+    try {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+        const close = stat.lastIndexOf(')');
+        if (close < 0) return null;
+        const fields = stat.slice(close + 2).trim().split(/\s+/);
+        // After comm, field 3 is state; starttime is field 22 overall, which is
+        // index 19 in this post-comm remainder (fields 3..22 => 0..19).
+        const starttime = fields[19];
+        return starttime && /^\d+$/.test(starttime) ? starttime : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The PowerShell start-time probe for a pid.
+ *
+ * Shared by BOTH windows probes - the synchronous `processStartToken` and the
+ * asynchronous `captureIdentityAsync`. They are two transports for one value,
+ * so the command lives here as a single function: when it was inlined in both
+ * places, each branch was edited independently and any drift between them
+ * silently produced two incomparable token formats.
+ */
+function windowsStartTimeQuery(pid: number): string {
+    // Get-Process, NOT Get-CimInstance: the CIM subsystem has to warm up on a
+    // cold runner and regularly blew past any sane timeout. StartTime is the
+    // same value.
+    //
+    // ToUniversalTime, not the local DateTime: the capture and the
+    // post-restart verification can straddle a DST change, and a shifted
+    // offset would serialize to a different string - so a perfectly healthy
+    // job would look recycled.
+    return `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`;
+}
+
+/**
+ * Format a raw windows start time into an identity token.
+ *
+ * Both windows probes MUST funnel through here, and this is load-bearing
+ * rather than cosmetic. `isOurProcess` compares a freshly-read token against a
+ * recorded one with `===`, and the token is persisted in the checkpoint file,
+ * so the two probes have to agree on the exact string. They did not: the async
+ * probe resolved the bare timestamp while the sync probe emitted a
+ * platform-tagged one. Every job captured through the async path - the only
+ * path the hot spawn path is allowed to use - therefore failed its own
+ * identity check forever, and was dropped at the next checkpoint load instead
+ * of being adopted. Recovery was broken on Windows for every such job, and
+ * the only symptom was a silently missing record.
+ */
+function windowsToken(raw: string): string | null {
+    const value = raw.trim();
+    return value ? `win32:${value}` : null;
+}
+
+/**
+ * The identity token for a pid, or null when the platform cannot supply one.
+ *
+ * Returning null is honest and load-bearing: callers must treat "no token" as
+ * "cannot prove identity", never as "matches".
+ */
+export function processStartToken(pid: number): string | null {
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (process.platform === 'linux') {
+        const starttime = linuxStartTime(pid);
+        return starttime ? `linux:${bootId()}:${starttime}` : null;
+    }
+    if (process.platform === 'win32') {
+        try {
+            const out = cp.execFileSync(
+                'powershell.exe',
+                ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                    windowsStartTimeQuery(pid)],
+                // Bounded hard, and stdin ignored: this runs on a path that can
+                // block the extension host, so it must never inherit a stdin
+                // pipe or wait on an interactive prompt.
+                { encoding: 'utf-8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
+            );
+            return windowsToken(out);
+        } catch {
+            return null;
+        }
+    }
+    // macOS and friends: `ps -o lstart=` is second-resolution, which is coarser
+    // than Linux's tick resolution but still distinguishes incarnations for any
+    // realistic restart gap.
+    try {
+        const out = cp.execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+            encoding: 'utf-8',
+            timeout: 2000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        return out ? `posix:${posixBootId()}:${out}` : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Capture the identity of a pid right after spawning it, synchronously.
+ *
+ * BLOCKS on Windows: reading a process creation time there needs PowerShell,
+ * and the call runs to completion before returning. That froze the extension
+ * host for the whole probe on every background spawn, which is the exact thing
+ * this repo forbids (see the note on `spawnSync` in mcp.ts and the async rule
+ * in shadowGit.ts). Any hot path MUST use `captureIdentityAsync` instead; this
+ * stays synchronous so it remains a plain, testable function everywhere.
+ */
+export function captureIdentity(pid: number | undefined): ProcessIdentity | null {
+    if (!pid || pid <= 0) return null;
+    const token = processStartToken(pid);
+    // No token is still recorded, with an explicit marker: refusing to persist
+    // the job would lose it, and pretending the pid alone is an identity is the
+    // bug this module exists to prevent. `isOurProcess` then refuses to act.
+    return { pid, token: token ?? 'unverified' };
+}
+
+/**
+ * Asynchronous identity capture, for the one host that needs a subprocess.
+ *
+ * Returns immediately with an unverified placeholder - enough for the job to
+ * exist and be listed - and calls `apply` with the real identity once the
+ * answer lands. Until then `isOurProcess` refuses the job, so the window where
+ * the identity is unknown is a window where nothing can be killed on its word.
+ */
+export function captureIdentityAsync(
+    pid: number | undefined,
+    apply: (identity: ProcessIdentity) => void,
+): void {
+    if (!pid || pid <= 0) return;
+    if (process.platform !== 'win32') {
+        const identity = captureIdentity(pid);
+        if (identity) apply(identity);
+        return;
+    }
+    // Still pending: recorded as unverified so a checkpoint written in the
+    // meantime is honest about not knowing.
+    apply({ pid, token: 'unverified' });
+    void new Promise<string | null>((resolve) => {
+        const child = cp.spawn('powershell.exe', [
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+            windowsStartTimeQuery(pid),
+            // stderr is PIPED, not ignored: it is how a failing probe explains
+            // itself. Still no stdin, so it can never wait on a prompt.
+        ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        let out = '';
+        let stderr = '';
+        // Generous: a one-shot probe behind a cold PowerShell start, and giving
+        // up early just leaves the job permanently unverified.
+        const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 20_000);
+        child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+        child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+        child.on('error', () => { clearTimeout(timer); resolve(null); });
+        child.on('close', () => {
+            clearTimeout(timer);
+            const value = out.trim();
+            if (!value && stderr.trim()) {
+                // Without this the probe fails SILENTLY on a host where the
+                // command is unavailable (AppLocker, a stripped PATH), and
+                // recovery quietly stops working with nothing to show for it.
+                console.warn(`xratu: process identity probe failed on windows: ${stderr.trim().slice(0, 200)}`);
+            }
+            resolve(windowsToken(value));
+        });
+    }).then((token) => { apply({ pid, token: token ?? 'unverified' }); });
+}
+
+/**
+ * True only when `pid` is alive AND still the incarnation we spawned.
+ *
+ * The token check is what makes this safe. A pid that is merely ALIVE is not
+ * enough - that is precisely the recycled-number case.
+ */
+export function isOurProcess(identity: ProcessIdentity | null | undefined): boolean {
+    if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0) return false;
+    if (identity.token === 'unverified') return false;
+    let alive = false;
+    try {
+        process.kill(identity.pid, 0);
+        alive = true;
+    } catch (err: any) {
+        // EPERM means the process exists but belongs to another user - alive,
+        // and still not ours to signal.
+        if (err?.code !== 'EPERM') return false;
+        alive = true;
+    }
+    if (!alive) return false;
+    const current = processStartToken(identity.pid);
+    return current !== null && current === identity.token;
+}
