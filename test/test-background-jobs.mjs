@@ -212,19 +212,27 @@ const fakeJob = (over) => ({
     // Output resets the idle window, so a process that keeps reporting
     // progress outlives a window far shorter than its total runtime. This is
     // what lets a slow build survive the idle kill.
+    //
+    // The margins are deliberately loose (a 3s window against ~1s ticks over
+    // ~5s). A tight window failed the windows CI leg: `ping -n 2` ticks about
+    // once a SECOND there, not once every 100ms, so a 400ms window killed a
+    // process that was plainly making progress. A timing-sensitive test needs
+    // headroom for the slowest scheduler in CI, not a race it happens to win.
+    const ticks = isWindows ? 5 : 20;
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
         command: sh(
-            'for i in 1 2 3 4 5 6 7 8; do echo tick; sleep 0.1; done',
-            'for /L %i in (1,1,8) do @(echo tick & ping -n 2 127.0.0.1 > nul)',
+            `for i in $(seq 1 ${ticks}); do echo tick; sleep 0.2; done`,
+            `for /L %i in (1,1,${ticks}) do @(echo tick & ping -n 2 127.0.0.1 > nul)`,
         ),
-        idleKillMs: 400,
+        idleKillMs: 3000,
         hardCapMs: 600_000,
     });
     await job.finished;
     ok('output resets the idle window, so a chatty process survives it',
-        job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.exitCode}`);
-    ok('its progress output is retained', (job.stdout.match(/tick/g) ?? []).length === 8, job.stdout);
+        job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.killReason}`);
+    const seen = (job.stdout.match(/tick/g) ?? []).length;
+    ok('its progress output is retained', seen === ticks, `${seen} of ${ticks}`);
 }
 
 {
@@ -563,14 +571,17 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 {
     // One handoff story for both paths: the model asking and the user pressing
     // the button must not be able to tell the agent different things.
+    // Asserted against the command ACTUALLY used - hardcoding the POSIX one
+    // fails the windows leg, where the shell is cmd.exe.
+    const command = sh('sleep 30', 'ping -n 31 127.0.0.1 > nul');
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command,
         background: true,
     });
     const text = describeBackgroundHandoff(job);
     ok('the handoff names the job', text.includes(job.id), JSON.stringify(text.slice(0, 80)));
-    ok('the handoff names the command', text.includes('sleep 30'));
+    ok('the handoff names the command', text.includes(command), JSON.stringify(text.slice(0, 160)));
     ok('the handoff says nothing will stop it', /nothing will stop it automatically/.test(text));
     ok('the handoff points at the process tool', /action 'poll'/.test(text) && /action 'kill'/.test(text));
     job.kill('test cleanup');
