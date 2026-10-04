@@ -447,11 +447,74 @@ function _sanitizeHtml(html: string): string {
     return result;
 }
 
+/**
+ * Grammars bundled into the host highlighter.
+ *
+ * The list is deliberately broad, because a fence tagged with a language that
+ * is NOT loaded makes `codeToHtml` THROW, and every throw fell through the
+ * silent catch in `highlightCode` into the plain monochrome fallback. With the
+ * original twelve names, `tsx`, `jsx`, `go`, `rust`, `c`, `cpp`, `java`,
+ * `kotlin`, `swift`, `toml`, `dockerfile`, `scss` and `vue` - all everyday
+ * fences - rendered as unstyled text with no error reported anywhere.
+ *
+ * Shiki resolves each canonical name together with its aliases, so loading
+ * `typescript` also covers `ts`, `csharp` covers `c#`/`cs`, and so on.
+ *
+ * Every name here must be a real bundled grammar: a single unknown entry makes
+ * `createHighlighter` reject, which is the very failure being fixed here. A
+ * name is only added after being checked against `createHighlighter` - which
+ * is why `env` and `gitignore`, despite looking plausible, are absent.
+ */
+const SHIKI_LANGS = [
+    'javascript', 'typescript', 'tsx', 'jsx',
+    'python', 'java', 'c', 'cpp', 'csharp', 'objective-c', 'vb',
+    'go', 'rust', 'ruby', 'php', 'swift', 'kotlin', 'scala',
+    'dart', 'lua', 'r', 'perl', 'haskell', 'elixir', 'clojure', 'zig',
+    'sql', 'bash', 'powershell', 'cmd', 'bat',
+    'json', 'yaml', 'toml', 'ini', 'csv',
+    'html', 'css', 'scss', 'markdown', 'xml', 'diff',
+    'dockerfile', 'makefile', 'cmake', 'graphql', 'nginx', 'vue',
+    'latex', 'plaintext',
+] as const;
+
+/** Every loaded id and alias, so `highlightCode` can check membership in O(1)
+ *  instead of letting an unknown language throw. */
+let shikiLoadedLangs: Set<string> | null = null;
+
+/** A highlighting failure is reported once, not once per code block. */
+let shikiWarned = false;
+
 async function initShiki() {
     shikiHighlighter = await createHighlighter({
         themes: ['github-dark', 'github-light'],
-        langs: ['python', 'typescript', 'javascript', 'html', 'css', 'json', 'bash', 'markdown', 'sql', 'yaml', 'xml', 'diff'],
+        langs: [...SHIKI_LANGS],
     });
+    shikiLoadedLangs = new Set(shikiHighlighter.getLoadedLanguages());
+}
+
+/**
+ * Initialise the highlighter, retrying once.
+ *
+ * `shikiHighlighter` gates every fence: while it is null `highlightCode`
+ * emits the plain fallback, and nothing re-renders those blocks afterwards.
+ * A single failed init therefore silently discoloured every code block for the
+ * rest of the session - which is the whole of the reported "shiki is not
+ * working" symptom, and it cleared only because the extension was reloaded.
+ * Retrying costs one extra startup pass and downgrades a permanently broken
+ * session to a briefly delayed one.
+ */
+async function ensureShiki(): Promise<void> {
+    if (shikiHighlighter) return;
+    try {
+        await initShiki();
+    } catch (err) {
+        console.error('xratu: shiki init failed, retrying once:', err);
+        try {
+            await initShiki();
+        } catch (retryErr) {
+            console.error('xratu: shiki unavailable; code will render unhighlighted:', retryErr);
+        }
+    }
 }
 
 function looksLikeFilePath(value: string): boolean {
@@ -474,14 +537,22 @@ function languageLabel(lang: string): string {
     if (!normalized) return 'code';
     const aliases: Record<string, string> = {
         js: 'javascript',
+        jsx: 'jsx',
         ts: 'typescript',
+        tsx: 'tsx',
         py: 'python',
         sh: 'bash',
         shell: 'bash',
+        zsh: 'bash',
         yml: 'yaml',
         md: 'markdown',
         rs: 'rust',
-        cs: 'c#',
+        // 'c#' is an alias shiki resolves, but the canonical name keeps the
+        // loaded-languages membership check predictable.
+        cs: 'csharp',
+        'c++': 'cpp',
+        htm: 'html',
+        dockerfile: 'dockerfile',
     };
     return aliases[normalized] ?? normalized;
 }
@@ -491,11 +562,23 @@ function highlightCode(str: string, lang: string, live: boolean): string {
     // inserts the result straight into .code-surface, and bare text there
     // collapses newlines (no white-space: pre on the surface div).
     if (live || !lang || !shikiHighlighter) return `<pre><code>${escapeHtml(str)}</code></pre>`;
+    // Guard the language rather than letting `codeToHtml` throw on it. Shiki's
+    // own `fallbackLanguage` does not cover a grammar that is not loaded at
+    // all - it still throws - so membership is checked here and an unknown
+    // fence falls back to the plaintext grammar, which still yields a themed
+    // block instead of bare text.
+    const resolved = shikiLoadedLangs?.has(lang) ? lang : 'plaintext';
     try {
         const theme = vscode.window.activeColorTheme?.kind === vscode.ColorThemeKind.Light
             ? 'github-light' : 'github-dark';
-        return shikiHighlighter.codeToHtml(str, { lang, theme });
-    } catch {
+        return shikiHighlighter.codeToHtml(str, { lang: resolved, theme });
+    } catch (err) {
+        // This catch used to be empty, which is why an entire session could
+        // render monochrome with nothing in any log to explain it.
+        if (!shikiWarned) {
+            shikiWarned = true;
+            console.error(`xratu: shiki failed for lang "${lang}"; rendering plain text:`, err);
+        }
         return `<pre><code>${escapeHtml(str)}</code></pre>`;
     }
 }
@@ -7230,7 +7313,10 @@ export function activate(context: vscode.ExtensionContext) {
     seedBundledSkills(context).catch((e) =>
         console.error('xratu: bundled skills seed failed:', e));
 
-    initShiki().catch(err => console.error('Shiki init failed:', err));
+    // Not awaited: activation must not block on the highlighter. `ensureShiki`
+    // owns the retry so a transient failure cannot leave `shikiHighlighter`
+    // null for the whole session.
+    void ensureShiki();
 
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);
 
