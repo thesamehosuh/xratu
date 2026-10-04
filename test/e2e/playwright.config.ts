@@ -51,7 +51,13 @@ export default defineConfig({
     // The webview mounts once per page load; parallel workers each get their
     // own browser context, so workers are safe - but keep the run small.
     fullyParallel: true,
-    workers: 2,
+    // ONE worker on Windows. The built bundle is a single ~12MB HTML file, so
+    // every `page.goto` pulls 12MB over loopback; two concurrent workers
+    // exhausted the runner's socket buffers and the run died on
+    // `net::ERR_NO_BUFFER_SPACE` - a transport failure, not an assertion.
+    // Serializing fixes the cause instead of retrying over it, because a
+    // blanket `retries` would also re-run real assertion failures and hide them.
+    workers: process.platform === 'win32' ? 1 : 2,
     use: {
         baseURL: `http://127.0.0.1:${PORT}`,
         viewport: { width: 900, height: 900 },
