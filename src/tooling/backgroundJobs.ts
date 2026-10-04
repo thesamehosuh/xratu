@@ -29,7 +29,7 @@
 
 import * as cp from 'child_process';
 import { killPids, killTree, snapshotTree } from './processTree';
-import { captureIdentity, type ProcessIdentity } from './processIdentity';
+import { captureIdentity, isOurProcess, type ProcessIdentity } from './processIdentity';
 import { terminalSpawn, terminalFailureHint, appendHintToResult } from './shellPlatform';
 
 /**
@@ -198,6 +198,18 @@ function nextJobId(): string {
 }
 
 /**
+ * Ids are NOT unique across host windows: the counter restarts at 1 on every
+ * activate, and adoption reuses the previous window's ids verbatim. Without
+ * this, the first job started after a reload would be handed `job-1` - the id
+ * of a RECOVERED job - and `jobs.set` would silently overwrite it, leaving a
+ * live dev server with no handle and a `kill` aimed at the wrong process.
+ */
+function reserveJobId(id: string): void {
+    const n = /^job-(\d+)$/.exec(id)?.[1];
+    if (n) jobCounter = Math.max(jobCounter, Number(n));
+}
+
+/**
  * Jobs that can still be acted on: every running job, plus finished
  * BACKGROUND jobs inside their retention window. A finished foreground job is
  * dropped immediately - once its tool call returned there is nothing left to
@@ -246,6 +258,16 @@ function reserveBackgroundSlot(jobId: string): void {
 }
 
 /**
+ * How often a recovered job re-checks whether its process is still alive.
+ *
+ * Polling the OS is not free - on Windows it is a PowerShell round trip - so
+ * the check is throttled and driven by reads rather than run on its own timer.
+ * Nothing in the extension needs to know about a recovered job that nobody is
+ * looking at, which is exactly when not to spend the call.
+ */
+const ADOPTED_REVALIDATE_MS = 10_000;
+
+/**
  * Register a process this host did NOT spawn - one adopted from the startup
  * checkpoint after a window reload.
  *
@@ -255,43 +277,73 @@ function reserveBackgroundSlot(jobId: string): void {
  *
  * Adoption only happens after `isOurProcess` proved the recorded pid is still
  * the SAME incarnation, so a recycled number can never end up here.
+ *
+ * Liveness is re-derived rather than assumed. A recovered entry that reported
+ * `running` forever would put a dead process in the composer badge
+ * permanently, and `pruneFinished` could never reclaim it - the badge is the
+ * only thing that ever looks at these.
  */
 export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
-    let reason: string | null = null;
+    reserveJobId(spec.id);
+    const { identity } = spec;
+    let killReason: string | null = null;
+    let finishedAt: number | undefined;
+    let lastChecked = 0;
+    let resolveFinished: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => { resolveFinished = resolve; });
+
+    /** Re-derive liveness from the OS, at most every ADOPTED_REVALIDATE_MS. */
+    const revalidate = (): void => {
+        if (finishedAt !== undefined) return;
+        const now = Date.now();
+        if (now - lastChecked < ADOPTED_REVALIDATE_MS) return;
+        lastChecked = now;
+        if (isOurProcess(identity)) return;
+        // The process is gone (or was never ours after all). Latch the time so
+        // `uptimeSeconds` freezes and `pruneFinished` can eventually drop it.
+        finishedAt = now;
+        resolveFinished?.();
+    };
+
     const entry: TerminalJob = {
         id: spec.id,
         command: spec.command,
         cwd: spec.cwd,
-        pid: spec.identity.pid,
+        pid: identity.pid,
         startedAt: spec.startedAt,
         background: true,
         backgroundedByUser: spec.backgroundedByUser,
         detached: true,
-        get finishedAt() { return undefined; },
-        get status() { return reason ? 'killed' : 'running'; },
+        identity,
+        get finishedAt() { revalidate(); return finishedAt; },
+        get status() { revalidate(); return killReason ? 'killed' : finishedAt === undefined ? 'running' : 'exited'; },
         get exitCode() { return null; },
-        get killReason() { return reason; },
+        get killReason() { return killReason; },
         get error() { return null; },
         get stdout() { return ''; },
         get stderr() { return ''; },
         get output() { return ''; },
-        uptimeSeconds: () => Math.round((Date.now() - spec.startedAt) / 1000),
+        uptimeSeconds: () => Math.round(((finishedAt ?? Date.now()) - spec.startedAt) / 1000),
         kill(why: string) {
-            if (reason) return;
-            reason = why;
+            if (killReason || finishedAt !== undefined) return;
+            killReason = why;
+            finishedAt = Date.now();
             onJobsChanged?.();
             // Snapshot the tree BEFORE the parent dies: once it exits its
             // children are reparented and the parent/child link is gone, which
             // is exactly what `taskkill /T` and the `ps` walk both depend on.
-            const tree = snapshotTree(spec.identity.pid);
-            void killTree(spec.identity.pid);
-            killPids(tree);
+            const tree = snapshotTree(identity.pid);
+            const done = killTree(identity.pid).then(() => killPids(tree));
+            // Settle on the kill, but never hang a tool call on it: a wedged
+            // `taskkill` must not pin the turn until the job timeout.
+            const fallback = setTimeout(() => resolveFinished?.(), 5000);
+            void done.finally(() => clearTimeout(fallback));
+            void done.then(() => resolveFinished?.());
         },
         moveToBackground: () => false,
-        // Deliberately never settles: nothing observes this process any more,
-        // so a `wait` on it would hang until its own timeout. `released`
-        // answers immediately because there is no owning tool call left.
-        finished: new Promise<void>(() => undefined),
+        finished,
+        // Answers immediately: there is no owning tool call left for a job this
+        // host did not start, so nothing is waiting on a handoff.
         released: Promise.resolve('exited'),
     };
     jobs.set(spec.id, entry);
@@ -377,10 +429,15 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         windowsVerbatimArguments,
     });
     child.stdin.end();
-    // Captured immediately, while the pid is certainly ours: /proc and `ps`
-    // report the CURRENT process, and by the time a checkpoint is written the
-    // number alone proves nothing.
-    const identity = captureIdentity(child.pid) ?? undefined;
+    // Captured ONLY for a job that is background from the start, and then
+    // immediately - `processStartToken` shells out (PowerShell on Windows), and
+    // paying that on every foreground command froze the extension host for up
+    // to the call's own timeout. `moveToBackground` captures lazily instead;
+    // it can only succeed while the job is still running, so the pid is
+    // certainly ours at that moment too.
+    let identity: ProcessIdentity | undefined = startBackground
+        ? captureIdentity(child.pid) ?? undefined
+        : undefined;
 
     const job: TerminalJob = {
         id,
@@ -437,6 +494,9 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         if (settled || isBackground) return false;
         isBackground = true;
         backgroundedByUser = byUser;
+        // Last chance to prove the identity: the process is still alive here,
+        // and this is the moment the checkpoint starts caring about it.
+        identity ??= captureIdentity(child.pid) ?? undefined;
         clearTimeout(idleTimer);
         clearTimeout(hardTimer);
         resolveReleased?.('backgrounded');
@@ -747,8 +807,13 @@ export function setJobChangeListener(listener: (() => void) | undefined): void {
  *  or foreground job has no process to lose track of, and an adopted one has
  *  no identity to re-verify with. */
 export function adoptableJobRecords(): BackgroundJobRecord[] {
+    // Detached (recovered) entries are INCLUDED on purpose: they are live
+    // processes with a recorded identity, and dropping them here would let the
+    // next save overwrite the checkpoint without them - leaving a running dev
+    // server that no window can ever find or stop, which is the exact failure
+    // this file exists to prevent.
     return [...jobs.values()]
-        .filter((j) => j.background && j.status === 'running' && j.identity && !j.detached)
+        .filter((j) => j.background && j.status === 'running' && j.identity)
         .map((j) => ({
             id: j.id,
             command: j.command,

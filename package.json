@@ -256,6 +256,7 @@
     "test:process-tree": "node test/test-process-tree.mjs",
     "test:background-jobs": "node test/test-background-jobs.mjs",
     "test:background-tool-surface": "node test/test-background-tool-surface.mjs",
+    "test:background-recovery": "node test/test-background-recovery.mjs",
     "test:test-framework": "node test/test-test-framework.mjs",
     "test:workspace-kind": "node test/test-workspace-kind.mjs",
     "test:edit-file-mode": "node test/test-edit-file-mode.mjs",

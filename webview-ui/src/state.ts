@@ -392,16 +392,12 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             const marked = (st: Step): Step => (st.background
                 ? st
                 : { ...st, background: { jobId: msg.jobId, byUser: msg.byUser } });
-            const global = mapCallStep(state, msg.callId, marked);
-            if (global) return global;
-            const { state: s, id } = ensureStreaming(state);
-            return {
-                ...s,
-                messages: s.messages.map((m) => (m.id !== id ? m : {
-                    ...m,
-                    steps: m.steps.map((st) => (st.kind === 'toolCall' && st.open && !st.callId ? marked(st) : st)),
-                })),
-            };
+            // Pair by callId ONLY. The old fallback marked the first open,
+            // callId-less toolCall step, which for a model-backgrounded job is
+            // no longer open - so the row kept offering "run in background"
+            // and could be handed off twice. A wrong guess is worse than a
+            // missed marker, and the host always supplies a callId.
+            return mapCallStep(state, msg.callId, marked) ?? state;
         }
 
         case 'backgroundJobStopped':

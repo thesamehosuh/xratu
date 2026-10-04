@@ -27,6 +27,30 @@ export interface ProcessIdentity {
 }
 
 let bootIdCache: string | null = null;
+let posixBootCache: string | null = null;
+
+/**
+ * macOS/BSD boot time. The POSIX token is only second-resolution, so without
+ * this a record old enough to span a reboot could match an unrelated process
+ * that happens to share a wall-clock second - the recycled-number hazard this
+ * module exists to prevent.
+ */
+function posixBootId(): string {
+    if (posixBootCache !== null) return posixBootCache;
+    posixBootCache = 'unknown-boot';
+    if (process.platform === 'darwin') {
+        try {
+            const out = cp.execFileSync('sysctl', ['-n', 'kern.boottime'], {
+                encoding: 'utf-8',
+                timeout: 2000,
+                stdio: ['ignore', 'pipe', 'ignore'],
+            });
+            const secs = /sec\s*=\s*(\d+)/.exec(out)?.[1];
+            if (secs) posixBootCache = secs;
+        } catch { /* keep the placeholder */ }
+    }
+    return posixBootCache;
+}
 
 /**
  * Linux boot id, so tokens cannot collide across reboots. Read once and
@@ -83,8 +107,15 @@ export function processStartToken(pid: number): string | null {
             const out = cp.execFileSync(
                 'powershell.exe',
                 ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-                    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToString('o')`],
-                { encoding: 'utf-8', timeout: 5000, windowsHide: true }
+                    // ToUniversalTime, not the local DateTime: the capture and
+                    // the post-restart verification can straddle a DST change,
+                    // and a shifted offset would serialize to a different
+                    // string - so a perfectly healthy job would look recycled.
+                    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`],
+                // Bounded hard, and stdin ignored: this runs on a path that can
+                // block the extension host, so it must never inherit a stdin
+                // pipe or wait on an interactive prompt.
+                { encoding: 'utf-8', timeout: 2000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
             ).trim();
             return out ? `win32:${out}` : null;
         } catch {
@@ -97,9 +128,10 @@ export function processStartToken(pid: number): string | null {
     try {
         const out = cp.execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
             encoding: 'utf-8',
-            timeout: 5000,
+            timeout: 2000,
+            stdio: ['ignore', 'pipe', 'ignore'],
         }).trim();
-        return out ? `posix:${out}` : null;
+        return out ? `posix:${posixBootId()}:${out}` : null;
     } catch {
         return null;
     }

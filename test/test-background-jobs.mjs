@@ -19,6 +19,9 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-background-jobs.mjs
  */
 import { createRequire } from 'module';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 const require = createRequire(import.meta.url);
 const {
@@ -51,6 +54,31 @@ const ok = (name, cond, detail = '') => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Await a job's death with a ceiling.
+ *
+ * The suite awaits `job.finished` in a dozen places, and a regression that
+ * stops it settling would otherwise hang the whole CI job until the runner's
+ * own timeout - minutes later, with no indication which assertion was
+ * responsible. Failing here names the job instead.
+ */
+/** Liveness poll. On Windows a terminated child's pid can stay openable
+ *  while our ChildProcess handle lives, so callers pair this with `exit`. */
+const waitDead = async (pid, ms = 10_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && alivePid(pid)) await sleep(50);
+    return !alivePid(pid);
+};
+const alivePid = (pid) => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+};
+
+const withDeadline = (job, ms = 30_000) =>
+    Promise.race([
+        job.finished.then(() => 'finished'),
+        sleep(ms).then(() => 'TIMED OUT'),
+    ]);
 
 const isWindows = process.platform === 'win32';
 
@@ -181,15 +209,7 @@ const fakeJob = (over) => ({
     await job.finished;
     ok('killForegroundJobs ends the job', job.status === 'killed', job.status);
     ok('the kill reason reaches the result', job.killReason === 'test kill', String(job.killReason));
-    if (!isWindows) {
-        const end = Date.now() + 5000;
-        let dead = false;
-        while (Date.now() < end && !dead) {
-            try { process.kill(pid, 0); } catch { dead = true; break; }
-            await sleep(50);
-        }
-        ok('the process tree is actually gone', dead, `pid ${pid}`);
-    }
+    ok('the direct child is actually gone', await waitDead(pid), `pid ${pid}`);
     ok('a killed job leaves the registry', listTerminalJobs().every((j) => j.id !== job.id));
 }
 
@@ -228,7 +248,7 @@ const fakeJob = (over) => ({
         idleKillMs: 3000,
         hardCapMs: 600_000,
     });
-    await job.finished;
+    ok('a chatty job settles rather than hanging', await withDeadline(job) === 'finished');
     ok('output resets the idle window, so a chatty process survives it',
         job.status === 'exited' && job.exitCode === 0, `${job.status}/${job.killReason}`);
     const seen = (job.stdout.match(/tick/g) ?? []).length;
@@ -358,8 +378,11 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
         }));
         await quick[i].finished;
     }
-    ok('finished background jobs never block a later spawn', true);
-    ok('the cap only counts running jobs', quick.length === MAX_BACKGROUND_JOBS + 4, String(quick.length));
+    // The claim IS the length: every spawn here is a background job that has
+    // already exited, so exceeding the cap by four proves finished jobs are
+    // not counted against it.
+    ok('the cap counts only running jobs, so finished ones never block a spawn',
+        quick.length === MAX_BACKGROUND_JOBS + 4, String(quick.length));
     ok('each finished job kept its own output', quick.every((j) => j.output.includes('quick-')), 'output lost');
 }
 
@@ -586,6 +609,68 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     ok('the handoff points at the process tool', /action 'poll'/.test(text) && /action 'kill'/.test(text));
     job.kill('test cleanup');
     await job.finished;
+}
+
+{
+    // A tool child is almost never the process doing the work: `npm`/`npx` run
+    // through a launcher, so the real server is a GRANDCHILD. Killing only the
+    // direct child orphans it - still holding a port - and it would go on to
+    // create the marker file below. This runs on BOTH legs: it used to be
+    // POSIX-only, which is exactly the platform where the group kill makes it
+    // easy to pass.
+    //
+    // Driven from a temp SCRIPT FILE, not `node -e`: inlining the source meant
+    // nesting JSON quoting inside shell quoting inside JS quoting, and the
+    // test failed on quoting rather than on tree killing.
+    const dir = mkdtempSync(join(tmpdir(), 'xratu-tree-'));
+    const marker = join(dir, 'grandchild-ran');
+    const script = join(dir, 'parent.js');
+    // The marker path travels as ARGV, not interpolated into the `-e` source:
+    // embedding it inline nested double quotes inside a double-quoted argument
+    // and made the generated script a syntax error, so the parent died before
+    // printing anything and the test failed on its own quoting.
+    writeFileSync(script, [
+        "const { spawn } = require('child_process');",
+        "const marker = process.argv[2];",
+        "const g = spawn(process.execPath, ['-e', 'setTimeout(() => require(\\'fs\\').writeFileSync(process.argv[1], \\'x\\'), 2000)', marker], { stdio: 'ignore', windowsHide: true });",
+        'process.stdout.write(String(g.pid));',
+    ].join('\n'), 'utf8');
+
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: sh(
+            `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(marker)}`,
+            `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(marker)}`,
+        ),
+        idleKillMs: 600_000,
+        hardCapMs: 600_000,
+    });
+
+    const end = Date.now() + 15_000;
+    let grandchild = null;
+    while (Date.now() < end && !grandchild) {
+        const m = /\b\d{3,}\b/.exec(job.stdout);
+        if (m) grandchild = Number(m[0]);
+        else await sleep(50);
+    }
+    ok('the spawned tree reported a grandchild pid', !!grandchild, JSON.stringify(job.stdout));
+    // Guards the assertion below against being vacuous: if the grandchild were
+    // already dead before the kill, "the marker never appeared" would prove
+    // nothing about the tree kill at all.
+    if (grandchild) {
+        ok('the grandchild is alive before the kill', alivePid(grandchild), `pid ${grandchild}`);
+    }
+
+    killForegroundJobs('test tree kill');
+    ok('the tree kill settles the job', await withDeadline(job) === 'finished');
+    // Long enough for the grandchild's 2s timer to have fired had it survived.
+    await sleep(3000);
+    ok('the grandchild died with the parent - it never got to run',
+        !existsSync(marker), `${marker} exists, so the tree kill missed the grandchild`);
+    if (grandchild) {
+        ok('the grandchild pid is gone too', await waitDead(grandchild), `pid ${grandchild}`);
+    }
+    rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');

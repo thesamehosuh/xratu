@@ -59,7 +59,14 @@ ok('process is offered', byName.has('process'));
 
 const terminalProps = props(terminal);
 ok('run_terminal_command takes background', terminalProps.has('background'), [...terminalProps].join(','));
-ok('the old detach flag is gone', !terminalProps.has('detach'), [...terminalProps].join(','));
+// `detach` is KEPT as a deprecated alias: a model that learned it from an
+// older session still sends it, and with no alias it would be silently ignored
+// - so an `xdg-open` would block on the 10-minute idle cap, which is the exact
+// regression the old detached branch existed to prevent.
+ok('the deprecated detach alias is still accepted', terminalProps.has('detach'), [...terminalProps].join(','));
+ok('the alias is labelled deprecated in its own description',
+    /[Dd]eprecated/.test(terminal.inputSchema.properties.detach.description),
+    terminal.inputSchema.properties.detach.description);
 ok('command stays required', (terminal.inputSchema.required ?? []).includes('command'));
 ok('background is not required', !(terminal.inputSchema.required ?? []).includes('background'));
 

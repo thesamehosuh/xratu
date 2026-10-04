@@ -1185,6 +1185,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  reload does not look like it silently lost them. */
     reportAdoptedJobs(count: number): void {
         this.notifyBanner('info', 'notifBackgroundAdopted', { count: String(count) });
+        // The badge is populated from this push alone, so a recovered job that
+        // nobody sends another event for would sit running with no chip until
+        // something unrelated happened to refresh the list.
+        this._postBackgroundJobs();
+    }
+
+    /** Records we could NOT re-prove as still ours. Surfaced rather than
+     *  dropped quietly: the common cause is a host that cannot read process
+     *  start times, which disables recovery entirely. */
+    reportUnrecoverableJobs(count: number): void {
+        console.warn(`xratu: ${count} background job record(s) could not be verified as still running and were dropped`);
+        this.notifyBanner('warning', 'notifBackgroundUnrecoverable', { count: String(count) });
     }
 
     /** Release the job-event listener. Registered as a subscription so VS Code
@@ -3249,7 +3261,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
         if (!job.moveToBackground(true)) {
-            this.notifyBanner('info', 'notifBackgroundJobGone');
+            // Two different failures share this return: the command already
+            // exited, or it is ALREADY background (the model backgrounded it
+            // and the button press raced the echo). Saying "no longer running"
+            // about a live background job is simply wrong.
+            this.notifyBanner(job.status === 'running' ? 'info' : 'warning',
+                job.status === 'running' ? 'notifBackgroundAlreadyRunning' : 'notifBackgroundJobGone');
             return;
         }
         this._view?.webview.postMessage({
@@ -7221,11 +7238,17 @@ export function activate(context: vscode.ExtensionContext) {
     // process identity first, because pid numbers are recycled.
     const backgroundJobs = new BackgroundJobStore(context.globalStorageUri.fsPath);
     provider.attachBackgroundJobStore(backgroundJobs);
-    void backgroundJobs.load().then(({ alive }) => {
+    void backgroundJobs.load().then(({ alive, dropped }) => {
         for (const record of alive) {
             adoptDetachedJob(record);
         }
         if (alive.length) provider.reportAdoptedJobs(alive.length);
+        // The dropped list is the interesting half: it is every record that
+        // could NOT be re-proven as ours (recycled pid, malformed file, or a
+        // host with no way to read process start times). Reporting it is the
+        // difference between "nothing to recover" and "recovery is broken and
+        // we are staying quiet about it".
+        if (dropped.length) provider.reportUnrecoverableJobs(dropped.length);
     }).catch(() => undefined);
 
     context.subscriptions.push(

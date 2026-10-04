@@ -316,7 +316,10 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
                 background: {
                     type: 'boolean',
                     description: 'Return immediately and let the command keep running (dev servers, file watchers, GUI apps like xdg-open). Skips both timeouts, so nothing will stop it later - not a cancel, not a turn ending - and it is your job to `process`-kill it when you are done. You get a job id back to poll, log or kill.'
-                }
+                },
+                // Deprecated alias, still accepted so an older session that
+                // learned `detach` keeps working instead of silently blocking.
+                detach: { type: 'boolean', description: 'Deprecated alias for background.' }
             },
             required: ['command']
         }
@@ -594,6 +597,12 @@ export function getLocalToolDefinitions(opts?: {
  * `kill` takes a job id and nothing else. There is deliberately no pid
  * parameter, so this tool cannot reach a process the extension did not start -
  * which is why it is not approval-gated (see its definition above).
+ *
+ * Note the deliberate ASYMMETRY with the `nested` guard on spawning: a child
+ * cannot start a background job, but it CAN kill one, because the jobs are
+ * session-wide and not owned by whoever started them. That is the useful
+ * direction - a child handed a job id to shut down is the common case - and the
+ * risky direction is bounded, since it can only name jobs this session minted.
  */
 async function dispatchProcessTool(args: any): Promise<{
     content: Array<{ type: 'text'; text: string }>;
@@ -645,7 +654,11 @@ async function dispatchProcessTool(args: any): Promise<{
         // would only repeat it.
         markCompletionConsumed(job.id);
         return text(readJobOutput(job, {
-            offset: numberArg(args?.offset, 0),
+            // `undefined`, not 0: an absent offset means "the newest lines",
+            // while an explicit 0 means "from the beginning". Coercing the
+            // absent case to 0 silently disabled the tail window and made `log`
+            // return a 50k-line log's oldest 200 lines.
+            ...(args?.offset === undefined ? {} : { offset: numberArg(args?.offset, 0) }),
             limit: numberArg(args?.limit, DEFAULT_LOG_LINES),
         }));
     }
@@ -846,7 +859,12 @@ async function dispatchTool(
         // the call open until the timeout, and the kill took the launched app
         // down with it), and a shell-level `&`/`start /b` loses the output and
         // the handle entirely.
-        if (args.background === true) {
+        // `detach` was the old spelling and models in older sessions still
+        // send it. Without this alias it would be silently IGNORED (the schema
+        // has no additionalProperties:false), so a `xdg-open` would run in the
+        // foreground and sit on the 10-minute idle cap - exactly the regression
+        // the deleted detached branch existed to prevent.
+        if (args.background === true || args.detach === true) {
             // A child must not leave work running behind it. The job would
             // outlive the delegation, keep a port or a file handle open, and
             // report its completion into a conversation that has already
@@ -876,7 +894,14 @@ async function dispatchTool(
         // server until the idle cap killed it.
         const job = spawnTerminalJob({ workspaceRoot, command, onOutput, callId });
         if (await job.released === 'backgrounded') {
-            return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+            // The user can release the turn at the same moment the command
+            // exits. If it has already finished, hand back its REAL result -
+            // a handoff saying "output so far, still running" about a command
+            // that just exited misreports it, and the exit code is the whole
+            // point of the call.
+            if (job.status === 'running') {
+                return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+            }
         }
         const result = await awaitTerminalJob(job, process.platform);
         return { content: [{ type: 'text', text: result.text }], isError: result.isError };

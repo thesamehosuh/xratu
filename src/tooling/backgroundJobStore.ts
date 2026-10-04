@@ -68,7 +68,10 @@ export class BackgroundJobStore {
         return this.enqueue(async () => {
             const dir = path.dirname(this.file);
             await fs.mkdir(dir, { recursive: true });
-            const temp = `${this.file}.tmp`;
+            // Scoped to THIS process: two VS Code windows share one
+            // globalStorage dir, and a fixed tmp name let them interleave a
+            // half-written file that `load` would then discard wholesale.
+            const temp = `${this.file}.${process.pid}.tmp`;
             await fs.writeFile(temp, JSON.stringify({ version: 1, jobs }), 'utf8');
             await renameWithRetry(temp, this.file);
         }).catch(() => undefined);
@@ -86,7 +89,12 @@ export class BackgroundJobStore {
         const dropped: string[] = [];
         let parsed: unknown;
         try {
-            parsed = JSON.parse(await fs.readFile(this.file, 'utf8'));
+            const raw = await fs.readFile(this.file, 'utf8');
+            // Strip a BOM first. This file lives in globalStorage on a
+            // Windows-first product, and one Notepad round-trip would
+            // otherwise make JSON.parse throw and silently drop EVERY
+            // recovery record - the same class of bug mcpConfig.ts guards.
+            parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
         } catch {
             // No file, or an unreadable one. Either way there is nothing to
             // adopt and nothing to report - a corrupt checkpoint must not block
