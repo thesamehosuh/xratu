@@ -49,6 +49,7 @@ import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
 import { formatCost } from '../cost';
+import { prefOn, toolFamily, type TranscriptPrefs } from '../transcriptPrefs';
 
 /** Open the native diff editor for completed edit call(s). */
 type OpenDiffHandler = (edits: OpenDiffEdit[]) => void;
@@ -424,30 +425,6 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
 // Tool dropdown bodies - one dedicated design per tool family. All content
 // sits directly on the pill background (no inner boxes/borders).
 // ---------------------------------------------------------------------------
-
-type ToolFamily = 'edit' | 'terminal' | 'read' | 'search' | 'git' | 'web' | 'ops' | 'mcp' | 'subagent' | 'generic';
-
-/** Edit/terminal dropdowns open by default - the diff/command IS the payload
- *  the user cares about; everything else stays collapsed. The subagent pill
- *  stays collapsed too: its summary line carries the delegated task, and the
- *  full trace/report is one click away. */
-const DEFAULT_OPEN_FAMILIES: readonly ToolFamily[] = ['edit', 'terminal'];
-
-/** Regex-ordered, first match wins - mirrors TOOL_ICONS/TOOL_LABELS style. */
-function toolFamily(tool?: string): ToolFamily {
-    if (!tool) return 'generic';
-    if (tool.startsWith('mcp__')) return 'mcp';
-    if (/^(apply_patch|replace_in_file|edit_file|write_file|create_file)$/.test(tool)) return 'edit';
-    if (/terminal|command/.test(tool)) return 'terminal';
-    if (/^read_files?$|^file_info$/.test(tool)) return 'read';
-    if (/^skill$/.test(tool)) return 'read';
-    if (/grep|glob|find_|workspace_symbols|list_files|directory_tree/.test(tool)) return 'search';
-    if (/^git_/.test(tool)) return 'git';
-    if (/fetch_url|web_search/.test(tool)) return 'web';
-    if (/^run_tests$|^get_diagnostics$|^check_dependencies$|^install_dependency$|^copy_file$|^move_file$|^delete_file$/.test(tool)) return 'ops';
-    if (/^task$/.test(tool)) return 'subagent';
-    return 'generic';
-}
 
 /** History-replay clip markers the host prepends to sanitized model-context
  *  copies. Rows persisted by older resume paths can carry them inside pill
@@ -1273,9 +1250,30 @@ function ToolBody({ call, result }: { call: Step; result?: Step }) {
     );
 }
 
+/**
+ * Open state for a collapsible pill, seeded from the user's auto-expand
+ * preference (Settings → transcript switches).
+ *
+ * A MANUAL toggle is never overwritten: the seed is re-applied only when that
+ * preference itself flips, so collapsing a diff by hand sticks, and flipping
+ * the switch later is the only thing that re-opens or re-collapses a pill that
+ * is already on screen. Without the ref check, every prefs push would reset
+ * each pill the user had touched.
+ */
+function useAutoOpen(auto: boolean): [boolean, (open: boolean) => void] {
+    const [open, setOpen] = useState(auto);
+    const lastAuto = useRef(auto);
+    useEffect(() => {
+        if (auto === lastAuto.current) return;
+        lastAuto.current = auto;
+        setOpen(auto);
+    }, [auto]);
+    return [open, setOpen];
+}
+
 /** A run of identical consecutive tool calls: one summary pill with an
  *  "×N" badge; expanding reveals each call as its own pill. */
-function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGroup' }>; onOpenDiff?: OpenDiffHandler }) {
+function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 'toolGroup' }>; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs }) {
     const tool = row.calls[0].call.tool;
     const Icon = toolIcon(tool);
     const { fa } = toolLabel(tool);
@@ -1284,12 +1282,12 @@ function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGrou
     // A run of edits is ONE "N files edited" pill whose body is a per-file
     // diff list - not N stacked edit pills.
     const isEdit = toolFamily(tool) === 'edit';
-    // Edit groups start OPEN, exactly like a single edit pill (see
-    // DEFAULT_OPEN_FAMILIES): the diff IS the payload, so a collapsed
-    // "N files edited" makes the user click for the thing they came to read.
-    // Non-edit runs stay collapsed - for reads/searches/terminal spam the
-    // count genuinely is the summary.
-    const [open, setOpen] = useState(isEdit);
+    // Edit groups start OPEN, exactly like a single edit pill (same
+    // preference): the diff IS the payload, so a collapsed "N files edited"
+    // makes the user click for the thing they came to read. Other runs follow
+    // their own family's switch - for reads/searches/commands the count
+    // genuinely is the summary.
+    const [open, setOpen] = useAutoOpen(prefOn(prefs, toolFamily(tool)));
     const stats = useMemo(() => (isEdit ? sumEditStats(row.calls) : null), [isEdit, row.calls]);
     return (
         <details
@@ -1343,7 +1341,7 @@ function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGrou
             ) : (
                 <div className="step-group-body">
                     {row.calls.map((c) => (
-                        <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} />
+                        <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} prefs={prefs} />
                     ))}
                 </div>
             )}
@@ -1351,21 +1349,21 @@ function ToolGroupRow({ row, onOpenDiff }: { row: Extract<Row, { kind: 'toolGrou
     );
 }
 
-function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler }) {
+function ActivityRow({ row, running, isLast, onOpenDiff, prefs }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
     const family = toolFamily(row.kind === 'thinking' ? undefined : row.call.tool);
-    // Controlled open: edit/terminal start expanded; the user's collapse
-    // survives streaming re-renders (MessageItem is memoized, but result
-    // arrivals still re-render rows).
-    const [open, setOpen] = useState(() => DEFAULT_OPEN_FAMILIES.includes(family));
+    // Controlled open: seeded from the family's auto-expand switch; the user's
+    // collapse survives streaming re-renders (MessageItem is memoized, but
+    // result arrivals still re-render rows).
+    const [open, setOpen] = useAutoOpen(prefOn(prefs, family));
     // Thinking pill: while streaming and OPEN, its scrollable body follows
     // the newest thinking lines - but ONLY while the reader is pinned to
     // the bottom; a manual scroll-up inside the pill is never yanked back.
     const thinkRef = useRef<HTMLElement | null>(null);
     const thinkPinned = useRef(true);
-    const [thinkOpen, setThinkOpen] = useState(false);
+    const [thinkOpen, setThinkOpen] = useAutoOpen(prefOn(prefs, 'thinking'));
     const thinkText = row.kind === 'thinking' ? row.step.text : '';
     useEffect(() => {
         const el = thinkRef.current;
@@ -1432,7 +1430,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff }: { row: Exclude<Row, {
         const dur = fmtDur((row.step.endedAt ?? 0) - (row.step.startedAt ?? 0));
         return (
             <details
-                className="step"
+                className="step step-think"
                 open={thinkOpen}
                 onToggle={(e) => setThinkOpen(e.currentTarget.open)}
             >
@@ -1827,12 +1825,12 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
     );
 }
 
-function TaskListRow({ row, view, streaming }: { row: Extract<Row, { kind: 'taskList' }>; view?: TaskListView; streaming: boolean }) {
+function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind: 'taskList' }>; view?: TaskListView; streaming: boolean; prefs?: TranscriptPrefs }) {
     const isCurrent = !!view && view.stepId === row.step.id;
     const tasks = isCurrent ? view!.tasks : parseTaskListStep(row.step.text);
 
     if (!tasks) {
-        return <ActivityRow row={{ key: row.key, kind: 'tool', call: row.step }} running={false} isLast={false} />;
+        return <ActivityRow row={{ key: row.key, kind: 'tool', call: row.step }} running={false} isLast={false} prefs={prefs} />;
     }
 
     // Null-safe: rows that are NOT the bound step render read-only from
@@ -2538,7 +2536,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr' }: MessageItemProps) {
+function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2632,15 +2630,15 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 <div className="steps" aria-label={t('stepsAria')}>
                     {rows.map((row) =>
                         row.kind === 'toolGroup' ? (
-                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} />
+                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} />
                         ) : row.kind === 'text' ? (
                             <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
                         ) : row.kind === 'taskList' ? (
-                            <TaskListRow key={row.key} row={row} view={taskList} streaming={streamingContent} />
+                            <TaskListRow key={row.key} row={row} view={taskList} streaming={streamingContent} prefs={transcriptPrefs} />
                         ) : row.kind === 'decision' ? (
                             <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} />
+                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} />
                         )
                     )}
                     {showWorking && (
@@ -2858,6 +2856,9 @@ interface MessageItemProps {
     taskList?: TaskListView;
     /** Locale-derived bubble direction from the app root. */
     dir?: 'rtl' | 'ltr';
+    /** Transcript display prefs (Settings switches): which pills start
+     *  expanded, which rows are rendered at all. */
+    transcriptPrefs?: TranscriptPrefs;
 }
 
 /**
@@ -2878,5 +2879,6 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.busy === b.busy &&
     a.conn === b.conn &&
     a.taskList === b.taskList &&
-    a.dir === b.dir
+    a.dir === b.dir &&
+    a.transcriptPrefs === b.transcriptPrefs
 );

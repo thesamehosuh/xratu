@@ -655,3 +655,37 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     await expect(page.locator('.queued-steer-chip')).toHaveCount(0);
 });
 
+
+test('transcript switches ship a transcriptSet and follow the host echo', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'restoreUser', value: 'build it' });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });
+    await hostMessage(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'STDOUT:\nok\nExit code: 0', callId: 't1' });
+    await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args: JSON.stringify({ path: 'src/a.ts', patch: '<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' }), callId: 'p1' });
+    await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', output: 'done', callId: 'p1' });
+
+    // Shipped defaults: the diff is expanded, the command output is not.
+    await expect(page.locator('details.step').first()).toBeVisible();
+    expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
+        .toEqual([false, true]);
+
+    await hostMessage(page, { type: 'openSettings' });
+    const switches = page.locator('.settings-card .mcp-switch');
+    // diffs on, commands off, reasoning off
+    expect(await switches.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked'))))
+        .toEqual(['true', 'false', 'false']);
+
+    await switches.nth(1).click();
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<Record<string, unknown>>);
+    expect(sent).toContainEqual({ type: 'transcriptSet', id: 'terminal', enabled: true });
+
+    // The host owns the blob: the switch only moves when the host echoes it.
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: { terminal: true } } });
+    await expect(switches.nth(1)).toHaveAttribute('aria-checked', 'true');
+    await hostMessage(page, { type: 'openChat' });
+    expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
+        .toEqual([true, true]);
+});

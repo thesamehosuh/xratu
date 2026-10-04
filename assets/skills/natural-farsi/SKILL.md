@@ -10,6 +10,36 @@ polished, zero half-spaces, zero Arabic diacritics. The result should read
 like a good tech blog post or a smart friend explaining something — not like
 a formal letter, and not like translated text.
 
+## The one-language rule
+
+Once the conversation is Persian, EVERY message is Persian — not just the
+opening one. This is the single most common failure: a reply starts in
+Persian, drifts into English for a few paragraphs of work ("Now the commits.
+I'm splitting into 4 rather than the 5 originally proposed..."), then snaps
+back. Register drift across messages is worse than drift inside one.
+
+Concretely, in a Persian conversation:
+
+- No English sentence. No English paragraph. No English bullet.
+- Latin script appears ONLY for: code and identifiers in backticks, tier-A
+  jargon, tier-B/C transliterations in Persian letters, and acronyms.
+- A whole message that is entirely English is always wrong, however natural
+  it reads and however technical the step is.
+
+Reasoning and tool arguments are not the reply and may be English; the text
+the user reads is the reply and is Persian.
+
+### When these rules apply
+
+These rules govern the Persian text you produce. Preloaded into a
+Persian-locale session they govern your WHOLE reply, and there is no
+exception: no English sentence, ever, in any message.
+
+Loaded by hand somewhere else — translating a document, reviewing Persian copy,
+answering questions ABOUT Persian — they govern only the Persian you write,
+and your explanation stays in whatever language the user is using. That is the
+only case where the one-language rule is limited to the reply itself.
+
 ## The register: colloquial morphology (the half everyone forgets)
 
 Persian has a register continuum. Name the target explicitly and never
@@ -166,6 +196,13 @@ orthography step alone is just "drop the ZWNJ"):
 - می‌شود → میشه، می‌کنند → میکنن، نمی‌شود → نمیشه
 - می‌خواهم → میخوام، برمی‌گردد → برمیگرده
 
+**Attach directly — the enclitic pronouns** (these are suffixes on a word, not
+compounds; a half-space after them is always wrong):
+
+- نگرانی‌م → نگرانیم، آزادی‌تان → آزادیتان
+- کدوم‌ها → کدوم ها (this one is the ها-plural, so it takes a space)
+- سالم‌ان → سالم ان، وابسته‌ن → وابسته نیستن، نتیجه‌اش → نتیجه اش
+
 **Full space — the ها/های plural suffix and the تر/ترین suffix:**
 
 - فایل‌ها → فایل ها
@@ -174,7 +211,7 @@ orthography step alone is just "drop the ZWNJ"):
 - اعلان‌ها → اعلان ها، پیام‌ها → پیام ها
 - بهینه‌تر → بهینه تر، کوچک‌تر → کوچک تر
 - مهم‌ترین → مهم ترین، سنگین‌ترین → سنگین ترین
-- Words ending in ه always take the space: ارائه‌دهنده‌ها → ارایه دهنده ها،
+- Words ending in ه always take the space: ارائه‌دهنده‌ها → ارائه دهنده ها،
   جلسه‌ها → جلسه ها
 
 **Full space — everything else that was a half-space compound:**
@@ -233,23 +270,41 @@ Orthography and morphology are mechanical; rhythm is what makes it human.
 
 ## Technical vocabulary (dev terms)
 
-Iranian developers overwhelmingly say/write technical terms in English even
-inside otherwise-Persian sentences ("این commit رو باید rebase کنم").
-Invented Persian translations like «بازنشانی خیمه‌ای» for "rebase" read as
-stilted or actively confusing to a working developer. Consistency matters
-more than either extreme (all-English or all-translated).
+This is where most mixed-language output comes from, so read the whole section
+before writing. Iranian developers say *some* technical words in English
+inside otherwise-Persian sentences ("این commit رو باید rebase کنم") - but
+only a small, well-known set. Everything else they say in Persian script.
 
-**Leave these in English (Latin script) inside Persian sentences - no
-translation, no invented Persian:**
+The failure mode is not "too much English" in the abstract; it is specific
+words with obvious Persian equivalents drifting into Latin mid-sentence
+(«debug print جا مونده», «کامنت stale», «schema داده»). Treat those as bugs.
 
-commit, push, pull, pull request, merge, rebase, branch, checkout, stash,
-build, deploy, staging, production, debug, bug, issue, ticket, sprint,
-backend, frontend, endpoint, API, token, cache, deprecated, refactor,
-runtime, framework, dependency, repository/repo, stack trace, hook, lint.
+### Tier A — stays Latin (closed list)
 
-**Translate these - they have settled, natural Persian equivalents that
-Iranian developers actually use (orthography follows the house rules above,
-so no half-spaces):**
+These have no natural Persian form and Iranians type them in English. Nothing
+else joins this list without a reason:
+
+commit, push, pull, pull request / PR, merge, rebase, branch, checkout,
+stash, cherry-pick, lint, hook, cache, endpoint, token, repo, patch, import,
+helper, caller, suite, shell, silence.
+
+### Tier B — Persian script, TRANSLITERATED (keep the sound, invent no word)
+
+Write the English word in Persian letters. Never coin a Persian phrase for
+these - a literal-but-natural Persian compound reads worse than a
+transliteration («تصویر لحظه ای» for "snapshot" is cursed; «اسنپ شات» is
+what people actually say).
+
+- system → سیستم، harness → هارنس، build → بیلد، deploy → دیپلوی
+- runtime → رانتایم، backend → بک اند، frontend → فرانت اند، framework → فریم ورک
+- production → پروداکشن، sprint → اسپرینت، bug → باگ
+- snapshot → اسنپ شات، boolean → بولین، atomic → اتمیک، global → گلوبال
+- IDE, CLI, JSON, YAML, SQL, HTTP, URL, CSS, HTML (acronyms stay Latin)
+
+### Tier C — a real Persian word
+
+These have settled Persian equivalents Iranian developers actually use
+(orthography follows the house rules above, so no half-spaces):
 
 - error → خطا
 - warning → هشدار
@@ -261,18 +316,71 @@ so no half-spaces):**
 - install → نصب
 - update → به روزرسانی
 - delete/remove → حذف
+- print (the output) → چاپ
+- debug (the concept) → اشکال زدایی
+- stale → کهنه
+- schema → ساختار (so "data schema" → ساختار داده)
+- working tree → درخت کاری
+- fallback → جایگزین
+- call site → محل فراخوانی
+- initiative → نوبت دهی
+- element / elemental → عنصر / عناصر
+- refactor → بازسازی
+- stage (git) → مرحله بندی
+- diff → تفاوت ها
+- mock → ماژول ساختگی
+- fixture → داده آزمایشی
+- payload → بدنه / محتوای ارسالی
+- save → ذخیره (سیو also fine)
+- failure → شکست
+- skip → رد شدن / رد کردن (اسکیپ also fine)
+- track (git) → ثبت
+- load → بارگذاری
+- ignore → نادیده گرفتن (ایگنور also fine)
+- lack → کمبود
+- repository → مخزن، dependency → وابستگی، deprecated → منسوخ
+- function → تابع، method → متد، variable → متغیر، array → آرایه
+- loop → حلقه، test → تست، stack trace → ردپای خطا
 
-**Settled transliterations override the list where they are natural** (رانتایم
-for runtime, بک اند for backend, کلید API for API key) - the list's point is to
-never INVENT a translation, not to police transliteration.
+**A Persian word and its transliteration are both idiomatic** — offer either
+(«نادیده گرفتن» or «ایگنور», «رد شدن» or «اسکیپ»). What is NOT idiomatic is
+coining a compound nobody says: "snapshot" is «اسنپ شات», never «تصویر لحظه ای».
+
+### Not forced — write them in Persian, no hard rule
+
+Persian has no single right answer for these, so there is no rule; just do
+not leave them in Latin by default:
+
+- player → بازیکن
+- sim (simulation) → شبیه سازی
+- targeting → هدفگیری
+- annotation → توضیح / یادداشت کنار کد
+
+### Tier D — identifier vs concept (the distinction that gets missed most)
+
+A literal symbol from the code stays Latin, in backticks. The *idea* behind
+it gets a Persian word. Never let the identifier stand in for the concept:
+
+| In the code (Latin, backticked) | In prose (Persian) |
+|---|---|
+| `stdout`, `stderr` | خروجی / خطای استاندارد |
+| `debugPrint()` | اشکال زدایی |
+| `test_sim.py` | فایل تست |
+| `f1_gate` | دروازه طبقه یک |
+| `return 2` | برگردوندن ۲ |
+
+So «یه `print` جا مونده توی `sim.py`» is wrong twice: the concept is چاپ
+(not `print`), and only the function name would stay Latin.
+
+**Default: Persian script.** A term in none of the tiers gets written in
+Persian script — a transliteration if it sounds like a word (tier B), a
+Persian word if one exists (tier C). Latin is the exception that requires a
+tier-A reason. If you genuinely cannot place a word, transliterate it; do not
+default to English.
 
 **Git commit messages are ALWAYS English**, whatever language the rest of the
 text is in (tooling, search, and team review all expect it), with
 Gregorian/ISO dates (see `jalali-dates`).
-
-When a term is not listed, prefer whichever form a working Iranian developer
-would type in a chat message to a teammate. If genuinely unsure, keep it in
-English - over-translating reads worse than under-translating in this domain.
 
 ## Mixed Persian + technical content (RTL/LTR islands)
 
@@ -360,26 +468,66 @@ Fixed (isolated runs inside an LTR row):
 > `<span dir="auto">HTTP جریانی</span> · <span dir="ltr">https://mcp.example.com/mcp</span>`
 > inside a `dir="ltr"` row container.
 
+**Example 6 — tier C words left in Latin (observed in a real session)**
+
+Every one of these has an obvious Persian equivalent and none of them is
+tier A or an identifier:
+
+Input:
+> یه debug print جا مونده. یه کامنت stale توی `sim.py` هست. schema داده هم
+> اضافه شده. working tree از این نظر تمیزه و به `f1_gate` fallback میکنه.
+> اول call site ها رو چک میکنم. initiative بر اساس سرعت محاسبه میشه.
+
+Output:
+> یه چاپ اشکال زدایی جا مونده. یه کامنت کهنه توی `sim.py` هست. ساختار داده
+> هم اضافه شده. درخت کاری از این نظر تمیزه و به `f1_gate` جایگزین میکنه.
+> اول محل فراخوانی ها رو چک میکنم. نوبت دهی بر اساس سرعت محاسبه میشه.
+
+**Example 7 — tier D: identifier vs concept**
+
+Input:
+> اون تست فقط `stdout` رو redirect میکنه، ولی `stderr` از قلم افتاده.
+
+Output:
+> اون تست فقط خروجی رو هدایت میکنه، ولی خطای استاندارد از قلم افتاده.
+
+(The symbols stay Latin when you must name them — «فقط `stdout` رو میگیره» —
+but the prose around them is Persian.)
+
+**Example 8 — mid-conversation drift into English**
+
+Input (real transcript, all of it wrong):
+> I need to verify each flag myself before touching anything.
+> Now the commits. I'm splitting into 4 rather than the 5 originally proposed.
+> Working tree is clean and 222 tests pass at HEAD.
+
+Output:
+> اول خودم همه پرچم ها رو با چشم خودم تایید میکنم، بعد دست میزنم.
+> حالا commit ها. ۴ تا میزنم نه ۵ تایی که اولش گفته شد.
+> درخت کاری تمیزه و ۲۲۲ تست روی HEAD پاس میشن.
+
 ## Checklist before delivering Farsi text
 
 Machine-checkable first; ear-check last. All greps are word-boundary (not
 inside longer words like راست / استفاده / پرداخت).
 
-1. No U+200C anywhere; می attaches, ها/های/تر/ترین spaced (exclusion list
-   respected)
+1. No U+200C anywhere; می attaches, enclitics attach, ها/های/تر/ترین spaced
+   (exclusion list respected)
 2. No harakat, no hamza (check ً ِ ُ َ ٔ ء أ إ ؤ ئ), no Arabic ي/ك
 3. Zero standalone را (رو only), zero همان/آن (همون/اون)
 4. Zero written verb endings: میدهد|میکند|میشود|دارد|میخواند|میداند|
    میتواند|میگوید|میگذارد|میآید|میرود|می‌خواهی|می‌توانی|می‌دانی and
    کنید|بگویید|بیایید|بخوانید|بدانید (کنین/بگید/بیاین/بخونید/بدونید)
 5. Zero standalone است (use ـه or هست), zero می‌باشد/میگردد
-6. Technical terms left in Latin where natives leave them
-7. Every mixed Persian/URL/path line rendered and read both ways; runs
+6. Every Latin word outside backticks is tier A, an acronym, or a literal
+   code symbol — everything else is in Persian script
+7. No sentence and no message without Persian letters
+8. Every mixed Persian/URL/path line rendered and read both ways; runs
    isolated
-8. Read it aloud in your head — if it sounds like a government letter OR a
+9. Read it aloud in your head — if it sounds like a government letter OR a
    translated textbook, rewrite it
 
-The bundled `check-register.mjs` runs checks 1-5 mechanically:
+The bundled `check-register.mjs` runs checks 1-7 mechanically:
 
 ```bash
 node ~/.agents/skills/natural-farsi/check-register.mjs draft.txt
@@ -387,4 +535,6 @@ node ~/.agents/skills/natural-farsi/check-register.mjs draft.txt
 ```
 
 Run it on the FINAL Persian output only — quoted source text in a
-translation task is exempt (it is supposed to look wrong).
+translation task is exempt (it is supposed to look wrong), and a document
+that is not Persian at all is exempt too (pass `--allow-no-persian` for an
+English source you are translating FROM).

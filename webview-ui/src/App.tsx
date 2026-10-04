@@ -40,6 +40,7 @@ import { NotificationBanner } from './components/NotificationBanner';
 import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
+import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
 import { prefersReducedMotion } from './motion';
 import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
@@ -197,6 +198,10 @@ export function App() {
     /** Agent reply language - echoed from the host on ready (the host resolves
      *  the locale-derived default so the chips show the effective value). */
     const [replyLanguage, setReplyLanguageState] = useState<'fa' | 'en' | 'auto'>(getLocale() === 'en' ? 'en' : 'fa');
+    /** Transcript display prefs - host-persisted, echoed on ready. The EMPTY
+     *  blob is the correct starting state: every id then resolves to its own
+     *  default in transcriptPrefs.ts, so no pill waits on the host to render. */
+    const [transcriptPrefs, setTranscriptPrefs] = useState<TranscriptPrefs>(EMPTY_TRANSCRIPT_PREFS);
     /** Session picker state - the toolbar's centered title button drives it. */
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -798,6 +803,9 @@ export function App() {
                 case 'replyLanguage':
                     setReplyLanguageState(msg.replyLanguage);
                     break;
+                case 'transcriptPrefs':
+                    setTranscriptPrefs(coerceTranscriptPrefs(msg.prefs));
+                    break;
                 case 'editorContext':
                     setActiveFile(msg.activeFile);
                     break;
@@ -1148,6 +1156,8 @@ export function App() {
                         setReplyLanguageState(l);
                         send({ type: 'setReplyLanguage', replyLanguage: l });
                     }}
+                    transcriptPrefs={transcriptPrefs}
+                    onSetTranscriptPref={(id, enabled) => send({ type: 'transcriptSet', id, enabled })}
                     onOpenCredentials={() => {
                         setCredReturnTo('settings');
                         setScreen('credentials');
@@ -1343,6 +1353,7 @@ export function App() {
                     taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined}
                     firstVisible={firstVisible}
                     onShowEarlier={showEarlier}
+                    transcriptPrefs={transcriptPrefs}
                 />
                 {showJump && (
                     <button

@@ -39,6 +39,9 @@ runtime. Everything runs inside the extension host, on your machine.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)
   standard; skills can be shared with Claude Code, Roo Code, OpenCode, and
   others.
+- **Subagents** - delegate a self-contained task to a named agent profile
+  running in its own context; several can run at once. See
+  [Subagents](#subagents).
 - **Long sessions** - steer mid-task, edit & resend any message, image and
   PDF attachments, automatic context compaction.
 - **Proxy-aware** - follows your proxy settings, VS Code's, the environment,
@@ -178,6 +181,78 @@ Skills:
 | `iran-dev-access` | What works from Iran and what to use instead - domestic gateways, local models, Iranian PaaS. |
 | `iran-connectivity-fallback` | A provider timing out repeatedly? Offers the alternatives already configured on your machine - no circumvention guides. |
 | `local-llm-low-ram` | Honest sizing math for running models locally on small machines. |
+
+## Subagents
+
+A subagent is a named agent profile the main agent can hand a
+self-contained task to with the `task` tool. The subagent runs a full agent
+loop in a **fresh context** - it cannot see your conversation - and only its
+final report comes back. That keeps a long search or a multi-file sweep out
+of your chat window, and lets the parent keep working while it runs.
+
+Two profiles are built in:
+
+| Profile | What it is for |
+|---------|----------------|
+| `explore` | Research. Reads, searches, and runs **read-only commands** (build, type-check, tests, linters, `git log`) to verify what it reports. It has no editing tools, so it cannot change anything. |
+| `general` | Multi-step work: inspect, edit, run commands, verify. |
+
+When the model needs several delegations in one message they run
+concurrently - `xratu.maxParallelSubagents` (default 4) caps how many at
+once, because each one is a whole agent loop with its own context and budget.
+Exceeding the cap is not an error: the rest start in order as slots free up.
+
+### Writing an agent file
+
+Run **Xratu: Agent Files** from the command palette to see every profile
+Xratu loaded - including the ones that failed and why - and to scaffold a new
+one. Files are plain markdown with YAML frontmatter; the body is the
+subagent's system prompt. Search order (first match wins):
+
+- `.xratu/agents/<name>.md`
+- `.agents/agents/<name>.md` (shared with other agent tools)
+- `.claude/agents/<name>.md` (Claude Code)
+- `~/.agents/agents/<name>.md`
+- `~/.claude/agents/<name>.md` (Claude Code)
+
+```markdown
+---
+name: code-reviewer
+description: Reviews changed code for correctness and security; use after a large edit.
+tools: read_file, grep_search, glob_search, run_terminal_command
+model: gpt-5-mini
+reasoning_effort: low
+max_rounds: 30
+---
+
+Review the diff for correctness and security problems. Report each finding
+with a file path and line number, most severe first.
+```
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Optional; must match the file name (lowercase, digits, single hyphens). |
+| `description` | **Required.** When to delegate to this agent - the model picks profiles from this line. |
+| `tools` | Optional allow-list of tool names. Omit it for everything except `task` and `ask_user_question`, which a subagent never gets. |
+| `model` | Optional. Run this profile on a specific model (its context window and output cap follow that model). Default: the parent session's model. |
+| `reasoning_effort` | Optional: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `max_rounds` | Optional loop budget for this profile (default 50). |
+
+`tools:` names are checked against the tools your install actually has when
+the file loads. Names that do not exist are dropped with a warning, and a
+list where **none** of the names exist is a hard error rather than a
+subagent that silently cannot do anything - worth knowing, because agent
+files written for other tools spell them `Read`, `Grep`, `Bash`. Run
+**Xratu: Agent Files** (or look in the **Xratu** output channel) to see
+these.
+
+A subagent keeps its own context, cannot delegate further, cannot ask you
+anything mid-run, and its own edits and commands go through the same
+approval gate as yours. Its run is reported back with a `task_id`: pass that
+id back in a later `task` call to continue the same subagent with its
+context intact instead of restarting the work. A `task_id` lives as long as
+the chat stays open in the same VS Code window - reloading the window ends
+it.
 
 ## Proxy
 

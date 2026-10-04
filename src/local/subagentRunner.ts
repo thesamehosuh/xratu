@@ -44,8 +44,14 @@ export interface SubagentHostContext {
      *  fills in the per-agent pieces (systemPrompt, userText, history, tools,
      *  maxRounds) - `maxRounds`/`sessionSummary`/`taskList`/`toolChoice`/
      *  `attachments` from the parent must NOT leak into the child (the
-     *  delegation prompt is text-only). */
-    baseRequest(): Omit<
+     *  delegation prompt is text-only).
+     *
+     *  The profile is passed because the model is per-agent overridable: a
+     *  child that names its own `model:`/`reasoning_effort:` must also get
+     *  THAT model's output cap, context window and thinking level, never the
+     *  parent's - a window/limit computed for the wrong model is how small
+     *  local children end up overflowing their context. */
+    baseRequest(def: SubagentDefinition): Omit<
         LocalAgentRequest,
         'systemPrompt' | 'userText' | 'history' | 'tools' | 'attachments'
         | 'maxRounds' | 'sessionSummary' | 'taskList' | 'taskListProvider' | 'toolChoice'
@@ -131,8 +137,11 @@ function rememberRun(registry: SubagentRunRegistry, id: string, record: Subagent
 function withTaskIdNote(output: string, taskId: string, toolCalls: number): string {
     // The count rides the note so the UI can show "how many tool calls did
     // this run make" even after a session restore (the live trace is
-    // display-only and not persisted).
-    return `${output}\n\n[task_id: ${taskId} · ${toolCalls} tool calls]`;
+    // display-only and not persisted). The lifetime clause is load-bearing:
+    // runs live in an in-memory per-chat registry, and the note itself IS
+    // persisted in the tool result - without it the model would resume a
+    // task_id that no longer exists after a reload.
+    return `${output}\n\n[task_id: ${taskId} · ${toolCalls} tool calls · resumable while this chat stays open]`;
 }
 
 function traceArgs(args: Record<string, unknown>): string {
@@ -194,7 +203,7 @@ export async function runSubagentTask(
         if (!existing) {
             const known = Array.from(registry.keys()).join(', ') || 'none';
             return {
-                output: `Unknown task_id "${req.taskId}". Available task_ids: ${known}. Start a new run with subagent_type instead.`,
+                output: `Unknown task_id "${req.taskId}". Available task_ids: ${known}. Runs do not survive a window reload or a cleared history - start a new run with subagent_type.`,
                 isError: true,
             };
         }
@@ -239,7 +248,7 @@ export async function runSubagentTask(
     allowed.delete(SUBAGENT_TOOL_NAME);
     onOutput?.(`▶ ${def.name}${resumed ? ' (resume)' : ''}\n`);
 
-    const base = ctx.baseRequest();
+    const base = ctx.baseRequest(def);
     const request: LocalAgentRequest = {
         ...base,
         systemPrompt: ctx.systemPrompt(def),

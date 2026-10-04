@@ -11,10 +11,12 @@ export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and cl
  *  explicit blocks exist to make the reply language deterministic and to keep
  *  technical terms untranslated (the #1 failure mode of weaker/local models). */
 export const REPLY_LANGUAGE_FA =
-    "Language: reply to the user in Persian (Farsi). Keep code, identifiers, file paths, " +
-    "commands, and technical terms (API, endpoint, commit, runtime, cache, branch, token) in " +
-    "English - never translate them into invented Persian; only a settled transliteration is " +
-    "fine where it is natural (کلید API).";
+    "Language: reply to the user in Persian (Farsi) - every message of the conversation, not just the first. " +
+    "Keep code, identifiers, file paths, commands, and true jargon in English - never translate them into " +
+    "invented Persian (the writing rules below carry the closed list of terms that qualify). Any other " +
+    "technical word goes in Persian script: a transliteration like رانتایم or a real Persian word like چاپ. " +
+    "Never write an English sentence or paragraph inside a Persian reply. " +
+    "Every update_task_list label is Persian too - it is user-facing UI, not an internal artifact.";
 export const REPLY_LANGUAGE_EN = "Language: reply to the user in English.";
 /** Applies in EVERY mode (fa/en/auto): the user's standing decision is that
  *  the agent's git commits are English regardless of reply language. */

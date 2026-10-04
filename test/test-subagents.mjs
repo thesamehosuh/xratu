@@ -21,6 +21,8 @@ const {
     parseTaskToolArgs,
     buildTaskToolDescription,
     buildTaskToolSchema,
+    subagentIssues,
+    agentFileTemplate,
     SUBAGENT_TOOL_NAME,
     DEFAULT_SUBAGENT_ROUNDS,
 } = require('../out/subagents.js');
@@ -73,7 +75,8 @@ const ok = (name, cond, detail = '') => {
     ok('builtins include explore', builtins.some((d) => d.name === 'explore'));
     ok('builtins include general', builtins.some((d) => d.name === 'general'));
     const explore = builtins.find((d) => d.name === 'explore');
-    ok('explore allow-list is read-only', !explore.tools.includes('edit_file') && !explore.tools.includes('run_terminal_command'));
+    ok('explore allow-list cannot edit', !explore.tools.includes('edit_file') && !explore.tools.includes('apply_patch'));
+    ok('explore can run commands to verify claims', explore.tools.includes('run_terminal_command'));
     const general = builtins.find((d) => d.name === 'general');
     check('general has no allow-list (all minus task)', general.tools, undefined);
     check('round budget default exported', DEFAULT_SUBAGENT_ROUNDS, 50);
@@ -149,6 +152,84 @@ fs.writeFileSync(
     const reviewer = resolveSubagent(defs, 'reviewer');
     check('without workspace, global copy loads', reviewer.description, 'Global reviewer');
     check('global source recorded', reviewer.source, 'global-agents');
+}
+
+// --- `tools:` / `model:` validation against the real toolset --------------
+// The regression this exists for: an agent file that names tools this host
+// does not have (Claude Code's `Read`/`Bash` vocabulary in a `.claude/agents/`
+// folder, or a typo) used to yield a child with NO tools that still looked
+// perfectly launchable to the model.
+{
+    const TOOLS = ['read_file', 'grep_search', 'glob_search', 'run_terminal_command', SUBAGENT_TOOL_NAME, 'skill'];
+    const validation = { toolNames: new Set(TOOLS) };
+    const ws = path.join(tmpRoot, 'ws-validate');
+    const dir = path.join(ws, '.xratu', 'agents');
+    fs.mkdirSync(dir, { recursive: true });
+    const write = (name, body) => fs.writeFileSync(path.join(dir, `${name}.md`), body, 'utf-8');
+    write('claude-style', '---\ndescription: Copied from another tool\ntools: Read, Grep, Glob, Bash\n---\nBody');
+    write('typo', '---\ndescription: One typo\ntools: read_file, read-files\n---\nBody');
+    write('partial', '---\ndescription: One bad name among good ones\ntools: read_file, grep_search, WebSearch\n---\nBody');
+    write('selfnest', '---\ndescription: Delegates to itself\ntools: read_file, task\n---\nBody');
+    write('priced', '---\ndescription: Runs on another model\nmodel: some-cheap-model\nreasoning_effort: low\n---\nBody');
+
+    const defs = discoverSubagents({ workspaceRoot: ws, homedir: tmpRoot, validation });
+    const names = listableSubagents(defs).map((d) => d.name);
+    ok('a tools: list that resolves to nothing is a definition ERROR', !names.includes('claude-style'));
+    const claudeStyle = defs.find((d) => d.name === 'claude-style');
+    ok('the error names the offending tools', /Read/.test(claudeStyle?.error ?? ''), String(claudeStyle?.error));
+    ok('the error lists the valid names', /read_file/.test(claudeStyle?.error ?? ''), String(claudeStyle?.error));
+    // One bad name next to good ones is a warning, not a dead profile: an
+    // external-MCP tool can be disconnected right now and come back later.
+    ok('a single typo next to valid names still loads', names.includes('typo'));
+    check('the typo is dropped from the toolset', JSON.stringify(resolveSubagent(defs, 'typo')?.tools),
+        JSON.stringify(['read_file']));
+    ok('the typo is reported as a warning', /read-files/.test(resolveSubagent(defs, 'typo')?.warning ?? ''));
+    ok('a partially valid list still loads', names.includes('partial'));
+    const partial = resolveSubagent(defs, 'partial');
+    check('the resolvable names are kept', JSON.stringify(partial.tools), JSON.stringify(['read_file', 'grep_search']));
+    ok('the dropped name is reported', /WebSearch/.test(partial?.warning ?? ''), String(partial?.warning));
+    check('task in a tools: list is stripped, not fatal', JSON.stringify(resolveSubagent(defs, 'selfnest')?.tools),
+        JSON.stringify(['read_file']));
+    ok('the always-stripped task is explained', /task/.test(resolveSubagent(defs, 'selfnest')?.warning ?? ''));
+    check('model + reasoning_effort parsed', resolveSubagent(defs, 'priced')?.model, 'some-cheap-model');
+    check('reasoning_effort parsed', resolveSubagent(defs, 'priced')?.reasoningEffort, 'low');
+
+    // Model validation only judges when the catalog actually knows something.
+    const withCatalog = discoverSubagents({
+        workspaceRoot: ws,
+        homedir: tmpRoot,
+        validation: { toolNames: new Set(TOOLS), knownModels: new Set(['gpt-5']) },
+    });
+    ok('a model this provider does not list warns', /not in this provider/.test(
+        resolveSubagent(withCatalog, 'priced')?.warning ?? ''));
+    const unknownCatalog = discoverSubagents({
+        workspaceRoot: ws,
+        homedir: tmpRoot,
+        validation: { toolNames: new Set(TOOLS), knownModels: new Set() },
+    });
+    ok('an undiscovered catalog never warns about models',
+        resolveSubagent(unknownCatalog, 'priced')?.warning === undefined);
+
+    // Diagnostics surface: everything a user should hear about, in one list.
+    const issues = subagentIssues(defs);
+    ok('broken files appear in diagnostics', issues.some((i) => i.def.name === 'claude-style' && i.fatal));
+    ok('warnings appear in diagnostics', issues.some((i) => i.def.name === 'partial' && !i.fatal));
+    ok('clean builtins raise nothing', subagentIssues(builtinSubagents()).length === 0);
+
+    // The scaffolded starter must load clean and keep its tool names.
+    const scaffoldWs = path.join(tmpRoot, 'ws-scaffold');
+    const scaffoldDir = path.join(scaffoldWs, '.xratu', 'agents');
+    fs.mkdirSync(scaffoldDir, { recursive: true });
+    fs.writeFileSync(path.join(scaffoldDir, 'my-agent.md'), agentFileTemplate('my-agent', TOOLS), 'utf-8');
+    const scaffolded = resolveSubagent(
+        discoverSubagents({ workspaceRoot: scaffoldWs, homedir: tmpRoot, validation }),
+        'my-agent');
+    ok('the scaffolded template loads', !!scaffolded, JSON.stringify(scaffolded));
+    ok('the scaffolded template has no error', !scaffolded?.error, String(scaffolded?.error));
+    ok('the scaffolded template has no warning', !scaffolded?.warning, String(scaffolded?.warning));
+    ok('the scaffolded template keeps resolvable tool names',
+        (scaffolded?.tools ?? []).every((t) => TOOLS.includes(t)), JSON.stringify(scaffolded?.tools));
+    ok('the template never nests task into a child', !(scaffolded?.tools ?? []).includes(SUBAGENT_TOOL_NAME));
 }
 
 // --- filterToolsForSubagent (recursion + session-control deny, allow-list) ---

@@ -133,13 +133,17 @@ const GENERAL = DEFS.find((d) => d.name === 'general');
 function childContext(extra = {}) {
     const usageEvents = [];
     let requestCount = 0;
+    let lastDef = null;
     return {
         usageEvents,
         requestCount: () => requestCount,
+        /** The profile handed to the base-request factory on the last call. */
+        lastDef: () => lastDef,
         ctx: {
             // Factory: one invocation per task (fresh conversation identity).
-            baseRequest: () => {
+            baseRequest: (def) => {
                 requestCount++;
+                lastDef = def;
                 return {
                     baseUrl: 'https://example.invalid/v1',
                     apiKey: 'k',
@@ -224,7 +228,7 @@ function childContext(extra = {}) {
     }, new Map()));
     ok('tool result is the final report', result.output.startsWith('ANSWER: found foo at src/x.ts:10'), result.output);
     ok('result carries the task_id note with the tool-call count',
-        /\[task_id: [0-9a-f]{10} · 1 tool calls\]/.test(result.output), result.output);
+        /\[task_id: [0-9a-f]{10} · 1 tool calls · resumable while this chat stays open\]/.test(result.output), result.output);
     check('result is not an error', result.isError, undefined);
     check('child made exactly two rounds', seen.length, 2);
     ok('trace announces the subagent', trace.join('').includes('▶ explore'));
@@ -303,6 +307,27 @@ function childContext(extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. Per-agent model/effort: the factory receives the PROFILE, so the child
+// can run on its own model (and that model's caps/window), not the parent's.
+// ---------------------------------------------------------------------------
+{
+    const defs = [{
+        name: 'cheap',
+        description: 'Runs on another model',
+        prompt: 'Do the thing.',
+        model: 'small-model',
+        reasoningEffort: 'low',
+        maxRounds: 2,
+        source: 'project-xratu',
+    }];
+    const { ctx, lastDef } = childContext();
+    await withMockFetch([() => textReply('done')], () =>
+        runSubagentTask(ctx, defs, { subagentType: 'cheap', description: 'd', prompt: 'go' }, new Map()));
+    check('baseRequest receives the launched profile', lastDef()?.name, 'cheap');
+    check("the profile's model reaches the transport", lastDef()?.model, 'small-model');
+}
+
+// ---------------------------------------------------------------------------
 // 6. Resume/heal: task_id continues the same subagent with its context.
 // ---------------------------------------------------------------------------
 {
@@ -334,6 +359,10 @@ function childContext(extra = {}) {
     }, registry));
     ok('resume continues with the final answer', second.result.output.startsWith('FULL:'), second.result.output);
     ok('resume keeps the same task_id', second.result.output.includes(`[task_id: ${taskId} ·`), second.result.output);
+    // The note is PERSISTED with the tool result, so it has to state its own
+    // lifetime: runs live in an in-memory per-chat registry.
+    ok('the task_id note states its lifetime',
+        second.result.output.includes('resumable while this chat stays open'), second.result.output);
     const resumedMessages = second.seen[0].body.messages;
     ok('resume restores the run history (not a fresh context)',
         resumedMessages.length > 2, `messages=${resumedMessages.length}`);

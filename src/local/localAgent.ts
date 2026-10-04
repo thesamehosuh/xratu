@@ -299,6 +299,11 @@ export interface LocalAgentRequest {
      *  ledger rows are pushed in completion order (which is what the
      *  replayed history stores, so run and replay stay byte-identical). */
     parallelTools?: string[];
+    /** Max simultaneous calls inside a `parallelTools` group; the rest start
+     *  as slots free up. Each parallel call can be a whole nested agent loop
+     *  with its own context window and round budget, so an uncapped group is
+     *  an uncapped bill. Undefined = no limit (every call at once). */
+    parallelToolLimit?: number;
 }
 
 export interface LocalToolExecutor {
@@ -4061,7 +4066,17 @@ export async function* runLocalAgent(
                     if (--remaining === 0) eventQueue.close();
                 }
             };
-            for (const call of parallelCalls) void runOne(call);
+            // Wave-limited launch: a group larger than the cap starts in
+            // batches, so N delegations cost N-at-a-time rather than N at
+            // once. Results still stream into the same queue as each call
+            // settles (the drain below is unchanged), and `runOne` never
+            // rejects, so awaiting a wave cannot fail the round.
+            const limit = Math.max(1, Math.floor(request.parallelToolLimit ?? parallelCalls.length) || parallelCalls.length);
+            void (async () => {
+                for (let i = 0; i < parallelCalls.length; i += limit) {
+                    await Promise.all(parallelCalls.slice(i, i + limit).map((call) => runOne(call)));
+                }
+            })();
             void (async () => {
                 for (const call of finalResult.toolCalls) {
                     if (parallelNames.has(call.name)) continue;

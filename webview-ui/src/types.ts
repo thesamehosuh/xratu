@@ -1,6 +1,8 @@
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
+import type { TranscriptPrefs } from './transcriptPrefs';
+
 /** One completed edit call to diff: the raw tool args text (JSON as the
  *  tool sent it), the server-side tool_call id for snapshot lookup, and the
  *  tool's result text (distinguishes a create from an overwrite). */
@@ -107,6 +109,10 @@ export type ToExtensionMessage =
     /** Persist the agent's reply language (Settings page chips). 'auto' = no
      *  prompt block; the model follows the user's message language. */
     | { type: 'setReplyLanguage'; replyLanguage: 'fa' | 'en' | 'auto' }
+    /** Settings page: flip one auto-expand switch (diffs / commands /
+     *  thinking). The host merges it into its opaque prefs blob and echoes
+     *  transcriptPrefs. */
+    | { type: 'transcriptSet'; id: string; enabled: boolean }
     /** @-mention support: ask the host for the workspace file list (git
      *  keep-set with a findFiles fallback) to power the composer popup. */
     | { type: 'requestFileList' }
@@ -364,6 +370,10 @@ export type FromExtensionMessage =
     /** Effective reply language (locale-derived default resolved host-side),
      *  echoed on webviewReady. */
     | { type: 'replyLanguage'; replyLanguage: 'fa' | 'en' | 'auto' }
+    /** Transcript display prefs - echoed on webviewReady and after every
+     *  transcriptSet, so the transcript and the Settings switches can never
+     *  disagree. An empty blob means "all defaults" (webview-owned). */
+    | { type: 'transcriptPrefs'; prefs: TranscriptPrefs }
     /** The file open in the active editor (workspace-relative, null when
      *  none) - lets suggestion workflows name the user's actual file. */
     | { type: 'editorContext'; activeFile: string | null }

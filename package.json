@@ -113,6 +113,13 @@
           "default": 0,
           "description": "%config.maxAgentRounds.desc%"
         },
+        "xratu.maxParallelSubagents": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "%config.maxParallelSubagents.desc%"
+        },
         "xratu.autoCompactThreshold": {
           "type": "number",
           "default": 90,
@@ -140,6 +147,11 @@
       {
         "command": "xratu.openSettings",
         "title": "%command.openSettings.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "xratu.agentFiles",
+        "title": "%command.agentFiles.title%",
         "category": "%command.category%"
       },
       {
@@ -245,6 +257,7 @@
     "test:user-question": "node test/test-user-question.mjs",
     "test:task-list": "node test/test-task-list.mjs",
     "test:agent-rounds": "node test/test-agent-rounds.mjs",
+    "test:parallel-subagents": "node test/test-parallel-subagents.mjs",
     "test:vsix-contents": "node test/test-vsix-contents.mjs",
     "test:patch-parser": "node test/test-patch-parser.mjs",
     "test:edit-diff": "node test/test-edit-diff.mjs",
@@ -253,6 +266,7 @@
     "test:prompt-cache-rate": "node test/test-prompt-cache-rate.mjs",
     "test:prompt-cache-prefix": "node test/test-prompt-cache-prefix.mjs",
     "test:compaction-policy": "node test/test-compaction-policy.mjs",
+    "test:transcript-prefs": "node test/test-transcript-prefs.mjs",
     "package": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && node esbuild.js --production && vite build --mode production",
     "package-vsix": "npx vsce package --no-dependencies",
     "compile-tests": "tsc -p . --outDir out",
