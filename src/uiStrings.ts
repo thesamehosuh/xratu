@@ -34,7 +34,7 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     notifRegenerateFailed: { fa: 'تولید دوباره ناموفق بود: {error}', en: 'Regeneration failed: {error}' },
     notifBackgroundJobDone: { fa: 'پس زمینه {command} تمام شد ({outcome}).', en: 'Background {command} finished ({outcome}).' },
     notifBackgroundJobGone: { fa: 'این دستور دیگه در حال اجرا نیست.', en: 'That command is no longer running.' },
-    notifBackgroundAdopted: { fa: '{count} پروسه در پس زمینه از قبلین اجرا مونده و دوباره به دست اومد.', en: '{count} background process(es) from the previous session were recovered.' },
+    notifBackgroundAdopted: { fa: '{count} پروسه در پس زمینه از قبل اجرا مونده و دوباره به دست اومد.', en: '{count} background process(es) from the previous session were recovered.' },
     notifBackgroundUnrecoverable: { fa: '{count} پروسه در پس زمینه قابل بازیابی نبود و رها شد.', en: '{count} background process record(s) could not be verified and were dropped.' },
     notifBackgroundAlreadyRunning: { fa: 'این دستور همین حالا در پس زمینه در حال اجراست.', en: 'That command is already running in the background.' },
     copyCode: { fa: 'کپی', en: 'Copy' },

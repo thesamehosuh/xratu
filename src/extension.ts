@@ -3339,6 +3339,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             this._localSteerQueue.push({ text, system: true });
         } else {
             this._pendingJobNotices.push(text);
+            // Bounded: each notice carries a job's output tail, and a watcher
+            // that restarts while the user is away could otherwise hand dozens
+            // of them to the next turn - token spend nobody asked for, pushing
+            // the context toward overflow. The most recent are the useful ones.
+            if (this._pendingJobNotices.length > MAX_PENDING_JOB_NOTICES) {
+                this._pendingJobNotices.splice(0, this._pendingJobNotices.length - MAX_PENDING_JOB_NOTICES);
+            }
         }
         this._postBackgroundJobs();
         const outcome = notice.status === 'exited' && notice.exitCode === 0 ? 'info' : 'warning';
@@ -7189,6 +7196,10 @@ async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void
         }
     }
 }
+
+/** Cap on completion reports held while no run is live. Each carries a job's
+ *  output tail, and they are all delivered to the next turn. */
+const MAX_PENDING_JOB_NOTICES = 16;
 
 export function activate(context: vscode.ExtensionContext) {
     const checkpoints = new ShadowCheckpointStore(context);

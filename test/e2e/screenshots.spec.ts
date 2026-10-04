@@ -5,7 +5,7 @@
  * LOOK at and writes PNGs to test/e2e/screenshots/. Run manually:
  *
  *   npm run build:webview
- *   npx playwright test -c test/e2e/playwright.config.ts screenshots.spec.ts
+ *   XRATU_SCREENSHOTS=1 npx playwright test -c test/e2e/playwright.config.ts screenshots.spec.ts
  *
  * Both locales and both widths, because RTL breaks differently than LTR and a
  * sidebar is where the composer badge actually has to fit.

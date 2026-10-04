@@ -22,7 +22,7 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-background-recovery.mjs
  */
 import { createRequire } from 'module';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -31,6 +31,7 @@ const require = createRequire(import.meta.url);
 const {
     adoptDetachedJob,
     adoptableJobRecords,
+    describeTerminalJob,
     formatJobCompletion,
     getTerminalJob,
     listTerminalJobs,
@@ -49,6 +50,16 @@ const ok = (name, cond, detail = '') => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isWindows = process.platform === 'win32';
 const sh = (posix, windows) => (isWindows ? windows : posix);
+
+/** A command that stays running: the duration is baked into a script file, so
+ *  nothing about it depends on shell quoting (see the same note in
+ *  test-background-jobs.mjs). */
+const holdFile = mkdtempSync(join(tmpdir(), 'xratu-hold-'));
+writeFileSync(join(holdFile, 'hold.js'), "setTimeout(() => {}, 30000);\n", 'utf8');
+const holdsForQuiet = () => sh(
+    `${JSON.stringify(process.execPath)} ${JSON.stringify(join(holdFile, 'hold.js'))}`,
+    `node ${JSON.stringify(join(holdFile, 'hold.js'))}`,
+);
 
 /** A long-lived child we own, used as a stand-in for "the user's dev server". */
 function spawnSleeper() {
@@ -209,8 +220,11 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     await Promise.all([store.save([record]), store.save([record]), store.save([record])]);
     const { alive: found } = await store.load();
     ok('concurrent saves leave a loadable file', found.length === 1, `found ${found.length}`);
-    ok('no stray tmp file is left in the directory',
-        readFileSync(join(dir, 'background-jobs.json'), 'utf8').length > 0);
+    // Actually looks for stray tmp files. The previous version only checked
+    // that the final file was non-empty, which no leftover temp file could
+    // ever affect - so it passed by construction.
+    const leftovers = readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+    ok('no stray tmp file is left behind', leftovers.length === 0, JSON.stringify(leftovers));
     rmSync(dir, { recursive: true, force: true });
 }
 
@@ -236,7 +250,11 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     ok('an adopted job cannot be backgrounded again', adopted.moveToBackground(true) === false);
     ok('an adopted job says its output is gone rather than empty',
         /no output is available/.test(readJobOutput(adopted)), JSON.stringify(readJobOutput(adopted)));
-    ok('an adopted job is marked as recovered', /recovered/.test(JSON.stringify(adopted) + 'background, recovered'));
+    // Checks the rendered line, not the object: the old version tested a string
+    // that already contained the literal it was looking for, so it could not
+    // fail.
+    ok('an adopted job is marked as recovered', /recovered/.test(describeTerminalJob(adopted)),
+        describeTerminalJob(adopted));
 
     // A3: the id must be reserved, or the next spawn steals it.
     const fresh = spawnTerminalJob({
@@ -260,6 +278,54 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     ok('and it reports as killed', adopted.status === 'killed', adopted.status);
     if (!isWindows) ok('the recovered process tree is actually gone', await waitDead(pid), `pid ${pid}`);
     else child.kill();
+}
+
+{
+    // CRITICAL: an adopted job's kill must RE-PROVE the identity at the moment
+    // it signals, not trust a cached answer. The cached proof can be hours old,
+    // and `killTree` kills the whole process GROUP on POSIX - so a stale proof
+    // terminates whatever now holds that pid. This is the exact hazard
+    // processIdentity.ts exists to prevent.
+    const child = spawnSleeper();
+    const identity = captureIdentity(child.pid);
+    const adopted = adoptDetachedJob({
+        id: 'job-stale', command: 'npm run dev', cwd: tmp, identity,
+        startedAt: Date.now(), uptimeSeconds: 1, backgroundedByUser: false,
+        status: 'running', exitCode: null,
+    });
+    ok('the adopted job still believes it is running', adopted.status === 'running', adopted.status);
+
+    child.kill();
+    await new Promise((r) => child.once('exit', r));
+    await sleep(200);
+
+    adopted.kill('must not signal a recycled pid');
+    ok('killing a job whose process is gone signals nothing',
+        adopted.status !== 'running', adopted.status);
+    ok('and it settles rather than hanging',
+        await Promise.race([adopted.finished.then(() => 'settled'), sleep(3000).then(() => 'HUNG')]) === 'settled');
+    ok('it is not reported as killed by us', adopted.killReason === null, String(adopted.killReason));
+    if (!isWindows) ok('and no signal was delivered to the recycled pid', await waitDead(child.pid, 5000));
+}
+
+{
+    // A job released by the USER must reach the checkpoint. `job.identity` used
+    // to be a snapshot taken at construction, so the identity captured during
+    // the release never showed up on the object and the job was never
+    // persisted - an unstoppable orphan after the next reload.
+    const job = spawnTerminalJob({
+        workspaceRoot: process.cwd(),
+        command: holdsForQuiet(),
+    });
+    ok('a fresh foreground job has no identity yet', job.identity === undefined, JSON.stringify(job.identity));
+    ok('the user can release it', job.moveToBackground(true) === true);
+    const record = adoptableJobRecords().find((r) => r.id === job.id);
+    ok('a released job is checkpointable - it has an identity', !!record, 'no record');
+    ok('and the record carries a real identity',
+        !!record && !!record.identity && record.identity.pid === job.pid, JSON.stringify(record?.identity));
+    ok('the record is still running, not finished', record?.status === 'running', record?.status);
+    job.kill('test cleanup');
+    await job.finished;
 }
 
 {

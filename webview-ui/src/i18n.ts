@@ -662,7 +662,7 @@ const fa = {
     notifRegenerateFailed: 'تولید دوباره ناموفق بود: {error}',
     notifBackgroundJobDone: 'پس زمینه {command} تمام شد ({outcome}).',
     notifBackgroundJobGone: 'این دستور دیگه در حال اجرا نیست.',
-    notifBackgroundAdopted: '{count} پروسه در پس زمینه از قبلین اجرا مونده و دوباره به دست اومد.',
+    notifBackgroundAdopted: '{count} پروسه در پس زمینه از قبل اجرا مونده و دوباره به دست اومد.',
     notifBackgroundUnrecoverable: '{count} پروسه در پس زمینه قابل بازیابی نبود و رها شد.',
     notifBackgroundAlreadyRunning: 'این دستور همین حالا در پس زمینه در حال اجراست.',
 

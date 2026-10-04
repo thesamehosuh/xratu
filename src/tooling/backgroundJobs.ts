@@ -326,6 +326,19 @@ export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
         uptimeSeconds: () => Math.round(((finishedAt ?? Date.now()) - spec.startedAt) / 1000),
         kill(why: string) {
             if (killReason || finishedAt !== undefined) return;
+            // Re-prove the identity IMMEDIATELY before signalling, unthrottled.
+            // The cached answer may be hours old: the process can have exited,
+            // and the pid been recycled onto something else. `killTree` on
+            // POSIX kills the whole process GROUP, so a stale proof here
+            // terminates an unrelated session - the exact hazard this module
+            // exists to prevent. Fail closed: if it cannot be proven ours,
+            // nothing is signalled.
+            if (!isOurProcess(identity)) {
+                finishedAt = Date.now();
+                onJobsChanged?.();
+                resolveFinished?.();
+                return;
+            }
             killReason = why;
             finishedAt = Date.now();
             onJobsChanged?.();
@@ -460,7 +473,13 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         pid: child.pid,
         startedAt,
         callId,
-        identity,
+        // A GETTER, not a copy: the Windows probe fills the token in
+        // asynchronously, and `moveToBackground` fills it later still. A
+        // snapshot taken here kept the initial `undefined`/`unverified`
+        // forever, so `adoptableJobRecords` never saw an identity - and a job
+        // the USER released to the background was never checkpointed, turning
+        // it into the unstoppable orphan the checkpoint exists to prevent.
+        get identity() { return identity; },
         get background() { return isBackground; },
         /** True when the USER released the turn rather than the model asking. */
         get backgroundedByUser() { return backgroundedByUser; },
