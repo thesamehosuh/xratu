@@ -68,29 +68,34 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * A command that is guaranteed to still be running after `ms`.
  *
- * Two things this must NOT be:
+ * Three earlier attempts at this all failed on the windows CI leg, each in a
+ * way that looked like a product bug:
  *
- *  - `ping -n 2`, which is only a ~1s wait when loopback behaves. On a runner
- *    where it returns sooner, a job meant to outlive a 700ms check had already
- *    exited and the timer assertions were asserting timing luck.
- *  - `node -e "<source>"`, whose quoted source does not survive cmd.exe's
- *    `/s` quote stripping - the command failed outright and the job exited at
- *    once, which is exactly the failure the windows CI leg reported.
+ *  - `ping -n 2` is only a ~1s wait when loopback behaves, so on a faster
+ *    runner the job had already exited;
+ *  - `node -e "<source>"` does not survive cmd.exe's `/s` quote stripping, so
+ *    the command failed outright and exited at once;
+ *  - passing the duration as `node hold.js 2500` arrived as the literal
+ *    `"2500"`, so `Number()` produced NaN and `setTimeout` fired immediately.
  *
- * So: a real script file holding a real timer, invoked as bare `node`. Both
- * forms are shell-quote-free beyond one quoted path, and the tree-kill test
- * already proves the bare-`node` form runs on windows.
+ * So the duration is BAKED INTO THE SCRIPT and there is no argument to mangle.
+ * One cached file per duration; bare `node` plus a single quoted path is the
+ * only quoting left, which is the form the tree-kill test proves runs here.
  */
-const HOLD_SCRIPT = join(mkdtempSync(join(tmpdir(), 'xratu-hold-')), 'hold.js');
-writeFileSync(HOLD_SCRIPT, [
-    'const ms = Number(process.argv[2] || 1000);',
-    "setTimeout(() => { console.log('held'); }, ms);",
-].join('\n'), 'utf8');
-
-const holdsFor = (ms) => sh(
-    `${JSON.stringify(process.execPath)} ${JSON.stringify(HOLD_SCRIPT)} ${ms}`,
-    `node ${JSON.stringify(HOLD_SCRIPT)} ${ms}`,
-);
+const holdDir = mkdtempSync(join(tmpdir(), 'xratu-hold-'));
+const holdFiles = new Map();
+const holdsFor = (ms) => {
+    let file = holdFiles.get(ms);
+    if (!file) {
+        file = join(holdDir, `hold-${ms}.js`);
+        writeFileSync(file, `setTimeout(() => { console.log('held'); }, ${ms});\n`, 'utf8');
+        holdFiles.set(ms, file);
+    }
+    return sh(
+        `${JSON.stringify(process.execPath)} ${JSON.stringify(file)}`,
+        `node ${JSON.stringify(file)}`,
+    );
+};
 
 const waitDead = async (pid, ms = 10_000) => {
     const end = Date.now() + ms;
@@ -224,7 +229,7 @@ const fakeJob = (over) => ({
     // A live job is killable and the tree kill reaches the group.
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         // Long windows so only the kill can end it.
         idleKillMs: 600_000,
         hardCapMs: 600_000,
@@ -244,7 +249,7 @@ const fakeJob = (over) => ({
     // kill() is idempotent: a second request must not re-signal or throw.
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         idleKillMs: 600_000,
         hardCapMs: 600_000,
     });
@@ -285,7 +290,7 @@ const fakeJob = (over) => ({
 {
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         idleKillMs: 200,
         hardCapMs: 600_000,
     });
@@ -297,7 +302,7 @@ const fakeJob = (over) => ({
 {
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         idleKillMs: 600_000,
         hardCapMs: 400,
     });
@@ -366,12 +371,12 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // running. This is the regression that makes `background` safe to offer.
     const bg = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         background: true,
     });
     const fg = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         background: false,
     });
     ok('a foreground cancel signals exactly one job', killForegroundJobs('test cancel') === 1, 'counted wrong');
@@ -392,7 +397,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
         for (let i = 0; i < MAX_BACKGROUND_JOBS + 2; i++) {
             spawned.push(spawnTerminalJob({
                 workspaceRoot: process.cwd(),
-                command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+                command: holdsFor(30_000),
                 background: true,
             }));
         }
@@ -477,7 +482,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 {
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsFor(30_000),
         background: true,
     });
     const started = Date.now();
@@ -528,7 +533,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     const unsubscribe = onJobEvent((e) => events.push(e));
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 1; echo released-ok', 'ping -n 2 127.0.0.1 > nul & echo released-ok'),
+        command: holdsFor(2_500),
         idleKillMs: 400,
         hardCapMs: 400,
         callId: 'call-abc',
@@ -640,7 +645,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // the button must not be able to tell the agent different things.
     // Asserted against the command ACTUALLY used - hardcoding the POSIX one
     // fails the windows leg, where the shell is cmd.exe.
-    const command = sh('sleep 30', 'ping -n 31 127.0.0.1 > nul');
+    const command = holdsFor(30_000);
     const job = spawnTerminalJob({
         workspaceRoot: process.cwd(),
         command,
