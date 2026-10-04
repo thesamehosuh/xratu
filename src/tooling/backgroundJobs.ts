@@ -429,24 +429,28 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         windowsVerbatimArguments,
     });
     child.stdin.end();
-    // Not captured for a FOREGROUND command: `processStartToken` needs a
-    // subprocess on Windows, and paying that on every command froze the
-    // extension host for the call's whole timeout. `moveToBackground` captures
-    // lazily instead - it can only succeed while the job is still running, so
-    // the pid is certainly ours at that moment too.
-    let identity: ProcessIdentity | undefined = captureIdentity(child.pid) ?? undefined;
-    // On Windows the real token needs a subprocess, so it is fetched in the
-    // background: the job exists immediately (killable by id, listed, and the
-    // tool call already returned) and its identity is upgraded the moment the
-    // answer lands. Until then the token is 'unverified', and `isOurProcess`
-    // refuses that - so a checkpoint written in the gap is honest instead of
-    // asserting an identity we have not proven yet.
-    if (startBackground && child.pid) {
-        captureIdentityAsync(child.pid, (resolved) => {
-            identity = resolved;
-            // Re-checkpoint so the durable record carries the real identity.
-            onJobsChanged?.();
-        });
+    // Deliberately empty for a FOREGROUND command, and on Windows even for a
+    // background one: `processStartToken` needs a subprocess there, and
+    // capturing it synchronously froze the extension host for the whole probe
+    // on every spawn. `moveToBackground` captures lazily instead - it can only
+    // succeed while the job is still running, so the pid is certainly ours at
+    // that moment too.
+    let identity: ProcessIdentity | undefined;
+    if (startBackground) {
+        if (process.platform === 'win32') {
+            // Async: the job exists immediately (listed, killable by id, tool
+            // call already returned) and the identity is upgraded when the
+            // answer lands. Until then the token is 'unverified', which
+            // `isOurProcess` refuses - so a checkpoint written in the gap is
+            // honest instead of asserting an identity we have not proven.
+            captureIdentityAsync(child.pid, (resolved) => {
+                identity = resolved;
+                // Re-checkpoint so the durable record carries the real token.
+                onJobsChanged?.();
+            });
+        } else {
+            identity = captureIdentity(child.pid) ?? undefined;
+        }
     }
 
     const job: TerminalJob = {
@@ -505,8 +509,14 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         isBackground = true;
         backgroundedByUser = byUser;
         // Last chance to prove the identity: the process is still alive here,
-        // and this is the moment the checkpoint starts caring about it.
-        identity ??= captureIdentity(child.pid) ?? undefined;
+        // and this is the moment the checkpoint starts caring about it. Async
+        // on Windows, which applies immediately everywhere else.
+        if (child.pid && !identity) {
+            captureIdentityAsync(child.pid, (resolved) => {
+                identity = resolved;
+                onJobsChanged?.();
+            });
+        }
         clearTimeout(idleTimer);
         clearTimeout(hardTimer);
         resolveReleased?.('backgrounded');

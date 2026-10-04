@@ -138,19 +138,17 @@ export function processStartToken(pid: number): string | null {
 }
 
 /**
- * Capture the identity of a pid right after spawning it.
+ * Capture the identity of a pid right after spawning it, synchronously.
  *
- * Synchronous, and only correct on hosts where reading the start time is
- * cheap: Linux reads `/proc`, macOS shells out to `ps` for a few hundred
- * milliseconds at worst. On Windows the equivalent needs PowerShell, and the
- * synchronous form froze the extension host for the call's whole 2s timeout on
- * every background spawn - which is the exact thing this repo forbids (see the
- * notes on `spawnSync` in mcp.ts and the async rule in shadowGit.ts). Windows
- * therefore uses `captureIdentityAsync`.
+ * BLOCKS on Windows: reading a process creation time there needs PowerShell,
+ * and the call runs to completion before returning. That froze the extension
+ * host for the whole probe on every background spawn, which is the exact thing
+ * this repo forbids (see the note on `spawnSync` in mcp.ts and the async rule
+ * in shadowGit.ts). Any hot path MUST use `captureIdentityAsync` instead; this
+ * stays synchronous so it remains a plain, testable function everywhere.
  */
 export function captureIdentity(pid: number | undefined): ProcessIdentity | null {
     if (!pid || pid <= 0) return null;
-    if (process.platform === 'win32') return null;
     const token = processStartToken(pid);
     // No token is still recorded, with an explicit marker: refusing to persist
     // the job would lose it, and pretending the pid alone is an identity is the

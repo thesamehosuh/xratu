@@ -38,7 +38,7 @@ const {
     spawnTerminalJob,
 } = require('../out/tooling/backgroundJobs.js');
 const { BackgroundJobStore } = require('../out/tooling/backgroundJobStore.js');
-const { captureIdentity, isOurProcess, processStartToken } = require('../out/tooling/processIdentity.js');
+const { captureIdentity, captureIdentityAsync, isOurProcess, processStartToken } = require('../out/tooling/processIdentity.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -82,6 +82,25 @@ ok('a live process we captured is recognised as ours',
     const identity = captureIdentity(child.pid);
     ok('a spawned child yields an identity', !!identity && identity.token !== 'unverified', JSON.stringify(identity));
     ok('and it is recognised as ours', isOurProcess(identity) === true);
+
+    // The async path is the ONLY path on Windows, so it needs its own
+    // assertion: it must eventually deliver a real token that `isOurProcess`
+    // accepts, rather than leaving the job permanently unverified.
+    const upgraded = await new Promise((resolve) => {
+        const end = Date.now() + 15_000;
+        const tick = () => {
+            const seen = [];
+            captureIdentityAsync(child.pid, (id) => seen.push(id));
+            const good = seen.find((id) => id.token !== 'unverified');
+            if (good) return resolve(good);
+            if (Date.now() > end) return resolve(seen[0] ?? null);
+            setTimeout(tick, 200);
+        };
+        tick();
+    });
+    ok('the async path delivers a real token', !!upgraded && upgraded.token !== 'unverified',
+        JSON.stringify(upgraded));
+    ok('and that token identifies our process', isOurProcess(upgraded) === true);
 
     // THE regression: same pid, different incarnation. This is what a recycled
     // pid looks like, and it must never be treated as our process.
