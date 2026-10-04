@@ -110,6 +110,19 @@ ok('a live process we captured is recognised as ours',
     });
     ok('the async path delivers a real token', !!upgraded && upgraded.token !== 'unverified',
         JSON.stringify(upgraded));
+    // The invariant that was actually broken: the two windows probes are two
+    // transports for ONE value, so they must yield the same string. Asserted
+    // directly rather than only through `isOurProcess`, because the round-trip
+    // re-reads via the sync probe and so reports a formatting drift as a bare
+    // "false" - which is what sent the original investigation after a timeout
+    // or a throw instead of after the two formats themselves. Comparing the
+    // tokens names the mismatch in the failure detail.
+    ok('and the async and sync probes agree byte for byte',
+        upgraded?.token === identity.token,
+        `async=${JSON.stringify(upgraded?.token)} sync=${JSON.stringify(identity.token)}`);
+    // Kept even though the line above covers it: this is the property that
+    // actually matters in production, since a token that the two probes agree
+    // on but that `isOurProcess` rejects would still strand the job.
     ok('and that token identifies our process', isOurProcess(upgraded) === true);
 
     // THE regression: same pid, different incarnation. This is what a recycled

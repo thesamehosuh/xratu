@@ -91,6 +91,46 @@ function linuxStartTime(pid: number): string | null {
 }
 
 /**
+ * The PowerShell start-time probe for a pid.
+ *
+ * Shared by BOTH windows probes - the synchronous `processStartToken` and the
+ * asynchronous `captureIdentityAsync`. They are two transports for one value,
+ * so the command lives here as a single function: when it was inlined in both
+ * places, each branch was edited independently and any drift between them
+ * silently produced two incomparable token formats.
+ */
+function windowsStartTimeQuery(pid: number): string {
+    // Get-Process, NOT Get-CimInstance: the CIM subsystem has to warm up on a
+    // cold runner and regularly blew past any sane timeout. StartTime is the
+    // same value.
+    //
+    // ToUniversalTime, not the local DateTime: the capture and the
+    // post-restart verification can straddle a DST change, and a shifted
+    // offset would serialize to a different string - so a perfectly healthy
+    // job would look recycled.
+    return `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`;
+}
+
+/**
+ * Format a raw windows start time into an identity token.
+ *
+ * Both windows probes MUST funnel through here, and this is load-bearing
+ * rather than cosmetic. `isOurProcess` compares a freshly-read token against a
+ * recorded one with `===`, and the token is persisted in the checkpoint file,
+ * so the two probes have to agree on the exact string. They did not: the async
+ * probe resolved the bare timestamp while the sync probe emitted a
+ * platform-tagged one. Every job captured through the async path - the only
+ * path the hot spawn path is allowed to use - therefore failed its own
+ * identity check forever, and was dropped at the next checkpoint load instead
+ * of being adopted. Recovery was broken on Windows for every such job, and
+ * the only symptom was a silently missing record.
+ */
+function windowsToken(raw: string): string | null {
+    const value = raw.trim();
+    return value ? `win32:${value}` : null;
+}
+
+/**
  * The identity token for a pid, or null when the platform cannot supply one.
  *
  * Returning null is honest and load-bearing: callers must treat "no token" as
@@ -107,21 +147,13 @@ export function processStartToken(pid: number): string | null {
             const out = cp.execFileSync(
                 'powershell.exe',
                 ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-                    // Get-Process, NOT Get-CimInstance: the CIM subsystem has
-                    // to warm up on a cold runner and regularly blew past any
-                    // sane timeout here. StartTime is the same value.
-                    //
-                    // ToUniversalTime, not the local DateTime: the capture and
-                    // the post-restart verification can straddle a DST change,
-                    // and a shifted offset would serialize to a different
-                    // string - so a perfectly healthy job would look recycled.
-                    `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`],
+                    windowsStartTimeQuery(pid)],
                 // Bounded hard, and stdin ignored: this runs on a path that can
                 // block the extension host, so it must never inherit a stdin
                 // pipe or wait on an interactive prompt.
                 { encoding: 'utf-8', timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
-            ).trim();
-            return out ? `win32:${out}` : null;
+            );
+            return windowsToken(out);
         } catch {
             return null;
         }
@@ -184,12 +216,7 @@ export function captureIdentityAsync(
     void new Promise<string | null>((resolve) => {
         const child = cp.spawn('powershell.exe', [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-            // Get-Process rather than Get-CimInstance (the CIM subsystem is
-            // slow to warm on a cold runner and was timing out).
-            // ToUniversalTime: a capture and a post-restart verification can
-            // straddle a DST change, and a shifted offset serializes to a
-            // different string - a healthy job would look recycled.
-            `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')`,
+            windowsStartTimeQuery(pid),
             // stderr is PIPED, not ignored: it is how a failing probe explains
             // itself. Still no stdin, so it can never wait on a prompt.
         ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -210,7 +237,7 @@ export function captureIdentityAsync(
                 // recovery quietly stops working with nothing to show for it.
                 console.warn(`xratu: process identity probe failed on windows: ${stderr.trim().slice(0, 200)}`);
             }
-            resolve(value || null);
+            resolve(windowsToken(value));
         });
     }).then((token) => { apply({ pid, token: token ?? 'unverified' }); });
 }
