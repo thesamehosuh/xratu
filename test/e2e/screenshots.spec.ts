@@ -39,6 +39,23 @@ const JOBS = [
     { jobId: 'job-2', command: 'npx tailwindcss --watch', running: true, uptimeSeconds: 37 },
 ];
 
+/** The shape that used to break the strip: a whole shell loop on one line.
+ *  Chips sized themselves to this and pushed the strip past the panel edge, so
+ *  every width/locale combination screenshots it. */
+const LONG_JOB = {
+    jobId: 'job-3',
+    command: 'for i in $(seq 1 15); do echo "tick $i at $(date +%H:%M:%S)"; sleep 2; done; echo "job finished cleanly"',
+    running: true,
+    uptimeSeconds: 4210,
+};
+
+
+/** The dock is folded by default - open it before shooting its rows. */
+async function openDock(page: Page): Promise<void> {
+    await page.locator('.bg-jobs-toggle').click();
+    await page.locator('.bg-job').first().waitFor();
+}
+
 for (const locale of ['fa', 'en'] as const) {
     for (const [label, width] of [['sidebar', 420], ['wide', 900]] as const) {
         test(`${locale} ${label}: running command with the background button`, async ({ page }) => {
@@ -60,7 +77,10 @@ for (const locale of ['fa', 'en'] as const) {
             });
             await page.locator('.step.running').waitFor();
             await host(page, { type: 'backgroundJobs', jobs: [JOBS[0]!] });
-            await page.locator('.bg-job').waitFor();
+            await page.locator('.bg-jobs').waitFor();
+            // Folded is the resting state a reviewer must see first.
+            await page.screenshot({ path: join(OUT, `bg-folded-${locale}-${label}.png`) });
+            await openDock(page);
             await page.screenshot({ path: join(OUT, `bg-running-${locale}-${label}.png`) });
         });
 
@@ -84,8 +104,24 @@ for (const locale of ['fa', 'en'] as const) {
             await page.locator('.step.running').waitFor();
             await host(page, { type: 'terminalBackgrounded', callId: 'call-1', jobId: 'job-1', byUser: true });
             await host(page, { type: 'backgroundJobs', jobs: JOBS });
-            await page.locator('.bg-job').nth(1).waitFor();
+            await openDock(page);
+            await page.locator('.bg-job').nth(1).hover();
             await page.screenshot({ path: join(OUT, `bg-stop-${locale}-${label}.png`) });
+        });
+
+        test(`${locale} ${label}: long commands truncate inside the card`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await installVscodeTheme(page);
+            await page.goto('/');
+            await host(page, { type: 'locale', locale });
+            await host(page, { type: 'showChat' });
+            await host(page, { type: 'backgroundJobs', jobs: [LONG_JOB] });
+            await page.locator('.bg-jobs').waitFor();
+            await page.screenshot({ path: join(OUT, `bg-long-folded-${locale}-${label}.png`) });
+            await host(page, { type: 'backgroundJobs', jobs: [LONG_JOB, ...JOBS] });
+            await openDock(page);
+            await page.locator('.bg-job').nth(2).hover();
+            await page.screenshot({ path: join(OUT, `bg-long-${locale}-${label}.png`) });
         });
 
         test(`${locale} ${label}: the process tool managing both jobs`, async ({ page }) => {

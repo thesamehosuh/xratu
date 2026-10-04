@@ -3399,8 +3399,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *
      * When no run is live the report is HELD rather than turned into a turn of
      * its own: the user did not ask anything, and waking the agent to announce
-     * a dev server exiting spends their tokens without being asked. The
-     * in-app banner still tells the human immediately.
+     * a dev server exiting spends their tokens without being asked.
      */
     private _handleJobEvent(event: JobEvent): void {
         if (event.kind === 'started') {
@@ -3431,17 +3430,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             }
         }
         this._postBackgroundJobs();
-        const outcome = notice.status === 'exited' && notice.exitCode === 0 ? 'info' : 'warning';
-        this.notifyBanner(outcome, 'notifBackgroundJobDone', {
-            command: notice.command,
-            outcome: notice.status === 'killed'
-                ? (notice.killReason ?? 'stopped')
-                : notice.status === 'failed'
-                    ? (notice.error?.message ?? 'failed to start')
-                    : notice.status === 'exited'
-                        ? `exit ${notice.exitCode}`
-                        : notice.status,
-        });
     }
 
     /** Drop queued steers from `fromIndex` on (a session switch, a no-run
