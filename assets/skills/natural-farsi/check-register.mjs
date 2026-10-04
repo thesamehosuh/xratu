@@ -1,12 +1,27 @@
 #!/usr/bin/env node
 /**
- * check-register.mjs — machine-checkable register/orthography lint for the
- * natural-farsi skill (level-3 colloquial Persian).
+ * check-register.mjs — machine-checkable register/orthography/language lint
+ * for the natural-farsi skill (level-3 colloquial Persian).
  *
  * Usage:
  *   node check-register.mjs draft.txt [more.txt ...]   # lint files
  *   cat draft.txt | node check-register.mjs            # lint stdin
  *   node check-register.mjs --selftest                 # verify the rules
+ *   node check-register.mjs --allow-no-persian en.txt  # English source being
+ *                                                       # translated FROM:
+ *                                                       # skip the
+ *                                                       # no-persian check
+ *
+ * Three families of rule:
+ *   1-5  orthography + register (half-space, diacritics, را/است, verb endings)
+ *   6    latin-word - every Latin word in prose is tier-A jargon, an acronym,
+ *        or a literal code symbol (backticked); anything else is reported with
+ *        its Persian equivalent
+ *   7    the one-language rule - en-sentence (an English-only sentence inside a
+ *        Persian reply) and no-persian (a Persian reply with no Persian in it)
+ *
+ * Code (fenced blocks, backticks, HTML tags, URLs, link targets) is masked
+ * before 6 and 7 run, so identifiers never count as prose.
  *
  * Run it on the FINAL Persian output only. Quoted source text in a
  * translation task is supposed to look wrong and is exempt.
@@ -93,7 +108,163 @@ const CHAR_RULES = [
   ['me-glued-alef', new RegExp(`می${ALEF_MADDA}`), 'me-prefix glued to alef madda — keep a boundary: می آید / میاورد (minus half-space)'],
 ];
 
-function lintText(text, label) {
+// ---------------------------------------------------------------------------
+// Language checks (tier A/B/C/D + the one-language rule)
+//
+// The register rules above cannot see the failure that actually ships:
+// English words that have an obvious Persian equivalent, and whole English
+// paragraphs inside an otherwise-Persian reply. Both are checked here.
+//
+// Code is masked before any of it runs, so backticked identifiers, fenced
+// blocks, URLs and HTML never count as prose.
+// ---------------------------------------------------------------------------
+
+/** Tier A — the CLOSED list of terms allowed to stay Latin in Persian prose.
+ *  English only, by design: this tool must stay language-neutral, so the
+ *  Persian side of the vocabulary (what each tier-B/C word becomes) lives in
+ *  the skill's tables, curated by a native speaker — never here. */
+const TIER_A = new Set([
+  'commit', 'push', 'pull', 'pr', 'merge', 'rebase', 'branch', 'checkout',
+  'stash', 'cherry-pick', 'lint', 'hook', 'cache', 'endpoint', 'token',
+  'git', 'github', 'gitlab', 'vscode', 'venv', 'npm', 'pip',
+  'repo', 'patch', 'import', 'helper', 'caller', 'suite', 'shell', 'silence',
+]);
+
+/** A token that is shaped like code, not prose: paths, dotted module names,
+ *  snake_case, namespaces. Never a language finding. `-` is deliberately NOT
+ *  a code character here: `hunk-level` and `case-insensitive` are English
+ *  prose, `combat.py` and `quest_progress` are code. */
+function isIdentifierShaped(tok) {
+  return /[_.\\/:]/.test(tok);
+}
+
+/** Match a Latin run TOGETHER with its code punctuation, so `models.py` and
+ *  `quest_progress` arrive as one token and `isIdentifierShaped` can see the
+ *  dot/underscore. Trailing sentence punctuation is trimmed below. */
+const LATIN_RUN = /[A-Za-z][A-Za-z0-9._\-/\\:]*/g;
+
+/** An acronym (API, HTTP, JSON) — Latin by universal convention. */
+function isAcronym(tok) {
+  return tok.length >= 2 && tok === tok.toUpperCase() && /[A-Z]/.test(tok);
+}
+
+/** Replace every non-prose span with spaces, preserving length and newlines
+ *  so findings keep their original line/column. */
+function maskNonProse(lines) {
+  // The OPENING marker is remembered, not just "are we inside a fence": a
+  // `~~~` line inside a ``` block is content, and toggling on it would let the
+  // rest of the block reach the language checks as prose.
+  let fence = null;
+  return lines.map((raw) => {
+    const open = /^\s*(```|~~~)/.exec(raw);
+    if (open) {
+      if (!fence) fence = open[1];
+      else if (fence === open[1]) fence = null;
+      return '';
+    }
+    if (fence) return '';
+    let s = raw;
+    // fenced/inline code, HTML tags, URLs, markdown link targets.
+    // The tag mask is TAG-SHAPED (`<` `/`? letter) so comparison prose
+    // (a < b and c > d) stays visible to the Latin-word checks.
+    s = s.replace(/`[^`]*`/g, (m) => ' '.repeat(m.length));
+    s = s.replace(/<\/?[A-Za-z][^>]*>/g, (m) => ' '.repeat(m.length));
+    s = s.replace(/\bhttps?:\/\/\S+/g, (m) => ' '.repeat(m.length));
+    s = s.replace(/\]\([^)]*\)/g, (m) => ' '.repeat(m.length));
+    return s;
+  });
+}
+
+/** An Arabic-script LETTER - not punctuation, not Arabic-Indic digits - and
+ *  including the presentation forms. A range test (`\u0600-\u06FF`) would let a
+ *  lone `،` or `٥` satisfy "this text is Persian" and let an Arabic-punctuation
+ *  segment count as Persian in the one-language rule. */
+const PERSIAN_RE = /(?=\p{Script_Extensions=Arabic})\p{L}/u;
+const PERSIAN_ANY = /(?=\p{Script_Extensions=Arabic})\p{L}/gu;
+const countPersian = (s) => (s.match(PERSIAN_ANY) ?? []).length;
+const LATIN_RE = /[A-Za-z]/;
+
+/** Sentence-ish segments of a prose line. A period is NOT a sentence end when it
+ *  sits inside a version token (`v1.2`) or a known abbreviation (`e.g.`) -
+ *  splitting there would leave sub-3-word fragments and let the whole English
+ *  sentence slip through the `en-sentence` check. */
+function splitSentences(prose) {
+  const guarded = prose
+    .replace(/(\d)\.(\d)/g, '$1\u0000$2')
+    .replace(/\b(?:e\.g|i\.e|etc|vs|approx|no|fig)\./gi, (m) => m.replace(/\./g, '\u0000'));
+  return guarded.split(/[.!?؟؛\n]+/).map((s) => s.replace(/\u0000/g, '.'));
+}
+
+function languageFindings(lines, label, opts) {
+  const findings = [];
+  const masked = maskNonProse(lines);
+  const hasPersian = masked.some((l) => PERSIAN_RE.test(l));
+
+  if (!hasPersian && !opts.allowNoPersian) {
+    const anyLetters = masked.some((l) => LATIN_RE.test(l));
+    if (anyLetters) {
+      findings.push({
+        label, lineNo: 1, col: 1, id: 'no-persian', got: '(whole text)',
+        fix: 'no Persian letters anywhere — a Persian reply must be Persian throughout (pass --allow-no-persian for an English source being translated FROM)',
+      });
+      return findings;
+    }
+  }
+
+  lines.forEach((raw, i) => {
+    const lineNo = i + 1;
+    const prose = masked[i];
+    // NOTE the brackets: an unbracketed /Ae-Zz/g is the literal sequence, not a
+    // character class, and silently matches nothing in Persian text.
+    const persianChars = countPersian(prose);
+    const latinChars = (prose.match(/[A-Za-z]/g) || []).length;
+
+    // Tier B/C/D: any bare Latin word in prose. On a line with no Persian at
+    // all the word list is pure noise - the one-language rule below already
+    // reports that line once, so skip it here.
+    const lineIsEnglish = persianChars === 0 && latinChars > 0;
+    if (!lineIsEnglish) {
+      for (const m of prose.matchAll(LATIN_RUN)) {
+        // `diff.` at the end of a sentence is the word `diff`, not a path.
+        const tok = m[0].replace(/[.\-_:]+$/, '');
+        if (!tok) continue;
+        const lower = tok.toLowerCase();
+        if (TIER_A.has(lower) || isAcronym(tok) || isIdentifierShaped(tok)) continue;
+        findings.push({
+          label, lineNo, col: m.index + 1, id: 'latin-word', got: tok,
+          fix: 'not tier-A jargon — write it in Persian script (the skill\'s tier B/C tables give the form), or backtick it if it is a literal code symbol',
+        });
+      }
+    }
+
+    // The one-language rule, per sentence, runs below across the whole file:
+    // on THIS line, a Persian line with a long English clause is already fully
+    // reported by the word list above, so there is nothing left to add here.
+  });
+
+  // The one-language rule, per sentence: no Persian letters at all.
+  if (hasPersian) {
+    lines.forEach((raw, i) => {
+      const prose = masked[i];
+      if (!LATIN_RE.test(prose)) return;
+      for (const seg of splitSentences(prose)) {
+        if (!LATIN_RE.test(seg)) continue;
+        if (PERSIAN_RE.test(seg)) continue;
+        const words = seg.trim().split(/\s+/).filter(Boolean);
+        // Fragments (a table row of hashes, a stray label) are not sentences.
+        if (words.length < 3) continue;
+        findings.push({
+          label, lineNo: i + 1, col: 1, id: 'en-sentence', got: seg.trim().slice(0, 60),
+          fix: 'an English-only sentence inside a Persian reply — translate it',
+        });
+      }
+    });
+  }
+
+  return findings;
+}
+
+function lintText(text, label, opts = {}) {
   const findings = [];
   const lines = text.split(/\r?\n/);
   lines.forEach((raw, i) => {
@@ -113,6 +284,7 @@ function lintText(text, label) {
       }
     });
   });
+  findings.push(...languageFindings(lines, label, opts));
   return findings;
 }
 
@@ -131,6 +303,7 @@ function selftest() {
     [`این می${ALEF_MADDA}ید`, ['me-glued-alef', 'verb-3sg']],
   ];
   let failed = 0;
+  const state = { get failed() { return failed; }, set failed(v) { failed = v; } };
   for (const [text, expectIds] of cases) {
     const got = lintText(text, 'selftest').map((f) => f.id);
     const ok = JSON.stringify(got) === JSON.stringify(expectIds);
@@ -146,22 +319,80 @@ function selftest() {
     failed++;
     console.error(`FAIL: boundary false positives: ${JSON.stringify(falsePositives)}`);
   }
+  checkLanguageSelftest(state);
   console.log(failed === 0 ? 'selftest: all rules pass' : `selftest: ${failed} failure(s)`);
   return failed === 0;
 }
 
+/** Language rules: the tier list, the masking, and the one-language rule. */
+function langCheck(state, name, text, expectIds, opts) {
+  const got = lintText(text, 'selftest', opts).map((f) => f.id);
+  if (JSON.stringify(got) !== JSON.stringify(expectIds)) {
+    state.failed++;
+    console.error(`FAIL(lang): ${name}\n  expected: ${JSON.stringify(expectIds)}\n  got:      ${JSON.stringify(got)}`);
+  }
+}
+
+function checkLanguageSelftest(state) {
+  // Tier C words with obvious Persian equivalents are flagged.
+  langCheck(state, 'tier C offenders', 'یه debug print جا مونده و schema داده اضافه شده.',
+    ['latin-word', 'latin-word', 'latin-word']);
+  // Tier A, acronyms, identifiers, paths and URLs must NOT be flagged.
+  langCheck(state, 'tier A + acronyms + identifiers',
+    'این commit رو روی branch جدید push کن و `API` و `test_sim.py` و https://x.com/a رو نگاه کن.',
+    []);
+  // Code is masked: an English fenced block or backticked run is not prose.
+  langCheck(state, 'fenced code masked',
+    '```bash\nthis command line is english\n```\nو بعدش `print(1)` اجرا شد.', []);
+  // The one-language rule: an English-only line inside a Persian reply is
+  // reported once per sentence, not once per word.
+  langCheck(state, 'english line in persian reply',
+    'باشه، الان commit ها رو میزنم.\nNow the commits. I am splitting into four here.',
+    ['en-sentence', 'en-sentence']);
+  // A whole English document, and the escape hatch for translating FROM one.
+  langCheck(state, 'english document flagged', 'This is an English source document.\nWith several lines here.',
+    ['no-persian']);
+  langCheck(state, 'english document allowed', 'This is an English source document.\nWith several lines here.',
+    [], { allowNoPersian: true });
+  // An abbreviation or a version token must not hide the sentence around it:
+  // splitting there would leave sub-3-word fragments and report nothing.
+  langCheck(state, 'abbreviation and version inside an english sentence',
+    'باشه.\nTry e.g. v1.2 now.', ['en-sentence']);
+  // A `~~~` line inside a ``` block is CODE, not a fence close: the rest of the
+  // block must stay masked.
+  langCheck(state, 'tilde line inside a backtick fence',
+    '```bash\n~~~ not a close\nthis command line is english\n```\nو بعدش `print(1)` اجرا شد.', []);
+  // Comparison prose is not a tag: `a < b and c > d` must stay visible (five bare
+// Latin words), where the old broad mask swallowed `b and c`.
+  langCheck(state, 'angle-bracketed comparison is not masked',
+    'مثلا a < b and c > d رو ببین.', ['latin-word', 'latin-word', 'latin-word', 'latin-word', 'latin-word']);
+  // Clean Persian with tier-A vocabulary must stay clean.
+  langCheck(state, 'clean persian', 'همه ۲۲۲ تست سبزن و باید commit کنی.', []);
+}
+
 function main() {
-  const args = process.argv.slice(2);
-  if (args.includes('--selftest')) {
+  const argv = process.argv.slice(2);
+  // Validate BEFORE the --selftest early exit, so a typo fails in every mode:
+  // a misspelled `--allow-no-persian` silently lints an English source as a
+  // Persian reply and reports no-persian against the translator's own input.
+  const unknown = argv.filter((a) => a.startsWith('--') && a !== '--selftest' && a !== '--allow-no-persian');
+  if (unknown.length) {
+    console.error(`check-register: unknown option(s): ${unknown.join(' ')}\n  usage: check-register.mjs [--allow-no-persian] [--selftest] [file.txt ...]`);
+    process.exit(2);
+  }
+  if (argv.includes('--selftest')) {
     process.exit(selftest() ? 0 : 1);
   }
-  const inputs = args.length
-    ? args.map((f) => ({ label: f, text: readFileSync(f, 'utf-8') }))
+  const allowNoPersian = argv.includes('--allow-no-persian');
+  const files = argv.filter((a) => !a.startsWith('--'));
+  const opts = { allowNoPersian };
+  const inputs = files.length
+    ? files.map((f) => ({ label: f, text: readFileSync(f, 'utf-8') }))
     : [{ label: '<stdin>', text: readFileSync(0, 'utf-8') }];
 
   let findings = 0;
   for (const { label, text } of inputs) {
-    const found = lintText(text, label);
+    const found = lintText(text, label, opts);
     findings += found.length;
     for (const f of found) {
       console.log(`${f.label}:${f.lineNo}:${f.col}: [${f.id}] ${f.got} -> ${f.fix}`);

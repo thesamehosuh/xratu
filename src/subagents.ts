@@ -16,9 +16,20 @@
  *   name: code-reviewer          # optional, must match the file name
  *   description: Reviews code…   # required (when-to-use, shown to the model)
  *   tools: read_file, grep_search  # optional allow-list; omit = all tools
+ *   model: qwen3-coder            # optional child model; omit = parent model
+ *   reasoning_effort: low         # optional thinking level for the child
  *   max_rounds: 30               # optional child loop budget
  *   ---
  *   System prompt body…
+ *
+ * Tool names in `tools:` are validated against the toolset the host would give
+ * the child (see `toolNames` on discoverSubagents). Names that do not exist
+ * are DROPPED with a warning - and a `tools:` list that resolves to NOTHING is
+ * a definition ERROR, never a silently tool-less subagent. That distinction is
+ * the whole point: xratu also reads `.claude/agents/` and `~/.agents/agents/`,
+ * whose files spell tools `Read, Grep, Bash`, and a mismatched allow-list used
+ * to produce a child that could do nothing at all while looking perfectly
+ * valid to the model.
  *
  * Windows-first: BOM and CRLF are tolerated like every other user-editable
  * file parser in this repo.
@@ -72,10 +83,21 @@ export interface SubagentDefinition {
     tools?: string[];
     /** Child round budget; undefined = DEFAULT_SUBAGENT_ROUNDS. */
     maxRounds?: number;
+    /** Child model; undefined = the parent's model. */
+    model?: string;
+    /** Child thinking level; undefined = the parent's selection. */
+    reasoningEffort?: string;
     source: SubagentSource;
+    /** Absolute path of the defining file (absent for builtins) - the
+     *  diagnostics surfaces reveal it in the editor. */
+    filePath?: string;
     /** Parse/validation failure (kept so surfaces can show why an agent
      *  file is not loading; never offered to the model). */
     error?: string;
+    /** Non-fatal problem: the profile loads and runs, but something in it was
+     *  ignored (unknown tool names in `tools:`, a model this provider does not
+     *  list). Surfaced next to the definition, never to the model. */
+    warning?: string;
 }
 
 /** Model-facing launch request as validated from tool arguments. `taskId`
@@ -100,15 +122,22 @@ export function builtinSubagents(): SubagentDefinition[] {
     return [
         {
             name: 'explore',
-            description: 'Fast read-only codebase research. Reads and searches the workspace and reports findings with file references; never changes anything.',
+            description: 'Read-only codebase research. Reads, searches and inspects the workspace (including running read-only commands to check a claim) and reports findings with file references; never changes a file.',
             prompt: [
                 'You are a codebase research subagent. Investigate the workspace and answer the task you were given with evidence: file paths and line numbers for every claim.',
-                'You are read-only by design: gather facts from files, searches and (if needed) the web, then report.',
+                'You do not modify the workspace: no edits, no writes, no installs, no commits. Gather facts from files, searches and (if needed) the web, then report.',
+                'You MAY run commands in the terminal, and you should when a claim needs verifying (build, type-check, tests, linters, `git log`, `--help` output). Use read-only invocations only, expect a normal approval prompt for each one, and never run something that writes to the workspace.',
                 'Prefer targeted searches over reading whole files.',
             ].join(' '),
             tools: [
                 'read_file', 'grep_search', 'glob_search', 'list_files',
                 'list_code_definition_names', 'web_search', 'fetch_url', 'skill',
+                // Terminal for VERIFICATION (build/test/lint/`--help`), not for
+                // changing anything: the tool still passes the parent's approval
+                // gate, and the profile has no editing tools at all. Without it
+                // the subagent can only ever report what it read, never what it
+                // confirmed - which is what made it useless for real research.
+                'run_terminal_command',
             ],
             source: 'builtin',
         },
@@ -129,6 +158,8 @@ export interface ParsedSubagentMd {
     description?: string;
     tools?: string[];
     maxRounds?: number;
+    model?: string;
+    reasoningEffort?: string;
     prompt: string;
 }
 
@@ -173,11 +204,13 @@ export function parseSubagentDefinition(raw: string): ParsedSubagentMd {
         if (value === '') {
             continue;
         }
-        if (key === 'name' || key === 'description') {
+        if (key === 'name' || key === 'description' || key === 'model') {
             parsed[key] = value;
         } else if (key === 'tools') {
             const names = value.split(',').map((s) => s.trim()).filter(Boolean);
             if (names.length > 0) parsed.tools = names;
+        } else if (key === 'reasoning_effort' || key === 'reasoningEffort') {
+            parsed.reasoningEffort = value;
         } else if (key === 'max_rounds' || key === 'maxRounds') {
             const n = Number.parseInt(value, 10);
             if (Number.isFinite(n) && n > 0) parsed.maxRounds = n;
@@ -195,14 +228,44 @@ function readCapped(filePath: string): string | null {
     }
 }
 
+/** Names quoted back in a "none of these tools exist" error, capped so the
+ *  message stays readable in a terminal and in the manage-agent picker. */
+const MAX_NAMES_IN_MESSAGE = 24;
+
+function nameList(names: Iterable<string>): string {
+    const all = Array.from(new Set(names)).sort();
+    const shown = all.slice(0, MAX_NAMES_IN_MESSAGE).join(', ');
+    return all.length > MAX_NAMES_IN_MESSAGE ? `${shown}, … (+${all.length - MAX_NAMES_IN_MESSAGE} more)` : shown;
+}
+
+/** Tools a profile may name but never gets: they are stripped for every child
+ *  (see filterToolsForSubagent). Saying so beats a bare "unknown tool". */
+const ALWAYS_STRIPPED_HINT = new Set<string>([
+    SUBAGENT_TOOL_NAME,
+    ...SESSION_CONTROL_TOOLS,
+    USER_QUESTION_TOOL_NAME,
+]);
+
+/** Extra names this host knows about, used only to VALIDATE a definition. */
+export interface SubagentValidationContext {
+    /** Every tool name a child could be offered in this run (the union over
+     *  plan mode, so a plan-mode run never makes a valid name look unknown).
+     *  Omitted = skip tool-name validation (standalone/pure use). */
+    toolNames?: ReadonlySet<string>;
+    /** Model ids the active provider lists. Omitted or EMPTY = the catalog has
+     *  not been discovered yet, so an unknown `model:` is not flagged. */
+    knownModels?: ReadonlySet<string>;
+}
+
 function buildFileDefinition(
     filePath: string,
     baseName: string,
     source: SubagentSource,
+    validation?: SubagentValidationContext,
 ): SubagentDefinition {
     const raw = readCapped(filePath);
     if (raw === null) {
-        return { name: baseName, description: '', prompt: '', source, error: `${baseName}.md is not readable` };
+        return { name: baseName, description: '', prompt: '', source, filePath, error: `${baseName}.md is not readable` };
     }
     const parsed = parseSubagentDefinition(raw);
     const nameError = (parsed.name !== undefined && parsed.name !== baseName)
@@ -211,20 +274,53 @@ function buildFileDefinition(
             ? `file name "${baseName}" is invalid (lowercase alphanumeric with single hyphens)`
             : (baseName.length > MAX_NAME_CHARS ? `name exceeds ${MAX_NAME_CHARS} characters` : undefined));
     const description = (parsed.description ?? '').trim();
+    // `tools:` is resolved against the real toolset here, at LOAD time, so a
+    // typo or a foreign tool vocabulary (Claude Code's `Read`/`Bash`) can
+    // never reach the model as a launchable-but-useless profile.
+    const warnings: string[] = [];
+    let tools = parsed.tools;
+    let toolsError: string | undefined;
+    if (parsed.tools && validation?.toolNames) {
+        const resolved = parsed.tools.filter((n) => validation.toolNames!.has(n) && !ALWAYS_STRIPPED_HINT.has(n));
+        const stripped = parsed.tools.filter((n) => ALWAYS_STRIPPED_HINT.has(n));
+        const missing = parsed.tools.filter((n) => !validation.toolNames!.has(n) && !ALWAYS_STRIPPED_HINT.has(n));
+        if (stripped.length > 0) {
+            warnings.push(`tools: ${stripped.join(', ')} can never be used by a subagent (always removed) and were dropped`);
+        }
+        if (missing.length > 0) {
+            warnings.push(`tools: unknown tool names ignored: ${nameList(missing)}`);
+        }
+        if (resolved.length === 0) {
+            toolsError = `tools: none of the listed tools exist (${nameList(parsed.tools)}). `
+                + `Valid names: ${nameList(validation.toolNames)}`;
+        } else {
+            tools = resolved;
+        }
+    }
+    if (parsed.model && validation?.knownModels && validation.knownModels.size > 0
+        && !validation.knownModels.has(parsed.model)) {
+        warnings.push(`model: "${parsed.model}" is not in this provider's model list; the request may fail`);
+    }
+    const warning = warnings.length > 0 ? warnings.join('; ') : undefined;
     const error = nameError
         ?? (description ? undefined : 'description is missing')
         ?? (description.length > MAX_DESCRIPTION_CHARS
             ? `description exceeds ${MAX_DESCRIPTION_CHARS} characters`
             : undefined)
-        ?? (parsed.prompt ? undefined : 'prompt body is missing');
+        ?? (parsed.prompt ? undefined : 'prompt body is missing')
+        ?? toolsError;
     return {
         name: baseName,
         description: description.slice(0, MAX_DESCRIPTION_CHARS),
         prompt: parsed.prompt.slice(0, MAX_PROMPT_CHARS),
-        ...(parsed.tools ? { tools: parsed.tools } : {}),
+        ...(tools ? { tools } : {}),
         ...(parsed.maxRounds ? { maxRounds: parsed.maxRounds } : {}),
+        ...(parsed.model ? { model: parsed.model } : {}),
+        ...(parsed.reasoningEffort ? { reasoningEffort: parsed.reasoningEffort } : {}),
         source,
+        filePath,
         ...(error ? { error } : {}),
+        ...(warning ? { warning } : {}),
     };
 }
 
@@ -233,7 +329,7 @@ function buildFileDefinition(
  *  shadows a valid lower-priority copy (same rule as skills.ts) and both
  *  invalid keeps the higher-priority error. Invalid files are kept with
  *  `error` set. */
-function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, SubagentDefinition>): void {
+function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, SubagentDefinition>, validation?: SubagentValidationContext): void {
     let entries: fs.Dirent[];
     try {
         entries = fs.readdirSync(baseDir, { withFileTypes: true });
@@ -253,7 +349,7 @@ function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, 
         const baseName = entry.name.slice(0, -3);
         const existing = out.get(baseName);
         if (existing && !existing.error) continue;
-        const def = buildFileDefinition(path.join(baseDir, entry.name), baseName, source);
+        const def = buildFileDefinition(path.join(baseDir, entry.name), baseName, source, validation);
         if (existing && existing.error && def.error) continue;
         out.set(baseName, def);
     }
@@ -262,23 +358,28 @@ function scanAgentDir(baseDir: string, source: SubagentSource, out: Map<string, 
 /** Discover subagent definitions: builtins (always) plus project/global
  *  agent files. A custom file whose name matches a builtin REPLACES it
  *  (project-specific `general` beats the stock one). Invalid file entries
- *  are returned with `error` set but never offered to the model. */
+ *  are returned with `error` set but never offered to the model; the caller
+ *  is expected to SURFACE those (an agent file that silently fails to load is
+ *  indistinguishable from one that does not exist). */
 export function discoverSubagents(opts?: {
     workspaceRoot?: string;
     homedir?: string;
+    /** Validates each file's `tools:` / `model:` against the live host. */
+    validation?: SubagentValidationContext;
 }): SubagentDefinition[] {
     const workspaceRoot = opts?.workspaceRoot;
     const home = opts?.homedir ?? os.homedir();
+    const validation = opts?.validation;
     const found = new Map<string, SubagentDefinition>();
     // Priority: project (xratu-specific first, then cross-agent layouts),
     // then global. Mirrors the skills discovery order.
     if (workspaceRoot) {
-        scanAgentDir(path.join(workspaceRoot, '.xratu', 'agents'), 'project-xratu', found);
-        scanAgentDir(path.join(workspaceRoot, '.agents', 'agents'), 'project-agents', found);
-        scanAgentDir(path.join(workspaceRoot, '.claude', 'agents'), 'project-claude', found);
+        scanAgentDir(path.join(workspaceRoot, '.xratu', 'agents'), 'project-xratu', found, validation);
+        scanAgentDir(path.join(workspaceRoot, '.agents', 'agents'), 'project-agents', found, validation);
+        scanAgentDir(path.join(workspaceRoot, '.claude', 'agents'), 'project-claude', found, validation);
     }
-    scanAgentDir(path.join(home, '.agents', 'agents'), 'global-agents', found);
-    scanAgentDir(path.join(home, '.claude', 'agents'), 'global-claude', found);
+    scanAgentDir(path.join(home, '.agents', 'agents'), 'global-agents', found, validation);
+    scanAgentDir(path.join(home, '.claude', 'agents'), 'global-claude', found, validation);
 
     const custom = Array.from(found.values()).sort((a, b) => a.name.localeCompare(b.name)
         || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -313,6 +414,24 @@ export function listableSubagents(defs: readonly SubagentDefinition[]): Subagent
     return defs.filter((d) => !d.error);
 }
 
+/** Every definition a user should HEAR about: ones that failed to load
+ *  (`error`) and ones that load with something ignored (`warning`). Builtins
+ *  carry neither, so a clean setup yields an empty list. Diagnostics surfaces
+ *  (the output channel, the manage-agent picker) render exactly this - an
+ *  agent file that silently fails to load is otherwise indistinguishable from
+ *  one that does not exist. */
+export function subagentIssues(
+    defs: readonly SubagentDefinition[],
+): Array<{ def: SubagentDefinition; message: string; fatal: boolean }> {
+    return defs
+        .filter((d) => d.error || d.warning)
+        .map((d) => ({
+            def: d,
+            message: d.error ?? d.warning!,
+            fatal: !!d.error,
+        }));
+}
+
 export function resolveSubagent(
     defs: readonly SubagentDefinition[],
     name: string,
@@ -336,6 +455,40 @@ export function filterToolsForSubagent<T extends { name: string }>(
         && !SESSION_CONTROL_TOOLS.has(tool.name)
         && tool.name !== USER_QUESTION_TOOL_NAME
         && (allow === null || allow.has(tool.name)));
+}
+
+/** Starter file for "Xratu: Agent Files → Create". Written with the HOST's
+ *  real tool names inlined, because the one way to author a broken agent file
+ *  is to guess a tool name - and the wrong guess produces a profile that looks
+ *  valid and can do nothing. Frontmatter values stay empty where optional: the
+ *  parser treats an empty value as absent, and a full-line `#` comment is
+ *  skipped (a trailing one would be read as the value). */
+export function agentFileTemplate(name: string, toolNames: readonly string[]): string {
+    const preferred = [
+        'read_file', 'grep_search', 'glob_search', 'list_files',
+        'run_terminal_command', 'web_search', 'fetch_url', 'skill',
+    ].filter((tool) => toolNames.includes(tool));
+    const shown = (preferred.length > 0 ? preferred : toolNames.slice(0, 8)).slice(0, 8);
+    return [
+        '---',
+        `name: ${name}`,
+        'description: One line, shown to the model - when should work be delegated to this agent?',
+        '# Optional. Delete the next line to give this agent every tool except',
+        '# task (no recursion) and ask_user_question.',
+        ...(shown.length > 0 ? [`tools: ${shown.join(', ')}`] : []),
+        '# model:            # optional: run this agent on one specific model',
+        '# reasoning_effort: # optional: none | minimal | low | medium | high | xhigh | max',
+        '# max_rounds: 30    # optional: this agent\'s loop budget (default 50)',
+        '---',
+        '',
+        `You are the ${name} agent.`,
+        '',
+        'Describe what you do, how you work, and what your final report must',
+        'contain. Only that final report reaches the parent agent - your',
+        'intermediate tool calls stay private - so make it self-contained, with',
+        'file paths and line numbers for every claim.',
+        '',
+    ].join('\n');
 }
 
 export interface TaskToolArgs {
@@ -379,7 +532,8 @@ export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): s
         'When to delegate: open-ended codebase research (project tours, "how does X work", finding something whose location you do not know), searches that may span many files, and independent subtasks you can hand over whole. Delegation keeps this conversation clean - the subagent\'s long search and file output never lands here.',
         'When NOT to delegate: a lookup you can finish in one or two tool calls, work that leans on this conversation\'s context, and anything where the user must choose.',
         'Every run reports a task_id. If a run was interrupted, failed, or needs follow-up work, pass that task_id to CONTINUE the same subagent with its context restored - never relaunch the same work from scratch.',
-        'Several task calls in ONE message run CONCURRENTLY as independent subagents - use that for parallelizable subtasks. They cannot coordinate with each other; one task = one coherent piece of work.',
+        'A task_id lives only as long as this chat does in this VS Code window: reloading the window or clearing the history drops it, and the run must then be started again with subagent_type.',
+        'Several task calls in ONE message run CONCURRENTLY as independent subagents - use that for parallelizable subtasks (a few at a time; the rest start as slots free up). They cannot coordinate with each other; one task = one coherent piece of work.',
         'Subagent types (for subagent_type):',
         ...typeLines(defs),
     ].join('\n');
@@ -401,7 +555,7 @@ export function buildTaskToolSchema(defs: readonly SubagentDefinition[]): Record
             },
             task_id: {
                 type: 'string',
-                description: 'Continue a previous subagent run of this session by its task_id (reported in every result) instead of starting over: its context is restored, so interrupted runs resume where they stopped and follow-up work builds on what it already did.',
+                description: 'Continue a previous subagent run of this chat by its task_id (reported in every result) instead of starting over: its context is restored, so interrupted runs resume where they stopped and follow-up work builds on what it already did. Valid only while the same chat stays open in the same window.',
             },
         },
         required: ['prompt'],

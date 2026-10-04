@@ -39,13 +39,14 @@ import { editDiffFromArgs } from './editDiff';
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
+import { parseTranscriptPrefs, withTranscriptPref } from './transcriptPrefs';
 import { ShadowCheckpointStore, EmptySeedError } from './shadowGit';
-import { ExternalMcpManager } from './externalMcp';
+import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
 import type { LocalToolExecutor, LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
-import { SUBAGENT_TOOL_NAME, discoverSubagents, filterToolsForSubagent } from './subagents';
+import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage } from './local/localSessionStore';
 import {
@@ -89,6 +90,7 @@ import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } 
 import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
 import { resolveEditMode } from './tooling/editFileArgs';
 import { resolveAgentRounds } from './tooling/agentRounds';
+import { resolveParallelSubagents } from './tooling/parallelSubagents';
 import { resolveCompactRatio } from './tooling/compactionPolicy';
 import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type GitStatusSummary } from './tooling/gitStatus';
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
@@ -110,6 +112,15 @@ const execFileAsync = promisify(execFile);
 let externalMcpInstance: ExternalMcpManager | null = null;
 let mcpConfigStoreInstance: McpConfigStore | null = null;
 let mcpMarketplaceInstance: McpMarketplaceStore | null = null;
+/** "Xratu" output channel: diagnostics for state that has no UI of its own.
+ *  Created in activate (the provider only writes to it). */
+let diagnosticsChannel: vscode.OutputChannel | null = null;
+
+/** Human label for where a subagent profile was loaded from. Resolved at
+ *  RENDER time (ui() reads the live locale) - never at module scope. */
+function agentSourceLabel(source: SubagentSource): string {
+    return ui(`agentSource.${source}`);
+}
 
 interface ApprovalDiff {
     file: string;
@@ -890,10 +901,87 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Machine-global timestamped usage ledger (daily chart + retroactive
      *  repricing). See src/local/usageLedger.ts. */
     private readonly _usageLedger: UsageLedgerStore;
-    /** Delegated subagent transcripts by task_id (session-scoped, in-memory):
-     *  a later `task` call can CONTINUE a run with its context restored.
-     *  Cleared with the session ledgers. */
-    private readonly _subagentRuns: SubagentRunRegistry = new Map();
+    /** Delegated subagent transcripts by task_id, PER CHAT: a later `task`
+     *  call can CONTINUE a run with its context restored. Keyed by chat rather
+     *  than held in one map so switching chats and coming back does not orphan
+     *  a run the model can still legitimately resume; only a window reload or a
+     *  cleared history ends a run for good (the task_id note says so). */
+    private readonly _subagentRunsByChat = new Map<string, SubagentRunRegistry>();
+    /** Fingerprint of the last agent-file diagnostics logged, so a per-turn
+     *  rediscovery does not repeat an unchanged complaint. */
+    private _subagentIssueSignature = '';
+    /** How many chats keep resumable subagent runs in memory. Older chats are
+     *  dropped (their runs become non-resumable, as a reload would). */
+    private static readonly MAX_SUBAGENT_CHATS = 4;
+
+    /** Registry backing the live chat's delegated runs, created on first use
+     *  and re-touched (LRU) on every access.
+     *
+     *  The EPHEMERAL id is preferred over the stored one: a chat's first send
+     *  creates the ephemeral id, and persisting that same chat then assigns a
+     *  stored id WITHOUT clearing the ephemeral one. Keying on the stored id
+     *  first would move the registry out from under the run that is still live,
+     *  so a task_id reported in the first turn would be unresolvable in the
+     *  second. The ephemeral id is assigned once per live chat and every path
+     *  that adopts a different chat clears it (see _restoreLocalSession), so
+     *  preferring it can never point one chat's key at another's runs. */
+    private _subagentRuns(): SubagentRunRegistry {
+        const key = this._ephemeralSessionId ?? this._sessionId ?? '';
+        const existing = this._subagentRunsByChat.get(key);
+        if (existing) {
+            this._subagentRunsByChat.delete(key);
+            this._subagentRunsByChat.set(key, existing);
+            return existing;
+        }
+        const created: SubagentRunRegistry = new Map();
+        this._subagentRunsByChat.set(key, created);
+        for (const [chat, registry] of this._subagentRunsByChat) {
+            if (this._subagentRunsByChat.size <= XratuChatViewProvider.MAX_SUBAGENT_CHATS) break;
+            if (chat === key) continue;
+            registry.clear();
+            this._subagentRunsByChat.delete(chat);
+        }
+        return created;
+    }
+
+    /** Drop the live chat's resumable runs (history cleared / chat deleted). */
+    private _forgetSubagentRuns(): void {
+        this._subagentRunsByChat.delete(this._ephemeralSessionId ?? this._sessionId ?? '');
+    }
+
+    /** Every tool name a subagent could be offered in this workspace: the
+     *  plan:false toolset (so a plan-mode run never makes a valid name look
+     *  unknown), plus skills and external MCP tools. Used both to VALIDATE
+     *  agent files and to scaffold a correct starter file. */
+    private _agentToolNames(workspaceRoot: string | undefined, external: AggregatedTool[]): Set<string> {
+        return new Set(getLocalToolDefinitions({
+            yolo: true,
+            plan: false,
+            external,
+            skills: this._discoverSkillsForRun(workspaceRoot ?? ''),
+        }).map((t) => t.name));
+    }
+
+    /** Report agent files that failed to load or loaded with something ignored.
+     *  Discovery runs on every turn, so the same problem is re-reported only
+     *  when it CHANGES - otherwise the channel would fill with the same line
+     *  once per round. */
+    private _logSubagentIssues(defs: readonly SubagentDefinition[]): void {
+        const issues = subagentIssues(defs);
+        const signature = issues.map((i) => `${i.def.name}:${i.fatal ? 'error' : 'warning'}:${i.message}`).join('\n');
+        if (signature === this._subagentIssueSignature) return;
+        this._subagentIssueSignature = signature;
+        const channel = diagnosticsChannel;
+        if (!channel) return;
+        if (issues.length === 0) return;
+        channel.appendLine(`[subagents] ${issues.length} agent file issue(s):`);
+        for (const issue of issues) {
+            channel.appendLine(
+                `  ${issue.fatal ? 'ERROR' : 'warn '} ${issue.def.name}`
+                + `${issue.def.filePath ? ` (${issue.def.filePath})` : ''}: ${issue.message}`);
+        }
+        channel.appendLine('  Run "Xratu: Agent Files" to see them, or fix the frontmatter.');
+    }
     /** Serializes read-modify-write pricing mutations so two rapid edits cannot
      *  clobber each other's snapshot of the settings object. */
     private _pricingWrite: Promise<void> = Promise.resolve();
@@ -2500,11 +2588,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._globalState.update('xratu.contextWindowOverrides', JSON.stringify(map));
     }
 
-    /** Best-known window for the selected model: explicit override, else the
-     *  longest matching provider-reported entry for this host, else the curated
-     *  knowledge table. Undefined when nothing is known. */
-    private _contextWindowHint(): number | undefined {
-        const model = this._selectedModel;
+    /** Best-known window for the model about to run: explicit override, else
+     *  the longest matching provider-reported entry for this host, else the
+     *  curated knowledge table. Undefined when nothing is known. `model`
+     *  defaults to the selected one; a subagent that names its own model must
+     *  be sized by ITS window, not the parent's. */
+    private _contextWindowHint(model?: string | null): number | undefined {
+        model = model || this._selectedModel;
         if (!model) return undefined;
         const override = this._contextWindowOverrides()[model];
         if (typeof override === 'number' && override >= 1024) return override;
@@ -2563,12 +2653,31 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  selection from before the model list changed) - sending either only
      *  yields a 400 we would then have to strip. */
     private _reasoningEffortFor(model: string, baseUrl: string): ThinkingLevel | undefined {
-        const level = this._thinkingLevelHint(model);
-        if (!level) return undefined;
+        return this._thinkingEffortFor(this._thinkingLevelHint(model), model, baseUrl);
+    }
+
+    /** Model ids the active provider has told us about (empty when nothing has
+     *  been discovered yet - callers must treat empty as "don't judge"). Used
+     *  to warn about an agent file naming a model this provider does not list. */
+    private _knownModelIds(baseUrl: string): Set<string> {
+        const entry = catalogEntryFor(this._modelCatalog, baseUrlHost(baseUrl), Date.now());
+        return new Set((entry?.models ?? []).map((m) => m.id));
+    }
+
+    /** An EXPLICIT thinking level (an agent file's `reasoning_effort:`) rather
+     *  than the per-model user selection, with the same provider guards: an
+     *  unknown level, a model that takes no reasoning parameter, or a level
+     *  this model does not advertise all send nothing rather than a 400. */
+    private _thinkingEffortFor(
+        level: string | undefined,
+        model: string,
+        baseUrl: string,
+    ): ThinkingLevel | undefined {
+        if (!level || !THINKING_LEVEL_SET.has(level)) return undefined;
         const meta = cachedModelInfo(this._modelCatalog, baseUrlHost(baseUrl), model);
         if (meta?.supportsReasoning === false) return undefined;
-        if (meta?.reasoningLevels?.length && !meta.reasoningLevels.includes(level)) return undefined;
-        return level;
+        if (meta?.reasoningLevels?.length && !meta.reasoningLevels.includes(level as ThinkingLevel)) return undefined;
+        return level as ThinkingLevel;
     }
 
     /** Provider/curated max output for the model, when known. The runtime
@@ -3170,27 +3279,48 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         // Subagent delegation (the `task` tool): named agent profiles, run as
         // nested agent loops in a fresh context. Discovery is per run like
-        // skills; children share the parent's model/transport but never its
-        // history, conversation identity, or round budget. The base request
-        // is a factory: every task call gets its OWN cacheKey / OpenCode
-        // session id, because two delegated tasks are two conversations.
-        const subagentDefs = discoverSubagents({ workspaceRoot: workspaceRoot || undefined });
+        // skills; children share the parent's transport but never its history,
+        // conversation identity, or round budget. The base request is a
+        // factory: every task call gets its OWN cacheKey / OpenCode session id,
+        // because two delegated tasks are two conversations.
+        //
+        // Agent files are VALIDATED against this host before the model ever
+        // sees them: a `tools:` list of names that do not exist (Claude Code's
+        // `Read`/`Bash` vocabulary, a typo) used to produce a child that could
+        // do nothing at all while looking perfectly launchable - the single
+        // worst failure mode this feature had. Unresolvable lists are now
+        // definition errors, and partial mismatches are warnings.
+        const runSkills = this._discoverSkillsForRun(workspaceRoot);
+        const subagentDefs = discoverSubagents({
+            workspaceRoot: workspaceRoot || undefined,
+            validation: {
+                toolNames: this._agentToolNames(workspaceRoot, externalTools),
+                knownModels: this._knownModelIds(active.baseUrl),
+            },
+        });
+        this._logSubagentIssues(subagentDefs);
         const subagentRunner = createSubagentRunner(
             {
-                baseRequest: () => {
+                baseRequest: (def) => {
                     const subagentConversationId = `${conversationId}::subagent-${crypto.randomUUID()}`;
+                    // A profile may name its own model/reasoning level; the
+                    // caps and the window follow THAT model, never the parent's.
+                    const childModel = def.model || model;
+                    const childEffort = def.reasoningEffort
+                        ? this._thinkingEffortFor(def.reasoningEffort, childModel, active.baseUrl)
+                        : this._reasoningEffortFor(childModel, active.baseUrl);
                     return {
                         baseUrl: active.baseUrl,
                         apiKey: active.apiKey || null,
-                        model,
+                        model: childModel,
                         signal: controller.signal,
-                        maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
-                        reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
+                        maxOutputLimit: this._maxOutputLimitFor(childModel, active.baseUrl),
+                        reasoningEffort: childEffort,
                         autoCompactRatio: resolveCompactRatio(
                             vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
-                        contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
+                        contextWindow: this._contextWindowHint(childModel) ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
                         dispatcher: getProxyDispatcher(active.baseUrl),
-                        apiStyle: resolveApiStyle(active.baseUrl, model),
+                        apiStyle: resolveApiStyle(active.baseUrl, childModel),
                         ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
                         cacheKey: subagentConversationId,
                     };
@@ -3200,7 +3330,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         yolo: this._yoloMode,
                         plan: runPlanMode,
                         external: externalTools,
-                        skills: this._discoverSkillsForRun(workspaceRoot),
+                        skills: runSkills,
                     }),
                     def,
                 ),
@@ -3230,7 +3360,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 },
             },
             subagentDefs,
-            this._subagentRuns,
+            this._subagentRuns(),
         );
 
         const rawExecutor = createLocalToolExecutor(
@@ -3317,8 +3447,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         external: externalTools,
                         // Agent Skills are rescanned per run (tool schemas
                         // snapshot at session start); disabled ones are
-                        // filtered out host-side.
-                        skills: this._discoverSkillsForRun(workspaceRoot),
+                        // filtered out host-side. Discovered once above and
+                        // shared with the subagent toolset.
+                        skills: runSkills,
                         // Subagent profiles: adds the `task` delegation tool.
                         subagents: subagentDefs,
                     }),
@@ -3362,8 +3493,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     // transport decides (see supportsPromptCacheKey).
                     cacheKey: conversationId,
                     // Several `task` calls in one message run as concurrent
-                    // subagents - that is the point of delegation.
+                    // subagents - that is the point of delegation - but each
+                    // one is a full agent loop with its own context and round
+                    // budget, so the group runs in waves (a few at a time)
+                    // rather than as one uncapped bill.
                     parallelTools: [SUBAGENT_TOOL_NAME],
+                    parallelToolLimit: resolveParallelSubagents(
+                        vscode.workspace.getConfiguration('xratu').get('maxParallelSubagents')),
                 },
                 executor,
                 // Shared with nested subagent runs (same live YOLO check).
@@ -3850,6 +3986,94 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'openSettings' });
     }
 
+    /**
+     * "Xratu: Agent Files" - the one surface where subagent profiles are
+     * visible at all. Agent files are plain markdown the user may have
+     * written for ANOTHER tool (`.claude/agents/`, `~/.agents/agents/`) and
+     * they fail SILENTLY: an unparsable file, a name that does not match the
+     * file, a `tools:` list of names this host does not have. Each of those
+     * used to make a profile simply not exist, with no error anywhere. This
+     * picker lists every discovered profile with its source and status, and
+     * can scaffold a correct one.
+     */
+    public async manageAgentFiles(): Promise<void> {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const external = externalMcpInstance ? await externalMcpInstance.listTools().catch(() => []) : [];
+        const toolNames = this._agentToolNames(workspaceRoot, external);
+        const defs = discoverSubagents({ workspaceRoot, validation: { toolNames } });
+        type Item = vscode.QuickPickItem & { def?: SubagentDefinition; create?: boolean };
+        const items: Item[] = [{
+            label: `$(add) ${ui('agentCreateItem')}`,
+            description: ui('agentCreateDescription'),
+            create: true,
+        }];
+        for (const def of defs) {
+            const status = def.error
+                ? ui('agentStatusBroken')
+                : def.warning ? ui('agentStatusWarning') : ui('agentStatusOk');
+            items.push({
+                label: `${def.error || def.warning ? '$(warning) ' : '$(check) '}${def.name}`,
+                description: `${status} · ${agentSourceLabel(def.source)}`,
+                detail: def.error || def.warning || def.description,
+                def,
+            });
+        }
+        const picked = await vscode.window.showQuickPick(items, {
+            title: ui('agentPickerTitle'),
+            placeHolder: ui('agentPickerPlaceholder'),
+            matchOnDescription: true,
+            matchOnDetail: true,
+        });
+        if (!picked) return;
+        if (picked.create) {
+            await this._scaffoldAgentFile(workspaceRoot, toolNames);
+            return;
+        }
+        if (picked.def?.filePath) {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(picked.def.filePath));
+            await vscode.window.showTextDocument(doc);
+        }
+    }
+
+    /** Write a starter agent file the loader will definitely accept. */
+    private async _scaffoldAgentFile(workspaceRoot: string | undefined, toolNames: ReadonlySet<string>): Promise<void> {
+        const name = await vscode.window.showInputBox({
+            title: ui('agentCreateTitle'),
+            prompt: ui('agentCreatePrompt'),
+            placeHolder: 'code-reviewer',
+            validateInput: (value) => {
+                const trimmed = value.trim();
+                if (!trimmed) return ui('agentCreateErrorEmpty');
+                if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(trimmed)) return ui('agentCreateErrorName');
+                if (trimmed.length > 64) return ui('agentCreateErrorName');
+                return null;
+            },
+        });
+        if (!name) return;
+        const trimmed = name.trim();
+        // Project scope when a folder is open (the agent belongs to the repo),
+        // else the shared cross-agent root so it follows the user everywhere.
+        const dir = workspaceRoot
+            ? path.join(workspaceRoot, '.xratu', 'agents')
+            : path.join(os.homedir(), '.agents', 'agents');
+        const file = path.join(dir, `${trimmed}.md`);
+        if (fs.existsSync(file)) {
+            void vscode.window.showWarningMessage(ui('agentCreateErrorExists', { path: file }));
+            return;
+        }
+        const uri = vscode.Uri.file(file);
+        try {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(agentFileTemplate(trimmed, Array.from(toolNames)), 'utf8'));
+        } catch (e) {
+            void vscode.window.showErrorMessage(ui('agentCreateFailed', { error: e instanceof Error ? e.message : String(e) }));
+            return;
+        }
+        this._subagentIssueSignature = '';
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc);
+    }
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         context: vscode.WebviewViewResolveContext,
@@ -3923,6 +4147,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                                 type: 'replyLanguage',
                                 replyLanguage: this._resolveReplyLanguage(),
                             });
+                            // Transcript display prefs (auto-expanded diffs / commands /
+                            // reasoning). Pushed here so a reload never renders
+                            // pills at the wrong default.
+                            this._sendTranscriptPrefs();
                             this._startConnectionPolling();
                             // Re-echo the policy toggles: a webview reload
                             // (new session, logout loop, window reload)
@@ -3969,6 +4197,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                         case 'setReplyLanguage':
                             void this._globalState.update('xratu.replyLanguage', data.replyLanguage);
                             break;
+                        case 'transcriptSet': {
+                            // The persisted blob is opaque to the host (the
+                            // webview owns the row schema); only the SHAPE is
+                            // validated here - see transcriptPrefs.ts.
+                            await this._setTranscriptPref(String(data.id ?? ''), !!data.enabled);
+                            this._sendTranscriptPrefs();
+                            break;
+                        }
                         case 'askQuestion':
                             await this._handleChatRequest(data.value, data.attachments);
                             break;
@@ -4784,6 +5020,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._globalState.update('xratu.disabledSkills', JSON.stringify(Array.from(set).sort()));
     }
 
+    /** Push the transcript display prefs. An empty blob is a valid state: the
+     *  webview resolves every missing id to its own default. */
+    private _sendTranscriptPrefs(): void {
+        if (!this._view) return;
+        this._view.webview.postMessage({
+            type: 'transcriptPrefs',
+            prefs: parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')),
+        });
+    }
+
+    private async _setTranscriptPref(id: string, enabled: boolean): Promise<void> {
+        const prefs = withTranscriptPref(
+            parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')),
+            id,
+            enabled,
+        );
+        await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(prefs));
+    }
+
     /** Push the Skills page view: discovered skills (valid, invalid, and
      *  shadowed) with enabled flags and folder paths for reveal actions. */
     private async _sendSkillsState(): Promise<void> {
@@ -5133,12 +5388,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Reset the per-session ledgers. Callers own cancel + epoch bump. */
     private _resetSessionLedgers(): void {
+        this._forgetSubagentRuns();
         this._sessionId = null;
         // A new conversation gets a fresh OpenCode session id.
         this._ephemeralSessionId = null;
         this._history = [];
         this._localHistory = [];
-        this._subagentRuns.clear();
         this._localEvictedUserTurns = 0;
         this._localReplayUserTurns = null;
         this._compactionRunReplayBase = null;
@@ -5322,11 +5577,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         const preferred = this._sessionId ?? this._globalState.get<string>(this._lastSessionStateKey());
         const meta = await this._localSessionStore.findCurrent(this._localWorkspaceKey(), preferred);
         if (!meta) {
+            this._forgetSubagentRuns();
             this._sessionId = null;
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
-            this._subagentRuns.clear();
             this._localEvictedUserTurns = 0;
             this._localReplayUserTurns = null;
             this._compactionRunReplayBase = null;
@@ -5339,11 +5594,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
         const snapshot = await this._localSessionStore.load(meta.id);
         if (!snapshot) {
+            this._forgetSubagentRuns();
             this._sessionId = null;
             this._ephemeralSessionId = null;
             this._history = [];
             this._localHistory = [];
-            this._subagentRuns.clear();
             this._localEvictedUserTurns = 0;
             this._localReplayUserTurns = null;
             this._compactionRunReplayBase = null;
@@ -5358,6 +5613,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
         this._restoreReplayBoundary(snapshot.replayUserTurns);
+        // Adopting a stored session REPLACES the live chat identity. A stale
+        // ephemeral id (from the chat this webview was showing before the
+        // reload) must not survive as the subagent-registry key, or the
+        // restored chat could resolve a task_id against the PREVIOUS chat's
+        // runs - one conversation's context leaking into another. Forgetting
+        // here costs a resume; the alternative costs isolation, so forget.
+        if (this._ephemeralSessionId) {
+            this._forgetSubagentRuns();
+            this._ephemeralSessionId = null;
+        }
         this._sessionId = snapshot.sessionId;
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {
@@ -6709,6 +6974,8 @@ async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void
 
 export function activate(context: vscode.ExtensionContext) {
     const checkpoints = new ShadowCheckpointStore(context);
+    diagnosticsChannel = vscode.window.createOutputChannel('Xratu');
+    context.subscriptions.push(diagnosticsChannel);
     const mcpConfigStore = new McpConfigStore(context);
     const externalMcp = new ExternalMcpManager(() => mcpConfigStore.load());
     externalMcpInstance = externalMcp;
@@ -6753,6 +7020,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('xratu.openSettings', async () => {
             await provider.openSettingsPublic();
+        }),
+        vscode.commands.registerCommand('xratu.agentFiles', async () => {
+            await provider.manageAgentFiles();
         }),
         vscode.commands.registerCommand('xratu.restoreCheckpoint', async () => {
             await provider.ensureView();

@@ -133,13 +133,17 @@ const GENERAL = DEFS.find((d) => d.name === 'general');
 function childContext(extra = {}) {
     const usageEvents = [];
     let requestCount = 0;
+    let lastDef = null;
     return {
         usageEvents,
         requestCount: () => requestCount,
+        /** The profile handed to the base-request factory on the last call. */
+        lastDef: () => lastDef,
         ctx: {
             // Factory: one invocation per task (fresh conversation identity).
-            baseRequest: () => {
+            baseRequest: (def) => {
                 requestCount++;
+                lastDef = def;
                 return {
                     baseUrl: 'https://example.invalid/v1',
                     apiKey: 'k',
@@ -224,7 +228,7 @@ function childContext(extra = {}) {
     }, new Map()));
     ok('tool result is the final report', result.output.startsWith('ANSWER: found foo at src/x.ts:10'), result.output);
     ok('result carries the task_id note with the tool-call count',
-        /\[task_id: [0-9a-f]{10} · 1 tool calls\]/.test(result.output), result.output);
+        /\[task_id: [0-9a-f]{10} · 1 tool calls · resumable while this chat stays open\]/.test(result.output), result.output);
     check('result is not an error', result.isError, undefined);
     check('child made exactly two rounds', seen.length, 2);
     ok('trace announces the subagent', trace.join('').includes('▶ explore'));
@@ -303,6 +307,27 @@ function childContext(extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. Per-agent model/effort: the factory receives the PROFILE, so the child
+// can run on its own model (and that model's caps/window), not the parent's.
+// ---------------------------------------------------------------------------
+{
+    const defs = [{
+        name: 'cheap',
+        description: 'Runs on another model',
+        prompt: 'Do the thing.',
+        model: 'small-model',
+        reasoningEffort: 'low',
+        maxRounds: 2,
+        source: 'project-xratu',
+    }];
+    const { ctx, lastDef } = childContext();
+    await withMockFetch([() => textReply('done')], () =>
+        runSubagentTask(ctx, defs, { subagentType: 'cheap', description: 'd', prompt: 'go' }, new Map()));
+    check('baseRequest receives the launched profile', lastDef()?.name, 'cheap');
+    check("the profile's model reaches the transport", lastDef()?.model, 'small-model');
+}
+
+// ---------------------------------------------------------------------------
 // 6. Resume/heal: task_id continues the same subagent with its context.
 // ---------------------------------------------------------------------------
 {
@@ -334,6 +359,10 @@ function childContext(extra = {}) {
     }, registry));
     ok('resume continues with the final answer', second.result.output.startsWith('FULL:'), second.result.output);
     ok('resume keeps the same task_id', second.result.output.includes(`[task_id: ${taskId} ·`), second.result.output);
+    // The note is PERSISTED with the tool result, so it has to state its own
+    // lifetime: runs live in an in-memory per-chat registry.
+    ok('the task_id note states its lifetime',
+        second.result.output.includes('resumable while this chat stays open'), second.result.output);
     const resumedMessages = second.seen[0].body.messages;
     ok('resume restores the run history (not a fresh context)',
         resumedMessages.length > 2, `messages=${resumedMessages.length}`);
@@ -622,6 +651,84 @@ function childContext(extra = {}) {
     check('both delegated results landed alongside the denial', taskResults.length, 2);
     const finalMessage = [...parentEvents].reverse().find((e) => e.type === 'assistantMessage' && !e.toolCalls.length);
     check('parent completed after the denied call and both children', finalMessage?.text, 'Denied one, both reports are in.');
+}
+
+// ---------------------------------------------------------------------------
+// 7. The parallel cap is a SLOT COUNT, not a batch size. The setting, the
+// README and the task-tool description all promise that the remaining calls
+// start "as slots free up" - a batched implementation would hold call 3 until
+// calls 1 AND 2 had both settled. Both properties are pinned here.
+// ---------------------------------------------------------------------------
+{
+    const PROBE = { name: 'probe', description: 'p', inputSchema: { type: 'object' }, requiresApproval: false };
+    /** Three calls: #0 and #2 finish at once, #1 hangs, so a slot frees while
+     *  another call is still running - the exact case batching gets wrong. */
+    const runCapped = async (limit) => {
+        const events = [];
+        let inFlight = 0;
+        let maxInFlight = 0;
+        const delays = [10, 400, 10];
+        const toolCalls = delays.map((_, n) => ({
+            index: n, id: `c${n}`, type: 'function',
+            function: { name: 'probe', arguments: JSON.stringify({ n }) },
+        }));
+        const handlers = [
+            () => sse([
+                frame({ choices: [{ delta: { tool_calls: toolCalls } }] }),
+                usageFrame,
+                'data: [DONE]\n\n',
+            ]),
+            () => textReply('all done'),
+        ];
+        const results = [];
+        await withMockFetch(handlers, async () => {
+            for await (const event of runLocalAgent(
+                {
+                    baseUrl: 'https://example.invalid/v1',
+                    apiKey: 'k',
+                    model: 'test-model',
+                    systemPrompt: 'Parent prompt',
+                    userText: 'run three probes',
+                    history: [],
+                    tools: [PROBE],
+                    apiStyle: 'chat',
+                    contextWindow: 100000,
+                    parallelTools: ['probe'],
+                    parallelToolLimit: limit,
+                },
+                {
+                    execute: async (call) => {
+                        const n = Number(call.arguments.n);
+                        events.push(`start:${n}`);
+                        inFlight++;
+                        maxInFlight = Math.max(maxInFlight, inFlight);
+                        await new Promise((resolve) => setTimeout(resolve, delays[n]));
+                        events.push(`end:${n}`);
+                        inFlight--;
+                        return { output: `probe ${n}` };
+                    },
+                },
+                { requestApproval: async () => ({}) },
+            )) {
+                if (event.type === 'toolResult') results.push(event.output);
+            }
+        });
+        return { events, maxInFlight, results };
+    };
+
+    const capped = await runCapped(2);
+    check('the cap is respected (never a third concurrent call)', capped.maxInFlight, 2);
+    ok('a queued call starts as soon as ONE slot frees (start:2 precedes end:1)',
+        capped.events.indexOf('start:2') > -1
+        && capped.events.indexOf('start:2') < capped.events.indexOf('end:1'),
+        capped.events.join(' '));
+    check('every call still ran', capped.results.length, 3);
+
+    const serial = await runCapped(1);
+    check('a cap of 1 never overlaps two calls', serial.maxInFlight, 1);
+    check('a serial cap keeps the emitted order', serial.events.join(' '),
+        'start:0 end:0 start:1 end:1 start:2 end:2');
+    check('a serial cap still runs every call', serial.results.length, 3);
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);

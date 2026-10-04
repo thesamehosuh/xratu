@@ -2050,6 +2050,14 @@ button {
     background: var(--xratu-accent-faint);
 }
 
+/* Chip icons are leading marks, not arrows: they stay pinned to the physical
+   LEFT in every locale so the row of chips reads as one aligned column. The
+   label itself keeps its own direction (the anonymous flex item inherits the
+   chip's direction), only the box order flips. */
+[dir='rtl'] .chip {
+    flex-direction: row-reverse;
+}
+
 /* Suggestion chips ride in one after another - the stagger is the hook. */
 .chip-suggest {
     animation: xratu-rise var(--xratu-dur-3) var(--xratu-ease-settle) backwards;
@@ -3256,14 +3264,39 @@ button {
 }
 
 /* The open body is tied to its pill by one rail that drops straight from the
-   icon column; the body content lines up with the pill label. Applies to every
-   open pill - tool bodies, grouped runs, and reasoning. */
+   icon column; the body content lines up with the pill label. Tool bodies and
+   grouped runs only - the reasoning pill keeps the indent WITHOUT the rail. */
 .step[open] > .step-body,
-.step[open] > .step-group-body,
-.step[open] > .step-think-body {
+.step[open] > .step-group-body {
     margin-inline-start: 6px;
     padding-inline-start: 14px;
     border-inline-start: 1px solid var(--xratu-accent-dim);
+}
+
+/* Reasoning gets no rail: its body is a wall of prose/code with nothing for a
+   line to point back at, so the rail advertised structure that isn't there.
+   The indent alone still aligns the body with the pill label. The markdown
+   path (`.step-think-body`) inherits the pill's direction, so logical props
+   land on the right side under RTL. */
+.step-think[open] > .step-think-body {
+    margin-inline-start: 6px;
+    padding-inline-start: 14px;
+}
+
+/* Raw reasoning renders in a `<pre dir="ltr">` (its content is code). The dir
+   attribute makes `inline-start` resolve to the LEFT even under RTL, which
+   would put the indent on the chevron side - pin it physically to the pill's
+   own start edge instead. */
+.step-think[open] > pre {
+    margin-left: 6px;
+    padding-left: 14px;
+}
+
+[dir='rtl'] .step-think[open] > pre {
+    margin-left: 0;
+    padding-left: 0;
+    margin-right: 6px;
+    padding-right: 14px;
 }
 
 /* A FAILED pill (or a group holding one) carries the red on its rail instead
@@ -3272,25 +3305,6 @@ button {
 .step.group-fail[open] > .step-body,
 .step.group-fail[open] > .step-group-body {
     border-inline-start-color: rgba(248, 81, 73, 0.55);
-}
-
-/* Raw reasoning renders in a `<pre dir="ltr">` (its content is code). The dir
-   attribute makes `inline-start` resolve to the LEFT even under RTL, which
-   would drop the rail on the chevron side - pin it physically to the pill's
-   own start edge instead. */
-.step[open] > pre {
-    margin-left: 6px;
-    padding-left: 14px;
-    border-left: 1px solid var(--xratu-accent-dim);
-}
-
-[dir='rtl'] .step[open] > pre {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: none;
-    margin-right: 6px;
-    padding-right: 14px;
-    border-right: 1px solid var(--xratu-accent-dim);
 }
 
 /* Plain-text run stats in a pill summary ("3 files +18 −6") - no chip. */
@@ -3528,7 +3542,7 @@ pre.tool-cmd {
     color: #f85149;
 }
 
-/* Terminal body: loading row while the command runs (auto-opened pill) */
+/* Terminal body: loading row while the command runs (collapsed pill) */
 .tool-loading {
     display: flex;
     align-items: center;

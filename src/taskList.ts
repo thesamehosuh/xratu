@@ -84,6 +84,8 @@ export function taskListReminderLine(items: TaskListItem[]): string {
     lines.push(
         'Keep this list current with the update_task_list tool: exactly one item in_progress while executing, ' +
         'mark items completed as you finish them, keep every label a short single sentence, ' +
+        'write every label in the language you are replying to the user in (the checklist is user-facing UI, ' +
+        'so match the user\'s language instead of defaulting to English), ' +
         'and respect any edits the user made to the list.'
     );
     return '\n\n' + lines.join('\n');

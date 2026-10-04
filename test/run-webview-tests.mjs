@@ -25,6 +25,7 @@ const suites = [
     { entry: 'webview-ui/test/usage-tokens.test.ts', outfile: 'dist-tests/usage-tokens-test.cjs' },
     // Imports MessageItem (TSX), so it needs the automatic JSX runtime.
     { entry: 'webview-ui/test/patch-blocks.test.ts', outfile: 'dist-tests/patch-blocks-test.cjs', jsx: 'automatic' },
+    { entry: 'webview-ui/test/transcript-prefs.test.tsx', outfile: 'dist-tests/transcript-prefs-test.cjs', jsx: 'automatic' },
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });

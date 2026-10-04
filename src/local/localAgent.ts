@@ -299,6 +299,11 @@ export interface LocalAgentRequest {
      *  ledger rows are pushed in completion order (which is what the
      *  replayed history stores, so run and replay stay byte-identical). */
     parallelTools?: string[];
+    /** Max simultaneous calls inside a `parallelTools` group; the rest start
+     *  as slots free up. Each parallel call can be a whole nested agent loop
+     *  with its own context window and round budget, so an uncapped group is
+     *  an uncapped bill. Undefined = no limit (every call at once). */
+    parallelToolLimit?: number;
 }
 
 export interface LocalToolExecutor {
@@ -4061,7 +4066,28 @@ export async function* runLocalAgent(
                     if (--remaining === 0) eventQueue.close();
                 }
             };
-            for (const call of parallelCalls) void runOne(call);
+            // Wave-limited launch: a group larger than the cap runs in fixed-size
+            // waves, so N delegations cost N-at-a-time rather than N at once.
+            // Workers are completion-driven, NOT batched: a queued call starts
+            // the moment ANY slot frees, which is what the setting, the README
+            // and the task-tool description all promise. Results still stream
+            // into the same queue as each call settles (the drain below is
+            // unchanged), and `runOne` never rejects, so a worker cannot fail
+            // the round.
+            const limit = Math.max(1, Math.floor(request.parallelToolLimit ?? parallelCalls.length) || parallelCalls.length);
+            void (async () => {
+                let next = 0;
+                await Promise.all(Array.from(
+                    { length: Math.min(limit, parallelCalls.length) },
+                    async () => {
+                        while (next < parallelCalls.length) {
+                            const call = parallelCalls[next++];
+                            if (call === undefined) break;
+                            await runOne(call);
+                        }
+                    },
+                ));
+            })();
             void (async () => {
                 for (const call of finalResult.toolCalls) {
                     if (parallelNames.has(call.name)) continue;

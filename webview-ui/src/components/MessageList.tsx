@@ -3,6 +3,7 @@ import { Bug, ChevronUp, FolderTree, FlaskConical, FolderSearch, Laptop, Link, U
 import type { LucideIcon } from 'lucide-react';
 import type { ChatMessage, ConnectionStatus, OpenDiffEdit } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
+import type { TranscriptPrefs } from '../transcriptPrefs';
 import { getLocale, t } from '../i18n';
 
 interface MessageListProps {
@@ -45,6 +46,9 @@ interface MessageListProps {
      *  live transcript is complete, only the DOM window is bounded. */
     firstVisible?: number;
     onShowEarlier?: () => void;
+    /** Transcript display prefs (Settings switches) - forwarded to every
+     *  bubble so a settings change re-renders the pills already on screen. */
+    transcriptPrefs?: TranscriptPrefs;
 }
 
 // Chips show a short label; the click builds a full WORKFLOW PROMPT that the
@@ -59,7 +63,7 @@ const SUGGESTIONS: Array<{ icon: LucideIcon; key: Parameters<typeof t>[0]; fileP
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, busy, conn, setupMode, onOpenCredentials, activeFile, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -171,6 +175,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     conn={start + i === messages.length - 1 ? conn : undefined}
                     taskList={taskList && taskList.stepId && m.steps.some((s) => s.id === taskList.stepId) ? taskList : undefined}
                     dir={dir}
+                    transcriptPrefs={transcriptPrefs}
                 />
             ))}
             </div>

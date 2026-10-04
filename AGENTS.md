@@ -41,6 +41,41 @@ assets/         brand assets (assets/brand) + bundled skills (assets/skills)
   merge. Green CI alone is not enough.
 - Do not commit secrets, `.env` files, or machine-specific paths.
 
+## Subagents (agent files)
+
+`src/subagents.ts` is the pure loader (discovery, frontmatter, validation);
+`src/local/subagentRunner.ts` drives the nested loop. The `task` tool is how
+the parent delegates; `subagents: SubagentDefinition[]` on
+`getLocalToolDefinitions` adds it, and `SubagentHostContext.baseRequest(def)`
+is what lets a profile pick its own model/effort (its caps and context window
+must then be computed for THAT model, not the parent's).
+
+Rules that exist because their absence was a real failure mode:
+
+- **`tools:` is VALIDATED at load time** against the host's real tool names
+  (`discoverSubagents({ validation: { toolNames } })`). Unknown names are
+  dropped with a `warning`; a list that resolves to NOTHING is an `error`, so
+  a foreign vocabulary (Claude Code's `Read`/`Grep`/`Bash` — those
+  directories are deliberately scanned) can never yield a silently tool-less
+  child. Never "fix" a bad `tools:` list by silently ignoring it again.
+- **Every load problem must be surfaced.** `subagentIssues()` feeds both the
+  `xratu.agentFiles` picker and the Xratu output channel; a definition with
+  `error`/`warning` that nobody renders is a silent failure.
+- **Strips hold structurally, not by prompt**: `task`,
+  `update_task_list`, `exit_plan_mode`, `ask_user_question` never reach a
+  child (`filterToolsForSubagent` + `wrapRestrictedExecutor`), even when a
+  profile allow-lists them.
+- **Approvals stay real for children.** Do NOT "fix" child prompts by
+  auto-approving them (goose/hermes do; that is a deliberate difference).
+  `task_id` is chat-scoped and the note says so — a persisted id must never
+  outlive its in-memory registry.
+- Parallel delegations run in WAVES (`xratu.maxParallelSubagents`, default 4);
+  each one is a full loop with its own context and budget.
+- Agent-file changes need BOTH `test:subagents` (loader/validation) and
+  `test:subagent-runner` (the real nested loop) green, plus a README section
+  in en + fa (the feature is user-facing, and Persian strings must pass
+  `test:farsi-orthography` — no ZWNJ).
+
 ## Verification — run before claiming done
 
 ```bash

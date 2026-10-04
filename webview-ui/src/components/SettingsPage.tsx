@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import {
+    Activity,
     ArrowLeft,
     ArrowRight,
     ChevronLeft,
     ChevronRight,
     Globe,
+    Languages,
     Link,
     MessageSquare,
     Trash2,
 } from 'lucide-react';
 import { getLocale, t } from '../i18n';
+import { prefOn, TRANSCRIPT_ROWS, type TranscriptPrefs } from '../transcriptPrefs';
 
 interface SettingsPageProps {
     onBack: () => void;
@@ -20,6 +23,11 @@ interface SettingsPageProps {
     /** Agent reply language ('auto' = follow the user's message language). */
     replyLanguage?: 'fa' | 'en' | 'auto';
     onSetReplyLanguage?: (language: 'fa' | 'en' | 'auto') => void;
+    /** Host-persisted auto-expand prefs (diffs / commands / thinking);
+     *  `onSetTranscriptPref` round-trips through the host, which echoes the
+     *  merged blob back - the switch never renders ahead of it. */
+    transcriptPrefs?: TranscriptPrefs;
+    onSetTranscriptPref?: (id: string, enabled: boolean) => void;
     onOpenCredentials?: () => void;
     /** Open the merged capabilities page (MCP servers + Agent Skills). */
     onOpenCapabilities?: () => void;
@@ -40,6 +48,8 @@ export function SettingsPage({
     onSetLocale,
     replyLanguage = 'auto',
     onSetReplyLanguage,
+    transcriptPrefs,
+    onSetTranscriptPref,
     onOpenCredentials,
     onOpenCapabilities,
     onOpenUsage,
@@ -132,9 +142,42 @@ export function SettingsPage({
                 <section className="settings-card">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
-                            <MessageSquare size={15} />
+                            <Activity size={15} />
                         </div>
-                        <h3>{t('settingsData')}</h3>
+                        <h3>{t('settingsTranscript')}</h3>
+                    </div>
+
+                    {TRANSCRIPT_ROWS.map(({ id, labelKey, descKey }) => {
+                        const on = prefOn(transcriptPrefs, id);
+                        const label = t(labelKey);
+                        return (
+                            <div className="settings-nav-row" key={id}>
+                                <div className="settings-nav-main">
+                                    <strong>{label}</strong>
+                                    <span>{t(descKey)}</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    className={`mcp-switch${on ? ' on' : ''}`}
+                                    role="switch"
+                                    aria-checked={on}
+                                    aria-label={label}
+                                    title={label}
+                                    onClick={() => onSetTranscriptPref?.(id, !on)}
+                                >
+                                    <span className="mcp-switch-knob" />
+                                </button>
+                            </div>
+                        );
+                    })}
+                </section>
+
+                <section className="settings-card">
+                    <div className="settings-section-head">
+                        <div className="settings-section-icon" aria-hidden="true">
+                            <Languages size={15} />
+                        </div>
+                        <h3>{t('settingsLocale')}</h3>
                     </div>
 
                     <div className="settings-nav-row">
@@ -190,6 +233,16 @@ export function SettingsPage({
                             </button>
                         </div>
                         <MessageSquare size={14} />
+                    </div>
+
+                </section>
+
+                <section className="settings-card">
+                    <div className="settings-section-head">
+                        <div className="settings-section-icon" aria-hidden="true">
+                            <Trash2 size={15} />
+                        </div>
+                        <h3>{t('settingsDanger')}</h3>
                     </div>
 
                     {!confirmClear ? (

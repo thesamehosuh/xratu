@@ -116,14 +116,14 @@ export const XRATU_EXPANSION_TOOLS = [
     tool('install_dependency', 'Install one or more project dependencies using a detected package manager. Python installs run the project virtualenv\'s pip when one exists (.venv/venv/env) - only fall back to run_terminal_command if this fails AND no venv exists; create one first (python -m venv .venv) and this tool will use it.', {
         packages: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 }, ecosystem: { type: 'string', enum: ['auto','node','python','rust','go','java','dotnet','ruby','php','swift'] }, dev: { type: 'boolean' },
     }, ['packages'], true),
-    tool('update_task_list', 'Create or replace the session task list (the plan artifact and execution tracker). Sends the COMPLETE list every time - later calls replace it entirely. Every label must be ONE SHORT single sentence (~10 words max): an imperative action, no elaboration, no multi-clause detail - put supporting detail in the chat text instead. Use one item per concrete verifiable step. When you FIRST draft the plan, always mark the FIRST step in_progress so it is highlighted as the starting point (everything else pending) - never a fully-pending first draft. While executing: exactly ONE item in_progress at a time, mark items completed as you finish them, never batch-complete. The user may edit the list between calls - respect their changes, do not silently revert them.', {
+    tool('update_task_list', 'Create or replace the session task list (the plan artifact and execution tracker). Sends the COMPLETE list every time - later calls replace it entirely. Every label must be ONE SHORT single sentence (~10 words max): an imperative action, no elaboration, no multi-clause detail - put supporting detail in the chat text instead. Write every label in the language you are replying to the user in - the checklist is user-facing UI, not an internal artifact, so match the user\'s language instead of defaulting to English (code identifiers inside a label stay verbatim). Use one item per concrete verifiable step. When you FIRST draft the plan, always mark the FIRST step in_progress so it is highlighted as the starting point (everything else pending) - never a fully-pending first draft. While executing: exactly ONE item in_progress at a time, mark items completed as you finish them, never batch-complete. The user may edit the list between calls - respect their changes, do not silently revert them.', {
         tasks: {
             type: 'array',
             description: 'The complete task list, in execution order.',
             items: {
                 type: 'object',
                 properties: {
-                    label: { type: 'string', description: 'Short imperative step label, e.g. "Add Alembic migration for tasks table".' },
+                    label: { type: 'string', description: 'Short imperative step label in the language you are replying in, e.g. "Add Alembic migration for tasks table".' },
                     status: { type: 'string', enum: [...TASK_LIST_STATUSES], description: 'pending | in_progress | completed.' },
                 },
                 required: ['label', 'status'],
