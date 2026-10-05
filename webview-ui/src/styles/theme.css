@@ -1001,11 +1001,17 @@ button {
     color: var(--xratu-diff-del);
 }
 
+/* `margin-inline-start: auto` HERE as well as on the ledger: two auto margins
+   split the free space so the ledger floats mid-row and the buttons sit on the
+   trailing edge. With it only on the ledger, a batch with no diffs (a terminal
+   command, a fully-denied batch) had nothing pushing the buttons out and they
+   hugged the title instead. */
 .approval-verdict {
     display: flex;
     align-items: center;
     gap: 6px;
     flex: 0 0 auto;
+    margin-inline-start: auto;
     white-space: nowrap;
 }
 
@@ -1040,16 +1046,18 @@ button {
     background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
 }
 
-/* The primary action wears the PRODUCT accent, not --vscode-button-background.
-   The theme's own blue (#0078d4 in Dark Modern) is a link/CTA colour: on a
-   filled 92px button sitting next to a "Deny all" it reads as a hyperlink and
-   pulls the eye away from the ledger it belongs to. The accent is already the
-   colour every other affirmative affordance in the webview uses, so the button
-   is consistent with the surface it lives on. Approved as rendered in the
-   prototype review (direction A). */
+/* The primary action wears the PRODUCT accent, and NOTHING else.
+   Both halves of the prototype's `var(--vscode-button-foreground, ...)` and
+   `var(--vscode-button-background, ...)` were lies: VS Code always defines
+   those tokens, so the fallback never fired and the label rendered white on
+   a 8% accent wash (and earlier, #0078d4 - a link colour - as the fill).
+   An accent-tinted surface needs accent-tinted text; taking the theme's
+   button foreground instead is what made it stop looking like the approved
+   design. Pinning both is also what makes it render identically in the
+   review harness and in a real editor. */
 .approval-apply {
     min-width: 92px;
-    color: var(--vscode-button-foreground, var(--xratu-accent-strong));
+    color: var(--xratu-accent-strong);
     background: var(--xratu-accent-faint);
     border-color: var(--xratu-accent-dim);
 }
@@ -1064,15 +1072,33 @@ button {
     cursor: not-allowed;
 }
 
+/* Both labels share one grid cell and the inactive one is only INVISIBLE, so
+   the button is always as wide as the wider of the two. Swapping the label in
+   place resized the button by ~23px mid-click and shoved the ledger beside it
+   sideways. `visibility` (not `display`) so the hidden label keeps its width. */
+.approval-btn-label {
+    display: grid;
+}
+
+.approval-btn-label > span {
+    grid-area: 1 / 1;
+}
+
+.approval-btn-label > span[aria-hidden='true'] {
+    visibility: hidden;
+}
+
 /* A fixed box for the spinner: the bundled .step-status paints only when real
-   .step markup wraps it, so without this the "Applying…" button collapses as
-   the label swaps to a longer string. */
+   .step markup wraps it, so without this the button collapses as the label
+   swaps to a longer string. */
 .approval-apply .step-status.spinner {
-    width: 11px;
-    height: 11px;
+    /* 13px, not 11px: the slot must match the 13px Check icon it replaces or
+       the button still resizes by the difference when the label swaps. */
+    width: 13px;
+    height: 13px;
     border-radius: 50%;
-    border: 1.5px solid color-mix(in srgb, var(--vscode-button-foreground, var(--xratu-accent-strong)) 35%, transparent);
-    border-block-start-color: var(--vscode-button-foreground, var(--xratu-accent-strong));
+    border: 1.5px solid color-mix(in srgb, var(--xratu-accent-strong) 35%, transparent);
+    border-block-start-color: var(--xratu-accent-strong);
     animation: approval-spin 720ms linear infinite;
 }
 

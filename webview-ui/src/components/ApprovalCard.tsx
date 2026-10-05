@@ -126,10 +126,15 @@ export function ApprovalCard({
     const preDenied = payload.preDenied ?? {};
     const approvable = payload.approvals.filter((a) => preDenied[a.tool_call_id] !== false);
     const resolution = payload.resolution;
-    const [submitting, setSubmitting] = useState(false);
+    /* WHICH decision is in flight, not merely that one is. A single boolean
+       made the Approve button read "Applying…" after a DENY — a rejection has
+       nothing to apply, and telling the user otherwise is the worst possible
+       thing to say while their change is being thrown away. */
+    const [inflight, setInflight] = useState<'approve' | 'deny' | null>(null);
+    const submitting = inflight !== null;
     /* A REF, not the state, gates the second decision. `submitting` only flips
      * on the next render, so two activations in one tick (a fast double-click,
-     * Enter twice on a focused button) both read the stale `false` and post two
+     * Enter twice on a focused button) both read the stale `null` and post two
      * decisions. The state still drives the disabled state and the spinner;
      * this is the synchronous guard the gate actually needs. */
     const decidedRef = useRef(false);
@@ -137,14 +142,14 @@ export function ApprovalCard({
     useEffect(() => {
         if (resolution) {
             decidedRef.current = false;
-            setSubmitting(false);
+            setInflight(null);
         }
     }, [resolution]);
 
     const decide = (approve: boolean, sessionApprove = false) => {
         if (decidedRef.current || resolution) return;
         decidedRef.current = true;
-        setSubmitting(true);
+        setInflight(approve ? 'approve' : 'deny');
         const decisions: Record<string, boolean> = { ...preDenied };
         for (const a of payload.approvals) {
             decisions[a.tool_call_id] = approve && preDenied[a.tool_call_id] !== false;
@@ -215,8 +220,13 @@ export function ApprovalCard({
                 )}
                 {!isResolved && (
                     <div className="approval-verdict">
+                        {/* Each button spins only for the decision IT started.
+                            A denial has nothing to apply, so it keeps its own
+                            label and only shows that the answer is on its way. */}
                         <button type="button" className="approval-deny" onClick={() => decide(false)} disabled={submitting}>
-                            <X size={13} />
+                            {inflight === 'deny'
+                                ? <span className="step-status spinner" />
+                                : <X size={13} />}
                             <span>{t('denyAll')}</span>
                         </button>
                         <button
@@ -225,8 +235,18 @@ export function ApprovalCard({
                             onClick={() => decide(true)}
                             disabled={submitting || approvable.length === 0}
                         >
-                            {submitting ? <span className="step-status spinner" /> : <Check size={13} />}
-                            <span>{submitting ? t('approvalApplying') : t('approve')}</span>
+                            {inflight === 'approve'
+                                ? <span className="step-status spinner" />
+                                : <Check size={13} />}
+                            {/* Both labels occupy the same grid cell and only
+                                one is VISIBLE, so the button is exactly as wide
+                                as the wider of the two. Swapping a label in
+                                place resized the button by ~23px mid-click and
+                                shoved the ledger sideways with it. */}
+                            <span className="approval-btn-label">
+                                <span aria-hidden={inflight === 'approve'}>{t('approve')}</span>
+                                <span aria-hidden={inflight !== 'approve'}>{t('approvalApplying')}</span>
+                            </span>
                         </button>
                     </div>
                 )}

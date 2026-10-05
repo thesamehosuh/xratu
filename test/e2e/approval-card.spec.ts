@@ -344,6 +344,50 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
     expect(denyBg).toBe('rgba(0, 0, 0, 0)');
 });
 
+test('the verdict buttons sit on the trailing edge in EVERY state', async ({ page }) => {
+    // The prototype splits the header's free space with TWO auto margins - one
+    // on the ledger, one on the verdict - so the buttons stay on the trailing
+    // edge even when there is no ledger to float. With the auto only on the
+    // ledger, a diffless batch (a terminal command, a fully-denied batch) had
+    // nothing pushing the buttons out and they hugged the title.
+    const gapToRightEdge = async () => page.locator('.approval-apply').evaluate((el) => {
+        const head = el.closest('.approval-head')!.getBoundingClientRect();
+        return Math.round(head.right - el.getBoundingClientRect().right);
+    });
+
+    // With a ledger (multi-file diffs).
+    await open(page, { approvals: [FILE_ITEM, CSS_ITEM] });
+    expect(await gapToRightEdge()).toBeLessThanOrEqual(2);
+    // Without one: a lone terminal command.
+    await open(page, { approvals: [COMMAND_ITEM] });
+    expect(await gapToRightEdge()).toBeLessThanOrEqual(2);
+    // Without one, and with a very short title.
+    await open(page, { approvals: [commandItem('call-s', 'ls')] });
+    expect(await gapToRightEdge()).toBeLessThanOrEqual(2);
+    // Deny and Approve are adjacent in both LTR and RTL.
+    await open(page, { approvals: [FILE_ITEM] });
+    expect(await gapToRightEdge()).toBeLessThanOrEqual(2);
+});
+
+test('the verdict button is accent-on-accent, never the theme button foreground', async ({ page }) => {
+    await open(page, { approvals: [FILE_ITEM] });
+    // VS Code ALWAYS defines --vscode-button-foreground (white in Dark
+    // Modern), so the prototype's `var(--vscode-button-foreground, ...)` label
+    // never reached its teal fallback: the real card rendered white text on an
+    // 8% accent wash. The review harness omitted the token and hid it.
+    const colour = await page.locator('.approval-apply').evaluate((el) => getComputedStyle(el).color);
+    const accent = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--xratu-accent-strong').trim();
+        document.body.appendChild(probe);
+        const v = getComputedStyle(probe).color;
+        probe.remove();
+        return v;
+    });
+    expect(colour).toBe(accent);
+    expect(colour).not.toBe('rgb(255, 255, 255)');
+});
+
 test('the ledger and the row table keep the approved metrics', async ({ page }) => {
     await open(page, { approvals: [FILE_ITEM, CSS_ITEM] });
     const read = (sel: string, prop: string) =>
@@ -402,6 +446,46 @@ test('allow-this-session sets the session flag', async ({ page }) => {
     const decision = (await sentMessages(page)).find((m) => m.type === 'approvalDecision') as
         { sessionApprove?: boolean } | undefined;
     expect(decision!.sessionApprove).toBe(true);
+});
+
+test('a DENY never shows the Approve button saying "Applying…"', async ({ page }) => {
+    // A rejection has nothing to apply. Telling the user their changes are
+    // being applied while they are being thrown away is the worst thing this
+    // card can say, and a single `submitting` boolean made it do exactly that:
+    // the label swap was unconditional, so Deny swapped the APPROVE label too.
+    await open(page, { approvals: [FILE_ITEM] });
+    await page.locator('.approval-deny').click();
+
+    // Both buttons go inert...
+    await expect(page.locator('.approval-deny')).toBeDisabled();
+    await expect(page.locator('.approval-apply')).toBeDisabled();
+    // ...but only Deny shows motion, and Approve keeps its own label.
+    await expect(page.locator('.approval-deny .step-status.spinner')).toHaveCount(1);
+    await expect(page.locator('.approval-apply .step-status.spinner')).toHaveCount(0);
+    await expect(page.locator('.approval-apply').getByText('Approve & run')).toBeVisible();
+    await expect(page.locator('.approval-apply').getByText('Applying…')).toBeHidden();
+});
+
+test('an APPROVE does show "Applying…", on the Approve button', async ({ page }) => {
+    await open(page, { approvals: [FILE_ITEM] });
+    await page.locator('.approval-apply').click();
+    // "Applying…" is VISIBLE (the idle label is present but hidden), so assert
+    // visibility rather than containment - the button carries both strings.
+    await expect(page.locator('.approval-apply').getByText('Applying…')).toBeVisible();
+    await expect(page.locator('.approval-apply .step-status.spinner')).toHaveCount(1);
+    // Deny stays quiet - it was not pressed.
+    await expect(page.locator('.approval-deny .step-status.spinner')).toHaveCount(0);
+    await expect(page.locator('.approval-deny')).toContainText('Deny all');
+});
+
+test('the in-flight spinner is sized, not collapsed', async ({ page }) => {
+    // The bundled .step-status paints only inside real .step markup, so
+    // without an explicit box the button changes width as its label swaps.
+    await open(page, { approvals: [FILE_ITEM] });
+    const before = await page.locator('.approval-apply').evaluate((el) => el.getBoundingClientRect().width);
+    await page.locator('.approval-apply').click();
+    const after = await page.locator('.approval-apply').evaluate((el) => el.getBoundingClientRect().width);
+    expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
 });
 
 test('a double click cannot post two decisions', async ({ page }) => {
