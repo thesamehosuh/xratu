@@ -36,7 +36,6 @@ export interface Copy {
     create: string;
     delete: string;
     runCommand: string;
-    autoDeniedNote: string;
     turn: string;
 }
 
@@ -56,7 +55,6 @@ export const COPY: Record<'fa' | 'en', Copy> = {
         create: 'ساخت فایل',
         delete: 'حذف فایل',
         runCommand: 'اجرای دستور',
-        autoDeniedNote: 'در حالت برنامه ریزی اجرا نمیشه',
         turn: 'دارم مسیر احراز هویت رو اضافه می کنم و تست هاش رو می نویسم.',
     },
     en: {
@@ -74,7 +72,6 @@ export const COPY: Record<'fa' | 'en', Copy> = {
         create: 'Create file',
         delete: 'Delete file',
         runCommand: 'Run command',
-        autoDeniedNote: 'Blocked in plan mode',
         turn: 'Adding the auth path now, then writing the tests for it.',
     },
 };
@@ -419,11 +416,6 @@ export const PROTO_CSS = `
     background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
     font-size: var(--xratu-fs-xs);
 }
-.proto-tag-note {
-    color: var(--vscode-descriptionForeground);
-    font-size: var(--xratu-fs-xs);
-}
-
 .proto-body { padding-block: 2px 8px; padding-inline-start: 17px; }
 
 .proto-diff {
@@ -531,15 +523,6 @@ export const PROTO_CSS = `
     padding-block: 6px;
     border-top: 1px solid var(--proto-hair-soft);
 }
-.a-note {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    color: var(--vscode-descriptionForeground);
-    font-size: var(--xratu-fs-xs);
-}
-
 /* ---- B: verdict bar + action footer ---------------------------------
    Same ledger as A, but the actions sit in a footer pinned to the bottom of
    the scrolling transcript, so the verdict stays reachable while a long diff
@@ -655,7 +638,7 @@ function rowHtml(row: Row, c: Copy, open: boolean, dir: Direction): string {
     const stats = statsCell(row);
     const body = bodyCell(row, c);
     const tag = row.preDenied
-        ? `<span class="proto-tag">${esc(c.preDenied)}</span><span class="proto-tag-note">${esc(c.autoDeniedNote)}</span>`
+        ? `<span class="proto-tag">${esc(c.preDenied)}</span>`
         : '';
     return `<div class="proto-row${open ? ' open' : ''}" data-row="${row.id}">
         <span class="caret" aria-hidden="true">${caret}</span>
@@ -724,13 +707,6 @@ export function renderDirection(dir: Direction, stateKey: string, c: Copy): stri
        it ("Some changes approved" over "Some changes applied") adds a row to
        every settled card and says nothing the header does not. */
 
-    /* The plan-mode note is only true when something in this batch was
-       actually pre-denied. Printing it unconditionally (as an unconditional
-       footer) puts "Blocked in plan mode" under every ordinary approval. */
-    const footNote = state.rows.some((r) => r.preDenied)
-        ? `<span class="a-note">${esc(c.autoDeniedNote)}</span>`
-        : '';
-
     if (dir === 'a') {
         return `<div class="proto a${settled ? ' settled' : ''}">
             <div class="a-head">
@@ -740,7 +716,7 @@ export function renderDirection(dir: Direction, stateKey: string, c: Copy): stri
                 ${settled ? '' : `<div class="proto-verdict">${denyBtn(state, c)}${approveBtn(state, c)}</div>`}
             </div>
             <div class="a-table">${state.rows.map((r) => rowHtml(r, c, open.has(r.id), dir)).join('')}</div>
-            ${settled ? '' : `<div class="a-foot">${sessionLink(approvable, c)}${footNote}</div>`}
+            ${settled ? '' : `<div class="a-foot">${sessionLink(approvable, c)}</div>`}
         </div>`;
     }
 
@@ -769,7 +745,7 @@ export function renderDirection(dir: Direction, stateKey: string, c: Copy): stri
         </div>
         <div class="c-body">
             <div class="proto-rows">${state.rows.map((r) => rowHtml(r, c, open.has(r.id), dir)).join('')}</div>
-            ${settled ? '' : `<div class="a-foot">${sessionLink(approvable, c)}${footNote}</div>`}
+            ${settled ? '' : `<div class="a-foot">${sessionLink(approvable, c)}</div>`}
         </div>
     </div>`;
 }

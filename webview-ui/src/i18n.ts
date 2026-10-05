@@ -311,6 +311,9 @@ const fa = {
 
     // Approval card
     approvalHead: 'درخواست اجرای ابزار',
+    /** Count-led title: the block says how many edits are pending instead of
+     *  naming its own component. `{count}` is a digit string. */
+    approvalCount: 'تایید {count} تغییر',
     approve: 'تایید و اجرا',
     approveSession: 'برای این نشست',
     approveSessionHint: 'دستور ها و ابزار های از این نوع تا پایان همین نشست بدون پرسیدن اجرا میشن',
@@ -1011,6 +1014,7 @@ const en: Record<keyof typeof fa, string> = {
     proxyFooterNote: 'The proxy applies to every outbound request: model calls, web tools, the MCP marketplace, and MCP servers.',
 
     approvalHead: 'Tool execution request',
+    approvalCount: 'Approve {count} edits',
     approve: 'Approve & run',
     approveSession: 'Allow this session',
     approveSessionHint: 'This kind of command or tool will run without asking for the rest of this session',
