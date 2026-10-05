@@ -482,9 +482,21 @@ test('the in-flight spinner is sized, not collapsed', async ({ page }) => {
     // The bundled .step-status paints only inside real .step markup, so
     // without an explicit box the button changes width as its label swaps.
     await open(page, { approvals: [FILE_ITEM] });
-    const before = await page.locator('.approval-apply').evaluate((el) => el.getBoundingClientRect().width);
+    // Fonts first. The webview inlines Vazirmatn with `font-display: swap`, and
+    // --vscode-font-family resolves to the host's `system-ui` - a different
+    // face on every runner. Measuring before the font settles compared two
+    // different metrics and read as a layout regression (it failed on macOS
+    // with a 1.77px delta while the layout never actually moved).
+    await page.evaluate(() => (document as Document & { fonts: FontFaceSet }).fonts.ready);
+    const before = await page.locator('.approval-apply').evaluate((el) => el.offsetWidth);
     await page.locator('.approval-apply').click();
-    const after = await page.locator('.approval-apply').evaluate((el) => el.getBoundingClientRect().width);
+    // Then the in-flight state, so the swap is committed rather than sampled
+    // mid-render.
+    await expect(page.locator('.approval-apply .step-status.spinner')).toHaveCount(1);
+    // offsetWidth, not getBoundingClientRect: the spinner is a rotating square,
+    // so its own bounding rect swells from 13px to 18.4px twice per turn.
+    // Transforms do not affect layout, and offsetWidth is the layout box.
+    const after = await page.locator('.approval-apply').evaluate((el) => el.offsetWidth);
     expect(Math.abs(after - before)).toBeLessThanOrEqual(1);
 });
 
