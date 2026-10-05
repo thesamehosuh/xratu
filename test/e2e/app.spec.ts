@@ -764,19 +764,22 @@ test('an empty or bare workspace gets starting-from-scratch chips', async ({ pag
 
     // The default chips are all maintenance ON a codebase, so they cannot
     // fire in a folder with nothing in it.
+    // `hostMessage` is a fire-and-forget postMessage, so every read below has to
+    // wait for React rather than sample whatever is on screen. `toHaveText`
+    // retries; a bare `allInnerTexts()` + `toEqual` does not, and on a slower
+    // macOS leg the 'project' step read the previous step's chips.
     await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
-    await expect(page.locator('.chip-suggest')).toHaveCount(4);
-    expect(await page.locator('.chip-suggest').allInnerTexts())
-        .toEqual(['Build something new', 'Set up this folder', 'Plan it with me first', 'Bring my code in']);
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Build something new', 'Set up this folder', 'Plan it with me first', 'Bring my code in']);
 
     // 'bare' (a README but no project) is the same case for the chips.
     await hostMessage(page, { type: 'showChat', workspaceKind: 'bare' });
-    expect((await page.locator('.chip-suggest').allInnerTexts())[0]).toBe('Build something new');
+    await expect(page.locator('.chip-suggest').first()).toHaveText('Build something new');
 
     // A real project keeps the established-project set.
     await hostMessage(page, { type: 'showChat', workspaceKind: 'project' });
-    expect(await page.locator('.chip-suggest').allInnerTexts())
-        .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
 
     // A host that does not send the field keeps the default set. This needs a
     // fresh page: the step above left `workspaceKind` at 'project', and the
@@ -785,8 +788,8 @@ test('an empty or bare workspace gets starting-from-scratch chips', async ({ pag
     await page.goto('/');
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
-    expect(await page.locator('.chip-suggest').allInnerTexts())
-        .toEqual(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
 });
 
 test('the fresh-workspace chips type a prompt with no {file} placeholder', async ({ page }) => {
