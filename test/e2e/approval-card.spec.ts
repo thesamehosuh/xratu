@@ -221,6 +221,29 @@ test('a batch with nothing approvable says so instead of counting', async ({ pag
     await expect(page.locator('.approval-title')).toHaveText('Nothing to approve');
 });
 
+test('the header renders no stray text where a condition is false', async ({ page }) => {
+    // React prints a NUMERIC 0 as text while ignoring `false`, so any
+    // `{numericCondition && ...}` silently paints a stray digit. Assert the
+    // header's text is EXACTLY the title plus the two button labels - no more.
+    await open(page, { approvals: [commandItem('call-a', 'npm test')] });
+    const headerText = async () => {
+        const head = page.locator('.approval-head');
+        // Drop the button labels: they are the only intended extra text.
+        const clone = await head.evaluate((el) => {
+            const c = el.cloneNode(true) as HTMLElement;
+            c.querySelector('.approval-verdict')?.remove();
+            return c.textContent ?? '';
+        });
+        return clone.trim();
+    };
+    await expect(page.locator('.approval-title')).toHaveText('Approve 1 command');
+    expect(await headerText()).toBe('Approve 1 command');
+
+    // Same check on a batch with no diffs at all - the case that painted "0".
+    await open(page, { approvals: [COMMAND_ITEM] });
+    expect(await headerText()).toBe('Approve 1 command');
+});
+
 /* ---- the states that must not break ---------------------------------- */
 
 test('a lone terminal command renders its command, not a diff', async ({ page }) => {

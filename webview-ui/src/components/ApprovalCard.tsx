@@ -186,7 +186,11 @@ export function ApprovalCard({
        says which items were blocked, so a sentence restating it says nothing
        the reader cannot see - and it read as an apology on a card that was
        simply part denied. */
-    const ledgerVisible = !isResolved && (fileCount > 0 || totalAdded || totalRemoved);
+    /* Every comparison is explicit. `fileCount > 0 || totalAdded || totalRemoved`
+       returns the NUMBER 0 through `||` short-circuiting, and React renders a
+       numeric 0 as literal text while ignoring `false` - so a batch with no
+       diffs painted a stray "0" next to the title. */
+    const ledgerVisible = !isResolved && (fileCount > 0 || totalAdded > 0 || totalRemoved > 0);
 
     return (
         <section className={`approval-card${isResolved ? ' resolved' : ' pending'}`} aria-label={title}>
