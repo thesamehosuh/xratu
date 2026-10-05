@@ -30,6 +30,10 @@ runtime. Everything runs inside the extension host, on your machine.
 - **Agentic coding** - reads files, edits code, runs terminal commands,
   searches the web. Every edit and command needs your approval; per-tool
   auto-approve if you trust a workflow, YOLO mode if you don't want the gate.
+  **YOLO mode drops the approval gate entirely** - file edits, terminal
+  commands, and MCP tools all run unasked. Checkpoints still snapshot before
+  edits and plan mode still blocks mutations, but nothing is holding the loop
+  back. Point it at a scratch workspace, not a repo you care about.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
 - **Checkpoints** - shadow-git snapshots before sends and edits, restorable
@@ -274,6 +278,18 @@ Settings → Proxy controls outbound routing:
 API keys are stored in VS Code secrets storage and sent only to the endpoint
 you configure. Chat history and checkpoints live on your disk only.
 
+Two features do leave your machine, by design:
+
+- **Web search** sends the query to whichever provider is configured - your own
+  SearXNG instance (`xratu.webSearchUrl`), otherwise Brave Search; Parallel is
+  also selectable.
+- **Fetch URL** requests the page you or the agent name, after the SSRF guard
+  rejects private and loopback addresses.
+
+MCP servers, skills, and agent files are read from your disk. Nothing is
+telemetry; there is no analytics or crash reporting in the extension. Report a
+vulnerability through [SECURITY.md](SECURITY.md), not a public issue.
+
 ## Development
 
 ```bash
@@ -283,7 +299,7 @@ npm run test:webview
 ```
 
 CI type-checks host and webview separately and runs the test suites on
-Ubuntu and Windows. See [AGENTS.md](AGENTS.md) for details.
+Ubuntu, Windows, and macOS. See [AGENTS.md](AGENTS.md) for details.
 
 ## Contributing
 

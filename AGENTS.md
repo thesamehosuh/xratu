@@ -85,7 +85,7 @@ node esbuild.js
 npm run test:webview
 ```
 
-CI runs exactly these on both ubuntu and windows, plus the host-side test
+CI runs exactly these on ubuntu, windows and macos, plus the host-side test
 suites. Skipping the webview tsc step is the classic CI-only failure — never
 skip it.
 
