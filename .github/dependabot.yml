@@ -17,12 +17,12 @@ updates:
       # and none of it ships inside the vsix.
       dev-dependencies:
         dependency-type: development
-      # Production patches are mechanical. Minors stay individual on purpose -
-      # a bundled minor can change behaviour, and that deserves a real look.
+      # Production patches are mechanical and group together. Minors stay
+      # individual on purpose: a bundled minor can change behaviour, and that
+      # deserves a real look rather than riding along with unrelated bumps.
       production-patches:
         dependency-type: production
         update-types:
-          - minor
           - patch
 
   - package-ecosystem: github-actions

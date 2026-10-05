@@ -286,8 +286,8 @@ Two features do leave your machine, by design:
 - **Fetch URL** requests the page you or the agent name, after the SSRF guard
   rejects private and loopback addresses.
 
-MCP servers, skills, and agent files are read from your disk. Nothing is
-telemetry; there is no analytics or crash reporting in the extension. Report a
+MCP servers, skills, and agent files are read from your disk. There is no
+telemetry, no analytics, and no crash reporting in the extension. Report a
 vulnerability through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Development
