@@ -80,7 +80,9 @@ const waitDead = async (pid, ms = 5000) => {
 };
 
 const tmp = mkdtempSync(join(tmpdir(), 'xratu-bg-'));
-const cleanup = () => rmSync(tmp, { recursive: true, force: true });
+// Retries, because this suite spawns and kills process trees: on Windows a
+// dying tree can still hold the directory, and `force` does not cover EBUSY.
+const cleanup = () => rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
 // ------------------------------------------------------ isOurProcess, fail-closed
 
@@ -200,7 +202,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     }));
     const finished = await new BackgroundJobStore(dir).load();
     ok('a record of an already-exited process is not adopted', finished.alive.length === 0);
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 {
@@ -218,7 +220,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     const { alive: found } = await store.load();
     ok('a BOM-prefixed checkpoint still loads', found.length === 1 && found[0].id === 'job-bom',
         `found ${found.length}`);
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 {
@@ -238,7 +240,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     // ever affect - so it passed by construction.
     const leftovers = readdirSync(dir).filter((f) => f.endsWith('.tmp'));
     ok('no stray tmp file is left behind', leftovers.length === 0, JSON.stringify(leftovers));
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 // ------------------------------------------------------- adopting a live process
