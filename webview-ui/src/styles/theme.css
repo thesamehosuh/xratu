@@ -72,6 +72,17 @@
        touching code/tables. Sidebar widths already sit under this. */
     --xratu-measure: 72ch;
 
+    /* Diff add/remove. Previously four hardcoded GitHub values
+       (#3fb950 / #f85149) repeated across .diff-row.*, .pill-diff-* and the
+       approval card with NO light override - a red-green pair tuned for a dark
+       editor is close to unreadable on a white one, so every diff in a light
+       theme rendered at the wrong contrast rather than at the wrong colour.
+       Two tokens, one definition, both themes covered. */
+    --xratu-diff-add: #3fb950;
+    --xratu-diff-del: #f85149;
+    --xratu-diff-add-bg: rgba(63, 185, 80, 0.10);
+    --xratu-diff-del-bg: rgba(248, 81, 73, 0.10);
+
     /* Motion language - "stream & settle": content arrives on an expressive
        ease-out and lands softly, interactive surfaces pop out of their
        anchor, live states breathe instead of blink. Durations form a 4-step
@@ -146,6 +157,17 @@ body.vscode-light {
     --xratu-bubble-user: var(--xratu-surface-inset);
     --xratu-code-bg: var(--vscode-editor-background);
     --xratu-code-head-bg: var(--vscode-editor-background);
+
+    /* Diff colours follow the light palette. Both values are the GitHub Light
+       pair VS Code's own Light Modern ships for diffEditor.addedText /
+       removedText, and both are DARKER than the dark-theme pair: on white, a
+       #3fb950 fill at 10% is a tint too pale to read as a change at all.
+       The wash also strengthens - light backgrounds need more of it to
+       separate the row from the surface behind it. */
+    --xratu-diff-add: #1a7f37;
+    --xratu-diff-del: #cf222e;
+    --xratu-diff-add-bg: rgba(26, 127, 55, 0.12);
+    --xratu-diff-del-bg: rgba(207, 34, 46, 0.12);
 }
 
 /* Form controls, placeholders and scrollbars follow the VS Code THEME, never
@@ -883,123 +905,208 @@ button {
     transform: translateY(0);
 }
 
+/* ---------------------------------------------------------------------------
+   Approval card - a code-review ledger, not a dialog.
+
+   The card used to be a rounded box: 1px border, 10px radius, its own tinted
+   header band, a separate actions band, `box-shadow`, six raw radii and ten
+   raw font sizes. Inside a transcript whose every other surface is flat -
+   tool pills, job rows, diffs - that elevation claimed a level nothing in the
+   message flow actually occupies, and it was the least-redesigned surface in
+   the product.
+
+   It is now ruled, not boxed: two hairline rules group the block, one 30px
+   verdict row carries the icon, the count-led title, the ledger and the two
+   verdict buttons, and the file table below is dense enough to read as a
+   table. No shadow, no radius, no nested chrome.
+   --------------------------------------------------------------------------- */
+
 .approval-card {
+    /* Hairlines, not a frame: one rule above and one below is enough to read
+       as a group, and it survives both light and dark themes without a second
+       surface colour to keep in sync. */
+    --approval-hair: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+    --approval-hair-soft: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
     width: 100%;
-    margin: 10px 0 2px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: 10px;
-    background: var(--xratu-surface-inset);
-    overflow: hidden;
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+    margin-block: 8px 2px;
+    border-block: 1px solid var(--approval-hair);
 }
 
-.approval-card.pending {
-    border-color: var(--vscode-widget-border);
-}
-
+/* No opacity drop: the old card dimmed a RESOLVED card to 0.86, which also
+   dimmed the diff the user may still want to read. The verdict colour in the
+   header carries the settled state instead. */
 .approval-card.resolved {
-    opacity: 0.86;
+    opacity: 1;
 }
+
+/* ---- verdict row ---------------------------------------------------- */
 
 .approval-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 9px;
-    min-height: 48px;
-    padding: 9px 11px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
-    border-bottom: 1px solid var(--vscode-widget-border);
-}
-
-.approval-head-left {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    min-width: 0;
-    flex: 1;
+    gap: 8px;
+    /* One row carries everything: at a 420px sidebar the old 48px header plus
+       its 48px actions band cost more vertical space than the diff they were
+       framing. */
+    min-height: 30px;
+    padding-block: 5px;
 }
 
 .approval-state-icon {
-    width: 27px;
-    height: 27px;
-    flex: 0 0 27px;
+    flex: 0 0 auto;
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 7px;
     color: var(--xratu-accent-strong);
-    background: var(--xratu-accent-faint);
-    border: 1px solid var(--xratu-accent-dim);
 }
 
-.approval-state-icon.resolved {
-    background: transparent;
-}
+.approval-state-icon.approved { color: var(--xratu-diff-add); }
+.approval-state-icon.rejected { color: var(--vscode-errorForeground); }
+.approval-state-icon.mixed { color: var(--vscode-editorWarning-foreground); }
 
-.approval-heading-copy {
+.approval-title {
     min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-
-.approval-heading-copy strong {
-    font-size: 12px;
-    line-height: 1.25;
-    font-weight: 650;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     color: var(--vscode-foreground);
-}
-
-.approval-heading-copy span {
-    font-size: 10.5px;
-    color: var(--vscode-descriptionForeground);
-}
-
-.approval-count {
-    margin-inline-start: auto;
-    min-width: 20px;
-    height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--xratu-accent-strong);
-    font-size: 10px;
+    font-size: var(--xratu-fs-md);
     font-weight: 650;
+    line-height: 1.25;
 }
 
-.approval-header-stats {
+/* The ledger aligns like a diffstat. Tabular numerals in the editor face keep
+   "+48 -12" column-comparable across rows and across cards. */
+.approval-ledger {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
     margin-inline-start: auto;
-    display: inline-flex;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground);
+    font-size: var(--xratu-fs-xs);
+}
+
+.approval-ledger .n {
+    font-family: var(--vscode-editor-font-family);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.approval-ledger .add,
+.approval-file-stats .add {
+    color: var(--xratu-diff-add);
+}
+
+.approval-ledger .del,
+.approval-file-stats .del {
+    color: var(--xratu-diff-del);
+}
+
+/* `margin-inline-start: auto` HERE as well as on the ledger: two auto margins
+   split the free space so the ledger floats mid-row and the buttons sit on the
+   trailing edge. With it only on the ledger, a batch with no diffs (a terminal
+   command, a fully-denied batch) had nothing pushing the buttons out and they
+   hugged the title instead. */
+.approval-verdict {
+    display: flex;
     align-items: center;
     gap: 6px;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10px;
-    font-weight: 650;
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+    white-space: nowrap;
 }
 
-.approval-header-stats span:first-child {
+.approval-verdict button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 24px;
+    padding-inline: 10px;
+    border-radius: var(--xratu-radius-xs);
+    border: 1px solid transparent;
+    font-family: inherit;
+    font-size: var(--xratu-fs-sm);
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--xratu-dur-2) var(--xratu-ease-settle),
+        border-color var(--xratu-dur-2) var(--xratu-ease-settle),
+        color var(--xratu-dur-2) var(--xratu-ease-settle),
+        opacity var(--xratu-dur-2) var(--xratu-ease-settle);
+}
+
+.approval-deny {
     color: var(--vscode-descriptionForeground);
-    font-weight: 500;
+    background: transparent;
 }
 
-.approval-stat {
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-weight: 650;
+.approval-deny:hover:not(:disabled) {
+    color: var(--vscode-errorForeground);
+    background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
 }
 
-.approval-stat.add,
-.approval-file-stats .add {
-    color: #3fb950;
+/* The primary action wears the PRODUCT accent, and NOTHING else.
+   Both halves of the prototype's `var(--vscode-button-foreground, ...)` and
+   `var(--vscode-button-background, ...)` were lies: VS Code always defines
+   those tokens, so the fallback never fired and the label rendered white on
+   a 8% accent wash (and earlier, #0078d4 - a link colour - as the fill).
+   An accent-tinted surface needs accent-tinted text; taking the theme's
+   button foreground instead is what made it stop looking like the approved
+   design. Pinning both is also what makes it render identically in the
+   review harness and in a real editor. */
+.approval-apply {
+    min-width: 92px;
+    color: var(--xratu-accent-strong);
+    background: var(--xratu-accent-faint);
+    border-color: var(--xratu-accent-dim);
 }
 
-.approval-stat.del,
-.approval-file-stats .del {
-    color: #f85149;
+.approval-apply:hover:not(:disabled) {
+    background: var(--xratu-accent-dim);
+    color: var(--xratu-accent);
 }
+
+.approval-verdict button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Both labels share one grid cell and the inactive one is only INVISIBLE, so
+   the button is always as wide as the wider of the two. Swapping the label in
+   place resized the button by ~23px mid-click and shoved the ledger beside it
+   sideways. `visibility` (not `display`) so the hidden label keeps its width. */
+.approval-btn-label {
+    display: grid;
+}
+
+.approval-btn-label > span {
+    grid-area: 1 / 1;
+}
+
+.approval-btn-label > span[aria-hidden='true'] {
+    visibility: hidden;
+}
+
+/* A fixed box for the spinner: the bundled .step-status paints only when real
+   .step markup wraps it, so without this the button collapses as the label
+   swaps to a longer string. */
+.approval-apply .step-status.spinner {
+    /* 13px, not 11px: the slot must match the 13px Check icon it replaces or
+       the button still resizes by the difference when the label swaps. */
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 1.5px solid color-mix(in srgb, var(--xratu-accent-strong) 35%, transparent);
+    border-block-start-color: var(--xratu-accent-strong);
+    animation: approval-spin 720ms linear infinite;
+}
+
+@keyframes approval-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ---- file table ----------------------------------------------------- */
 
 .approval-items {
     display: flex;
@@ -1008,19 +1115,18 @@ button {
 
 .approval-item {
     border: 0;
-    border-bottom: 1px solid var(--vscode-widget-border);
-}
-
-.approval-item:last-child {
-    border-bottom: 0;
+    border-top: 1px solid var(--approval-hair-soft);
 }
 
 .approval-item summary {
-    min-height: 44px;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
+    gap: 7px;
+    min-width: 0;
+    /* 26px, not the old 44px: this row is a line in a table, and a 44px target
+       is sized for a mouse on a desktop-width list, not for a 420px sidebar. */
+    min-height: 26px;
+    padding-block: 4px;
     cursor: pointer;
     list-style: none;
     user-select: none;
@@ -1031,115 +1137,125 @@ button {
 }
 
 .approval-item summary:hover {
-    background: color-mix(in srgb, var(--vscode-list-hoverBackground) 55%, transparent);
+    background: color-mix(in srgb, var(--vscode-list-hoverBackground) 45%, transparent);
+}
+
+.approval-item summary:focus-visible {
+    outline: 2px solid var(--xratu-accent);
+    outline-offset: -2px;
+}
+
+.approval-caret {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: var(--vscode-descriptionForeground);
+    transition: transform var(--xratu-dur-2) var(--xratu-ease-settle);
+}
+
+/* Up/down only: a left/right fold reads backwards under RTL. */
+[dir='rtl'] .approval-caret {
+    transform: scaleX(-1);
+}
+
+.approval-item[open] .approval-caret {
+    transform: rotate(180deg);
+}
+
+[dir='rtl'] .approval-item[open] .approval-caret {
+    transform: scaleX(-1) rotate(180deg);
 }
 
 .approval-file-icon {
-    width: 24px;
-    height: 24px;
-    flex: 0 0 24px;
+    flex: 0 0 auto;
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 5px;
     color: var(--vscode-descriptionForeground);
-    background: color-mix(in srgb, var(--vscode-input-background) 75%, transparent);
 }
 
-.approval-file-copy {
+/* The file identity is ONE mono run with a dim directory and a bright
+   basename. The old card stacked the name over the full path, which cost ~14px
+   per row and repeated the basename in both halves.
+
+   The directory is the shrinkable half and the basename is fixed, so a long
+   path ellipsizes where there is redundancy and the name being approved stays
+   fully readable. A single text-overflow on the whole run clips the tail -
+   which is exactly the basename. */
+.approval-path {
+    flex: 1 1 auto;
     min-width: 0;
-    flex: 1;
     display: flex;
-    flex-direction: column;
-    gap: 1px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--xratu-fs-xs);
 }
 
-.approval-file-name {
+.approval-path .dir {
+    min-width: 0;
     overflow: hidden;
+    white-space: nowrap;
     text-overflow: ellipsis;
+    color: var(--vscode-descriptionForeground);
+}
+
+.approval-path .base {
+    flex: 0 0 auto;
     white-space: nowrap;
     color: var(--vscode-foreground);
-    font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
-    font-size: 11.5px;
     font-weight: 600;
-    direction: ltr;
-    text-align: start;
 }
 
-.approval-file-path {
+/* A non-diff row has no directory to absorb the shrink, so its own label has
+   to ellipsize - and the row needs overflow clipping too, or the nowrap child
+   paints straight past the panel edge. */
+.approval-label {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--vscode-descriptionForeground);
-    font-size: 9.5px;
-    direction: ltr;
-    text-align: start;
+    text-overflow: ellipsis;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-foreground);
 }
 
 .approval-file-stats {
     flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10px;
-    font-weight: 650;
-}
-
-.approval-tool-mini {
-    flex: 0 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-family: var(--vscode-editor-font-family);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--xratu-fs-xs);
+    font-weight: 600;
     white-space: nowrap;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: var(--xratu-accent-faint);
-    border: 1px solid var(--xratu-accent-dim);
-    color: var(--xratu-accent-strong);
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 9.5px;
 }
 
 .approval-denied-tag {
     flex: 0 0 auto;
-    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: var(--xratu-radius-xs);
     color: var(--vscode-errorForeground);
-    background: rgba(248, 81, 73, 0.08);
-    border: 1px solid rgba(248, 81, 73, 0.25);
-    border-radius: 999px;
-    padding: 2px 6px;
-}
-
-.approval-item-chevron {
-    flex: 0 0 auto;
-    color: var(--vscode-descriptionForeground);
-    transition: transform var(--xratu-dur-1) var(--xratu-ease-settle);
-}
-
-.approval-item[open] .approval-item-chevron {
-    transform: rotate(180deg);
+    background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
+    font-size: var(--xratu-fs-xs);
 }
 
 .approval-item-body {
-    padding: 0 10px 9px;
+    padding-block: 2px 8px;
+    padding-inline-start: 20px;
 }
+
+/* ---- diff + action preview ------------------------------------------ */
 
 .approval-diff-wrap {
     overflow: hidden;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000);
+    border: 1px solid var(--approval-hair);
+    border-radius: var(--xratu-radius-xs);
 }
 
 .approval-diff {
     max-height: 310px;
     overflow: auto;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10.5px;
-    line-height: 1.5;
-    tab-size: 4;
     width: 100%;
     border-collapse: collapse;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--xratu-fs-xs);
+    line-height: 1.55;
+    tab-size: 4;
 }
 
 .diff-row {
@@ -1147,16 +1263,12 @@ button {
 }
 
 .diff-no {
-    width: 36px;
-    padding: 0 6px;
+    width: 34px;
+    padding-inline: 6px;
     text-align: right;
     user-select: none;
     color: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, transparent);
-    border-right: 1px solid color-mix(in srgb, var(--vscode-widget-border) 70%, transparent);
-}
-
-.diff-no-old {
-    border-right: 1px solid color-mix(in srgb, var(--vscode-widget-border) 70%, transparent);
+    border-inline-end: 1px solid var(--approval-hair-soft);
 }
 
 .diff-mark {
@@ -1178,21 +1290,21 @@ button {
 }
 
 .diff-row.diff-add {
-    background: rgba(63, 185, 80, 0.10);
+    background: var(--xratu-diff-add-bg);
 }
 
 .diff-row.diff-add .diff-mark,
 .diff-row.diff-add .diff-code {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .diff-row.diff-del {
-    background: rgba(248, 81, 73, 0.10);
+    background: var(--xratu-diff-del-bg);
 }
 
 .diff-row.diff-del .diff-mark,
 .diff-row.diff-del .diff-code {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .diff-row.diff-ctx .diff-code {
@@ -1200,19 +1312,17 @@ button {
 }
 
 .approval-action-preview {
-    padding: 9px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--vscode-input-background) 80%, #000);
+    padding: 8px;
+    border: 1px solid var(--approval-hair);
+    border-radius: var(--xratu-radius-xs);
+    background: var(--xratu-code-bg);
 }
 
 .approval-action-label {
-    margin-bottom: 5px;
+    margin-block-end: 5px;
     color: var(--vscode-descriptionForeground);
-    font-size: 10px;
+    font-size: var(--xratu-fs-xs);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
 }
 
 .approval-action-path {
@@ -1221,113 +1331,69 @@ button {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--xratu-accent-strong);
-    font-size: 11px;
+    font-size: var(--xratu-fs-sm);
 }
 
 .approval-action-preview pre {
     margin: 5px 0 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 11px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--xratu-fs-sm);
     line-height: 1.5;
     color: var(--vscode-foreground);
 }
 
-.approval-actions {
+/* ---- footer --------------------------------------------------------- */
+
+/* "Allow this session" is a standing permission, not a verdict for this batch,
+   so it sits below the table as a quiet link rather than competing with
+   Approve in the header. Nothing else goes on this line: the plan-mode note
+   only appears when an item really was auto-denied. */
+.approval-foot {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
-    padding: 8px 8px 9px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 88%, #000);
-    border-top: 1px solid var(--vscode-widget-border);
+    gap: 8px;
+    padding-block: 6px;
+    border-top: 1px solid var(--approval-hair-soft);
 }
 
-/* Same chip language as the composer: quiet pills, icon-tinted hover,
-   accent used sparingly on the primary action only. */
-.approval-actions button {
-    height: 26px;
+.approval-session {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
     gap: 5px;
-    padding: 0 12px;
-    border-radius: 999px;
-    font-size: var(--xratu-fs-sm);
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
     font-family: inherit;
-    font-weight: 600;
-    line-height: 1;
-    transition: background var(--xratu-dur-2) var(--xratu-ease-settle), border-color var(--xratu-dur-2) var(--xratu-ease-settle), color var(--xratu-dur-2) var(--xratu-ease-settle), opacity var(--xratu-dur-2) var(--xratu-ease-settle);
+    font-size: var(--xratu-fs-xs);
+    cursor: pointer;
+    transition: color var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
-.approval-actions .deny-btn {
-    flex: 0 0 auto;
-    color: var(--vscode-descriptionForeground);
-    background: transparent;
-    /* Transparent border, not none: all three actions share the same box
-       structure (1px border inside a fixed border-box height), so the row
-       can never render mixed heights under fractional-DPR rounding. */
-    border: 1px solid transparent;
-}
-
-.approval-actions .deny-btn:hover:not(:disabled) {
-    color: var(--vscode-errorForeground);
-    background: rgba(248, 81, 73, 0.09);
-}
-
-/* Middle action: quiet ghost pill between Deny and Approve - trusts one KIND
-   of command/tool for the rest of the session without touching settings. */
-.approval-actions .session-allow-btn {
-    flex: 0 0 auto;
-    color: var(--vscode-descriptionForeground);
-    background: transparent;
-    border: 1px solid var(--vscode-widget-border);
-}
-
-.approval-actions .session-allow-btn:hover:not(:disabled) {
+.approval-session:hover:not(:disabled) {
     color: var(--xratu-accent-strong);
-    background: var(--xratu-accent-faint);
-    border-color: color-mix(in srgb, var(--xratu-accent) 35%, transparent);
 }
 
-.approval-actions .apply-btn {
-    flex: 1;
-    color: var(--xratu-accent-strong);
-    background: var(--xratu-accent-faint);
-    border: 1px solid color-mix(in srgb, var(--xratu-accent) 35%, transparent);
+.approval-session:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
-.approval-actions .apply-btn:hover:not(:disabled) {
-    color: var(--xratu-accent-strong);
-    background: var(--xratu-accent-dim);
-    border-color: color-mix(in srgb, var(--xratu-accent) 60%, transparent);
+.approval-session:focus-visible {
+    outline: 2px solid var(--xratu-accent);
+    outline-offset: 2px;
 }
 
-.approval-actions button:disabled {
-    opacity: 0.5;
-    cursor: wait;
-}
-
-.approval-resolution {
-    padding: 8px 10px 9px;
-    border-top: 1px solid var(--vscode-widget-border);
-    color: var(--vscode-descriptionForeground);
-    font-size: 10.5px;
-    /* The verdict seals the card: it settles in under the actions row. */
-    animation: decision-in var(--xratu-dur-3) var(--xratu-ease-settle);
-}
-
-.approval-resolution.approved {
-    color: #3fb950;
-}
-
-.approval-resolution.rejected {
-    color: var(--vscode-descriptionForeground);
-}
-
-.approval-resolution.mixed {
-    color: var(--xratu-accent-strong);
+@media (max-width: 460px) {
+    /* Below this the three header labels stop fitting beside the ledger. The
+       file COUNT goes first: the +N -N totals carry the same information and
+       the file names are listed underneath anyway. */
+    .approval-ledger .files {
+        display: none;
+    }
 }
 
 /* Decision card (ask_user_question): stacked option buttons, the model's
@@ -3326,11 +3392,11 @@ button {
 }
 
 .step-stat .a {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .step-stat .d {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .step-stat.ok {
@@ -3377,11 +3443,11 @@ button {
 }
 
 .edit-file-stat .a {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .edit-file-stat .d {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .edit-file-head .spacer {
@@ -3810,13 +3876,13 @@ pre.tool-cmd {
 }
 
 .pill-diff-line.del {
-    background: rgba(248, 81, 73, 0.13);
-    border-inline-start: 2px solid #f85149;
+    background: var(--xratu-diff-del-bg);
+    border-inline-start: 2px solid var(--xratu-diff-del);
 }
 
 .pill-diff-line.add {
-    background: rgba(63, 185, 80, 0.13);
-    border-inline-start: 2px solid #3fb950;
+    background: var(--xratu-diff-add-bg);
+    border-inline-start: 2px solid var(--xratu-diff-add);
 }
 
 .pill-diff-mark {
@@ -3829,11 +3895,11 @@ pre.tool-cmd {
 }
 
 .pill-diff-line.del .pill-diff-mark {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .pill-diff-line.add .pill-diff-mark {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .pill-diff-code {
@@ -3905,15 +3971,15 @@ pre.tool-cmd {
 }
 
 .step pre.pill-diff-del {
-    background: rgba(248, 81, 73, 0.13);
-    border-inline-start: 2px solid #f85149;
+    background: var(--xratu-diff-del-bg);
+    border-inline-start: 2px solid var(--xratu-diff-del);
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
 }
 
 .step pre.pill-diff-add {
-    background: rgba(63, 185, 80, 0.13);
-    border-inline-start: 2px solid #3fb950;
+    background: var(--xratu-diff-add-bg);
+    border-inline-start: 2px solid var(--xratu-diff-add);
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
 }
