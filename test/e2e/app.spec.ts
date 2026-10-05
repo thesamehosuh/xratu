@@ -273,15 +273,13 @@ test('returning to the tail collapses the reveal window', async ({ page }) => {
     // Leave the tail and return: the mounted window collapses back to one page
     // so a long session cannot keep every revealed bubble in the DOM forever.
     await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
-    // The collapse is edge-triggered on "was away from the tail, now back"
-    // (collapsing while pinned would undo the reveal). Two back-to-back
-    // scrollTop writes can coalesce into ONE scroll event whose final state
-    // is "at tail", so the away-from-tail edge is never observed and the
-    // window stays at 50 - the flake. Let a frame render at the top first so
-    // the scroll handler sees the off-tail position before the return.
-    await page.locator('.messages').evaluate((el) => new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
-    }));
+    // The collapse is edge-triggered on "was away from the tail, now back", so
+    // the app must first OBSERVE the off-tail position. Waiting for `.jump-btn`
+    // is that observation made deterministic: it renders exactly when
+    // `atBottom` is false. Sleeping or spinning rAFs here instead just guesses
+    // how long the scroll event takes - fine on Linux, a lost race on macOS,
+    // where the collapse then never fires and the window stays at 50.
+    await expect(page.locator('.jump-btn')).toBeVisible();
     await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
     await expect(bubbles).toHaveCount(40);
     await expect(page.locator('.show-earlier')).toBeVisible();
@@ -321,7 +319,11 @@ test('appending while scrolled up keeps the reader anchor', async ({ page }) => 
     await expect(bubbles).toHaveCount(40);
     // Scroll to the top: the app's onScroll marks the reader as not-at-bottom.
     await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
-    await page.waitForTimeout(50);
+    // Wait for the app to have SEEN it (`.jump-btn` renders iff atBottom is
+    // false). A fixed sleep races the scroll event - on macOS the append below
+    // landed while atBottom was still true, so the window collapsed instead of
+    // growing and the count stayed 40.
+    await expect(page.locator('.jump-btn')).toBeVisible();
     // Two messages in ONE task -> one React commit (delta=2). The window must
     // GROW by the delta, not shift - the oldest bubble stays mounted and no
     // control appears.
@@ -674,6 +676,11 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
 
     await hostMessage(page, { type: 'openSettings' });
     const switches = page.locator('.settings-card .mcp-switch');
+    // The card mounts on a later commit than the message that requested it, so
+    // read the switches only once they exist. A bare `evaluateAll` here got `[]`
+    // on the slower macOS leg - an empty result that reads like "no switches
+    // exist" rather than "not rendered yet".
+    await expect(switches).toHaveCount(3);
     // diffs on, commands off, reasoning off
     expect(await switches.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked'))))
         .toEqual(['true', 'false', 'false']);
