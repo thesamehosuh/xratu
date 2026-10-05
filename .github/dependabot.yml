@@ -1,0 +1,32 @@
+# Dependabot watches the one surface that actually ships: the 8 runtime deps
+# in package.json are bundled into dist/extension.js, so an advisory in
+# undici / pdfjs-dist / markdown-it / ws reaches every install. It also keeps
+# the action SHAs pinned in release.yml fresh - those pins carry a
+# version-in-comment and rot silently otherwise.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Dev-only tooling bumps together: esbuild / vite / playwright move often
+      # and none of it ships inside the vsix.
+      dev-dependencies:
+        dependency-type: development
+      # Production patches are mechanical and group together. Minors stay
+      # individual on purpose: a bundled minor can change behaviour, and that
+      # deserves a real look rather than riding along with unrelated bumps.
+      production-patches:
+        dependency-type: production
+        update-types:
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

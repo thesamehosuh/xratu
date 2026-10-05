@@ -5,10 +5,25 @@ on:
     branches: [main]
   pull_request:
 
+# Superseded PR runs are pure waste - the matrix is three OS legs. NEVER
+# cancel on main: a killed main run tells you nothing about the commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# CI only checks out the repo and runs node. `contents: read` matches
+# release.yml and drops the default token to read-only.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Default fail-fast cancels the sibling legs the moment one fails, which
+      # HIDES whether they passed - a windows leg killed mid-`webServer` reports
+      # exit 0xC000013A and looks like its own bug. Every leg is signal.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
