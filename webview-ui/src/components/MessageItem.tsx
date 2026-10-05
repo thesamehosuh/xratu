@@ -415,7 +415,15 @@ interface PatchBlock {
  *  whitespace, and a final block whose REPLACE terminator was cut off by
  *  that clipping. Returns null only when no block structure exists at all
  *  so callers fall back to plain text. Marker content lines are refused
- *  upstream (mcp.ts), so the split is unambiguous in practice. */
+ *  upstream (mcp.ts), so the split is unambiguous in practice.
+ *
+ *  The host ALSO ignores leading junk before the first opener (its block regex
+ *  is not anchored), so a stray closer there - `>>>>>>> PLACEHOLDER`, which
+ *  models emit when they copy the template's placeholder token - must be
+ *  skipped as junk rather than failing the parse. Refusing it dumped the raw
+ *  markers over the diff the file actually got, on a patch the host applied
+ *  cleanly. Only a marker-shaped line INSIDE a block stays fatal: that is the
+ *  ambiguous case the return-null guards below exist for. */
 export function parsePatchBlocks(patch: string): PatchBlock[] | null {
     const lines = stripReplayMarkers(patch)
         .replace(/^\uFEFF/, '')
@@ -454,9 +462,14 @@ export function parsePatchBlocks(patch: string): PatchBlock[] | null {
             }
         }
         if (/^={7}$/.test(line)) {
+            // A separator before any opener is leading junk (the host's
+            // unanchored block regex ignores it); inside a block it is
+            // ambiguous, so refuse the parse and let the caller show raw text.
+            if (phase === 'none') continue;
             if (phase !== 'search') return null;
             phase = 'replace';
         } else if (/^>{7}/.test(line)) {
+            if (phase === 'none') continue;
             if (phase !== 'replace') return null;
             flush();
         } else if (phase === 'search') {

@@ -158,16 +158,36 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
  * must be a STRING; `tool_calls` must carry `function.arguments`) and repairs
  * turns persisted by older builds that stored `argumentsJson` or dropped
  * content. Key order matches the in-run loop's `messages.push` calls.
+ *
+ * ORPHAN `tool` rows are dropped. A provider requires every `tool` message to
+ * answer a `tool_calls` entry in a PRECEDING assistant message, and rejects the
+ * whole request otherwise. A row can lose its owner: the crash snapshot keeps
+ * only the last `PENDING_TURN_EVENT_LIMIT` pending-turn events, and that cut
+ * can land between an `assistant_message` (which carries the tool_calls) and its
+ * `tool_result`. The result is replayed as a `tool` row with nothing above it,
+ * and every later message in the session then fails with an opaque
+ * `invalid_request_error` - the session is unrecoverable without discarding it.
+ * Filtering here rather than only at persist time is deliberate: it also
+ * REPAIRS snapshots already on disk, which no re-save would otherwise fix.
+ *
+ * The complementary case (an assistant `tool_calls` with no answer) is handled
+ * by the commit paths, which append a placeholder result row.
  */
 export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]): LocalAgentMessage[] {
-    return rows.map((row): LocalAgentMessage => {
+    const out: LocalAgentMessage[] = [];
+    // Ids of tool_calls declared by assistant rows already emitted. A `tool` row
+    // is only replayable while its owner is still in the message list.
+    const declared = new Set<string>();
+    for (const row of rows) {
         if (row.role === 'tool') {
-            return {
+            if (row.tool_call_id == null || !declared.has(row.tool_call_id)) continue;
+            out.push({
                 role: 'tool',
-                ...(row.tool_call_id != null ? { tool_call_id: row.tool_call_id } : {}),
+                tool_call_id: row.tool_call_id,
                 content: row.content ?? '',
                 ...(row.isError != null ? { isError: row.isError } : {}),
-            };
+            });
+            continue;
         }
         const toolCalls = row.tool_calls?.map((tc) => ({
             id: tc.id,
@@ -179,13 +199,17 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
                     : JSON.stringify(tc.function?.arguments ?? tc.function?.argumentsJson ?? {}),
             },
         }));
-        return {
+        for (const tc of toolCalls ?? []) {
+            if (tc.id != null) declared.add(tc.id);
+        }
+        out.push({
             role: row.role as LocalAgentMessage['role'],
             content: row.content ?? '',
             ...(toolCalls ? { tool_calls: toolCalls } : {}),
             ...(row.isError != null ? { isError: row.isError } : {}),
             ...(row.providerBlocks ? { providerBlocks: row.providerBlocks } : {}),
             ...(row.reasoningContent ? { reasoningContent: row.reasoningContent } : {}),
-        };
-    });
+        });
+    }
+    return out;
 }
