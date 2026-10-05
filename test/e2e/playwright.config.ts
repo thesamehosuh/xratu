@@ -43,11 +43,11 @@ function localChromiumExecutable(): string | undefined {
 
 export default defineConfig({
     testDir: __dirname,
-    // `screenshots.spec.ts` is a manual review harness, not a gate: it only
-    // writes PNGs of the states a human needs to look at. Running it in CI
-    // would produce screenshot artifacts nobody reads while still reporting
-    // green. Opt in with XRATU_SCREENSHOTS=1.
-    testIgnore: process.env.XRATU_SCREENSHOTS ? [] : '**/screenshots.spec.ts',
+    // `screenshots.spec.ts` and `approval-prototypes.spec.ts` are manual review
+    // harnesses, not gates: they only write PNGs of the states a human needs to
+    // look at. Running them in CI would produce screenshot artifacts nobody
+    // reads while still reporting green. Opt in with XRATU_SCREENSHOTS=1.
+    testIgnore: process.env.XRATU_SCREENSHOTS ? [] : ['**/screenshots.spec.ts', '**/approval-prototypes.spec.ts'],
     // The webview mounts once per page load; parallel workers each get their
     // own browser context, so workers are safe - but keep the run small.
     fullyParallel: true,

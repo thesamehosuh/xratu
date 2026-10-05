@@ -28,6 +28,12 @@ export const VSCODE_DARK_TOKENS: Record<string, string> = {
     '--vscode-errorForeground': '#f85149',
     '--vscode-font-family': 'system-ui, -apple-system, "Segoe UI", sans-serif',
     '--vscode-foreground': '#cccccc',
+    /* Diff colours resolve through the gitDecoration family in every stock
+     * theme. Without them here a diff falls back to `currentColor` and add/del
+     * become indistinguishable - a screenshot that looks fine and proves
+     * nothing, which is the same trap as missing surfaces. */
+    '--vscode-gitDecoration-addedResourceForeground': '#4bf3c8',
+    '--vscode-gitDecoration-deletedResourceForeground': '#f4587e',
     '--vscode-input-background': '#313131',
     '--vscode-input-border': '#3c3c3c',
     '--vscode-input-foreground': '#cccccc',
@@ -48,17 +54,56 @@ export const VSCODE_DARK_THEME_CSS = ':root{'
     + Object.entries(VSCODE_DARK_TOKENS).map(([name, value]) => `${name}:${value};`).join('')
     + '}';
 
+/** Light Modern defaults for every `--vscode-*` token the webview reads. */
+export const VSCODE_LIGHT_TOKENS: Record<string, string> = {
+    '--vscode-button-secondaryBackground': '#e5e5e5',
+    '--vscode-button-secondaryForeground': '#3b3b3b',
+    '--vscode-descriptionForeground': '#616161',
+    '--vscode-editor-background': '#ffffff',
+    '--vscode-editor-font-family': 'Consolas, "Courier New", monospace',
+    '--vscode-editor-foreground': '#000000',
+    '--vscode-editorWarning-foreground': '#bf8803',
+    '--vscode-editorWidget-background': '#f3f3f3',
+    '--vscode-errorForeground': '#e51400',
+    '--vscode-font-family': 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--vscode-foreground': '#3b3b3b',
+    '--vscode-gitDecoration-addedResourceForeground': '#1a7f37',
+    '--vscode-gitDecoration-deletedResourceForeground': '#cf222e',
+    '--vscode-input-background': '#ffffff',
+    '--vscode-input-border': '#cecece',
+    '--vscode-input-foreground': '#3b3b3b',
+    '--vscode-input-placeholderForeground': '#767676',
+    '--vscode-inputValidation-errorBackground': '#f2dede',
+    '--vscode-list-hoverBackground': '#e8e8e8',
+    '--vscode-scrollbarSlider-background': 'rgba(121, 121, 121, 0.4)',
+    '--vscode-scrollbarSlider-hoverBackground': 'rgba(100, 100, 100, 0.7)',
+    '--vscode-sideBar-background': '#f8f8f8',
+    '--vscode-textBlockQuote-background': '#f2f2f2',
+    '--vscode-textLink-foreground': '#005fb8',
+    '--vscode-textPreformat-foreground': '#000000',
+    '--vscode-widget-border': '#e5e5e5',
+};
+
+/** The token block as a `:root{}` stylesheet. */
+export const VSCODE_LIGHT_THEME_CSS = ':root{'
+    + Object.entries(VSCODE_LIGHT_TOKENS).map(([name, value]) => `${name}:${value};`).join('')
+    + '}';
+
 /**
- * Install the Dark Modern tokens into a standalone webview page and mark the
- * body as dark (the webview's Shiki highlighter picks its theme from the
+ * Install theme tokens into a standalone webview page and mark the body as
+ * dark or light (the webview's Shiki highlighter picks its theme from the
  * `vscode-dark` / `vscode-light` body class).
  *
  * Call BEFORE `page.goto`. Safe to call once per page; the injected style is
- * idempotent.
+ * idempotent. A light install MUST go through here too: the `vscode-light`
+ * block in `theme.css` remaps the `--xratu-*` surfaces, and hand-rolling only
+ * the `:root` tokens leaves a light body class off, which silently changes
+ * which elevation mix every surface resolves to.
  */
-export async function installVscodeTheme(page: Page): Promise<void> {
-    await page.emulateMedia({ colorScheme: 'dark' });
-    await page.addInitScript((css) => {
+export async function installVscodeTheme(page: Page, mode: 'dark' | 'light' = 'dark'): Promise<void> {
+    const css = mode === 'light' ? VSCODE_LIGHT_THEME_CSS : VSCODE_DARK_THEME_CSS;
+    await page.emulateMedia({ colorScheme: mode });
+    await page.addInitScript(({ css, bodyClass }) => {
         const apply = () => {
             // `document.head` is absent while the initial document is still
             // parsing, so fall back to documentElement; a later
@@ -71,9 +116,9 @@ export async function installVscodeTheme(page: Page): Promise<void> {
                 style.textContent = css;
                 target.appendChild(style);
             }
-            document.body?.classList.add('vscode-dark');
+            document.body?.classList.add(bodyClass);
         };
         apply();
         document.addEventListener('DOMContentLoaded', apply);
-    }, VSCODE_DARK_THEME_CSS);
+    }, { css, bodyClass: mode === 'light' ? 'vscode-light' : 'vscode-dark' });
 }

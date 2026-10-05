@@ -72,6 +72,17 @@
        touching code/tables. Sidebar widths already sit under this. */
     --xratu-measure: 72ch;
 
+    /* Diff add/remove. Previously four hardcoded GitHub values
+       (#3fb950 / #f85149) repeated across .diff-row.*, .pill-diff-* and the
+       approval card with NO light override - a red-green pair tuned for a dark
+       editor is close to unreadable on a white one, so every diff in a light
+       theme rendered at the wrong contrast rather than at the wrong colour.
+       Two tokens, one definition, both themes covered. */
+    --xratu-diff-add: #3fb950;
+    --xratu-diff-del: #f85149;
+    --xratu-diff-add-bg: rgba(63, 185, 80, 0.10);
+    --xratu-diff-del-bg: rgba(248, 81, 73, 0.10);
+
     /* Motion language - "stream & settle": content arrives on an expressive
        ease-out and lands softly, interactive surfaces pop out of their
        anchor, live states breathe instead of blink. Durations form a 4-step
@@ -146,6 +157,17 @@ body.vscode-light {
     --xratu-bubble-user: var(--xratu-surface-inset);
     --xratu-code-bg: var(--vscode-editor-background);
     --xratu-code-head-bg: var(--vscode-editor-background);
+
+    /* Diff colours follow the light palette. Both values are the GitHub Light
+       pair VS Code's own Light Modern ships for diffEditor.addedText /
+       removedText, and both are DARKER than the dark-theme pair: on white, a
+       #3fb950 fill at 10% is a tint too pale to read as a change at all.
+       The wash also strengthens - light backgrounds need more of it to
+       separate the row from the surface behind it. */
+    --xratu-diff-add: #1a7f37;
+    --xratu-diff-del: #cf222e;
+    --xratu-diff-add-bg: rgba(26, 127, 55, 0.12);
+    --xratu-diff-del-bg: rgba(207, 34, 46, 0.12);
 }
 
 /* Form controls, placeholders and scrollbars follow the VS Code THEME, never
@@ -993,12 +1015,12 @@ button {
 
 .approval-stat.add,
 .approval-file-stats .add {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .approval-stat.del,
 .approval-file-stats .del {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .approval-items {
@@ -1178,21 +1200,21 @@ button {
 }
 
 .diff-row.diff-add {
-    background: rgba(63, 185, 80, 0.10);
+    background: var(--xratu-diff-add-bg);
 }
 
 .diff-row.diff-add .diff-mark,
 .diff-row.diff-add .diff-code {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .diff-row.diff-del {
-    background: rgba(248, 81, 73, 0.10);
+    background: var(--xratu-diff-del-bg);
 }
 
 .diff-row.diff-del .diff-mark,
 .diff-row.diff-del .diff-code {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .diff-row.diff-ctx .diff-code {
@@ -3326,11 +3348,11 @@ button {
 }
 
 .step-stat .a {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .step-stat .d {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .step-stat.ok {
@@ -3377,11 +3399,11 @@ button {
 }
 
 .edit-file-stat .a {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .edit-file-stat .d {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .edit-file-head .spacer {
@@ -3810,13 +3832,13 @@ pre.tool-cmd {
 }
 
 .pill-diff-line.del {
-    background: rgba(248, 81, 73, 0.13);
-    border-inline-start: 2px solid #f85149;
+    background: var(--xratu-diff-del-bg);
+    border-inline-start: 2px solid var(--xratu-diff-del);
 }
 
 .pill-diff-line.add {
-    background: rgba(63, 185, 80, 0.13);
-    border-inline-start: 2px solid #3fb950;
+    background: var(--xratu-diff-add-bg);
+    border-inline-start: 2px solid var(--xratu-diff-add);
 }
 
 .pill-diff-mark {
@@ -3829,11 +3851,11 @@ pre.tool-cmd {
 }
 
 .pill-diff-line.del .pill-diff-mark {
-    color: #f85149;
+    color: var(--xratu-diff-del);
 }
 
 .pill-diff-line.add .pill-diff-mark {
-    color: #3fb950;
+    color: var(--xratu-diff-add);
 }
 
 .pill-diff-code {
@@ -3905,15 +3927,15 @@ pre.tool-cmd {
 }
 
 .step pre.pill-diff-del {
-    background: rgba(248, 81, 73, 0.13);
-    border-inline-start: 2px solid #f85149;
+    background: var(--xratu-diff-del-bg);
+    border-inline-start: 2px solid var(--xratu-diff-del);
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
 }
 
 .step pre.pill-diff-add {
-    background: rgba(63, 185, 80, 0.13);
-    border-inline-start: 2px solid #3fb950;
+    background: var(--xratu-diff-add-bg);
+    border-inline-start: 2px solid var(--xratu-diff-add);
     border-radius: var(--xratu-radius-xs);
     padding: 3px 6px;
 }
