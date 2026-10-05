@@ -357,6 +357,24 @@ export function App() {
     // (before the scroll handlers below) because they read it.
     const [visibleBudget, setVisibleBudget] = useState(HISTORY_PAGE_SIZE);
     const pendingScrollAdjust = useRef<{ height: number; top: number } | null>(null);
+    /** Record the scroller's position AND content height after WE move it.
+     *
+     *  `onScroll` infers intent from a height snapshot, and only a scroll
+     *  event refreshes it. Content that changes height WITHOUT moving
+     *  scrollTop - streaming beneath a pinned reader, or the reveal
+     *  adjustment below - fires no scroll event, so the snapshot goes stale
+     *  and the next upward scroll is vetoed by `heightChanged` as "just a
+     *  content change". For a programmatic scroll there is no wheel/touch
+     *  event to satisfy `userIntent` instead, so the veto is permanent: the
+     *  app can never leave the tail, and a revealed window never collapses.
+     *  Every scroll we perform syncs both refs, keeping the snapshot an
+     *  honest description of the last position we know about. */
+    const syncScrollBookkeeping = useCallback(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        lastScrollTop.current = el.scrollTop;
+        lastScrollHeight.current = el.scrollHeight;
+    }, []);
     const onScroll = () => {
         const el = containerRef.current;
         if (el) {
@@ -439,7 +457,8 @@ export function App() {
         const el = containerRef.current;
         if (!el || !atBottom.current) return;
         el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-    }, []);
+        syncScrollBookkeeping();
+    }, [syncScrollBookkeeping]);
 
     // ResizeObserver-driven pin: while a run is LIVE, any content growth -
     // tool pill expand/collapse, streamed rows, rendered edit results -
@@ -457,7 +476,8 @@ export function App() {
         // Never override an in-flight smooth jump with an instant snap.
         if (smoothJumpInFlight.current) return;
         el.scrollTo({ top: el.scrollHeight });
-    }, []);
+        syncScrollBookkeeping();
+    }, [syncScrollBookkeeping]);
 
     // Follow stream output: instant (no animation) so it never fights itself.
     useEffect(() => {
@@ -577,9 +597,13 @@ export function App() {
         pendingScrollAdjust.current = null;
         el.scrollTop = adj.top + (el.scrollHeight - adj.height);
         // Keep the scroll bookkeeping in sync so onScroll does not read this
-        // programmatic jump as a user scroll-up.
-        lastScrollTop.current = el.scrollTop;
-    }, [firstVisible]);
+        // programmatic jump as a user scroll-up. BOTH refs, not just the
+        // position: this adjustment is also where the content height changes
+        // without a scroll event following it, so recording only scrollTop
+        // left `lastScrollHeight` describing the pre-reveal layout and made
+        // the very next upward scroll look like a content change.
+        syncScrollBookkeeping();
+    }, [firstVisible, syncScrollBookkeeping]);
 
     /** Reveal the next older page of the transcript window. A no-op when
      *  nothing is hidden (so it cannot arm a stale scroll adjustment). */
