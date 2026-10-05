@@ -135,38 +135,90 @@ test('the card is a ruled ledger, not a card in a box', async ({ page }) => {
     await expect(card.locator('.approval-file-stats').first()).toHaveText('+3 −2');
 });
 
-test('a resolved card drops its actions but keeps the verdict readable', async ({ page }) => {
-    await open(page, { approvals: [FILE_ITEM] });
+/**
+ * What settling an approval actually does to the transcript.
+ *
+ * There is no live path that renders `payload.resolution`: on an assistant
+ * bubble the reducer STRIPS the payload (keeping the streamed pills and text
+ * visible) and on a standalone system row it drops the row outright. That is
+ * the contract, and it is what this asserts - the earlier version of this test
+ * re-posted a payload carrying `resolution` and "passed" against a card the
+ * reducer had never actually resolved.
+ *
+ * The resolved RENDER branch in ApprovalCard is pre-existing defensive code
+ * (it predates this change and the reducer still does not produce it), so
+ * there is nothing to drive end to end here.
+ */
+test('settling an approval removes its card and keeps the streamed turn', async ({ page }) => {
+    await open(page, { approvals: [FILE_ITEM, CSS_ITEM] });
+    await expect(page.locator('.approval-card')).toHaveCount(1);
+    await expect(page.locator('.msg-content')).toContainText('Adding the auth path now.');
+
     await page.locator('.approval-apply').click();
     await host(page, { type: 'approvalResolved', approval_id: 'ap-1', resolution: 'approved' });
-    // A resolved payload on a SYSTEM row is replaced by a fresh record; assert
-    // on the pending->resolved title swap before the row is torn down.
+
     await expect(page.locator('.approval-card')).toHaveCount(0);
+    // The turn survives: losing the card must not lose the transcript.
+    await expect(page.locator('.msg-content')).toContainText('Adding the auth path now.');
 });
 
-test('a session reload renders the resolved ledger without actions', async ({ page }) => {
-    await page.addInitScript(() => {
-        (window as unknown as Record<string, unknown>).acquireVsCodeApi = () => ({
-            postMessage: () => undefined,
-            getState: () => undefined,
-            setState: (s: unknown) => s,
-        });
+test('the actions are gone before the card is, so no verdict can be re-posted', async ({ page }) => {
+    await open(page, { approvals: [FILE_ITEM] });
+    await page.locator('.approval-apply').click();
+    // Between the click and the resolution the card is inert, not merely
+    // repainted: a user who double-taps during the round trip gets one answer.
+    await expect(page.locator('.approval-apply')).toBeDisabled();
+    await expect(page.locator('.approval-deny')).toBeDisabled();
+    await expect(page.locator('.approval-session')).toBeDisabled();
+});
+
+/**
+ * The pending title must name what is actually waiting. "Edits" on a batch of
+ * terminal commands is a lie the reader has to decode from the table below,
+ * and counting the whole batch promises edits the reader cannot grant when
+ * some items were auto-denied.
+ */
+test('the pending title names the batch, not just its size', async ({ page }) => {
+    const title = () => page.locator('.approval-title');
+
+    // Edits.
+    await open(page, { approvals: [FILE_ITEM, CSS_ITEM] });
+    await expect(title()).toHaveText('Approve 2 edits');
+    // Singular.
+    await open(page, { approvals: [FILE_ITEM] });
+    await expect(title()).toHaveText('Approve 1 edit');
+    // Terminal commands.
+    await open(page, { approvals: [COMMAND_ITEM, COMMAND_ITEM] });
+    await expect(title()).toHaveText('Approve 2 commands');
+    await open(page, { approvals: [COMMAND_ITEM] });
+    await expect(title()).toHaveText('Approve 1 command');
+    // A JSON-args MCP tool is neither an edit nor a command.
+    await open(page, { approvals: [JSON_ITEM] });
+    await expect(title()).toHaveText('Approve 1 action');
+    // Mixed: the batch is generic, not the first item's kind.
+    await open(page, { approvals: [FILE_ITEM, COMMAND_ITEM] });
+    await expect(title()).toHaveText('Approve 2 actions');
+});
+
+test('the pending title counts only the items the reader can actually grant', async ({ page }) => {
+    // Three items, one auto-denied: promising "3 edits" would offer a decision
+    // on something the card will refuse to run.
+    await open(page, {
+        approvals: [FILE_ITEM, CSS_ITEM, commandItem('call-z', 'rm -rf build')],
+        preDenied: { 'call-z': false },
     });
-    await installVscodeTheme(page);
-    await page.setViewportSize({ width: 420, height: 900 });
-    await page.goto('/');
-    await host(page, { type: 'locale', locale: 'en' });
-    await host(page, { type: 'showChat' });
-    await host(page, { type: 'startResponse' });
-    await host(page, { type: 'chunk', value: 'Adding the auth path now.' });
-    // The record path: a settled payload re-rendered from history.
-    await host(page, { type: 'needsApproval', approval_id: 'ap-2', approvals: [FILE_ITEM, CSS_ITEM] });
-    await page.locator('.approval-card').waitFor();
-    await host(page, { type: 'needsApproval', approval_id: 'ap-3', approvals: [COMMAND_ITEM] });
-    // Settle the FIRST one by re-posting the same id with a resolution.
-    await host(page, { type: 'approvalResolved', approval_id: 'ap-2', resolution: 'approved' });
-    await host(page, { type: 'needsApproval', approval_id: 'ap-4', approvals: [FILE_ITEM], resolution: 'rejected' });
-    await expect(page.locator('.approval-card').first()).toBeVisible();
+    await expect(page.locator('.approval-title')).toHaveText('Approve 2 edits');
+    // Every row is still VISIBLE - hiding a denied item would hide the fact
+    // that the agent tried it.
+    await expect(page.locator('.approval-item')).toHaveCount(3);
+});
+
+test('a batch with nothing approvable says so instead of counting', async ({ page }) => {
+    await open(page, {
+        approvals: [commandItem('call-a', 'rm -rf build')],
+        preDenied: { 'call-a': false },
+    });
+    await expect(page.locator('.approval-title')).toHaveText('Nothing to approve');
 });
 
 /* ---- the states that must not break ---------------------------------- */
@@ -342,12 +394,17 @@ test('a double click cannot post two decisions', async ({ page }) => {
 test('the verdict is reachable by keyboard alone', async ({ page }) => {
     await open(page, { approvals: [FILE_ITEM] });
     // The section is labelled for screen readers.
-    await expect(page.locator('.approval-card')).toHaveAttribute('aria-label', 'Approve 1 edits');
+    await expect(page.locator('.approval-card')).toHaveAttribute('aria-label', 'Approve 1 edit');
 
-    // Focus the apply button directly and check the ring is actually painted:
-    // a :focus-visible rule that resolves to `outline: none` passes a
-    // "can I focus it" test while leaving keyboard users with no indicator.
-    await page.locator('.approval-apply').focus();
+    // Keyboard REACHABILITY, not a programmatic focus() call: tab into the
+    // apply button from its real predecessor. focus() would pass even if the
+    // tab order were scrambled.
+    await page.locator('.approval-deny').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.approval-apply')).toBeFocused();
+
+    // A :focus-visible rule that resolves to `outline: none` passes a "can I
+    // focus it" test while leaving keyboard users with no indicator at all.
     const ring = await page.locator('.approval-apply').evaluate((el) => getComputedStyle(el).outlineWidth);
     expect(ring).not.toBe('0px');
 

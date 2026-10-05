@@ -595,7 +595,7 @@ export const PROTO_CSS = `
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function splitPath(file: string): string {
+function splitPath(file: string): { dir: string; base: string } {
     const i = file.lastIndexOf('/');
     return i < 0 ? { dir: '', base: file } : { dir: file.slice(0, i + 1), base: file.slice(i + 1) };
 }

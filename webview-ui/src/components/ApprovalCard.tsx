@@ -158,16 +158,29 @@ export function ApprovalCard({
     const isTerminal = payload.approvals.every((a) => /terminal|command|shell/.test(a.tool_name));
 
     const isResolved = !!resolution;
-    /* The title states the VERDICT, or counts what is pending. No second
-       "applied" line follows: the header already says what happened, and a
-       second line only repeats it in a quieter colour. */
+    /* The title states the VERDICT, or describes what is waiting. The pending
+       copy counts the APPROVABLE items only - counting the whole batch would
+       promise edits the reader cannot grant - and names the batch, because
+       "edits" is a lie for a terminal command or a JSON-args MCP tool. */
+    const pendingCount = approvable.length;
+    const isTerminalBatch = pendingCount > 0
+        && approvable.every((a) => /terminal|command|shell/.test(a.tool_name));
+    const isEditBatch = pendingCount > 0 && approvable.every((a) => !!a.diff);
+    const pendingTitle = pendingCount === 0
+        ? t('approvalNone')
+        : tf(
+            pendingCount === 1
+                ? isTerminalBatch ? 'approvalCommandOne' : isEditBatch ? 'approvalEditOne' : 'approvalActionOne'
+                : isTerminalBatch ? 'approvalCommandMany' : isEditBatch ? 'approvalEditMany' : 'approvalActionMany',
+            { count: String(pendingCount) },
+        );
     const title = resolution === 'approved'
         ? isTerminal ? t('approvalCommandApproved') : t('approvalApproved')
         : resolution === 'rejected'
             ? isTerminal ? t('approvalCommandRejected') : t('approvalRejected')
             : resolution === 'mixed'
                 ? t('approvalMixed')
-                : tf('approvalCount', { count: String(payload.approvals.length) });
+                : pendingTitle;
 
     /* No plan-mode note on the footer: the per-row "Auto-denied" tag already
        says which items were blocked, so a sentence restating it says nothing
