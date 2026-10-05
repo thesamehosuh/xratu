@@ -121,7 +121,9 @@ check('quoted title arrives as ONE argument', JSON.parse(split), [
     'pr.md',
 ]);
 
-fs.rmSync(tmp, { recursive: true, force: true });
+// Retries, because this suite spawns shells: on Windows a just-exited shell
+// can still hold the directory, and `force` does not cover EBUSY.
+fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
 console.log(failed === 0 ? '\nshell-quoting: all tests passed' : `\nshell-quoting: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

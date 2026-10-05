@@ -735,7 +735,10 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     if (grandchild) {
         ok('the grandchild pid is gone too', await waitDead(grandchild), `pid ${grandchild}`);
     }
-    rmSync(dir, { recursive: true, force: true });
+    // Retries, because this suite spawns process trees: on Windows a
+    // just-killed tree can still hold the directory, and `force` does not
+    // cover EBUSY.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
