@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import MarkdownIt from 'markdown-it';
+import MarkdownIt, { type Renderer } from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
 import {
@@ -619,7 +619,7 @@ function renderFence(token: any, live: boolean): string {
     );
 }
 
-function configureMarkdownRenderer(renderer: MarkdownIt['renderer'], live: boolean): void {
+function configureMarkdownRenderer(renderer: Renderer, live: boolean): void {
     renderer.rules.fence = (tokens, idx) => renderFence(tokens[idx], live);
 
     // Indented code blocks emit a bare <pre><code> - route them through the

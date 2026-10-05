@@ -282,7 +282,6 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/cross-spawn": "^6.0.6",
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
