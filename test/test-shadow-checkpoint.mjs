@@ -207,8 +207,8 @@ try {
         ok('checkpoint survives commit.gpgsign=true in global config', !!gpgSha, gpgErr);
         ok('global core.hooksPath post-commit hook does NOT run', !existsSync(hookFired));
     } finally {
-        rmSync(gpgWork, { recursive: true, force: true });
-        rmSync(gpgHome, { recursive: true, force: true });
+        rmSync(gpgWork, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        rmSync(gpgHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 
     // --- empty seed refused ---
@@ -222,11 +222,14 @@ try {
     } catch (e) {
         ok('empty seed restore refuses', e instanceof EmptySeedError, String(e));
     } finally {
-        rmSync(seedWork, { recursive: true, force: true });
+        rmSync(seedWork, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 } finally {
-    rmSync(work, { recursive: true, force: true });
-    rmSync(storageRoot, { recursive: true, force: true });
+    // Retries on every teardown below, because this suite shells out to git
+    // and gpg: on Windows a just-exited child can still hold the directory,
+    // and `force` does not cover EBUSY.
+    rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    rmSync(storageRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 console.log(failed === 0 ? '\nAll checkpoint restore tests passed.' : `\n${failed} test(s) FAILED.`);

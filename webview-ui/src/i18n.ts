@@ -311,6 +311,18 @@ const fa = {
 
     // Approval card
     approvalHead: 'درخواست اجرای ابزار',
+    /** Pending title, count-led. The batch decides the noun: "edits" is a lie
+     *  for a terminal command or a JSON-args MCP tool, so edits / commands /
+     *  generic actions each get their own pair. Persian does not inflect for
+     *  number, so its singular and plural forms are identical. `{count}` is a
+     *  digit string and always counts the APPROVABLE items only. */
+    approvalNone: 'موردی برای تایید نیست',
+    approvalEditOne: 'تایید {count} تغییر',
+    approvalEditMany: 'تایید {count} تغییر',
+    approvalCommandOne: 'تایید اجرای {count} دستور',
+    approvalCommandMany: 'تایید اجرای {count} دستور',
+    approvalActionOne: 'تایید {count} اقدام',
+    approvalActionMany: 'تایید {count} اقدام',
     approve: 'تایید و اجرا',
     approveSession: 'برای این نشست',
     approveSessionHint: 'دستور ها و ابزار های از این نوع تا پایان همین نشست بدون پرسیدن اجرا میشن',
@@ -1011,6 +1023,13 @@ const en: Record<keyof typeof fa, string> = {
     proxyFooterNote: 'The proxy applies to every outbound request: model calls, web tools, the MCP marketplace, and MCP servers.',
 
     approvalHead: 'Tool execution request',
+    approvalNone: 'Nothing to approve',
+    approvalEditOne: 'Approve {count} edit',
+    approvalEditMany: 'Approve {count} edits',
+    approvalCommandOne: 'Approve {count} command',
+    approvalCommandMany: 'Approve {count} commands',
+    approvalActionOne: 'Approve {count} action',
+    approvalActionMany: 'Approve {count} actions',
     approve: 'Approve & run',
     approveSession: 'Allow this session',
     approveSessionHint: 'This kind of command or tool will run without asking for the rest of this session',
