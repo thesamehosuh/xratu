@@ -25,7 +25,7 @@ jobs:
       # exit 0xC000013A and looks like its own bug. Every leg is signal.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -53,7 +53,8 @@ jobs:
         run: npm run test:webview
 
       # Browser E2E for the webview bundle. Linux runners need the system
-      # libraries (sudo is available); Windows runners ship them already.
+      # libraries (sudo is available); Windows and macOS runners ship them
+      # already, so `--with-deps` is Linux-only here.
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         if: runner.os == 'Linux'
@@ -62,8 +63,28 @@ jobs:
         run: npx playwright install chromium
         if: runner.os == 'Windows'
 
+      - name: Install Playwright Chromium (macOS)
+        run: npx playwright install chromium
+        if: runner.os == 'macOS'
+
       - name: Webview E2E (Playwright)
         run: npm run test:e2e
+
+      # A failed Playwright run writes `test-results/*/error-context.md` - a
+      # page snapshot per failure. Without this they are thrown away, and the
+      # next platform-specific failure is only diagnosable from the assertion
+      # diff in the log. Uploads on failure only; `!cancelled()` so a
+      # fail-fast sibling kill does not upload a misleading empty report.
+      - name: Upload Playwright failure artifacts
+        if: failure() && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
 
       # Host-side suites (pure-node logic + security heuristics). Compile the
       # host first - the suites resolve `../out/*.js` (endpoint-guard needs
