@@ -20,8 +20,12 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Default fail-fast cancels the sibling legs the moment one fails, which
+      # HIDES whether they passed - a windows leg killed mid-`webServer` reports
+      # exit 0xC000013A and looks like its own bug. Every leg is signal.
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,8 +53,7 @@ jobs:
         run: npm run test:webview
 
       # Browser E2E for the webview bundle. Linux runners need the system
-      # libraries (sudo is available); Windows and macOS runners ship them
-      # already, so `--with-deps` is Linux-only here.
+      # libraries (sudo is available); Windows runners ship them already.
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         if: runner.os == 'Linux'
@@ -58,10 +61,6 @@ jobs:
       - name: Install Playwright Chromium (Windows)
         run: npx playwright install chromium
         if: runner.os == 'Windows'
-
-      - name: Install Playwright Chromium (macOS)
-        run: npx playwright install chromium
-        if: runner.os == 'macOS'
 
       - name: Webview E2E (Playwright)
         run: npm run test:e2e
