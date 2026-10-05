@@ -298,7 +298,7 @@
     "vite-plugin-singlefile": "^2.0.3"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "cross-spawn": "^7.0.6",
     "lucide-react": "^1.33.0",
     "markdown-it": "^14.3.2",
