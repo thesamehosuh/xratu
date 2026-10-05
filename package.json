@@ -301,7 +301,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cross-spawn": "^7.0.6",
     "lucide-react": "^1.33.0",
-    "markdown-it": "^14.2.0",
+    "markdown-it": "^15.0.2",
     "pdfjs-dist": "^4.10.38",
     "shiki": "^4.2.0",
     "undici": "^6.28.1",
