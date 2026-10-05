@@ -129,7 +129,11 @@ try {
     ok('run_tests advertises that it requires approval',
         /Requires approval\.$/.test(def.description), def.description.slice(-40));
 } finally {
-    rmSync(ws, { recursive: true, force: true });
+    // maxRetries/retryDelay, not `force` alone: this suite really runs `jest`
+    // and `pytest`, and on Windows their workers still hold directory handles
+    // when we get here. `force` swallows ENOENT but not EBUSY, so the whole
+    // suite failed on teardown with every assertion green.
+    rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 console.log(failed === 0 ? '\nAll run_tests guard tests passed.' : `\n${failed} test(s) FAILED.`);
