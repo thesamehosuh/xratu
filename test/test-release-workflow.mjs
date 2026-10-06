@@ -33,7 +33,14 @@ import { fileURLToPath } from 'url';
 
 // fileURLToPath: `.pathname` yields `/D:/...` on Windows and double-drives.
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const yaml = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8');
+
+// Windows checkouts arrive CRLF (there is no .gitattributes in this repo), and
+// the assertions below are line-anchored regexes - `^...$` with a literal \n
+// cannot match a \r\n pair. Normalise once, here, so the guards behave
+// identically on all three CI OS legs.
+const yaml = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
+    .replace(/^﻿/, '')
+    .replace(/\r\n/g, '\n');
 
 let failed = 0;
 const check = (name, ok, detail = '') => {
