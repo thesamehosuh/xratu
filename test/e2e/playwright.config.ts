@@ -1,4 +1,4 @@
-import { defineConfig, chromium } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -43,14 +43,18 @@ function localChromiumExecutable(): string | undefined {
 
 export default defineConfig({
     testDir: __dirname,
-    // `screenshots.spec.ts`, `approval-prototypes.spec.ts` and
-    // `approval-shots.spec.ts` are manual review harnesses, not gates: they
-    // only write PNGs of the states a human needs to look at. Running them in
-    // CI would produce screenshot artifacts nobody reads while still reporting
-    // green. Opt in with XRATU_SCREENSHOTS=1.
+    // `approval-prototypes.spec.ts` and `approval-shots.spec.ts` are manual
+    // review harnesses, not gates: they only write PNGs of the states a human
+    // needs to look at. Running them in CI would produce screenshot artifacts
+    // nobody reads while still reporting green. Opt in with
+    // XRATU_SCREENSHOTS=1.
+    //
+    // `screenshots.spec.ts` is NOT ignored any more: it carries the committed
+    // visual baselines (the CI gate for webview-ui/src/styles/theme.css). Its
+    // own manual half skips itself unless XRATU_SCREENSHOTS is set.
     testIgnore: process.env.XRATU_SCREENSHOTS
         ? []
-        : ['**/screenshots.spec.ts', '**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
+        : ['**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
     // The webview mounts once per page load; parallel workers each get their
     // own browser context, so workers are safe - but keep the run small.
     fullyParallel: true,
@@ -68,6 +72,16 @@ export default defineConfig({
             const executablePath = localChromiumExecutable();
             return executablePath ? { launchOptions: { executablePath } } : {};
         })(),
+    },
+    // Every screenshot comparison in this project is a visual-regression GATE, so
+    // the defaults must not depend on when the frame was captured:
+    // `animations: 'disabled'` fast-forwards finite animations and cancels
+    // infinite ones (the scanning spinner) to a fixed frame - a baseline baked
+    // from a mid-transition frame is flaky by construction. `caret: 'hide'`
+    // drops the blinking text caret, and `scale: 'css'` compares in CSS pixels
+    // so a devicePixelRatio change cannot fail every baseline at once.
+    expect: {
+        toHaveScreenshot: { animations: 'disabled', caret: 'hide', scale: 'css' },
     },
     webServer: {
         command: `node ${join('serve.mjs')} "${WEBVIEW_DIST}" ${PORT}`,
