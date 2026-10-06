@@ -19,6 +19,12 @@ permissions:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    # CI never commits, so installing the local git hooks is pointless - and if
+    # husky ever failed during `npm ci`'s `prepare` step it would take the
+    # whole build down before any real check ran. HUSKY=0 makes that step a
+    # documented no-op here (husky honours it) while still working for humans.
+    env:
+      HUSKY: '0'
     strategy:
       # Default fail-fast cancels the sibling legs the moment one fails, which
       # HIDES whether they passed - a windows leg killed mid-`webServer` reports
@@ -37,6 +43,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Cheapest signal first: this is the gate that encodes AGENTS.md's
+      # "Non-negotiable rules" (killTree, cross-spawn, logical CSS props, dir
+      # handling) as AST rules, so they cannot be forgotten in review.
+      - name: Lint (eslint)
+        run: npm run lint
 
       - name: Type-check host (tsc --noEmit)
         run: node_modules/.bin/tsc --noEmit -p tsconfig.json
