@@ -97,6 +97,35 @@ testable modules with node test suites — precedent: `test/test-endpoint-guard.
 (run after `npx tsc -p . --outDir out`; npm script per suite). Security-
 relevant heuristics (e.g. `endpointGuard.ts`) ALWAYS get a regression test.
 
+## Releasing
+
+Pushing a `v*` tag is the whole release. `.github/workflows/release.yml` builds
+the VSIX behind the same gate as CI and then creates the GitHub Release with
+that exact artifact attached — no manual download/upload step.
+
+Bump `version` in `package.json` in the same PR as the user-visible change (it
+is what the packaged VSIX reports), then tag `main`:
+
+```bash
+git tag -a v1.4.3 -m "xratu 1.4.3" && git push origin v1.4.3
+```
+
+Release notes are optional. To write them yourself instead of accepting a
+generated commit list, add `.github/release-notes/v1.4.3.md` **before** tagging
+— the workflow prefers that file when it exists. Prose beats a commit list;
+this repo's releases have always carried real notes.
+
+Two invariants in that workflow are load-bearing and guarded by
+`test:release-workflow` — keep that suite green if you touch it:
+
+- Only the `publish` job holds `contents: write`. The `package` job runs
+  `npm ci` and the build toolchain, so it must stay read-only or a compromised
+  dependency script inherits the ability to publish.
+- The tag is validated as strict semver in `package` and handed to `publish` as
+  a job output. `on.push.tags: ['v*']` matches anything starting with `v`,
+  metacharacters included, so that regex is the only thing between a tag name
+  and a shell. Never let `publish` read `github.ref_name` directly.
+
 ## Webview UI inspection — screenshot the real UI before/after visual work
 
 Never judge webview UI from CSS alone; drive the built bundle in a real
