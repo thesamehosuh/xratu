@@ -100,6 +100,31 @@ the lint pass; fix the code, or amend the rule's justification comment in
 For packaging: `npm run package-vsix`. For interactive development:
 `npm run compile` + F5 via `.vscode/launch.json`.
 
+### Dev loop — hot reload and session replay
+
+Two ENVIRONMENT-DRIVEN escape hatches (`src/devWebview.ts`, covered by
+`test:dev-webview`). They are deliberately not contributed as settings: they
+are developer-only, a setting would need a `package.nls` pair in both
+locales, and an env var can only ever be on for someone who exported it
+themselves.
+
+- `XRATU_DEV_WEBVIEW_URL=http://localhost:5173` (with `npx vite` running)
+  serves the app from the Vite dev server instead of the built bundle, so
+  React/CSS edits hot-reload instead of costing an esbuild+vite rebuild plus
+  a webview reload. The value is interpolated into a CSP and into script
+  `src`, so it is validated to http(s) only. Invalid URL or missing
+  `webview-ui/index.html` falls back to the built bundle — never a blank page.
+- `XRATU_WEBVIEW_LOG=/path/tape.jsonl` appends every host→webview envelope
+  to a JSONL tape. Replay it into a real browser afterwards — no VS Code, no
+  credentials, no tokens spent:
+
+  ```bash
+  node test/e2e/replay.mjs /tmp/tape.jsonl --shot after.png --dump-out out.jsonl
+  ```
+
+  `--dump-out` records what the WEBVIEW sent back, so a passing run and a
+  broken run can be diffed to find the first divergent message.
+
 Host-side pure logic (path guards, parsers, protocol shapes) goes in
 testable modules with node test suites — precedent: `test/test-endpoint-guard.mjs`
 (run after `npx tsc -p . --outDir out`; npm script per suite). Security-
