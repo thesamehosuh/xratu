@@ -4,13 +4,24 @@ on:
   push:
     tags: ['v*']
 
-# Least privilege - packaging only needs to read the repo and upload artifacts.
+# Two tags can never be released at once, and cancelling a half-finished
+# release (a tag deleted mid-run, say) is worse than waiting.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Default for the build job: read the repo, upload artifacts. The publish job
+# below opts into `contents: write` for itself alone.
 permissions:
   contents: read
 
 jobs:
   package:
     runs-on: ubuntu-latest
+    outputs:
+      # Handed to the publish job so the tag is validated ONCE, here, instead
+      # of being re-parsed from `github.ref_name` in a second shell.
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       # Pin actions to full-length commit SHAs (version in comment).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,9 +50,11 @@ jobs:
       # Tag names matching the v* trigger may contain shell metacharacters;
       # only strict semver tags reach the shell below.
       - name: Validate tag
+        id: tag
         run: |
           echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
             || { echo "unexpected tag: $RELEASE_TAG"; exit 1; }
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 
@@ -56,3 +69,57 @@ jobs:
           name: xratu-${{ github.ref_name }}-vsix
           path: xratu-*.vsix
           if-no-files-found: error
+
+  # Publishing is the one step that needs a token, so it is its own job with
+  # job-level `contents: write`. The build above stays read-only, so a
+  # compromised `npm ci` script cannot reach the release API - it can only
+  # write into this run's own artifact store.
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # No credentials needed: nothing here touches git.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same run, so this needs no cross-run artifact permission.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xratu-${{ needs.package.outputs.tag }}-vsix
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
+        run: |
+          set -euo pipefail
+          vsix=$(ls dist/xratu-*.vsix)
+          notes=".github/release-notes/${RELEASE_TAG}.md"
+
+          # A re-run of this workflow must not fail on an existing release.
+          # `gh release create` errors if the tag is already published, so the
+          # retry path replaces the asset instead.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG exists - replacing its asset only"
+            gh release upload "$RELEASE_TAG" "$vsix" --clobber
+            exit 0
+          fi
+
+          # Hand-written notes win: this repo's releases carry real prose, and
+          # `--generate-notes` would replace that with a commit list. The file
+          # is optional so a tag cut without one still publishes.
+          if [ -f "$notes" ]; then
+            gh release create "$RELEASE_TAG" "$vsix" \
+              --title "xratu ${RELEASE_TAG#v}" \
+              --notes-file "$notes" \
+              --verify-tag
+          else
+            gh release create "$RELEASE_TAG" "$vsix" \
+              --title "xratu ${RELEASE_TAG#v}" \
+              --generate-notes \
+              --verify-tag
+          fi

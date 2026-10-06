@@ -217,6 +217,7 @@
     "test:endpoint-guard": "node test/test-endpoint-guard.mjs",
     "test:ssrf-guard": "node test/test-ssrf-guard.mjs",
     "test:run-tests-guard": "node test/test-run-tests-guard.mjs",
+    "test:release-workflow": "node test/test-release-workflow.mjs",
     "test:tool-args": "node test/test-tool-args.mjs",
     "test:mcp-tool-images": "node test/test-mcp-tool-images.mjs",
     "test:tool-images-e2e": "node test/test-tool-images-e2e.mjs",
