@@ -965,6 +965,10 @@ export function App() {
         (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
         [send]
     );
+    const handleReviewChanges = useCallback(
+        (sha: string) => send({ type: 'reviewChanges', sha }),
+        [send]
+    );
     // "Open diff in editor" on an edit step: the host resolves the exact
     // before/after (edit-time snapshot, else the tool args) and opens the
     // native VS Code diff editor.
@@ -1422,6 +1426,7 @@ export function App() {
                     onRegenerate={handleRegenerate}
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
+                    onReviewChanges={handleReviewChanges}
                     onOpenDiff={handleOpenDiff}
                     onBackgroundTerminal={handleBackgroundTerminal}
                     onKillBackground={handleKillBackground}

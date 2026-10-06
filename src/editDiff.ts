@@ -272,3 +272,33 @@ export function computeDiffHunks(oldContent: string, newContent: string): Array<
 
     return hunks;
 }
+
+/** One hunk of a before/after pair, flattened for the review surface's
+ *  picker: git-style 1-based starts, per-side counts, and a one-line sample
+ *  of the change (first added line, else first removed). */
+export interface HunkSummary {
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+    added: number;
+    removed: number;
+    sample: string;
+}
+
+/** Flatten computeDiffHunks for display. Returns null when the LCS table
+ *  would blow the cell budget - the caller then falls back to the whole-file
+ *  diff instead of pretending there are no changes. */
+export function hunkSummaries(before: string, after: string): HunkSummary[] | null {
+    const hunks = computeDiffHunks(before, after);
+    if (!hunks) return null;
+    return hunks.map((h) => ({
+        oldStart: h.oldStart,
+        oldCount: h.oldCount,
+        newStart: h.newStart,
+        newCount: h.newCount,
+        added: h.addedLines.length,
+        removed: h.removedLines.length,
+        sample: (h.addedLines[0] ?? h.removedLines[0] ?? '').trim().slice(0, 120),
+    }));
+}

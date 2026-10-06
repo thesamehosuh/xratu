@@ -24,6 +24,7 @@ interface MessageListProps {
     onEditMessage?: (userIndex: number, value: string) => void;
     /** Restore workspace files to a turn's shadow checkpoint. */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
+    onReviewChanges?: (sha: string) => void;
     /** Open the native diff editor for a completed edit step. */
     onOpenDiff?: (edits: OpenDiffEdit[]) => void;
     /** Release the turn while a running terminal command keeps going. */
@@ -85,7 +86,7 @@ const SUGGESTIONS_FRESH: Suggestion[] = [
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -193,6 +194,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onRegenerate={onRegenerate}
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
+                    onReviewChanges={onReviewChanges}
                     onOpenDiff={onOpenDiff}
                     onBackgroundTerminal={onBackgroundTerminal}
                     onKillBackground={onKillBackground}

@@ -118,6 +118,7 @@ export interface WebviewMessageHost {
     discoverLocalModels(signal?: AbortSignal): Promise<DiscoveredLocalModel[]>;
     notifyBanner(kind: 'info' | 'warning' | 'error', valueKey: string, params?: Record<string, string>): void;
     restoreCheckpointFlow(): Promise<void>;
+    reviewChangesFlow(fromSha?: string): Promise<void>;
 }
 
 export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessage, deps: RouterDeps): void {
@@ -244,6 +245,11 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     } else {
                         void host.restoreCheckpointFlow();
                     }
+                    break;
+                case 'reviewChanges':
+                    void host.reviewChangesFlow(
+                        typeof data.sha === 'string' && data.sha ? data.sha : undefined,
+                    );
                     break;
                 case 'clearHistory':
                     // Legacy sender - same semantics as a new session

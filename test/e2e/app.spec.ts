@@ -307,6 +307,19 @@ test('the edit pill open-diff button posts the call to the host', async ({ page 
     });
 });
 
+test('the review button posts the row checkpoint to the host', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
+    const review = page.locator('button[aria-label="Review changes"]');
+    await expect(review).toBeVisible();
+    await expect(page.locator('button[aria-label="Restore files"]')).toBeVisible();
+    await review.click();
+    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
+    expect(sent).toContainEqual({ type: 'reviewChanges', sha: 'abc1234' });
+});
+
 test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });

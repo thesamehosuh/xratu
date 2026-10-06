@@ -43,6 +43,10 @@ export type ToExtensionMessage =
      *  shows its checkpoint QuickPick; with a sha, it restores that turn's
      *  checkpoint after a confirm (files only, or files + rewind chat). */
     | { type: 'restoreCheckpoint'; userIndex?: number; sha?: string }
+    /** Hunk-level review of what changed since a checkpoint. The transcript's
+     *  review button sends the row's checkpoint sha; a missing sha means the
+     *  host shows its checkpoint QuickPick first (palette path). */
+    | { type: 'reviewChanges'; sha?: string }
     | { type: 'saveLlmCredentials'; base_url: string; api_key: string; returnToChat?: boolean }
     /** Replace the stored API key of a saved connection (webview never sees
      *  the real key - it only ever SENDS a replacement). */
