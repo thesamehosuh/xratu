@@ -447,6 +447,52 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 }
 
 // ---------------------------------------------------------------------------
+// Orphan `tool` rows are dropped at the replay funnel.
+// A provider requires every `tool` message to answer a `tool_calls` entry in a
+// PRECEDING assistant message and rejects the whole request otherwise. The
+// crash snapshot's head-truncated pending-turn window could drop the owning
+// `assistant_message` and keep its `tool_result`, so one long turn made every
+// LATER message in the session fail with `invalid_request_error` - and nothing
+// in the ledger showed why. Filtering in `buildReplayHistory` also REPAIRS
+// snapshots already on disk, which no re-save would otherwise touch.
+// ---------------------------------------------------------------------------
+{
+    const assistant = (id) => ({
+        role: 'assistant', content: '',
+        tool_calls: [{ id, type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }],
+    });
+    const orphan = buildReplayHistory([
+        { role: 'user', content: 'go' },
+        { role: 'tool', tool_call_id: 'lost', content: 'orphaned output' },
+        assistant('kept'),
+        { role: 'tool', tool_call_id: 'kept', content: 'paired output' },
+    ]);
+    ok('an orphan tool row is dropped', orphan.filter((m) => m.role === 'tool').length === 1);
+    ok('the paired tool row survives',
+        orphan.some((m) => m.role === 'tool' && m.tool_call_id === 'kept'));
+    ok('nothing else is dropped', orphan.length === 3);
+
+    // A tool row with no id at all cannot be paired either.
+    ok('a tool row with no tool_call_id is dropped',
+        buildReplayHistory([{ role: 'user', content: 'go' }, { role: 'tool', content: 'x' }]).length === 1);
+
+    // The mirror case is NOT this function's job: an unanswered assistant
+    // tool_call is repaired by the commit paths (placeholder result rows).
+    ok('an assistant tool_call is still replayed (commit paths answer it)',
+        buildReplayHistory([assistant('dangling')]).length === 1);
+
+    // Well-formed ledgers must pass through untouched, in order.
+    const clean = buildReplayHistory([
+        { role: 'user', content: 'go' },
+        assistant('a'),
+        { role: 'tool', tool_call_id: 'a', content: 'out' },
+        { role: 'assistant', content: 'done' },
+    ]);
+    ok('a well-formed ledger replays unchanged',
+        clean.length === 4 && clean[1].tool_calls[0].id === 'a' && clean[2].content === 'out');
+}
+
+// ---------------------------------------------------------------------------
 // Aggregate carrier budget: a per-message cap cannot bound carriers (one turn
 // can run unbounded rounds), so `boundCarriers` drops carriers from the OLDEST
 // rows, keeping the newest reasoning whole. A carrier that sanitization will

@@ -329,8 +329,34 @@ function boundedContentCap(
     return Math.max(MAX_STORED_CONTENT, Math.min(contentCap, scaled));
 }
 
+/**
+ * Drop leading `tool_result` events from a head-truncated pending-turn window.
+ *
+ * The crash snapshot keeps the LAST `PENDING_TURN_EVENT_LIMIT` events, and that
+ * cut lands mid-round: a window can open on the `tool_result` whose matching
+ * `assistant_message` (which carries the `tool_calls`) was sliced off. Restoring
+ * it replays that result as a `tool` row with no owning assistant message, and
+ * an OpenAI-compatible provider rejects the whole next request with
+ * `invalid_request_error` - one long turn made every later message in the
+ * session fail with an opaque 400 (seen live: the window opened on a
+ * `read_file` result, and `continue` / `bro?` both 400'd until the session was
+ * discarded).
+ *
+ * Only LEADING results are dropped, and only while the window starts with one:
+ * the first `tool_call`/`assistant_message` re-establishes the pairing for
+ * everything after it. Dropping more would throw away real tool output, which
+ * is the context the model needs most.
+ */
+const PENDING_TURN_EVENT_LIMIT = 40;
+
+function alignPendingTurnEvents(events: any[]): any[] {
+    let start = 0;
+    while (start < events.length && events[start]?.type === 'tool_result') start++;
+    return start === 0 ? events : events.slice(start);
+}
+
 function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
-    const events = Array.isArray(pt.events) ? pt.events.slice(-40).map((event: any) => {
+    const events = Array.isArray(pt.events) ? alignPendingTurnEvents(pt.events.slice(-PENDING_TURN_EVENT_LIMIT)).map((event: any) => {
         if (event?.type === 'thinking' && typeof event.content === 'string') {
             // A reasoning block can still be growing when a mid-run persist
             // fires; hold it to the SAME ceiling the in-memory ledger uses so

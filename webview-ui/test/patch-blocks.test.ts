@@ -82,6 +82,41 @@ assert.deepEqual(
 assert.equal(parsePatchBlocks('just some text\nwith no markers'), null, 'no block structure');
 assert.equal(parsePatchBlocks(''), null, 'empty input');
 
+// --- leading marker junk is tolerated, like the host's executor -------------
+//
+// A model copying the tool template's placeholder token emits
+// `>>>>>>> PLACEHOLDER` as the patch's FIRST line. The host's block regex is
+// not anchored, so it ignored that line and applied the patch; the display
+// parser used to bail and dump the raw markers over the diff the file actually
+// got. Junk before the first opener must be skipped, not treated as a marker.
+
+assert.deepEqual(
+    parsePatchBlocks('>>>>>>> PLACEHOLDER\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE'),
+    [{ search: 'x', replace: 'y' }],
+    'a stray closer before the first opener is leading junk',
+);
+
+assert.deepEqual(
+    parsePatchBlocks('=======\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE'),
+    [{ search: 'x', replace: 'y' }],
+    'a stray separator before the first opener is leading junk',
+);
+
+assert.deepEqual(
+    parsePatchBlocks('>>>>>>> PLACEHOLDER\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE'
+        + '\n>>>>>>> PLACEHOLDER\n<<<<<<< SEARCH\nz\n=======\nw\n>>>>>>> REPLACE'),
+    [{ search: 'x', replace: 'y' }, { search: 'z', replace: 'w' }],
+    'junk between blocks still parses every block',
+);
+
+// Inside a block the same lines are ambiguous, so the parse is still refused -
+// that is what keeps the raw fallback honest for genuinely broken patches.
+assert.equal(
+    parsePatchBlocks('<<<<<<< SEARCH\nx\n>>>>>>> REPLACE\n=======\ny'),
+    null,
+    'a closer before the separator is a malformed block, not junk',
+);
+
 // --- unified diff ----------------------------------------------------------
 
 assert.deepEqual(

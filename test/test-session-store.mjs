@@ -24,6 +24,7 @@ const check = (name, actual, expected) => {
     if (!ok) failed++;
     console.log(`${ok ? 'ok' : 'FAIL'} - ${name}${ok ? '' : ` (got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)})`}`);
 };
+const checkTrue = (name, actual) => check(name, !!actual, true);
 
 const root = mkdtempSync(join(tmpdir(), 'xratu-session-store-'));
 const ws = '/tmp/fake-workspace';
@@ -369,6 +370,42 @@ try {
         const serialized = JSON.stringify(loaded.pendingTurn.events[0].args);
         check('pendingTurn args bounded', serialized.length <= 20_000, true);
         check('pendingTurn args valid JSON', (() => { try { JSON.parse(serialized); return true; } catch { return false; } })(), true);
+    }
+    // 20. The pending-turn window is head-truncated to its last 40 events, and
+    // that cut used to land BETWEEN an `assistant_message` (which carries the
+    // tool_calls) and its `tool_result`. The orphaned result replayed as a
+    // `tool` row with no owning assistant message, and an OpenAI-compatible
+    // provider rejects the whole request - so every later message in the
+    // session failed with an opaque `invalid_request_error` until it was
+    // discarded. The window must now open on a paired event.
+    {
+        const pt = await store.create(ws);
+        // 20 tool calls, each assistant_message -> tool_call -> tool_result.
+        // The 40-event tail begins on the SECOND round's `tool_result`.
+        const events = [];
+        for (let i = 0; i < 20; i++) {
+            events.push({ type: 'assistant_message', content: `a${i}`, tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] });
+            events.push({ type: 'tool_call', id: `c${i}`, tool: 'read_file', args: { path: 'a' } });
+            events.push({ type: 'tool_result', id: `c${i}`, tool: 'read_file', output: `out${i}` });
+        }
+        check('window would orphan a result if unaligned', events.slice(-40)[0].type, 'tool_result');
+        await store.save(pt.id, {
+            workspace: ws, model: null, summary: null, localHistory: [], uiHistory: [],
+            pendingTurn: { prompt: 'p', text: '', thinking: '', events },
+        });
+        const kept = (await store.load(pt.id)).pendingTurn.events;
+        checkTrue('pending window does not open on an orphan result', kept.length > 0 && kept[0].type !== 'tool_result');
+        // Every surviving result must still be preceded by its owner.
+        const declared = new Set();
+        let orphans = 0;
+        for (const e of kept) {
+            if (e.type === 'assistant_message') for (const tc of e.tool_calls ?? []) declared.add(tc.id);
+            if (e.type === 'tool_result' && !declared.has(e.id)) orphans++;
+        }
+        check('no orphan tool_result in the pending window', orphans, 0);
+        // The rest of the round survives - only the unpairable head is dropped.
+        checkTrue('paired events are kept', kept.some((e) => e.type === 'assistant_message'));
+        check('last event is never dropped', kept[kept.length - 1].output, 'out19');
     }
 } finally {
     rmSync(root, { recursive: true, force: true });
