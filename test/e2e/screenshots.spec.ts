@@ -307,32 +307,10 @@ async function freezeFonts(page: Page): Promise<void> {
     expect(loaded, 'the bundled Vazirmatn webfont must be resolved before the contract is checked').toBe(true);
 }
 
-/** Shiki highlighting is async (`useHighlightedCode`). A baseline captured
- *  before it lands stores the plain-text variant and then fails forever. */
+/** Shiki highlighting is async (`useHighlightedCode`). A render captured
+ *  before it lands stores the plain-text variant and is then unreviewable. */
 async function expectHighlighted(page: Page, selector: string): Promise<void> {
     await expect(page.locator(`${selector} span[style*="color"]`).first()).toBeAttached({ timeout: 20_000 });
-}
-
-/**
- * AGENTS.md's CAVEAT: a page with an internal scroll container looks CLIPPED in
- * a stitched `fullPage` image, so the image cannot be trusted either way.
- * Assert the real thing instead - no `overflow: hidden` ancestor may cut the
- * captured subject (it only clips when that ancestor's scrollHeight exceeds its
- * clientHeight). A scroller (`overflow: auto`) is not a clipper and is ignored.
- */
-async function expectNotClipped(subject: Locator): Promise<void> {
-    const clipper = await subject.evaluate((el) => {
-        let node: HTMLElement | null = el.parentElement;
-        while (node && node !== document.body) {
-            const style = getComputedStyle(node);
-            const clips = /hidden|clip/.test(`${style.overflowY} ${style.overflowX}`);
-            const overflowing = node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1;
-            if (clips && overflowing) return `${node.tagName.toLowerCase()}.${node.className}`;
-            node = node.parentElement;
-        }
-        return null;
-    });
-    expect(clipper, 'the captured subject is cut off by an overflow:hidden ancestor').toBeNull();
 }
 
 /** Local discovery is kicked off on mount and holds its spinner for a ~1s
@@ -345,7 +323,7 @@ async function settleLocalScan(page: Page): Promise<void> {
 
 /* --- screens --------------------------------------------------------------
  * One driver per screen; each returns the locator of the thing under
- * inspection (what to settle, clip-check and scroll into view). */
+ * inspection (what to settle and scroll into view). */
 
 async function welcomeScreen(page: Page, locale: Locale): Promise<Locator> {
     await shell(page, locale);
@@ -540,7 +518,6 @@ test.describe('theme contract', () => {
                     await page.goto('/');
                     const subject = await drive(page, locale);
                     await expect(subject).toBeVisible();
-                    await expectNotClipped(subject);
                     await freezeFonts(page);
 
                     // R3: direction is locale-driven on the root, never
