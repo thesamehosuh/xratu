@@ -28,8 +28,9 @@
  * ---------------------------------------------------------------------------
  * CLI
  * ---------------------------------------------------------------------------
- *   --jobs N, -j N     worker pool size (default: availableParallelism()-1,
- *                      clamped to [2,8]).  Also: XRATU_TEST_JOBS.
+ *   --jobs N, -j N     worker pool size (default: availableParallelism()-1
+ *                      clamped to [2,8], but 1 - serial - on Windows; see
+ *                      defaultJobs).  Also: XRATU_TEST_JOBS.
  *                      `--jobs 1` restores the original serial behaviour.
  *   --filter SUBSTR    run only suites whose name contains SUBSTR (case-insensitive).
  *   --changed [REF]    run only the suites plausibly affected by changed
@@ -127,7 +128,7 @@ if (opts.help) {
     console.log([
         'host-tests - host-side suite runner',
         '',
-        '  --jobs N, -j N   parallel workers (default: cpus-1 clamped 2..8; env XRATU_TEST_JOBS)',
+        '  --jobs N, -j N   parallel workers (default: cpus-1 clamped 2..8; 1 on Windows; env XRATU_TEST_JOBS)',
         '  --filter SUBSTR  only suites whose name contains SUBSTR (case-insensitive)',
         '  --changed [REF]  only suites affected by changed source (unsure -> full set)',
         '  --json PATH      write a machine-readable summary',
@@ -436,6 +437,20 @@ if (opts.changedRequested) console.log(`host-tests: --changed: ${selection.reaso
  * ------------------------------------------------------------------ */
 
 function defaultJobs() {
+    // WINDOWS DEFAULTS TO SERIAL, on purpose.
+    //
+    // `test:background-jobs` and `test:background-recovery` spawn REAL
+    // processes and assert wall-clock windows (idle timeout, output retention,
+    // a start token appearing within a deadline). In a worker pool they starve
+    // each other and those timing assertions flake - observed on CI: main is
+    // green with a serial runner, and the parallel run went red on
+    // windows-latest while ubuntu and macos stayed green.
+    //
+    // WINDOWS-FIRST means the default must be the one that cannot flake, not
+    // the one that is fastest. `--jobs N` / XRATU_TEST_JOBS still opt into
+    // parallelism for anyone who wants it.
+    if (process.platform === 'win32') return 1;
+
     let n;
     try {
         n = os.availableParallelism();
