@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import MarkdownIt from 'markdown-it';
-import { createHighlighter } from 'shiki';
 import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
 import {
     adoptDetachedJob,
@@ -15,7 +12,6 @@ import {
     formatJobCompletion,
     getJobByCallId,
     getTerminalJob,
-    killForegroundJobs,
     listTerminalJobs,
     onJobEvent,
     setJobChangeListener,
@@ -52,9 +48,16 @@ import {
     type ProxyTestOutcome,
     type ProxyTestResult,
 } from './proxyTest';
-import { parsePatchBlocks, repairPatchMarkers, sanitizePath } from './paths';
+import { sanitizePath } from './paths';
+import { ATTACH_MAX_BYTES, ATTACH_MAX_COUNT, ATTACH_MAX_TOTAL_BYTES, buildLocalUserText, isImageAttachment, isPdfAttachment, isTextAttachment, mimeFromFilename, resolveReferenceAttachments, validateHostAttachments } from './attachments';
+import type { AttachmentMeta, ComposerAttachment, HistoryMessage } from './chatViewTypes';
+import { closeOpenFence, ensureShiki, md, mdLive } from './markdownRender';
+import { _sanitizeHtml } from './sanitizeHtml';
+import { collectProjectRules } from './projectRules';
+import { closeStaleSkillEditors, isDir, isKnownSkillsPath } from './skillsHost';
 import { classifyWorkspace } from './workspaceKind';
-import { editDiffFromArgs } from './editDiff';
+import { applyMarkerPatch, computeDiffHunks, editDiffFromArgs } from './editDiff';
+import { routeWebviewMessage, type WebviewMessageHost } from './webviewRouter';
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
@@ -115,7 +118,7 @@ import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
 import { getProxyDispatcher, getProxyResolution } from './proxyDispatcher';
 import { proxyFetch } from './proxyFetch';
-import { detectLocalProxies } from './proxyDetect';
+import { detectLocalProxies, probeProxyReachable } from './proxyDetect';
 import { providerIdForUrl, providerLabelForUrl, isIranianProvider, baseUrlHost } from './providerIdentity';
 import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
 import { explainError } from './local/errorExplain';
@@ -148,514 +151,15 @@ interface ApprovalDiff {
     lines: string[];
 }
 
-interface ComposerAttachment {
-    id: string;
-    name: string;
-    mimeType: string;
-    size: number;
-    dataBase64: string;
-    /** Workspace-relative path of a REFERENCE attachment (@-mention): the
-     *  webview sends path-only, and this host reads the bytes at send time
-     *  (_resolveReferenceAttachments) so content is always fresh. */
-    path?: string;
-}
-
-interface AttachmentMeta {
-    name: string;
-    mime_type: string;
-    size: number;
-    path?: string;
-}
 
 /** Reasoning-effort variants the host accepts from the webview. */
 const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
 
-
-// ---------------------------------------------------------------------------
-// Attachment validation (host-side check - the webview's checks are a UX
-// convenience; this is the layer that actually guards the send).
-// ---------------------------------------------------------------------------
-
-const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-const ATTACH_TEXT_EXTRA_TYPES = new Set([
-    'application/json', 'application/xml', 'application/yaml', 'application/x-yaml',
-    'application/toml', 'application/javascript', 'application/x-sh',
-]);
-const ATTACH_MAX_COUNT = 20;
-const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
-const ATTACH_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
-/** Cap on attachment text (the webview mirrors this value). */
-const ATTACH_TEXT_MAX_CHARS = 24_000;
-
-// Cap for the approval diff's O(m·n) LCS table. 2000×2000 ≈ 4M cells; beyond
-// that the synchronous DP allocation (several GB at 20k×20k lines) would
-// freeze the extension host. Over-budget previews degrade to diff: null.
-const MAX_DIFF_LCS_CELLS = 4_000_000;
 /** Cap for the @-mention file list (same order as the project tree cap). */
 const FILE_LIST_MAX_ENTRIES = 2000;
 
-function isImageAttachment(mime: string): boolean {
-    return ATTACH_IMAGE_TYPES.has(mime);
-}
 
-function isTextAttachment(mime: string): boolean {
-    return mime.startsWith('text/') || ATTACH_TEXT_EXTRA_TYPES.has(mime);
-}
-
-/** PDFs are allowed IN and are text-extracted host-side (pdfExtract.ts); raw
- *  application/pdf is never sent to a model. */
-function isPdfAttachment(mime: string): boolean {
-    return mime === 'application/pdf';
-}
-
-const HOST_IMAGE_EXT_MIME: Record<string, string> = {
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
-};
-
-/** Text/source extensions accepted as inline text attachments (subset of the
- *  webview's ATTACH_TEXT_EXTENSIONS - same list, kept in sync). */
-const TEXT_FILE_EXTENSIONS = new Set([
-    'txt', 'md', 'markdown', 'jsonc', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'env', 'log',
-    'properties', 'py', 'pyw', 'jsx', 'ts', 'tsx', 'css', 'scss', 'sass', 'less',
-    'html', 'htm', 'vue', 'svelte', 'astro', 'rb', 'go', 'rs', 'java', 'kt', 'kts',
-    'swift', 'c', 'h', 'cpp', 'hpp', 'cc', 'hh', 'cs', 'php', 'zsh', 'fish', 'ps1',
-    'psm1', 'bat', 'cmd', 'sql', 'graphql', 'gql', 'proto', 'dockerfile', 'makefile',
-    'mk', 'cmake', 'gradle', 'lock', 'gitignore', 'gitattributes', 'editorconfig',
-    'npmrc', 'diff', 'patch', 'lua', 'pl', 'pm', 'r', 'dart', 'elm', 'ex', 'exs',
-    'erl', 'hrl', 'clj', 'cljs', 'scala', 'groovy', 'tf', 'tfvars', 'hcl', 'sol',
-    'zig', 'nim', 'v', 'asm', 's', 'm', 'mm',
-]);
-
-/** Extension → MIME for explorer-dragged files (mirrors the webview's
- *  mimeForFile; browsers aren't involved here so there is no File.type).
- *  Returns '' for UNKNOWN extensions - binaries (mp3/mp4/zip/…) must be
- *  rejected, never shipped as text/plain garbage. */
-function mimeFromFilename(name: string): string {
-    const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : name.toLowerCase();
-    if (HOST_IMAGE_EXT_MIME[ext]) return HOST_IMAGE_EXT_MIME[ext];
-    if (ext === 'pdf') return 'application/pdf';
-    if (ext === 'json' || ext === 'jsonc') return 'application/json';
-    if (ext === 'xml') return 'application/xml';
-    if (ext === 'yaml' || ext === 'yml') return 'application/yaml';
-    if (ext === 'toml') return 'application/toml';
-    if (ext === 'sh' || ext === 'bash') return 'application/x-sh';
-    if (ext === 'js' || ext === 'mjs' || ext === 'cjs') return 'application/javascript';
-    if (TEXT_FILE_EXTENSIONS.has(ext)) return 'text/plain';
-    return '';
-}
-
-/** Decoded byte length of a base64 payload, without materializing it. */
-function decodedBase64Len(dataBase64: string): number {
-    const stripped = dataBase64.includes(',') ? dataBase64.slice(dataBase64.indexOf(',') + 1) : dataBase64;
-    const trimmed = stripped.trimEnd();
-    let padding = 0;
-    while (padding < trimmed.length && trimmed[trimmed.length - 1 - padding] === '=') padding++;
-    return Math.max(Math.floor(trimmed.length / 4) * 3 - padding, 0);
-}
-
-/** Returns a user-facing error as an i18n key (+ params), or null when the
- *  attachments pass. The webview resolves the key via tf(). */
-function validateHostAttachments(attachments: ComposerAttachment[] | undefined): { key: string; params?: Record<string, string> } | null {
-    if (!attachments || attachments.length === 0) return null;
-    if (attachments.length > ATTACH_MAX_COUNT) {
-        return { key: 'attachTooMany' };
-    }
-    let total = 0;
-    for (const a of attachments) {
-        const decoded = decodedBase64Len(a.dataBase64);
-        if (decoded === 0) return { key: 'attachEmpty', params: { name: a.name } };
-        total += decoded;
-        if (total > ATTACH_MAX_TOTAL_BYTES) return { key: 'attachTotalTooLarge' };
-        if (decoded > ATTACH_MAX_BYTES) return { key: 'attachTooLarge', params: { name: a.name } };
-        if (!isImageAttachment(a.mimeType) && !isTextAttachment(a.mimeType) && !isPdfAttachment(a.mimeType)) {
-            return { key: 'attachUnsupported', params: { name: a.name } };
-        }
-    }
-    return null;
-}
-
-let shikiHighlighter: Awaited<ReturnType<typeof createHighlighter>> | null = null;
-
-function escapeHtml(str: string): string {
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-// ---------------------------------------------------------------------------
-// Allowlist-based HTML sanitizer for webview content.
-// Replaces the regex-based XSS filter (blocklists are inherently bypassable).
-// Uses a tag/attribute allowlist - only known-safe constructs pass through.
-// ---------------------------------------------------------------------------
-
-const ALLOWED_TAGS = new Set([
-    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'p', 'br', 'hr', 'pre', 'code', 'blockquote',
-    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
-    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
-    'a', 'img', 'button', 'em', 'strong', 'b', 'i', 'u', 's', 'del', 'ins', 'mark',
-    'sup', 'sub', 'small', 'details', 'summary',
-    'div', 'span', 'abbr', 'kbd', 'samp', 'var',
-    'svg', 'path', 'rect', 'polyline', 'line', 'circle',
-]);
-
-const ALLOWED_ATTRS: Record<string, Set<string>> = {
-    'a': new Set(['href', 'title', 'rel']),
-    'button': new Set(['type', 'title', 'aria-label']),
-    'img': new Set(['src', 'alt', 'title', 'width', 'height']),
-    'td': new Set(['colspan', 'rowspan', 'align', 'valign']),
-    'th': new Set(['colspan', 'rowspan', 'align', 'valign', 'scope']),
-    'ol': new Set(['start', 'type', 'reversed']),
-    'code': new Set(['class']),   // for shiki language classes
-    'pre': new Set(['class', 'style']),   // shiki theme background
-    'div': new Set(['class']),    // for shiki wrapper
-    'span': new Set(['class', 'style']),  // shiki token colors
-    'col': new Set(['span']),
-    'abbr': new Set(['title']),
-    'svg': new Set(['xmlns', 'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'class']),
-    'path': new Set(['d', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin']),
-    'rect': new Set(['width', 'height', 'x', 'y', 'rx', 'ry', 'fill', 'stroke']),
-    'polyline': new Set(['points', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin']),
-    'line': new Set(['x1', 'y1', 'x2', 'y2', 'stroke', 'stroke-width']),
-    'circle': new Set(['cx', 'cy', 'r', 'fill', 'stroke']),
-    '*': new Set(['class']),      // allow class on all tags
-};
-
-const FORBIDDEN_TAGS = new Set([
-    'script', 'iframe', 'object', 'embed', 'form', 'input', 'textarea',
-    'select', 'link', 'style', 'meta', 'base', 'math',
-    'video', 'audio', 'source', 'canvas', 'template', 'head', 'body',
-    'html', 'title', 'frame', 'frameset', 'applet', 'marquee',
-]);
-
-const EVENT_HANDLER_RE = /^on[a-z]/i;
-const DATA_ATTR_RE = /^data-/i;
-const JAVASCRIPT_URI_RE = /^\s*javascript\s*:/i;
-
-/**
- * Inline styles are only safe for syntax highlighting: permit exactly the
- * two color properties shiki emits, with hex values, nothing else.
- */
-function sanitizeStyle(value: string): string {
-    const kept = value
-        .split(';')
-        .map((decl) => decl.trim())
-        .filter((decl) => /^(color|background-color)\s*:\s*#[0-9a-fA-F]{3,8}$/.test(decl));
-    return kept.join('; ');
-}
-
-function _sanitizeHtml(html: string): string {
-    // Tokenize HTML into tags, text, and comments using a regex that captures
-    // opening tags, closing tags, self-closing tags, and comments.
-    const TOKEN_RE = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*?)(\/?)>|([^<]+)/g;
-
-    let result = '';
-    let match: RegExpExecArray | null;
-
-    while ((match = TOKEN_RE.exec(html)) !== null) {
-        const [full, closeSlash, tagName, attrsRaw, selfClose, textContent] = match;
-
-        // Text content or comment (no tag) - pass through text, strip comments
-        // Check before tagName - text/comment matches have undefined tagName
-        if (textContent !== undefined) {
-            result += textContent;
-            continue;
-        }
-        if (!tagName) { continue; }
-
-        const tag = tagName.toLowerCase();
-
-        // Strip HTML comments (potential attack vector)
-        if (full.startsWith('<!--')) {
-            continue;
-        }
-
-        // Check forbidden tags - strip entirely (including children in the regex)
-        if (FORBIDDEN_TAGS.has(tag)) {
-            continue;
-        }
-
-        // Unknown tags - strip but keep content
-        if (!ALLOWED_TAGS.has(tag)) {
-            continue;
-        }
-
-        // Parse attributes
-        const allowedAttrs = new Set<string>([
-            ...(ALLOWED_ATTRS[tag] || []),
-            ...(ALLOWED_ATTRS['*'] || []),
-        ]);
-
-        let safeAttrs = '';
-        const ATTR_RE = /([a-zA-Z_][\w\-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+)))?/g;
-        let attrMatch: RegExpExecArray | null;
-
-        while ((attrMatch = ATTR_RE.exec(attrsRaw)) !== null) {
-            const [, attrName, dqVal, sqVal, uqVal] = attrMatch;
-            const attrLower = attrName.toLowerCase();
-            const attrVal = dqVal ?? sqVal ?? uqVal ?? '';
-
-            // Block event handlers (onmouseover, onclick, etc.)
-            if (EVENT_HANDLER_RE.test(attrLower)) continue;
-
-            // Block data-* attributes
-            if (DATA_ATTR_RE.test(attrLower)) continue;
-
-            // Check allowlist
-            if (!allowedAttrs.has(attrLower)) continue;
-
-            // Validate href/src URIs - block javascript: and data: URIs
-            if (attrLower === 'href' || attrLower === 'src') {
-                if (JAVASCRIPT_URI_RE.test(attrVal)) continue;
-                // Block data: URIs that could contain HTML/JS
-                if (/^\s*data\s*:/i.test(attrVal)) continue;
-                // Remote images are a tracking beacon vector in offline
-                // coding chats - only relative/anchor links survive here,
-                // and CSP blocks network loads at the frame level too.
-                if (attrLower === 'src' && /^[a-z][a-z0-9+.-]*:\/\//i.test(attrVal)) continue;
-            }
-
-            // Style attributes get property-level filtering (shiki colors only)
-            if (attrLower === 'style') {
-                const cleanStyle = sanitizeStyle(attrVal);
-                if (cleanStyle) {
-                    safeAttrs += ` ${attrName}="${cleanStyle}"`;
-                }
-                continue;
-            }
-
-            // Reconstruct attribute with original quoting style
-            if (dqVal !== undefined) {
-                safeAttrs += ` ${attrName}="${escapeHtml(attrVal)}"`;
-            } else if (sqVal !== undefined) {
-                safeAttrs += ` ${attrName}='${escapeHtml(attrVal)}'`;
-            } else if (uqVal !== undefined) {
-                safeAttrs += ` ${attrName}="${escapeHtml(attrVal)}"`;
-            } else {
-                safeAttrs += ` ${attrName}`;
-            }
-        }
-
-        if (closeSlash) {
-            result += `</${tag}>`;
-        } else if (selfClose) {
-            result += `<${tag}${safeAttrs} />`;
-        } else {
-            result += `<${tag}${safeAttrs}>`;
-        }
-    }
-
-    return result;
-}
-
-/**
- * Grammars bundled into the host highlighter.
- *
- * The list is deliberately broad, because a fence tagged with a language that
- * is NOT loaded makes `codeToHtml` THROW, and every throw fell through the
- * silent catch in `highlightCode` into the plain monochrome fallback. With the
- * original twelve names, `tsx`, `jsx`, `go`, `rust`, `c`, `cpp`, `java`,
- * `kotlin`, `swift`, `toml`, `dockerfile`, `scss` and `vue` - all everyday
- * fences - rendered as unstyled text with no error reported anywhere.
- *
- * Shiki resolves each canonical name together with its aliases, so loading
- * `typescript` also covers `ts`, `csharp` covers `c#`/`cs`, and so on.
- *
- * Every name here must be a real bundled grammar: a single unknown entry makes
- * `createHighlighter` reject, which is the very failure being fixed here. A
- * name is only added after being checked against `createHighlighter` - which
- * is why `env` and `gitignore`, despite looking plausible, are absent.
- */
-const SHIKI_LANGS = [
-    'javascript', 'typescript', 'tsx', 'jsx',
-    'python', 'java', 'c', 'cpp', 'csharp', 'objective-c', 'vb',
-    'go', 'rust', 'ruby', 'php', 'swift', 'kotlin', 'scala',
-    'dart', 'lua', 'r', 'perl', 'haskell', 'elixir', 'clojure', 'zig',
-    'sql', 'bash', 'powershell', 'cmd', 'bat',
-    'json', 'yaml', 'toml', 'ini', 'csv',
-    'html', 'css', 'scss', 'markdown', 'xml', 'diff',
-    'dockerfile', 'makefile', 'cmake', 'graphql', 'nginx', 'vue',
-    'latex', 'plaintext',
-] as const;
-
-/** Every loaded id and alias, so `highlightCode` can check membership in O(1)
- *  instead of letting an unknown language throw. */
-let shikiLoadedLangs: Set<string> | null = null;
-
-/** A highlighting failure is reported once, not once per code block. */
-let shikiWarned = false;
-
-async function initShiki() {
-    shikiHighlighter = await createHighlighter({
-        themes: ['github-dark', 'github-light'],
-        langs: [...SHIKI_LANGS],
-    });
-    shikiLoadedLangs = new Set(shikiHighlighter.getLoadedLanguages());
-}
-
-/**
- * Initialise the highlighter, retrying once.
- *
- * `shikiHighlighter` gates every fence: while it is null `highlightCode`
- * emits the plain fallback, and nothing re-renders those blocks afterwards.
- * A single failed init therefore silently discoloured every code block for the
- * rest of the session - which is the whole of the reported "shiki is not
- * working" symptom, and it cleared only because the extension was reloaded.
- * Retrying costs one extra startup pass and downgrades a permanently broken
- * session to a briefly delayed one.
- */
-async function ensureShiki(): Promise<void> {
-    if (shikiHighlighter) return;
-    try {
-        await initShiki();
-    } catch (err) {
-        console.error('xratu: shiki init failed, retrying once:', err);
-        try {
-            await initShiki();
-        } catch (retryErr) {
-            console.error('xratu: shiki unavailable; code will render unhighlighted:', retryErr);
-        }
-    }
-}
-
-function looksLikeFilePath(value: string): boolean {
-    const v = value.trim();
-    if (!v || /\s/.test(v)) return false;
-    return (
-        /^(?:\.?\.?[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(v) ||
-        /^(?:src|app|lib|tests?|components|extension|webview-ui)[\\/]/i.test(v) ||
-        /\.(?:ts|tsx|js|jsx|py|rs|go|java|c|cc|cpp|h|hpp|json|md|css|scss|html|xml|yaml|yml|toml|sh|bash)(?::\d+(?::\d+)?)?$/i.test(v)
-    );
-}
-
-function looksLikeSymbol(value: string): boolean {
-    const v = value.trim();
-    return /^(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*(?:\(\))?$/.test(v);
-}
-
-function languageLabel(lang: string): string {
-    const normalized = lang.trim().split(/\s+/)[0].toLowerCase();
-    if (!normalized) return 'code';
-    const aliases: Record<string, string> = {
-        js: 'javascript',
-        jsx: 'jsx',
-        ts: 'typescript',
-        tsx: 'tsx',
-        py: 'python',
-        sh: 'bash',
-        shell: 'bash',
-        zsh: 'bash',
-        yml: 'yaml',
-        md: 'markdown',
-        rs: 'rust',
-        // 'c#' is an alias shiki resolves, but the canonical name keeps the
-        // loaded-languages membership check predictable.
-        cs: 'csharp',
-        'c++': 'cpp',
-        htm: 'html',
-        dockerfile: 'dockerfile',
-    };
-    return aliases[normalized] ?? normalized;
-}
-
-function highlightCode(str: string, lang: string, live: boolean): string {
-    // Fallback MUST emit a <pre><code> shell like shiki does - renderFence
-    // inserts the result straight into .code-surface, and bare text there
-    // collapses newlines (no white-space: pre on the surface div).
-    if (live || !lang || !shikiHighlighter) return `<pre><code>${escapeHtml(str)}</code></pre>`;
-    // Guard the language rather than letting `codeToHtml` throw on it. Shiki's
-    // own `fallbackLanguage` does not cover a grammar that is not loaded at
-    // all - it still throws - so membership is checked here and an unknown
-    // fence falls back to the plaintext grammar, which still yields a themed
-    // block instead of bare text.
-    const resolved = shikiLoadedLangs?.has(lang) ? lang : 'plaintext';
-    try {
-        const theme = vscode.window.activeColorTheme?.kind === vscode.ColorThemeKind.Light
-            ? 'github-light' : 'github-dark';
-        return shikiHighlighter.codeToHtml(str, { lang: resolved, theme });
-    } catch (err) {
-        // This catch used to be empty, which is why an entire session could
-        // render monochrome with nothing in any log to explain it.
-        if (!shikiWarned) {
-            shikiWarned = true;
-            console.error(`xratu: shiki failed for lang "${lang}"; rendering plain text:`, err);
-        }
-        return `<pre><code>${escapeHtml(str)}</code></pre>`;
-    }
-}
-
-function closeOpenFence(text: string): string {
-    const lines = text.split('\n');
-    let inFence = false;
-    let fenceMarker = '';
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!inFence) {
-            if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-                inFence = true;
-                fenceMarker = trimmed.slice(0, 3);
-            }
-        } else {
-            if (trimmed.startsWith(fenceMarker)) {
-                inFence = false;
-            }
-        }
-    }
-    if (inFence) return text + '\n' + fenceMarker;
-    return text;
-}
-
-function renderFence(token: any, live: boolean): string {
-    const lang = token.info.trim().split(/\s+/)[0].toLowerCase();
-    const label = languageLabel(token.info);
-    const highlighted = highlightCode(token.content, lang, live);
-    return (
-        `<div class="code-block">` +
-            `<div class="code-header">` +
-                `<span class="code-title">${escapeHtml(label)}</span>` +
-                `<button type="button" class="code-copy" aria-label="${escapeHtml(ui('copyCode'))}" title="${escapeHtml(ui('copyCode'))}">${escapeHtml(ui('copyCode'))}</button>` +
-            `</div>` +
-            `<div class="code-surface">${highlighted}</div>` +
-        `</div>`
-    );
-}
-
-function configureMarkdownRenderer(renderer: MarkdownIt['renderer'], live: boolean): void {
-    renderer.rules.fence = (tokens, idx) => renderFence(tokens[idx], live);
-
-    // Indented code blocks emit a bare <pre><code> - route them through the
-    // same shell so they get the padded surface instead of raw browser styles.
-    renderer.rules.code_block = (tokens, idx) => renderFence(tokens[idx], live);
-
-    renderer.rules.code_inline = (tokens, idx) => {
-        const value = tokens[idx].content;
-        const classes = [
-            'xratu-inline-code',
-            looksLikeFilePath(value) ? 'xratu-path' : '',
-            !looksLikeFilePath(value) && looksLikeSymbol(value) ? 'xratu-symbol' : '',
-        ].filter(Boolean).join(' ');
-        return `<code class="${classes}">${escapeHtml(value)}</code>`;
-    };
-}
-
-const md = new MarkdownIt({
-    html: false,
-    linkify: true,
-    // Single newlines inside a paragraph become <br> - chat models routinely
-    // break lines without blank lines, which would otherwise merge into one.
-    breaks: true,
-});
-
-configureMarkdownRenderer(md.renderer, false);
-
-// Streaming twin: identical DOM structure, but skips Shiki so the webview does
-// not replace code-block structure when the final highlighted response arrives.
-const mdLive = new MarkdownIt({ html: false, linkify: true, breaks: true });
-configureMarkdownRenderer(mdLive.renderer, true);
 
 /**
  * Which webviews are already wrapped for `XRATU_WEBVIEW_LOG` recording.
@@ -679,102 +183,6 @@ function getNonce(): string {
     return text;
 }
 
-/** Collect AGENTS.md project rules: workspace root first, then every nested
- *  directory between it and the active file (closest wins - it is sent last).
- *  Everything travels inside the normal authenticated /chat request body, so
- *  no second network path exists. */
-async function collectProjectRules(): Promise<string> {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || folders.length === 0) return '';
-
-    let rootFsPath = folders[0].uri.fsPath;
-    let activeFsPath: string | null = null;
-    const editor = vscode.window.activeTextEditor;
-    if (editor && editor.document.uri.scheme === 'file') {
-        const wf = vscode.workspace.getWorkspaceFolder(editor.document.uri);
-        if (wf) {
-            rootFsPath = wf.uri.fsPath;
-            activeFsPath = editor.document.uri.fsPath;
-        }
-    }
-
-    // Chain of directories from the root down to the active file's folder.
-    const dirs: string[] = [];
-    if (activeFsPath) {
-        const stop = path.resolve(rootFsPath);
-        // Windows paths are case-insensitive; a casing mismatch between the
-        // workspace folder and the editor document (c:\Work vs C:\Work) would
-        // otherwise make this walk climb past the workspace root.
-        const sameDir = (a: string, b: string) => process.platform === 'win32'
-            ? a.toLowerCase() === b.toLowerCase()
-            : a === b;
-        const insideRoot = (dir: string) => process.platform === 'win32'
-            ? dir.toLowerCase().startsWith(stop.toLowerCase() + path.sep) || sameDir(dir, stop)
-            : dir.startsWith(stop + path.sep) || sameDir(dir, stop);
-        let dir = path.dirname(path.resolve(activeFsPath));
-        while (true) {
-            dirs.unshift(dir);
-            if (sameDir(dir, stop)) break;
-            const parent = path.dirname(dir);
-            if (parent === dir || !insideRoot(dir)) break;
-            dir = parent;
-        }
-    } else {
-        dirs.push(path.resolve(rootFsPath));
-    }
-
-    const PER_FILE_CAP = 4000;
-    const TOTAL_CAP = 8000;
-    const sections: string[] = [];
-    let total = 0;
-    for (const dir of dirs) {
-        const file = path.join(dir, 'AGENTS.md');
-        try {
-            let text = await fs.promises.readFile(file, 'utf-8');
-            if (text.length > PER_FILE_CAP) {
-                const fullLen = text.length;
-                text = text.slice(0, PER_FILE_CAP)
-                    + `\n… (truncated - showing first ${PER_FILE_CAP} of ${fullLen} chars; read the file directly for the rest)`;
-            }
-            total += text.length;
-            if (total > TOTAL_CAP) break;
-            const rel = path.relative(rootFsPath, dir);
-            sections.push(`## ${rel && rel !== '' ? rel + '/' : ''}AGENTS.md\n${text.trim()}`);
-        } catch { /* no rules at this level */ }
-    }
-    return sections.join('\n\n');
-}
-
-interface HistoryMessage {
-    role: string;
-    content?: string;
-    events?: any[];
-    /** Shadow-checkpoint sha taken just BEFORE this prompt ran - the restore
-     *  point when the user edits/resends or regenerates this turn. */
-    cp?: string;
-    /** Attachment metadata (no base64) for user turns - rendered in the
-     *  bubble and replayed on edit/resend. */
-    attachments?: AttachmentMeta[];
-}
-
-/** Prompt text for the local loop: text attachments ride as fenced blocks
- *  (no vision needed); caps match ATTACH_TEXT_MAX_CHARS. Shared by the
- *  opening prompt AND steered messages. */
-function buildLocalUserText(prompt: string, attachments?: ComposerAttachment[]): string {
-    const textBlocks: string[] = [];
-    for (const a of attachments ?? []) {
-        if (!isTextAttachment(a.mimeType)) continue;
-        let content = Buffer.from(a.dataBase64, 'base64').toString('utf8');
-        if (content.length > ATTACH_TEXT_MAX_CHARS) {
-            const remaining = content.length - ATTACH_TEXT_MAX_CHARS;
-            content = content.slice(0, ATTACH_TEXT_MAX_CHARS)
-                + `\n… [file truncated, ${remaining} more characters - read the file with your tools if needed]`;
-        }
-        textBlocks.push(`[Attached file: ${a.name}]\n\`\`\`\n${content}\n\`\`\``);
-    }
-    return [prompt, ...textBlocks].filter((p) => p.length > 0).join('\n\n')
-        || 'Describe the attached file(s).';
-}
 
 /** Result of consuming one streamed agent run. */
 interface StreamOutcome {
@@ -832,10 +240,10 @@ const EDIT_SNAPSHOT_MAX_CHARS = 200_000;
 /** Bounded FIFO of captured snapshots (one entry per edit call). */
 const EDIT_SNAPSHOT_MAX_ENTRIES = 60;
 
-class XratuChatViewProvider implements vscode.WebviewViewProvider {
+class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
     public static readonly viewType = 'xratu-chat-view';
-    private _view?: vscode.WebviewView;
-    private _sessionId: string | null = null;
+    _view?: vscode.WebviewView;
+    _sessionId: string | null = null;
     /** Stable OpenCode session id for a not-yet-persisted conversation, so
      *  every round of a run sends the same `x-opencode-session`. */
     private _ephemeralSessionId: string | null = null;
@@ -844,7 +252,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _runCostCurrency: 'USD' | 'IRT' = 'USD';
     /** Base URL of the current run/provider, used to resolve its pricing. */
     private _runBaseUrl: string | null = null;
-    private _history: HistoryMessage[] = [];
+    _history: HistoryMessage[] = [];
     private _sessionSummary: string | null = null;
     /** Display title of the CURRENT session (toolbar button + picker).
      *  Mirrors the server rule: first user message, truncated; a rename
@@ -877,9 +285,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _sessionEpoch = 0;
     private _connectionStatusInterval: NodeJS.Timeout | null = null;
     private _chatRetryCount: number = 0;
-    private _yoloMode: boolean = false;
-    private _planMode: boolean = false;
-    private _selectedModel: string | null = null;
+    _yoloMode: boolean = false;
+    _planMode: boolean = false;
+    _selectedModel: string | null = null;
     /** Provider-reported context windows, scoped by provider HOST then model
      *  id (so the same id on two providers never shares a window). Only
      *  windows the provider actually reported live here; the curated fallback
@@ -982,7 +390,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _localTurnToken = 0;
     /** True while a local agent loop is live - steers queue for its next
      *  round boundary instead of starting a new turn. */
-    private _localRunActive = false;
+    _localRunActive = false;
     /** Settles when the owning local run fully unwinds (either cleanup
      *  finally in _handleChatRequest). _clearAllSessions awaits it so the
      *  fresh session is only exposed after the canceled run has stopped
@@ -1116,7 +524,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  finally; the ledgers alone are authoritative after that. */
     private _localPendingTurn: { prompt: string; events: any[]; attachments?: AttachmentMeta[] } | null = null;
     private _localPartialTimer: ReturnType<typeof setTimeout> | null = null;
-    private readonly _localSessionStore: LocalSessionStore;
+    readonly _localSessionStore: LocalSessionStore;
     /** Seq for in-app notification banners (replaces vscode.window toasts). */
     private _notifSeq = 0;
     /** Config file the MCP page just wrote, with a hash of the exact bytes -
@@ -1196,7 +604,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Webview's "open diff in editor": resolve each completed edit call to a
      *  before/after pair (exact snapshot first, args reconstruction second) and
      *  open the host's native diff editor. */
-    private async _openEditDiff(
+    async _openEditDiff(
         edits: Array<{ tool?: string; args?: string; callId?: string; result?: string }>
     ): Promise<void> {
         const resolved: Array<{ path: string; before: string; after: string }> = [];
@@ -1234,9 +642,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly _secrets: vscode.SecretStorage,
+        readonly _secrets: vscode.SecretStorage,
         checkpoints: ShadowCheckpointStore,
-        private readonly _globalState: vscode.Memento,
+        readonly _globalState: vscode.Memento,
         localStorageUri: vscode.Uri
     ) {
         this._checkpoints = checkpoints;
@@ -1452,7 +860,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     // _history; user edits are a small per-session override that any NEW
     // model write invalidates (setTaskListWriteListener → _noteTaskListWrite).
 
-    private _taskListEdits: Record<string, TaskListItem[]> = {};
+    _taskListEdits: Record<string, TaskListItem[]> = {};
 
     /** Live task list for the IN-FLIGHT run, refreshed on every model write
      *  (_noteTaskListWrite). The trailing reminder is rebuilt from this each
@@ -1474,7 +882,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _saveTaskListEdits(): Promise<void> {
+    async _saveTaskListEdits(): Promise<void> {
         await this._globalState.update('xratu.taskListEdits', JSON.stringify(this._taskListEdits));
     }
 
@@ -1519,7 +927,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  falls back to those args when there is no override - pushing the
      *  derived list here would race a mid-run write (history rows commit at
      *  end of run) and flash a stale checklist. */
-    private _pushTaskListState(): void {
+    _pushTaskListState(): void {
         const override = this._sessionId ? this._taskListEdits[this._sessionId] : undefined;
         this._view?.webview.postMessage({
             type: 'taskListState',
@@ -1588,7 +996,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Webview answered (or was replaced/disposed) - settle the confirm. */
-    private _resolveNotification(id: string, action: string | null): void {
+    _resolveNotification(id: string, action: string | null): void {
         const resolve = this._pendingNotifies.get(id);
         if (resolve) {
             this._pendingNotifies.delete(id);
@@ -1675,7 +1083,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  bubble). Confirms the scope first - files only, or files plus a
      *  conversation rewind to before that turn - then reuses the same shadow
      *  restore + ledger truncation as edit/resend. */
-    private async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
+    async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
         if (!this._view) return;
         if (this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchBusy');
@@ -1763,11 +1171,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** The agent loop runs in the extension - there is nothing to poll.
      *  Post 'connected' so the webview never sits on its 'disconnected'
      *  default (cloud-era connection-loss indicators are gone). */
-    private _startConnectionPolling() {
+    _startConnectionPolling() {
         this._view?.webview.postMessage({ type: 'connectionStatus', status: 'connected' });
     }
 
-    private async _showStartScreen() {
+    async _showStartScreen() {
         if (!this._view) return;
         // The only gate: a saved credential. Returning users (or anyone who
         // just connected from the welcome screen) go straight to chat;
@@ -1795,7 +1203,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Echo the active editor's file (workspace-relative) to the webview so
      *  suggestion-chip workflows can name the user's actual file. Null when
      *  no real file editor is active or it lives outside the workspace. */
-    private _pushEditorContext(): void {
+    _pushEditorContext(): void {
         if (!this._view) return;
         const editor = vscode.window.activeTextEditor;
         let activeFile: string | null = null;
@@ -1901,7 +1309,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             console.error('xratu: task list edit persist failed:', e));
     }
 
-    private async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
+    async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
         if (!this._view || this._abortControllers.size > 0) return;
 
         let targetIdx = this._findUserEntry(userIndex);
@@ -2324,7 +1732,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** The Usage page's view: all-time per-provider usage, the sparse
      *  per-day/per-model cost series, and the effective rate per model. */
-    private async _sendUsageState(): Promise<void> {
+    async _sendUsageState(): Promise<void> {
         if (!this._view) return;
         const credentials = await this._getSavedCredentials();
         const byHost = new Map<string, { label: string; iranian: boolean }>();
@@ -2443,7 +1851,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Write a per-model price override (in the given currency). */
-    private async _saveModelPricing(
+    async _saveModelPricing(
         id: string,
         input: number,
         output: number,
@@ -2476,7 +1884,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._refreshCostDisplay();
     }
 
-    private async _removeModelPricing(id: string): Promise<void> {
+    async _removeModelPricing(id: string): Promise<void> {
         const key = id.trim().toLowerCase();
         let removed = false;
         await this._queuePricingWrite(async () => {
@@ -2537,7 +1945,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async _setLlmCredentials(reason?: string, openCard?: 'byok' | 'local'): Promise<void> {
+    async _setLlmCredentials(reason?: string, openCard?: 'byok' | 'local'): Promise<void> {
         const credentials = await this._getSavedCredentials();
         const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId') ?? credentials[0]?.id ?? null;
         const active = credentials.find((c) => c.id === activeId);
@@ -2551,7 +1959,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         await this._sendSavedCredentials();
     }
 
-    private async _saveLlmCredentials(base_url: string, api_key: string, returnToChat = false): Promise<void> {
+    async _saveLlmCredentials(base_url: string, api_key: string, returnToChat = false): Promise<void> {
         if (!base_url) {
             this._view?.webview.postMessage({ type: 'byokCredentialError', valueKey: 'credUrlRequired' });
             return;
@@ -2604,7 +2012,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async _selectLlmCredential(id: string): Promise<void> {
+    async _selectLlmCredential(id: string): Promise<void> {
         const credentials = await this._getSavedCredentials();
         if (!credentials.some((c) => c.id === id)) return;
         const currentId = this._globalState.get<string>('xratu.activeLlmCredentialId');
@@ -2627,7 +2035,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Replace the stored API key of a saved connection. Only the webview's
      *  NEW key travels here - the old key never leaves the host. */
-    private async _updateLlmCredential(id: string, api_key: string): Promise<void> {
+    async _updateLlmCredential(id: string, api_key: string): Promise<void> {
         const key = api_key.trim();
         if (!key) return;
         const credentials = await this._getSavedCredentials();
@@ -2645,7 +2053,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
-    private async _deleteLlmCredential(id: string): Promise<void> {
+    async _deleteLlmCredential(id: string): Promise<void> {
         const credentials = await this._getSavedCredentials();
         const next = credentials.filter((c) => c.id !== id);
         if (next.length === credentials.length) return;
@@ -2704,7 +2112,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return active.id;
     }
 
-    private async _rememberModelForActiveCredential(model: string | null): Promise<void> {
+    async _rememberModelForActiveCredential(model: string | null): Promise<void> {
         if (!model) return;
         const credId = await this._resolveActiveCredentialId();
         if (!credId) return;
@@ -2759,7 +2167,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _setContextWindowOverride(model: string, window: number | null): Promise<void> {
+    async _setContextWindowOverride(model: string, window: number | null): Promise<void> {
         if (!model) return;
         const map = this._contextWindowOverrides();
         if (typeof window === 'number' && window >= 1024 && Number.isFinite(window)) {
@@ -2871,7 +2279,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined;
     }
 
-    private async _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void> {
+    async _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void> {
         if (!model) return;
         const map = this._thinkingLevels();
         if (level && THINKING_LEVEL_SET.has(level)) {
@@ -2898,7 +2306,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Effective reply language: explicit user choice, else derived from the
      *  UI locale (fa UI -> Persian replies). 'auto' is stored explicitly and
      *  means "follow the user's message language" (no prompt block). */
-    private _resolveReplyLanguage(): 'fa' | 'en' | 'auto' {
+    _resolveReplyLanguage(): 'fa' | 'en' | 'auto' {
         const stored = this._globalState.get<string>('xratu.replyLanguage');
         if (stored === 'fa' || stored === 'en' || stored === 'auto') return stored;
         return this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa';
@@ -3163,7 +2571,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  that matches one of the card's options resolves as that option (its
      *  description rides back to the model); anything else is the card's
      *  free-text answer. */
-    private _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void {
+    _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void {
         const entry = this._localDecisionResolvers.get(decisionId);
         if (!entry) return;
         const trimmed = typeof answer === 'string' ? answer.trim() : '';
@@ -3258,7 +2666,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  validation, PDF extraction) and queue it for the loop's next round
      *  boundary. With no live run (race: the turn settled first) it
      *  degrades to an ordinary send. */
-    private async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
+    async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
         const text = value.trim();
         if (!text && !(attachments && attachments.length > 0)) {
             this._confirmSteer(steerId, 'drop');
@@ -3282,7 +2690,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // steer outright: its webview bubbles no longer exist to match.
         const turnToken = this._localTurnToken;
         const sessionEpochAtEntry = this._sessionEpoch;
-        const refError = await this._resolveReferenceAttachments(attachments);
+        const refError = await resolveReferenceAttachments(attachments);
         if (refError) {
             this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params, ...(steerId ? { steerId } : {}) });
             return;
@@ -3334,7 +2742,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Confirm a pending steer bubble to the webview. Only steers that came
      *  through `steerRun` carry an id; askQuestion-routed ones already
      *  rendered their own user row. */
-    private _confirmSteer(steerId: string | undefined, mode: 'steer' | 'turn' | 'drop' = 'steer'): void {
+    _confirmSteer(steerId: string | undefined, mode: 'steer' | 'turn' | 'drop' = 'steer'): void {
         if (!steerId) return;
         this._view?.webview.postMessage({ type: 'steerApplied', steerId, mode });
     }
@@ -3348,7 +2756,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      * command was already approved and is already running), and asking again
      * would train the user to click through dialogs for a strictly safer state.
      */
-    private _backgroundTerminalCall(callId: string | undefined): void {
+    _backgroundTerminalCall(callId: string | undefined): void {
         const job = getJobByCallId(callId);
         if (!job) {
             // The command may have finished (or been killed) between the row
@@ -3375,7 +2783,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Stop a background job from the UI. */
-    private async _killBackgroundJob(jobId: string): Promise<void> {
+    async _killBackgroundJob(jobId: string): Promise<void> {
         const job = getTerminalJob(jobId);
         if (!job || job.status !== 'running') {
             this._postBackgroundJobs();
@@ -4086,7 +3494,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _fetchModels(): Promise<boolean> {
+    async _fetchModels(): Promise<boolean> {
         if (!this._view) return false;
         // A remembered model for THIS credential wins over the in-memory one -
         // the in-memory value may belong to the credential we just switched
@@ -4439,431 +3847,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
         this._webviewSubscriptions.push(
             webviewView.webview.onDidReceiveMessage((data) => {
-            (async () => {
-                try {
-                    switch (data.type) {
-                        case 'webviewReady':
-                            // Locale FIRST, before any await: the boot chain
-                            // below (_showStartScreen) must never outrun this
-                            // echo, or the page renders in the wrong language.
-                            // (The HTML also bakes the locale in; this is the
-                            // idempotent echo.)
-                            this._view?.webview.postMessage({
-                                type: 'locale',
-                                locale: this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa'
-                            });
-                            // Effective reply language for the settings page
-                            // (locale-derived default resolved host-side so the
-                            // chips never lie about what the agent will do).
-                            this._view?.webview.postMessage({
-                                type: 'replyLanguage',
-                                replyLanguage: this._resolveReplyLanguage(),
-                            });
-                            // Transcript display prefs (auto-expanded diffs / commands /
-                            // reasoning). Pushed here so a reload never renders
-                            // pills at the wrong default.
-                            this._sendTranscriptPrefs();
-                            this._startConnectionPolling();
-                            // Re-echo the policy toggles: a webview reload
-                            // (new session, logout loop, window reload)
-                            // resets the UI to OFF while the host state
-                            // persists - the toolbar must never lie about
-                            // YOLO being armed.
-                            this._view?.webview.postMessage({ type: 'yoloMode', enabled: this._yoloMode });
-                            this._view?.webview.postMessage({ type: 'planMode', enabled: this._planMode });
-                            this._pushTaskListState();
-                            // The git line under the composer must be correct on
-                            // the first paint after a webview reload too.
-                            void this._sendGitStatus();
-                            this._resetLiveSegments();
-                            // Reconcile the local multi-session index with the
-                            // on-disk directories (+ legacy one-shot import)
-                            // and restore the CURRENT session - both inside
-                            // ONE serialized transition: the restore reads
-                            // the index (a fire-and-forget reconcile could
-                            // race it and restore nothing, or a stale id, on
-                            // the first run after the legacy migration), and
-                            // the transition queue keeps a boot racing
-                            // openSession/clearHistory from restoring a stale
-                            // session id over the newer transition's state.
-                            await this._serializeSessionTransition(async () => {
-                                await this._localSessionStore.reconcile(this._localWorkspaceKey()).catch((e) =>
-                                    console.error('xratu: local session reconcile failed', e));
-                                await this._showStartScreen();
-                            });
-                            this._pushEditorContext();
-                            break;
-                        case 'setLocale':
-                            await this._globalState.update('xratu.locale', data.locale);
-                            setUiLocale(data.locale === 'en' ? 'en' : 'fa');
-                            // Re-echo the effective reply language: the
-                            // locale-derived default follows the UI locale,
-                            // so the chips must never show a stale value.
-                            // Explicit fa/en/auto choices survive through
-                            // _resolveReplyLanguage.
-                            this._view?.webview.postMessage({
-                                type: 'replyLanguage',
-                                replyLanguage: this._resolveReplyLanguage(),
-                            });
-                            break;
-                        case 'setReplyLanguage':
-                            void this._globalState.update('xratu.replyLanguage', data.replyLanguage);
-                            break;
-                        case 'transcriptSet': {
-                            // The persisted blob is opaque to the host (the
-                            // webview owns the row schema); only the SHAPE is
-                            // validated here - see transcriptPrefs.ts.
-                            await this._setTranscriptPref(String(data.id ?? ''), !!data.enabled);
-                            this._sendTranscriptPrefs();
-                            break;
-                        }
-                        case 'askQuestion':
-                            await this._handleChatRequest(data.value, data.attachments);
-                            break;
-                        case 'steerRun':
-                            void this._handleSteer(data.value, data.attachments, data.steerId)
-                                // An unexpected throw (e.g. a filesystem read
-                                // before the try) must still release the held
-                                // bubble, or its chip sticks forever.
-                                .catch(() => this._confirmSteer(data.steerId, 'drop'));
-                            break;
-                        case 'requestFileList':
-                            void this._pushFileList();
-                            break;
-                        case 'decisionResponse':
-                            this._handleToolDecision(data.decisionId, data.answer, data.dismissed === true);
-                            break;
-                        case 'approvalDecision':
-                            await this._handleToolApproval(data.approvalId, data.decisions || {}, data.sessionApprove === true);
-                            break;
-                        case 'notificationAction':
-                            this._resolveNotification(data.id, data.action ?? null);
-                            break;
-                        case 'backgroundTerminal':
-                            this._backgroundTerminalCall(data.callId);
-                            break;
-                        case 'killBackgroundJob':
-                            void this._killBackgroundJob(data.jobId);
-                            break;
-                        case 'cancelRequest':
-                            // Stop a running terminal command NOW. The loop's
-                            // abort only takes effect at a round boundary, so
-                            // without this a long command keeps running (and
-                            // keeps holding its ports/files) until the idle cap.
-                            killForegroundJobs();
-                            this._cancelActiveRequests();
-                            break;
-                        case 'restoreCheckpoint':
-                            if (typeof data.sha === 'string' && data.sha) {
-                                void this._restoreCheckpointAt(
-                                    typeof data.userIndex === 'number' ? data.userIndex : -1,
-                                    data.sha,
-                                );
-                            } else {
-                                void this.restoreCheckpointFlow();
-                            }
-                            break;
-                        case 'clearHistory':
-                            // Legacy sender - same semantics as a new session
-                            // (multi-session keeps old conversations intact).
-                            await this.clearHistory();
-                            break;
-                        case 'newSession':
-                            await this.clearHistory();
-                            break;
-                        case 'clearAllSessions':
-                            // Settings "Clear history": wipe EVERY stored
-                            // session on this machine, then start fresh.
-                            await this._clearAllSessions();
-                            break;
-                        case 'listSessions':
-                            await this._listSessions(!!data.all);
-                            break;
-                        case 'searchSessions':
-                            await this._searchSessions(
-                                String(data.query ?? ''),
-                                !!data.all,
-                                typeof data.requestId === 'number' ? data.requestId : undefined,
-                            );
-                            break;
-                        case 'openSession':
-                            await this._openSession(data.id);
-                            break;
-                        case 'renameSession':
-                            await this._renameSession(data.id, String(data.title ?? ''));
-                            break;
-                        case 'deleteSession':
-                            await this._deleteSession(data.id);
-                            break;
-                        case 'saveLlmCredentials':
-                            void this._saveLlmCredentials(data.base_url, data.api_key, !!data.returnToChat);
-                            break;
-                        case 'selectLlmCredential':
-                            void this._selectLlmCredential(data.id);
-                            break;
-                        case 'deleteLlmCredential':
-                            void this._deleteLlmCredential(data.id);
-                            break;
-                        case 'updateLlmCredential':
-                            void this._updateLlmCredential(data.id, data.api_key);
-                            break;
-                        case 'openCredentials':
-                            void this._setLlmCredentials(undefined, data.target);
-                            break;
-                        case 'toggleYolo':
-                            this._yoloMode = !this._yoloMode;
-                            this._view?.webview.postMessage({ type: 'yoloMode', enabled: this._yoloMode });
-                            break;
-                        case 'togglePlanMode':
-                            this._planMode = !this._planMode;
-                            this._view?.webview.postMessage({ type: 'planMode', enabled: this._planMode });
-                            // The in-flight run captured its toolset + mode at
-                            // start (schemas snapshot per run) - a mid-run
-                            // toggle must never read as retroactively active.
-                            if (this._localRunActive) {
-                                this.notifyBanner('info', 'planModeLiveNote');
-                            }
-                            break;
-                        case 'listModels':
-                            await this._fetchModels();
-                            break;
-                        case 'selectModel': {
-                            this._selectedModel = data.value;
-                            void this._secrets.store('xratu.selectedModel', data.value);
-                            void this._rememberModelForActiveCredential(data.value);
-                            break;
-                        }
-                        case 'setContextWindowOverride':
-                            void this._setContextWindowOverride(data.model, data.window);
-                            break;
-                        case 'setThinkingLevel':
-                            void this._setThinkingLevel(data.model, data.level);
-                            break;
-                        case 'copyToClipboard':
-                            void vscode.env.clipboard.writeText(data.value);
-                            break;
-                        case 'openDiff':
-                            void this._openEditDiff(data.edits).catch((e) =>
-                                console.error('xratu: open diff failed:', e));
-                            break;
-                        case 'taskListEdit': {
-                            // User edit of the checklist (webview is the single
-                            // editing surface). Stored as the session override;
-                            // the next /chat request echoes it so the model
-                            // sees the edited list in its per-turn reminder.
-                            if (this._sessionId && Array.isArray(data.tasks) && data.tasks.length > 0) {
-                                this._taskListEdits[this._sessionId] = data.tasks as TaskListItem[];
-                                void this._saveTaskListEdits().catch((e) =>
-                                    console.error('xratu: task list edit persist failed:', e));
-                            }
-                            this._pushTaskListState();
-                            break;
-                        }
-                        case 'editMessage':
-                            this._rewindAndResend(data.userIndex, data.value, data.attachments).catch((e) => {
-                                this.notifyBanner('error', 'notifEditFailed', {
-                                    error: e instanceof Error ? e.message : String(e)
-                                });
-                            });
-                            break;
-                        case 'openMcpSettings': {
-                            // MCP config lives in dedicated JSON files, NOT
-                            // VS Code settings - open the resolved file (the
-                            // workspace file when it exists, else global) so
-                            // raw edits land where the page saves.
-                            const store = mcpConfigStoreInstance;
-                            const wsPath = store?.workspacePath ?? null;
-                            let target = wsPath && fs.existsSync(wsPath) ? wsPath : store?.globalPath ?? null;
-                            if (target && !fs.existsSync(target)) {
-                                await fs.promises.mkdir(path.dirname(target), { recursive: true });
-                                // Exclusive create - never clobber a config
-                                // created concurrently (TOCTOU on exists).
-                                try {
-                                    await fs.promises.writeFile(target, '{\n  "mcpServers": {}\n}\n', { encoding: 'utf-8', flag: 'wx' });
-                                } catch (err: any) {
-                                    if (err?.code !== 'EEXIST') throw err;
-                                }
-                            }
-                            if (target) {
-                                await vscode.window.showTextDocument(vscode.Uri.file(target));
-                            }
-                            break;
-                        }
-                        case 'mcpGetState':
-                            await this._sendMcpState();
-                            // Fire-and-forget live probe: statuses fill in
-                            // (and re-push) as servers connect. Errors here
-                            // are already recorded per-server.
-                            void externalMcpInstance?.listTools()
-                                .catch(() => undefined)
-                                .finally(() => { void this._sendMcpState(); });
-                            break;
-                        case 'mcpSave':
-                            await this._saveMcpConfig(data.target as McpSaveTarget, data.servers as ExternalServerConfig[]);
-                            break;
-                        case 'mcpRestart':
-                            await externalMcpInstance?.restart(String(data.name ?? ''));
-                            await this._sendMcpState();
-                            break;
-                        case 'mcpMarketplaceGetState':
-                            await this._sendMarketplaceState({
-                                query: typeof data.query === 'string' ? data.query : '',
-                                force: data.force === true,
-                            });
-                            break;
-                        case 'mcpMarketplaceDetect':
-                            await this._sendMarketplaceDetection(String(data.id ?? ''));
-                            break;
-                        case 'gitStatusGetState':
-                            await this._sendGitStatus();
-                            break;
-                        case 'gitBranchesGetState':
-                            await this._sendGitBranches();
-                            break;
-                        case 'gitCheckout':
-                            await this._gitCheckout(String(data.branch ?? ''));
-                            break;
-                        case 'usageGetState':
-                            await this._sendUsageState();
-                            break;
-                        case 'usageSaveModel':
-                            await this._saveModelPricing(
-                                String(data.id ?? ''),
-                                Number(data.input),
-                                Number(data.output),
-                                data.cachedInput == null ? null : Number(data.cachedInput),
-                                data.currency === 'IRT' ? 'IRT' : 'USD',
-                            );
-                            break;
-                        case 'usageRemoveModel':
-                            await this._removeModelPricing(String(data.id ?? ''));
-                            break;
-                        case 'proxyGetState':
-                            await this._sendProxyState();
-                            break;
-                        case 'proxySave':
-                            await this._saveProxySettings(
-                                data.mode === 'off' || data.mode === 'custom' ? data.mode : 'auto',
-                                String(data.proxyUrl ?? ''),
-                                String(data.noProxy ?? ''),
-                            );
-                            break;
-                        case 'proxyDetect':
-                            await this._detectProxies();
-                            break;
-                        case 'proxyTest':
-                            await this._testProxyConnection();
-                            break;
-                        case 'skillsGetState':
-                            await this._sendSkillsState();
-                            break;
-                        case 'skillsToggle':
-                            await this._setSkillEnabled(
-                                String(data.id ?? ''),
-                                !!data.enabled,
-                            );
-                            await this._sendSkillsState();
-                            break;
-                        case 'skillsReveal': {
-                            // Reveal a skill folder in the OS file explorer.
-                            // Without a dirPath: ensure + reveal the global
-                            // skills directory (empty-state CTA).
-                            const requested = String(data.dirPath ?? '').trim();
-                            let target = '';
-                            if (requested && await this._isDir(requested)) {
-                                target = requested;
-                            } else {
-                                const globalSkills = path.join(os.homedir(), '.agents', 'skills');
-                                try { await fs.promises.mkdir(globalSkills, { recursive: true }); } catch { /* reveal best effort */ }
-                                target = globalSkills;
-                            }
-                            // Guard against arbitrary path reveals leaking
-                            // beyond skill locations - only reveal paths that
-                            // are (or live under) a known skills root.
-                            if (await this._isKnownSkillsPath(target)) {
-                                void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target));
-                            }
-                            break;
-                        }
-                        case 'skillsOpen': {
-                            // Open a skill's SKILL.md in an editor tab - the
-                            // skills page's "edit" affordance. Missing files
-                            // are scaffolded from a minimal template.
-                            const requested = String(data.dirPath ?? '').trim();
-                            if (requested && await this._isDir(requested) && await this._isKnownSkillsPath(requested)) {
-                                await this._openSkillFile(requested);
-                            }
-                            break;
-                        }
-                        case 'skillsCreate': {
-                            // Scaffold a unique new-skill folder in the
-                            // global skills directory and open it.
-                            const dir = await this._createSkillScaffold();
-                            if (dir) {
-                                await this._openSkillFile(dir);
-                                await this._sendSkillsState();
-                            }
-                            break;
-                        }
-                        case 'skillsDelete': {
-                            // Permanently remove a skill folder (path-guarded
-                            // to known skills locations).
-                            const dirPath = String(data.dirPath ?? '').trim();
-                            await this._deleteSkillFolder(dirPath);
-                            await this._sendSkillsState();
-                            break;
-                        }
-                        case 'discoverLocalModels': {
-                            // Probes can throw (network glitches, aborted
-                            // fetches) - report the failure instead of an
-                            // indistinguishable empty result.
-                            try {
-                                const discovered = await this.discoverLocalModels();
-                                this._view?.webview.postMessage({
-                                    type: 'localModelsDiscovered',
-                                    runtimes: discovered.map((d) => ({
-                                        id: d.connection.id,
-                                        runtime: d.connection.runtime,
-                                        name: d.connection.name,
-                                        baseUrl: d.connection.baseUrl,
-                                        modelCount: d.models.length,
-                                        models: d.models.map((m) => m.id),
-                                        supportsTools: d.supportsTools,
-                                        supportsVision: d.supportsVision,
-                                    })),
-                                });
-                            } catch (e) {
-                                this._view?.webview.postMessage({
-                                    type: 'localModelsDiscovered',
-                                    runtimes: [],
-                                    error: e instanceof Error ? e.message : String(e),
-                                });
-                            }
-                            break;
-                        }
-                        case 'regenerate': {
-                            // Re-run the LAST exchange: rewind to its own
-                            // pre-prompt checkpoint and resend unchanged.
-                            let lastUser = -1;
-                            for (let i = 0; i < this._history.length; i++) {
-                                if (this._history[i].role === 'user') lastUser = i;
-                            }
-                            if (lastUser >= 0) {
-                                this._rewindAndResend(lastUser, null).catch((e) => {
-                                    this.notifyBanner('error', 'notifRegenerateFailed', {
-                                        error: e instanceof Error ? e.message : String(e)
-                                    });
-                                });
-                            }
-                            break;
-                        }
-                    }
-                } catch (err) {
-                    console.error('xratu: unhandled error', err);
-                    this._view?.webview.postMessage({ type: 'error', valueKey: 'errInternal', params: { detail: err instanceof Error ? err.message : String(err) } });
-                }
-            })();
-        })
+                void routeWebviewMessage(this, data, {
+                    mcpConfigStore: mcpConfigStoreInstance,
+                    externalMcp: externalMcpInstance,
+                });
+            })
         );
     }
 
@@ -4912,7 +3900,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Push the git status for the line under the composer. A non-repo (or a
      *  missing git) reports `isRepo: false` and the UI renders nothing - a
      *  status line that guesses is worse than no line. */
-    private async _sendGitStatus(): Promise<void> {
+    async _sendGitStatus(): Promise<void> {
         if (!this._view) return;
         const { status, root } = await this._readGitStatus();
         this._view.webview.postMessage({ type: 'gitStatusState', status, root });
@@ -4921,7 +3909,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Push the branch list for the picker. The CURRENT branch comes from the
      *  status the line is already showing - one source of truth, not a second
      *  git call that could disagree with the line the user just clicked. */
-    private async _sendGitBranches(): Promise<void> {
+    async _sendGitBranches(): Promise<void> {
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         let branches: string[] = [];
@@ -4949,7 +3937,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  reach git's argv. `git checkout` refuses on its own when the switch
      *  would overwrite local changes (no -f here, deliberately), and a failure
      *  is REPORTED - a picker that silently does nothing reads as broken. */
-    private async _gitCheckout(branch: string): Promise<void> {
+    async _gitCheckout(branch: string): Promise<void> {
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (root && isSafeBranchName(branch) && this._gitBranches.includes(branch)) {
@@ -4975,7 +3963,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  Header values are included (the page is the single editing surface -
      *  masking them would make saves destructive). The addable catalog now
      *  rides `mcpMarketplaceState` instead of this payload. */
-    private async _sendMcpState(): Promise<void> {
+    async _sendMcpState(): Promise<void> {
         if (!externalMcpInstance || !mcpConfigStoreInstance || !this._view) return;
         const config = await mcpConfigStoreInstance.load();
         const statuses = await externalMcpInstance.getServerStatuses();
@@ -4998,7 +3986,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Push the Proxy page's view: stored settings plus the LIVE resolution
      *  (which layer won - the answer is often "your OS system proxy", which
      *  is invisible in the settings UI otherwise). */
-    private async _sendProxyState(): Promise<void> {
+    async _sendProxyState(): Promise<void> {
         if (!this._view) return;
         const cfg = vscode.workspace.getConfiguration('xratu');
         const resolved = getProxyResolution();
@@ -5017,7 +4005,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Persist proxy settings (Proxy page). Writes the `xratu.*` settings -
      *  the dispatcher picks them up on the next request (its cache keys off
      *  the resolved URL). */
-    private async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string): Promise<void> {
+    async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string): Promise<void> {
         const cfg = vscode.workspace.getConfiguration('xratu');
         await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
         await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
@@ -5026,7 +4014,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Scan loopback for running proxy clients (Clash family, v2rayN, …). */
-    private async _detectProxies(): Promise<void> {
+    async _detectProxies(): Promise<void> {
         if (!this._view) return;
         let candidates: Array<{
             service: string;
@@ -5056,7 +4044,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  localhost runtime matching no_proxy) must never prove a dead proxy
      *  works. Planning + verdict shaping are pure (src/proxyTest.ts); every
      *  failure carries an i18n key, never baked English. */
-    private async _testProxyConnection(): Promise<void> {
+    async _testProxyConnection(): Promise<void> {
         if (!this._view) return;
         const post = (result: ProxyTestResult) => {
             this._view?.webview.postMessage({
@@ -5083,7 +4071,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // "Connection refused" to the proxy IS the diagnosis - say so before
         // any endpoint can drown it in a generic timeout.
         if (resolution.url) {
-            const proxyFailure = await this._probeProxyReachable(resolution.url);
+            const proxyFailure = await probeProxyReachable(resolution.url);
             if (proxyFailure) {
                 post({ ok: false, detailKey: 'proxyDetailProxyDead', params: proxyFailure });
                 return;
@@ -5135,42 +4123,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  connections, else the { endpoint, reason } params for the "proxy
      *  unreachable" report - the single most useful diagnosis when the
      *  connection to the proxy is dead. */
-    private _probeProxyReachable(proxyUrl: string): Promise<{ endpoint: string; reason: string } | null> {
-        return new Promise((resolve) => {
-            let host = '127.0.0.1';
-            let port = 80;
-            try {
-                const parsed = new URL(proxyUrl);
-                host = parsed.hostname;
-                port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
-            } catch {
-                resolve({ endpoint: proxyUrl, reason: 'invalid URL' });
-                return;
-            }
-            const endpoint = `${host}:${port}`;
-            const socket = net.connect({ host, port });
-            let settled = false;
-            const finish = (value: { endpoint: string; reason: string } | null) => {
-                if (settled) return;
-                settled = true;
-                socket.removeAllListeners();
-                socket.destroy();
-                resolve(value);
-            };
-            socket.setTimeout(3000, () => finish({ endpoint, reason: 'timed out after 3s' }));
-            socket.once('connect', () => finish(null));
-            socket.once('error', (err: any) => finish({
-                endpoint,
-                reason: String(err?.code ?? err?.message ?? 'connection failed'),
-            }));
-        });
-    }
 
     /** Push the live marketplace. The fetch happens HERE, never in the
      *  webview: its CSP is `connect-src 'none'`, and the host is where the
      *  proxy, timeouts and size caps live. `query` echoes back so the webview
      *  can drop a stale response that lost the debounce race. */
-    private async _sendMarketplaceState(options: { query?: string; force?: boolean } = {}): Promise<void> {
+    async _sendMarketplaceState(options: { query?: string; force?: boolean } = {}): Promise<void> {
         if (!mcpMarketplaceInstance || !this._view) return;
         const query = options.query ?? '';
         let state: MarketplaceState;
@@ -5194,7 +4152,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     /** Opt-in README detection for an entry a catalog shipped without install
      *  metadata. The entry is looked up in the LAST LOADED catalog by id - a
      *  webview-supplied URL would let the page make the host fetch anything. */
-    private async _sendMarketplaceDetection(id: string): Promise<void> {
+    async _sendMarketplaceDetection(id: string): Promise<void> {
         if (!mcpMarketplaceInstance || !this._view) return;
         const entry = id ? mcpMarketplaceInstance.findEntry(id) : null;
         if (!entry) {
@@ -5221,7 +4179,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  consumed by a later save's watcher event). */
     private _mcpSaveQueue: Promise<unknown> = Promise.resolve();
 
-    private _saveMcpConfig(target: McpSaveTarget, servers: ExternalServerConfig[]): Promise<void> {
+    _saveMcpConfig(target: McpSaveTarget, servers: ExternalServerConfig[]): Promise<void> {
         const run = this._mcpSaveQueue.then(() => this._saveMcpConfigNow(target, servers), () => this._saveMcpConfigNow(target, servers));
         this._mcpSaveQueue = run.catch(() => undefined);
         return run;
@@ -5323,7 +4281,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _setSkillEnabled(id: string, enabled: boolean): Promise<void> {
+    async _setSkillEnabled(id: string, enabled: boolean): Promise<void> {
         const id0 = String(id ?? '').trim();
         if (!id0) return;
         const set = new Set(this._disabledSkillIds());
@@ -5340,7 +4298,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Push the transcript display prefs. An empty blob is a valid state: the
      *  webview resolves every missing id to its own default. */
-    private _sendTranscriptPrefs(): void {
+    _sendTranscriptPrefs(): void {
         if (!this._view) return;
         this._view.webview.postMessage({
             type: 'transcriptPrefs',
@@ -5348,7 +4306,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async _setTranscriptPref(id: string, enabled: boolean): Promise<void> {
+    async _setTranscriptPref(id: string, enabled: boolean): Promise<void> {
         const prefs = withTranscriptPref(
             parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')),
             id,
@@ -5359,7 +4317,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Push the Skills page view: discovered skills (valid, invalid, and
      *  shadowed) with enabled flags and folder paths for reveal actions. */
-    private async _sendSkillsState(): Promise<void> {
+    async _sendSkillsState(): Promise<void> {
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
         const disabled = new Set(this._disabledSkillIds());
@@ -5374,7 +4332,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         if (skills.some((s) => s.renamedFrom)) {
             for (const s of skills) {
                 if (s.renamedFrom) {
-                    await this._closeStaleSkillEditors(
+                    await closeStaleSkillEditors(
                         path.join(path.dirname(s.dirPath), s.renamedFrom),
                         s.dirPath,
                     );
@@ -5407,73 +4365,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async _isDir(p: string): Promise<boolean> {
-        try {
-            return (await fs.promises.stat(p)).isDirectory();
-        } catch {
-            return false;
-        }
-    }
-
-    /** True only for paths at or inside a known skills location - the reveal
-     *  handler must not become a generic "show any folder in explorer" tool
-     *  driven by webview-supplied paths. Both sides are canonicalized with
-     *  realpath so symlinks/`..` cannot smuggle a path lexically inside a
-     *  skills root while resolving elsewhere on disk. */
-    private async _isKnownSkillsPath(p: string): Promise<boolean> {
-        let real: string;
-        try {
-            real = await fs.promises.realpath(p);
-        } catch {
-            return false;
-        }
-        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const candidates: string[] = [
-            path.join(os.homedir(), '.agents', 'skills'),
-        ];
-        if (root) {
-            candidates.push(
-                path.join(root, '.xratu', 'skills'),
-                path.join(root, '.agents', 'skills'),
-            );
-        }
-        for (const base of candidates) {
-            let baseReal: string;
-            try {
-                baseReal = await fs.promises.realpath(base);
-            } catch {
-                continue;
-            }
-            if (real === baseReal || real.startsWith(baseReal + path.sep)) return true;
-        }
-        return false;
-    }
-
-    /** Open (creating if needed) a skill's SKILL.md in an editor tab. Caller
-     *  must have validated skillDir as a known skills location. */
-    private async _openSkillFile(skillDir: string): Promise<void> {
-        const file = path.join(skillDir, SKILL_FILE);
-        try {
-            await fs.promises.access(file);
-        } catch {
-            const fallbackName = path.basename(skillDir) || 'new-skill';
-            const template = [
-                '---',
-                `name: ${fallbackName}`,
-                'description: TODO - describe what this skill does and when the agent should load it.',
-                '---',
-                '',
-                `# ${fallbackName}`,
-                '',
-            ].join('\n');
-            await fs.promises.writeFile(file, template, 'utf8');
-        }
-        void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
-    }
 
     /** Scaffold a unique `new-skill` folder in the global skills directory
      *  and return its path (null when the directory cannot be created). */
-    private async _createSkillScaffold(): Promise<string | null> {
+    async _createSkillScaffold(): Promise<string | null> {
         const globalSkills = path.join(os.homedir(), '.agents', 'skills');
         try {
             await fs.promises.mkdir(globalSkills, { recursive: true });
@@ -5481,7 +4376,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             return null;
         }
         let name = 'new-skill';
-        for (let n = 2; await this._isDir(path.join(globalSkills, name)); n++) {
+        for (let n = 2; await isDir(path.join(globalSkills, name)); n++) {
             name = `new-skill-${n}`;
         }
         const dir = path.join(globalSkills, name);
@@ -5500,7 +4395,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  listing so orphaned directories and legacy snapshots are included,
      *  and deletion failures are counted, not fatal - the clear proceeds
      *  with an honest error afterward. */
-    private async _clearAllSessions(): Promise<void> {
+    async _clearAllSessions(): Promise<void> {
         this._cancelActiveRequests();
         this._sessionEpoch++;
         // Mirror the run-loop finally: a pending partial flush must not fire
@@ -5559,8 +4454,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Permanently remove a skill folder. Caller supplies a webview path -
      *  guarded to known skills locations. */
-    private async _deleteSkillFolder(dirPath: string): Promise<void> {
-        if (!(await this._isDir(dirPath)) || !(await this._isKnownSkillsPath(dirPath))) return;
+    async _deleteSkillFolder(dirPath: string): Promise<void> {
+        if (!(await isDir(dirPath)) || !(await isKnownSkillsPath(dirPath))) return;
         try {
             await fs.promises.rm(dirPath, { recursive: true, force: true });
         } catch (e) {
@@ -5568,41 +4463,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** After discovery auto-renamed a skill folder, close editor tabs still
-     *  open on the OLD SKILL.md path. Without this, saving such a stale tab
-     *  recreates the old folder and the skill reappears as a duplicate.
-     *  Unsaved edits are carried over to the renamed file first. */
-    private async _closeStaleSkillEditors(oldDir: string, newDir: string): Promise<void> {
-        try {
-            const tabGroups = (vscode.window as unknown as {
-                tabGroups?: {
-                    // Groups live in `all`; each group carries its `tabs`.
-                    all?: readonly { tabs?: readonly { input?: unknown }[] }[];
-                    close?: (tabs: unknown[], preserveFocus?: boolean) => Thenable<boolean>;
-                };
-            }).tabGroups;
-            const tabs = (tabGroups?.all ?? []).flatMap((g) => g.tabs ?? []);
-            if (tabs.length === 0 || !tabGroups?.close) return;
-            const oldFile = path.join(oldDir, SKILL_FILE);
-            const newFile = path.join(newDir, SKILL_FILE);
-            const samePath = (a: string, b: string) =>
-                path.resolve(a) === path.resolve(b)
-                || (process.platform === 'win32' && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase());
-            const stale = tabs.filter((t) => {
-                const input = t.input as { uri?: { fsPath?: string } } | undefined;
-                const fsPath = input && typeof input === 'object' ? input.uri?.fsPath : undefined;
-                return !!fsPath && samePath(fsPath, oldFile);
-            });
-            if (stale.length === 0) return;
-            const doc = vscode.workspace.textDocuments.find((d) => samePath(d.uri.fsPath, oldFile));
-            if (doc?.isDirty) {
-                await fs.promises.writeFile(newFile, Buffer.from(doc.getText(), 'utf8'));
-            }
-            await tabGroups.close(stale, true);
-        } catch {
-            /* best effort - editor bookkeeping must never surface as a chat error */
-        }
-    }
 
     private _restoreChatUI() {
         if (!this._view) return;
@@ -5651,7 +4511,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         return _sanitizeHtml(rawHtml);
     }
 
-    private _localWorkspaceKey(): string {
+    _localWorkspaceKey(): string {
         const folder = vscode.workspace.workspaceFolders?.[0];
         return folder?.uri.fsPath || 'default';
     }
@@ -5741,14 +4601,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Session picker listing for the webview. With `all` the list spans
      *  every workspace; otherwise it is scoped to the current one. */
-    private async _listSessions(all: boolean): Promise<void> {
+    async _listSessions(all: boolean): Promise<void> {
         const metas = await this._localSessionStore.list(all ? undefined : this._localWorkspaceKey());
         const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt }));
         this._view?.webview.postMessage({ type: 'sessionList', items, currentId: this._sessionId });
     }
 
     /** Full-text search across stored sessions (session-picker search box). */
-    private async _searchSessions(query: string, all: boolean, requestId?: number): Promise<void> {
+    async _searchSessions(query: string, all: boolean, requestId?: number): Promise<void> {
         const metas = await this._localSessionStore.search(query, all ? undefined : this._localWorkspaceKey());
         const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt }));
         this._view?.webview.postMessage({ type: 'sessionSearchResults', query, requestId, items });
@@ -5759,7 +4619,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  cannot overwrite a newer transition's session state. */
     private _sessionTransitionQueue: Promise<unknown> = Promise.resolve();
 
-    private _serializeSessionTransition<T>(fn: () => Promise<T>): Promise<T> {
+    _serializeSessionTransition<T>(fn: () => Promise<T>): Promise<T> {
         const run = this._sessionTransitionQueue.then(fn, fn);
         this._sessionTransitionQueue = run.catch(() => undefined);
         return run;
@@ -5769,7 +4629,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  live run is cancelled first (the epoch bump keeps its settled state
      *  out of the new session's view), then the webview reloads so
      *  streaming state starts clean. Serialized against clearHistory. */
-    private _openSession(id: string): Promise<void> {
+    _openSession(id: string): Promise<void> {
         return this._serializeSessionTransition(() => this._openSessionNow(id));
     }
 
@@ -5862,7 +4722,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Rename a session (picker inline edit); persists in the local store. */
-    private async _renameSession(id: string, title: string): Promise<void> {
+    async _renameSession(id: string, title: string): Promise<void> {
         const clean = title.replace(/\s+/g, ' ').trim();
         if (!clean) return;
         await this._localSessionStore.rename(id, clean);
@@ -5875,7 +4735,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     /** Hard-delete a session (picker context action; the webview confirms).
      *  Deleting the OPEN session falls back to a fresh empty one. */
-    private async _deleteSession(id: string): Promise<void> {
+    async _deleteSession(id: string): Promise<void> {
         await this._localSessionStore.delete(id);
         if (this._taskListEdits[id]) {
             delete this._taskListEdits[id];
@@ -6227,12 +5087,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** New turn: nothing streamed yet, so the segment timeline starts empty. */
-    private _resetLiveSegments(): void {
+    _resetLiveSegments(): void {
         this._liveSegments = [];
         this._liveSeg = '';
     }
 
-    private _cancelActiveRequests() {
+    _cancelActiveRequests() {
         for (const controller of this._abortControllers.values()) {
             controller.abort();
         }
@@ -6356,7 +5216,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
      *  offers node_modules/build output, and secret files are filtered even
      *  outside git. LISTING is not attaching: a user who explicitly refs
      *  .env still can (their call, same as the picker). */
-    private async _pushFileList(): Promise<void> {
+    async _pushFileList(): Promise<void> {
         if (!this._view) return;
         const wsFolder = vscode.workspace.workspaceFolders?.[0];
         let files: string[] = [];
@@ -6386,75 +5246,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         this._view.webview.postMessage({ type: 'fileList', files });
     }
 
-    /** Resolve @-mention REFERENCE attachments (path-only chips) by reading
-     *  the workspace files NOW - content is always current at send time, and
-     *  the resolved text/image bytes flow through the exact same downstream
-     *  pipeline as picker attachments (host validation, PDF extraction,
-     *  fenced blocks in the user prompt). Mutates entries in place.
-     *  Fail-closed: any unresolvable ref aborts the send with a composer
-     *  error, never a silently dropped reference. */
-    private async _resolveReferenceAttachments(
-        attachments: ComposerAttachment[] | undefined
-    ): Promise<{ key: string; params?: Record<string, string> } | null> {
-        if (!attachments || attachments.length === 0) return null;
-        const wsFolder = vscode.workspace.workspaceFolders?.[0];
-        let totalBytes = attachments
-            .filter((a) => !a.path)
-            .reduce((sum, a) => sum + decodedBase64Len(a.dataBase64), 0);
-        for (const a of attachments) {
-            if (!a.path) continue;
-            const rel = a.path.replace(/\\/g, '/').replace(/^\.\//, '');
-            let abs: string;
-            try {
-                // sanitizePath enforces workspace containment + symlink safety.
-                abs = sanitizePath(rel, wsFolder ? wsFolder.uri.fsPath : '');
-            } catch {
-                return { key: 'attachRefOutside', params: { name: rel } };
-            }
-            const uri = vscode.Uri.file(abs);
-            let stat: vscode.FileStat;
-            try {
-                stat = await vscode.workspace.fs.stat(uri);
-            } catch {
-                return { key: 'attachRefNotFound', params: { name: rel } };
-            }
-            if (stat.type & vscode.FileType.Directory) {
-                return { key: 'attachIsFolder', params: { name: rel } };
-            }
-            if (stat.size === 0) {
-                return { key: 'attachEmpty', params: { name: rel } };
-            }
-            if (stat.size > ATTACH_MAX_BYTES) {
-                return { key: 'attachTooLarge', params: { name: rel } };
-            }
-            if (totalBytes + stat.size > ATTACH_MAX_TOTAL_BYTES) {
-                return { key: 'attachTotalTooLarge' };
-            }
-            const bytes = await vscode.workspace.fs.readFile(uri);
-            // mimeFromFilename returns '' for unknown extensions - sniff the
-            // bytes instead of guessing: decodable NUL-free UTF-8 is text,
-            // everything else is refused (fail-closed binary protection).
-            let mime = mimeFromFilename(path.basename(abs));
-            if (!mime) {
-                const isText = !bytes.includes(0) && Buffer.from(bytes).toString('utf8').length > 0;
-                if (!isText) return { key: 'attachUnsupported', params: { name: rel } };
-                mime = 'text/plain';
-            }
-            if (isTextAttachment(mime) && (bytes.includes(0) || Buffer.from(bytes).toString('utf8').includes('\uFFFD'))) {
-                return { key: 'attachUnsupported', params: { name: rel } };
-            }
-            totalBytes += stat.size;
-            a.dataBase64 = Buffer.from(bytes).toString('base64');
-            a.size = stat.size;
-            a.mimeType = mime;
-            // The model and every chip/history view identify the file by its
-            // workspace-relative path (Cline-style), not the bare basename.
-            a.name = rel;
-        }
-        return null;
-    }
 
-    private async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void> {
+    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void> {
         if (!this._view) { return; }
         // Plan mode is captured BEFORE any await: the run later builds its
         // system prompt, toolset and approval gate from this snapshot, so a
@@ -6527,7 +5320,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
             // through its own tools when it needs their content.
             // @-mention refs resolve FIRST (filling path-only chips with fresh
             // bytes); everything downstream validates them like any attachment.
-            const refError = await this._resolveReferenceAttachments(attachments);
+            const refError = await resolveReferenceAttachments(attachments);
             if (refError) {
                 this._view.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params });
                 return;
@@ -6893,7 +5686,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                 // Simulate the SEARCH/REPLACE blocks in memory so the card
                 // shows a real unified diff instead of raw markers.
                 oldContent = stat ? (await vscode.workspace.openTextDocument(fileUri)).getText() : '';
-                const patched = this._applyMarkerPatch(oldContent, String(args.patch ?? ''));
+                const patched = applyMarkerPatch(oldContent, String(args.patch ?? ''));
                 if (patched === null) return null;
                 newContent = patched;
             } else {
@@ -6903,7 +5696,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     ? (args.new_content || '')
                     : oldContent.replace(args.old_str ?? '', () => (args.new_str ?? ''));
             }
-            const hunks = this._computeDiffHunks(oldContent, newContent);
+            const hunks = computeDiffHunks(oldContent, newContent);
             if (hunks === null) return null;
             const lines: string[] = [];
             let added = 0;
@@ -6919,44 +5712,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** Apply <<<<<<< SEARCH / ======= / >>>>>>> REPLACE blocks in-memory so
-     *  approval cards show a real diff for apply_patch payloads. Returns
-     *  null when no block matches (the preview degrades gracefully). */
-    private _applyMarkerPatch(content: string, patch: string): string | null {
-        // Shared parser, not a private copy of the regex: the approval card
-        // must preview exactly what apply_patch will do - including the
-        // dropped-final-closer repair - or the diff shown and the edit
-        // applied can disagree. A refusal (marker-like content inside a body)
-        // degrades to null; the preview is advisory, the tool reports.
-        let blocks: Array<{ search: string; replace: string }>;
-        try {
-            blocks = parsePatchBlocks(repairPatchMarkers(patch).patch);
-        } catch {
-            return null;
-        }
-        if (blocks.length === 0) return null;
-        let out = content;
-        for (const { search, replace } of blocks) {
-            if (out.split(search).length - 1 === 1) {
-                out = out.replace(search, () => replace);
-                continue;
-            }
-            const sLines = search.split('\n');
-            const cLines = out.split('\n');
-            let at = -1;
-            for (let i = 0; i <= cLines.length - sLines.length; i++) {
-                let match = true;
-                for (let j = 0; j < sLines.length; j++) {
-                    if (cLines[i + j].trimEnd() !== sLines[j].trimEnd()) { match = false; break; }
-                }
-                if (match) { at = i; break; }
-            }
-            if (at < 0) return null;
-            cLines.splice(at, sLines.length, ...replace.split('\n'));
-            out = cLines.join('\n');
-        }
-        return out;
-    }
 
     private async _processNeedsApproval(parsed: any) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -7032,7 +5787,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove = false, _retryCount = 0): Promise<void> {
+    async _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove = false, _retryCount = 0): Promise<void> {
         if (_retryCount > 1) return;
         const approvals = this._approvalCloseItems[approvalId] ?? [];
 
@@ -7059,128 +5814,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private _computeDiffHunks(oldContent: string, newContent: string): Array<{ oldStart: number; oldCount: number; newStart: number; newCount: number; removedLines: string[]; addedLines: string[] }> | null {
-        // Trim the shared prefix/suffix first: a small edit inside a huge
-        // file collapses to the changed region, keeping the LCS table tiny.
-        let oldLines = oldContent.split('\n');
-        let newLines = newContent.split('\n');
-        let trimmed = 0;
-        {
-            let prefix = 0;
-            while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++;
-            let suffix = 0;
-            while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix &&
-                oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix++;
-            if (prefix > 0 || suffix > 0) {
-                trimmed = prefix;
-                oldLines = oldLines.slice(prefix, oldLines.length - suffix);
-                newLines = newLines.slice(prefix, newLines.length - suffix);
-            }
-        }
-        const hunks: Array<{ oldStart: number; oldCount: number; newStart: number; newCount: number; removedLines: string[]; addedLines: string[] }> = [];
-
-        // Simple LCS-based diff
-        const m = oldLines.length;
-        const n = newLines.length;
-        if (m * n > MAX_DIFF_LCS_CELLS) {
-            return null;
-        }
-        const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-        for (let i = 1; i <= m; i++) {
-            for (let j = 1; j <= n; j++) {
-                if (oldLines[i - 1] === newLines[j - 1]) {
-                    dp[i][j] = dp[i - 1][j - 1] + 1;
-                } else {
-                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-                }
-            }
-        }
-
-        // Backtrack to find diff regions
-        const changes: Array<{ type: 'keep' | 'remove' | 'add'; oldIdx: number; newIdx: number }> = [];
-        let i = m, j = n;
-        while (i > 0 || j > 0) {
-            if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-                changes.unshift({ type: 'keep', oldIdx: i - 1, newIdx: j - 1 });
-                i--; j--;
-            } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-                changes.unshift({ type: 'add', oldIdx: i, newIdx: j - 1 });
-                j--;
-            } else {
-                changes.unshift({ type: 'remove', oldIdx: i - 1, newIdx: j });
-                i--;
-            }
-        }
-
-        // Group consecutive changes into hunks (with 2 lines of context)
-        const contextLines = 2;
-        let hunkStart = 0;
-        while (hunkStart < changes.length) {
-            // Skip keep lines at the start
-            while (hunkStart < changes.length && changes[hunkStart].type === 'keep') {
-                hunkStart++;
-            }
-            if (hunkStart >= changes.length) break;
-
-            // Find the end of this change group (with context)
-            let hunkEnd = hunkStart;
-            let lastChangeIdx = hunkStart;
-            while (hunkEnd < changes.length) {
-                if (changes[hunkEnd].type !== 'keep') {
-                    lastChangeIdx = hunkEnd;
-                }
-                // Stop if we've gone past the last change by contextLines
-                if (hunkEnd > lastChangeIdx + contextLines && hunkEnd < changes.length) {
-                    // Check if there are more changes ahead
-                    let hasMoreChanges = false;
-                    for (let k = hunkEnd; k < changes.length; k++) {
-                        if (changes[k].type !== 'keep') { hasMoreChanges = true; break; }
-                    }
-                    if (!hasMoreChanges) break;
-                    // Include context and start a new hunk
-                    hunkEnd = Math.min(hunkEnd + contextLines, changes.length);
-                    break;
-                }
-                hunkEnd++;
-            }
-
-            // Extract the hunk
-            const hunkChanges = changes.slice(hunkStart, hunkEnd);
-            const removedLines: string[] = [];
-            const addedLines: string[] = [];
-            let oldStart = -1;
-            let oldCount = 0;
-            let newStart = -1;
-            let newCount = 0;
-
-            for (const c of hunkChanges) {
-                if (c.type === 'remove') {
-                    if (oldStart === -1) oldStart = c.oldIdx;
-                    removedLines.push(oldLines[c.oldIdx]);
-                    oldCount++;
-                } else if (c.type === 'add') {
-                    if (newStart === -1) newStart = c.newIdx;
-                    addedLines.push(newLines[c.newIdx]);
-                    newCount++;
-                }
-            }
-
-            if (removedLines.length > 0 || addedLines.length > 0) {
-                hunks.push({
-                    oldStart: oldStart + 1 + trimmed,
-                    oldCount,
-                    newStart: (newStart >= 0 ? newStart : oldStart) + 1 + trimmed,
-                    newCount,
-                    removedLines,
-                    addedLines,
-                });
-            }
-
-            hunkStart = hunkEnd;
-        }
-
-        return hunks;
-    }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
         const nonce = getNonce();

@@ -331,3 +331,34 @@ export async function detectLocalProxies(): Promise<DetectedProxyGroup[]> {
 function formatHost(host: string): string {
     return host.includes(':') ? `[${host}]` : host;
 }
+
+export function probeProxyReachable(proxyUrl: string): Promise<{ endpoint: string; reason: string } | null> {
+    return new Promise((resolve) => {
+        let host = '127.0.0.1';
+        let port = 80;
+        try {
+            const parsed = new URL(proxyUrl);
+            host = parsed.hostname;
+            port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+        } catch {
+            resolve({ endpoint: proxyUrl, reason: 'invalid URL' });
+            return;
+        }
+        const endpoint = `${host}:${port}`;
+        const socket = net.connect({ host, port });
+        let settled = false;
+        const finish = (value: { endpoint: string; reason: string } | null) => {
+            if (settled) return;
+            settled = true;
+            socket.removeAllListeners();
+            socket.destroy();
+            resolve(value);
+        };
+        socket.setTimeout(3000, () => finish({ endpoint, reason: 'timed out after 3s' }));
+        socket.once('connect', () => finish(null));
+        socket.once('error', (err: any) => finish({
+            endpoint,
+            reason: String(err?.code ?? err?.message ?? 'connection failed'),
+        }));
+    });
+}

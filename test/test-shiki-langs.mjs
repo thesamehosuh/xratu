@@ -10,10 +10,11 @@
  * `php`, `ruby`, `haskell`, `c++`. It is not detectable by looking at a diff
  * of the rendered output; it is only visible when the colours are missing.
  *
- * The renderer itself cannot be imported: `src/extension.ts` imports `vscode`.
- * So the lists under test are PARSED out of the source instead. That is
- * deliberate - the alternative is a hand-typed copy in the test, which passes
- * happily while the shipped list diverges, which is the whole failure mode.
+ * The renderer itself cannot be imported: `src/markdownRender.ts` imports
+ * `vscode` (for the active color theme). So the lists under test are PARSED
+ * out of the source instead. That is deliberate - the alternative is a
+ * hand-typed copy in the test, which passes happily while the shipped list
+ * diverges, which is the whole failure mode.
  *
  * The two structural guards matter as much as the fence tags:
  *
@@ -39,12 +40,12 @@ const ok = (name, cond, detail = '') => {
 };
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const src = readFileSync(join(repoRoot, 'src', 'extension.ts'), 'utf-8');
+const src = readFileSync(join(repoRoot, 'src', 'markdownRender.ts'), 'utf-8');
 
 // ---------------------------------------------------------------- the source lists
 
 const langsBlock = /const SHIKI_LANGS = \[([\s\S]*?)\] as const;/.exec(src);
-ok('SHIKI_LANGS is still declared in src/extension.ts', !!langsBlock,
+ok('SHIKI_LANGS is still declared in src/markdownRender.ts', !!langsBlock,
     'the renderer was restructured - re-point this test at the new shape');
 const langs = [...(langsBlock?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
 
