@@ -8,7 +8,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { editDiffFromArgs } = require('../out/editDiff.js');
+const { editDiffFromArgs, hunkSummaries } = require('../out/editDiff.js');
 
 let failed = 0;
 const check = (name, fn) => {
@@ -105,6 +105,37 @@ check('persisted clip markers are stripped from both sides', () => {
 check('missing path yields an empty label, not a crash', () => {
     const r = editDiffFromArgs('apply_patch', JSON.stringify({ patch: '<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE' }));
     eq(r.path, '', 'path');
+});
+
+check('hunkSummaries flattens a replace into one 1-based hunk', () => {
+    const hunks = hunkSummaries('a\nb\nc\nd\ne\nf\ng\n', 'a\nb\nX\nd\ne\nf\ng\n');
+    if (!hunks || hunks.length !== 1) throw new Error(`expected 1 hunk, got ${JSON.stringify(hunks)}`);
+    const h = hunks[0];
+    eq(h.newStart, 3, 'newStart');
+    eq(h.oldStart, 3, 'oldStart');
+    eq(h.added, 1, 'added');
+    eq(h.removed, 1, 'removed');
+    eq(h.sample, 'X', 'sample');
+});
+
+check('hunkSummaries: identical sides yield an empty list', () => {
+    eq(hunkSummaries('same\n', 'same\n').length, 0, 'hunks');
+});
+
+check('hunkSummaries: pure addition reports only added lines', () => {
+    const hunks = hunkSummaries('one\n', 'one\ntwo\n');
+    if (!hunks || hunks.length !== 1) throw new Error(`expected 1 hunk, got ${JSON.stringify(hunks)}`);
+    eq(hunks[0].added, 1, 'added');
+    eq(hunks[0].removed, 0, 'removed');
+    eq(hunks[0].sample, 'two', 'sample');
+});
+
+check('hunkSummaries: pure removal samples the removed line', () => {
+    const hunks = hunkSummaries('one\ntwo\n', 'one\n');
+    if (!hunks || hunks.length !== 1) throw new Error(`expected 1 hunk, got ${JSON.stringify(hunks)}`);
+    eq(hunks[0].added, 0, 'added');
+    eq(hunks[0].removed, 1, 'removed');
+    eq(hunks[0].sample, 'two', 'sample');
 });
 
 if (failed) {

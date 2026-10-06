@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -157,6 +157,11 @@
       {
         "command": "xratu.restoreCheckpoint",
         "title": "%command.restoreCheckpoint.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "xratu.reviewChanges",
+        "title": "%command.reviewChanges.title%",
         "category": "%command.category%"
       },
       {

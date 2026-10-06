@@ -211,6 +211,28 @@ try {
         rmSync(gpgHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 
+    // --- hunk-review surface: diffCheckpoint + readCheckpointFile ---
+    writeFileSync(join(work, 'review-base.txt'), 'alpha\nbeta\n');
+    const reviewBase = await store.createCheckpoint(work, 'review base');
+    writeFileSync(join(work, 'review-base.txt'), 'alpha\nCHANGED\n');
+    writeFileSync(join(work, 'review-new.txt'), 'gamma\n');
+    const changed = await store.diffCheckpoint(work, reviewBase);
+    const byPath = new Map(changed.map((c) => [c.path, c]));
+    const modified = byPath.get('review-base.txt');
+    ok('diffCheckpoint lists a tracked modification with counts',
+        !!modified && !modified.untracked && modified.added === 1 && modified.removed === 1,
+        JSON.stringify(changed));
+    ok('diffCheckpoint lists files created after the checkpoint as untracked',
+        byPath.get('review-new.txt')?.untracked === true, JSON.stringify(changed));
+    ok('readCheckpointFile returns the checkpoint content',
+        (await store.readCheckpointFile(work, reviewBase, 'review-base.txt')) === 'alpha\nbeta\n');
+    ok('readCheckpointFile returns null for a file that did not exist yet',
+        (await store.readCheckpointFile(work, reviewBase, 'review-new.txt')) === null);
+    const cleanBase = await store.createCheckpoint(work, 'review clean');
+    ok('diffCheckpoint finds nothing right after a snapshot',
+        (await store.diffCheckpoint(work, cleanBase)).length === 0,
+        JSON.stringify(await store.diffCheckpoint(work, cleanBase)));
+
     // --- empty seed refused ---
     const seedWork = mkdtempSync(join(tmpdir(), 'xratu-cp-seed-'));
     try {

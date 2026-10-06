@@ -22,6 +22,7 @@
 	"command.openSettings.title": "باز کردن تنظیمات",
 	"command.agentFiles.title": "فایل های زیرعامل…",
 	"command.restoreCheckpoint.title": "بازیابی نقطه بازگشت…",
+	"command.reviewChanges.title": "بررسی تغییرات…",
 	"command.attachFile.title": "پیوست فایل ها…",
 	"command.attachFromExplorer.title": "پیوست به گفتگوی خراتو",
 	"view.container.title": "خراتو",

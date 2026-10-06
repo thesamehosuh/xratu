@@ -22,6 +22,7 @@
 	"command.openSettings.title": "Open Settings",
 	"command.agentFiles.title": "Agent Files…",
 	"command.restoreCheckpoint.title": "Restore Checkpoint…",
+	"command.reviewChanges.title": "Review Changes…",
 	"command.attachFile.title": "Attach Files…",
 	"command.attachFromExplorer.title": "Attach to Xratu Chat",
 	"view.container.title": "Xratu",

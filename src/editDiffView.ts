@@ -19,12 +19,16 @@ const MAX_DOCS = 60;
 /**
  * Open a native side-by-side diff for `filePath`. Returns false when there is
  * nothing to diff (identical sides - the caller shows a banner instead).
+ * `selection` (0-based, inclusive, NEW-side lines) lands the editor on the
+ * hunk the review surface was opened for - best-effort, the diff itself is
+ * the same either way.
  */
 export function openEditDiff(
     store: Map<string, string>,
     filePath: string,
     before: string,
-    after: string
+    after: string,
+    selection?: readonly [number, number]
 ): boolean {
     if (before === after) return false;
     const base = path.basename(filePath) || 'file';
@@ -39,6 +43,9 @@ export function openEditDiff(
         if (oldest.done) break;
         store.delete(oldest.value);
     }
-    void vscode.commands.executeCommand('vscode.diff', left, right, filePath || 'diff');
+    const options = selection
+        ? { selection: new vscode.Range(Math.max(0, selection[0]), 0, Math.max(0, selection[1]), 0) }
+        : undefined;
+    void vscode.commands.executeCommand('vscode.diff', left, right, filePath || 'diff', options);
     return true;
 }

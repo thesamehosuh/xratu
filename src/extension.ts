@@ -56,13 +56,13 @@ import { _sanitizeHtml } from './sanitizeHtml';
 import { collectProjectRules } from './projectRules';
 import { closeStaleSkillEditors, isDir, isKnownSkillsPath } from './skillsHost';
 import { classifyWorkspace } from './workspaceKind';
-import { applyMarkerPatch, computeDiffHunks, editDiffFromArgs } from './editDiff';
+import { applyMarkerPatch, computeDiffHunks, editDiffFromArgs, hunkSummaries } from './editDiff';
 import { routeWebviewMessage, type WebviewMessageHost } from './webviewRouter';
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
 import { parseTranscriptPrefs, withTranscriptPref } from './transcriptPrefs';
-import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics } from './shadowGit';
+import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics, type ChangedFile } from './shadowGit';
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
@@ -239,6 +239,11 @@ const EDIT_DIFF_TOOLS = new Set(['edit_file', 'apply_patch', 'replace_in_file', 
 const EDIT_SNAPSHOT_MAX_CHARS = 200_000;
 /** Bounded FIFO of captured snapshots (one entry per edit call). */
 const EDIT_SNAPSHOT_MAX_ENTRIES = 60;
+/** Per-side cap for the checkpoint review surface's virtual documents. The
+ *  edit-snapshot cap above is much smaller because snapshots are captured
+ *  per call; review opens whatever the user picked, so a 1MB text file is
+ *  the practical ceiling before the diff editor itself stops being useful. */
+const REVIEW_MAX_CHARS = 1_000_000;
 
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
     public static readonly viewType = 'xratu-chat-view';
@@ -1076,6 +1081,128 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('error', 'notifRestoreFailed', {
                 error: e instanceof Error ? e.message : String(e)
             });
+        }
+    }
+
+    /** Hunk-level review of what changed since a checkpoint: pick a file,
+     *  then a hunk, and open the native side-by-side diff landed on that
+     *  hunk. The palette path picks the checkpoint here; the transcript's
+     *  review button arrives with the row's checkpoint sha instead. Data
+     *  comes from the shadow store (checkpoint side) and the working tree
+     *  (current side); the preview itself is editDiffView's virtual docs. */
+    public async reviewChangesFlow(fromSha?: string): Promise<void> {
+        const folder = vscode.workspace.workspaceFolders?.[0];
+        if (!folder) {
+            this.notifyBanner('error', 'notifNoFolder');
+            return;
+        }
+        const root = folder.uri.fsPath;
+        let sha = fromSha;
+        if (!sha) {
+            let listing: string;
+            try {
+                listing = await this._checkpoints.listCheckpoints(root, 20);
+            } catch (e) {
+                const error = e instanceof Error ? e.message : String(e);
+                diagnosticsChannel?.appendLine(`xratu checkpoints - list failed: ${error}`);
+                this.notifyBanner('error', 'notifCheckpointsUnavailable', { error });
+                return;
+            }
+            const entries = listing.split('\n').filter((l) => l.includes('|'));
+            if (entries.length === 0 || listing === 'No checkpoints found.') {
+                this.notifyBanner('info', 'notifNoCheckpoints');
+                return;
+            }
+            const picked = await vscode.window.showQuickPick(
+                entries.map((line) => {
+                    const [hash, date, ...subject] = line.split('|');
+                    return { label: subject.join('|').trim() || 'checkpoint', description: `${date.trim()} (${hash.trim()})`, sha: hash.trim() };
+                }),
+                { placeHolder: ui('reviewCheckpointPlaceholder') }
+            );
+            if (!picked) return;
+            sha = picked.sha;
+        }
+        let changed: ChangedFile[];
+        try {
+            changed = await this._checkpoints.diffCheckpoint(root, sha);
+        } catch (e) {
+            this.notifyBanner('error', 'notifReviewFailed', {
+                error: e instanceof Error ? e.message : String(e)
+            });
+            return;
+        }
+        if (changed.length === 0) {
+            this.notifyBanner('info', 'notifReviewNoChanges');
+            return;
+        }
+        const pickedFile = await vscode.window.showQuickPick(
+            changed.map((f) => ({
+                label: f.path,
+                description: f.untracked
+                    ? ui('reviewFileNew')
+                    : f.binary
+                        ? ui('reviewFileBinary')
+                        : `+${f.added} \u2212${f.removed}`,
+                file: f,
+            })),
+            { placeHolder: ui('reviewFilesPlaceholder') }
+        );
+        if (!pickedFile) return;
+        const picked = pickedFile.file;
+        if (picked.binary) {
+            this.notifyBanner('info', 'notifReviewBinary', { file: picked.path });
+            return;
+        }
+        let before = '';
+        let after = '';
+        try {
+            if (picked.untracked) {
+                // A new file may be an image - never feed NUL bytes to the
+                // virtual-document diff. Binary detection reads only the head.
+                const buf = await fs.promises.readFile(path.join(root, picked.path));
+                if (buf.subarray(0, 8192).includes(0)) {
+                    this.notifyBanner('info', 'notifReviewBinary', { file: picked.path });
+                    return;
+                }
+                after = buf.toString('utf-8');
+            } else {
+                before = (await this._checkpoints.readCheckpointFile(root, sha, picked.path)) ?? '';
+                after = await fs.promises.readFile(path.join(root, picked.path), 'utf-8');
+            }
+        } catch {
+            // A file deleted since the checkpoint keeps its old side only.
+            after = after || '';
+        }
+        if (Math.max(before.length, after.length) > REVIEW_MAX_CHARS) {
+            this.notifyBanner('info', 'notifReviewTooLarge', { file: picked.path });
+            return;
+        }
+        if (before === after) {
+            this.notifyBanner('info', 'notifReviewNoHunks', { file: picked.path });
+            return;
+        }
+        const hunks = hunkSummaries(before, after);
+        if (hunks && hunks.length > 0) {
+            const pickedHunk = await vscode.window.showQuickPick(
+                hunks.map((h) => ({
+                    label: `+${h.newStart} (+${h.added} \u2212${h.removed})`,
+                    description: `@@ +${h.newStart},${h.newCount}`,
+                    detail: h.sample,
+                    hunk: h,
+                })),
+                { placeHolder: ui('reviewHunksPlaceholder') }
+            );
+            if (!pickedHunk) return;
+            const h = pickedHunk.hunk;
+            const end = Math.max(h.newStart, h.newStart + Math.max(h.newCount, 1) - 1);
+            openEditDiff(this._virtualDocuments, picked.path, before, after, [h.newStart - 1, end - 1]);
+            return;
+        }
+        // No hunk list: either the LCS budget refused (hunks === null) or the
+        // sides differ in a way grouping could not express - show the file.
+        if (!openEditDiff(this._virtualDocuments, picked.path, before, after)) {
+            this.notifyBanner('info', 'notifReviewNoHunks', { file: picked.path });
         }
     }
 
@@ -6039,6 +6166,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('xratu.agentFiles', async () => {
             await provider.manageAgentFiles();
+        }),
+        vscode.commands.registerCommand('xratu.reviewChanges', () => {
+            void provider.reviewChangesFlow();
         }),
         vscode.commands.registerCommand('xratu.restoreCheckpoint', async () => {
             await provider.ensureView();

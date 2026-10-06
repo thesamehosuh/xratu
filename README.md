@@ -37,7 +37,9 @@ runtime. Everything runs inside the extension host, on your machine.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
 - **Checkpoints** - shadow-git snapshots before sends and edits, restorable
-  anytime. Your real git repo is never touched.
+  anytime, with hunk-level review: pick a checkpoint, pick a file, pick a
+  hunk, and the native side-by-side diff opens right on it. Your real git
+  repo is never touched.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
   Cline-compatible files-based config.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)

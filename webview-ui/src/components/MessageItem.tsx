@@ -13,6 +13,7 @@ import {
     Copy,
     CornerDownRight,
     ExternalLink,
+    FileDiff,
     GripVertical,
     HelpCircle,
     History,
@@ -2155,7 +2156,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2208,6 +2209,8 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
     // restored sessions may not) and nothing is running.
     const showRestoreBtn =
         showUserFooter && !busy && userIndex !== undefined && !!message.cp && !!onRestoreCheckpoint;
+    const showReviewBtn =
+        showUserFooter && !busy && !!message.cp && !!onReviewChanges;
 
     const copyAnswer = async () => {
         try {
@@ -2437,6 +2440,17 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                             <History size={13} />
                         </button>
                     )}
+                    {showReviewBtn && (
+                        <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => onReviewChanges?.(message.cp!)}
+                            aria-label={t('reviewChanges')}
+                            title={t('reviewChangesHint')}
+                        >
+                            <FileDiff size={13} />
+                        </button>
+                    )}
                     <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>
                         {formatMessageTimestamp(message.createdAt)}
                     </span>
@@ -2460,6 +2474,9 @@ interface MessageItemProps {
     /** Restore workspace files to this turn's shadow checkpoint (the host
      *  confirms the scope: files only, or files + rewind the conversation). */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
+    /** Hunk-level review of everything changed since this turn's checkpoint
+     *  (the host picks the file and the hunk, then opens the native diff). */
+    onReviewChanges?: (sha: string) => void;
     /** Open the native diff editor for a completed edit step (or group). */
     onOpenDiff?: OpenDiffHandler;
     /** Release the turn while a running terminal command keeps going. */
@@ -2496,6 +2513,7 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.onRegenerate === b.onRegenerate &&
     a.onEditMessage === b.onEditMessage &&
     a.onRestoreCheckpoint === b.onRestoreCheckpoint &&
+    a.onReviewChanges === b.onReviewChanges &&
     a.onOpenDiff === b.onOpenDiff &&
     a.onBackgroundTerminal === b.onBackgroundTerminal &&
     a.onKillBackground === b.onKillBackground &&

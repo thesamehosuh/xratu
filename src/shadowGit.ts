@@ -40,6 +40,19 @@ export interface RestoreResult {
     safety: string;
 }
 
+/** One file changed between a checkpoint and the current working tree. */
+export interface ChangedFile {
+    /** Workspace-relative path in git form (`/` separators). */
+    path: string;
+    /** Lines added (0 for untracked files - counting would read them all). */
+    added: number;
+    removed: number;
+    /** Created after the checkpoint - untracked in the shadow index. */
+    untracked: boolean;
+    /** git reported the file as binary (numstat prints `-` for both counts). */
+    binary: boolean;
+}
+
 /** Thrown by restoreCheckpoint when the target is the initial empty seed
  *  commit. Distinguishable so flows that "just want to rewind" (edit-resend)
  *  can continue silently while explicit restore flows keep surfacing it. */
@@ -441,5 +454,66 @@ export class ShadowCheckpointStore {
             const [hash, date, subject] = line.split('|');
             return `${hash} | ${date} | ${subject}`;
         }).join('\n');
+    }
+
+    /** One file the workspace changed between `fromSha` and the CURRENT
+     *  working tree (the hunk-review surface reads this). Read-only - but
+     *  serialized with snapshot/restore so it never samples a half-restored
+     *  tree. */
+    async diffCheckpoint(workspaceRoot: string, fromSha: string): Promise<ChangedFile[]> {
+        return this._serialized(async () => {
+            await this.ensureRepo(workspaceRoot);
+            const numstat = await this.gitAsync(
+                [...this.repoConfigArgs(), 'diff', '--numstat', '--no-renames', fromSha, '--'],
+                workspaceRoot
+            );
+            if (numstat.code !== 0) {
+                throw new Error(numstat.stderr.trim() || `git diff exited ${numstat.code}`);
+            }
+            const files = new Map<string, ChangedFile>();
+            for (const line of numstat.stdout.split('\n')) {
+                if (!line.trim()) continue;
+                const cols = line.split('\t');
+                if (cols.length < 3) continue;
+                const [a, r] = cols;
+                const rel = cols.slice(2).join('\t');
+                if (!rel) continue;
+                files.set(rel, {
+                    path: rel,
+                    added: a === '-' ? 0 : Number(a) || 0,
+                    removed: r === '-' ? 0 : Number(r) || 0,
+                    untracked: false,
+                    // git prints `-` for both counts only for BINARY files.
+                    binary: a === '-' && r === '-',
+                });
+            }
+            // Files CREATED after the checkpoint are untracked in the shadow
+            // index and invisible to `git diff` - the same blind spot that
+            // once made restore silently no-op (see restoreCheckpoint).
+            const others = await this.gitAsync(
+                [...this.repoConfigArgs(), 'ls-files', '--others', '--exclude-standard'],
+                workspaceRoot
+            );
+            if (others.code === 0) {
+                for (const rel of others.stdout.split('\n')) {
+                    if (rel && !files.has(rel)) {
+                        files.set(rel, { path: rel, added: 0, removed: 0, untracked: true, binary: false });
+                    }
+                }
+            }
+            return [...files.values()].sort((x, y) => x.path.localeCompare(y.path));
+        });
+    }
+
+    /** Content of `filePath` as of checkpoint `sha` (null when the file did
+     *  not exist there - the review flow treats that as an empty side). */
+    async readCheckpointFile(workspaceRoot: string, sha: string, filePath: string): Promise<string | null> {
+        const result = await this.gitAsync(
+            [...this.repoConfigArgs(), 'show', `${sha}:${filePath}`],
+            workspaceRoot,
+            30000,
+        );
+        if (result.code !== 0) return null;
+        return result.stdout;
     }
 }
