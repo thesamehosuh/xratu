@@ -275,10 +275,21 @@
     "test:prompt-cache-prefix": "node test/test-prompt-cache-prefix.mjs",
     "test:compaction-policy": "node test/test-compaction-policy.mjs",
     "test:transcript-prefs": "node test/test-transcript-prefs.mjs",
+    "test:dev-webview": "node test/test-dev-webview.mjs",
+    "test:protocol-drift": "node test/test-protocol-drift.mjs",
+    "test:agent-events": "node test/test-agent-events.mjs",
     "package": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && node esbuild.js --production && vite build --mode production",
     "package-vsix": "npx vsce package --no-dependencies",
     "compile-tests": "tsc -p . --outDir out",
-    "watch-tests": "tsc -p . -w --outDir out"
+    "watch-tests": "tsc -p . -w --outDir out",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs}": [
+      "eslint"
+    ]
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
@@ -292,9 +303,15 @@
     "@vitejs/plugin-react": "^4.3.4",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.4.5",
+    "typescript-eslint": "^8.71.1",
     "vite": "^5.4.11",
     "vite-plugin-singlefile": "^2.0.3"
   },

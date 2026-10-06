@@ -14,7 +14,6 @@
 import * as crypto from 'crypto';
 import {
     runLocalAgent,
-    type LocalAgentMessage,
     type LocalAgentRequest,
     type LocalApprovalGate,
     type LocalToolDefinition,

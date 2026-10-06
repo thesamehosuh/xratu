@@ -9,7 +9,7 @@
 
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { MessageItem, TASK_LIST_TOOL, parseTaskListStep } from '../src/components/MessageItem';
+import { MessageItem, parseTaskListStep } from '../src/components/MessageItem';
 import type { ChatMessage } from '../src/types';
 
 let pass = 0;

@@ -631,7 +631,7 @@ function bodyCell(row: Row, c: Copy): string {
     return '';
 }
 
-function rowHtml(row: Row, c: Copy, open: boolean, dir: Direction): string {
+function rowHtml(row: Row, c: Copy, open: boolean, _dir: Direction): string {
     const file = row.diff?.file ?? '';
     const label = file || row.label;
     const caret = ICON.caret;

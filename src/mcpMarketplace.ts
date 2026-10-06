@@ -150,15 +150,6 @@ function asStringArray(value: unknown): string[] {
     return value.filter((v): v is string => typeof v === 'string');
 }
 
-function asFiniteNumber(value: unknown): number | undefined {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string' && value.trim() !== '') {
-        const n = Number(value);
-        if (Number.isFinite(n)) return n;
-    }
-    return undefined;
-}
-
 /** Keep only http(s) URLs - a catalog must not push `javascript:`/`file:`
  *  links into the UI. */
 export function safeHttpUrl(value: unknown): string | undefined {

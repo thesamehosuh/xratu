@@ -224,6 +224,14 @@ export function captureIdentityAsync(
         let stderr = '';
         // Generous: a one-shot probe behind a cold PowerShell start, and giving
         // up early just leaves the job permanently unverified.
+        //
+        // R1 (AGENTS.md) bans a bare `child.kill()` because killing only the
+        // direct child ORPHANS A USER'S process tree. This is not that case:
+        // a fixed, non-shell PowerShell probe we spawned ourselves for a
+        // read-only query, with no job registry entry and no descendants worth
+        // sweeping - so killing the direct handle is correct and killTree()
+        // would be noise.
+        // eslint-disable-next-line no-restricted-syntax
         const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 20_000);
         child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
         child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });

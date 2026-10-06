@@ -22,6 +22,11 @@ import {
     type JobEvent,
 } from './tooling/backgroundJobs';
 import { BackgroundJobStore } from './tooling/backgroundJobStore';
+import {
+    buildDevWebviewHtml,
+    createRecordedPostMessage,
+    parseDevWebviewUrl,
+} from './devWebview';
 
 /**
  * A tool image in the shape the WEBVIEW wants: a `data:` URL, so the row can
@@ -58,7 +63,7 @@ import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics } from 
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
-import type { LocalToolExecutor, LocalToolImage } from './local/localAgent';
+import type { LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
 import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
@@ -651,6 +656,14 @@ configureMarkdownRenderer(md.renderer, false);
 // not replace code-block structure when the final highlighted response arrives.
 const mdLive = new MarkdownIt({ html: false, linkify: true, breaks: true });
 configureMarkdownRenderer(mdLive.renderer, true);
+
+/**
+ * Which webviews are already wrapped for `XRATU_WEBVIEW_LOG` recording.
+ * `resolveWebviewView` runs again on every webview re-init and can hand back
+ * the SAME Webview object - wrapping twice would double every line in the
+ * tape and make a replay drift out of step with the real session.
+ */
+const recordedWebviews = new WeakSet<object>();
 
 function getNonce(): string {
     const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -4356,7 +4369,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -4373,6 +4386,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
         // waits forever, holding its controller slot.
         this._rejectPendingLocalApprovals();
         this._rejectPendingLocalDecisions();
+
+        // DEV-ONLY: `XRATU_WEBVIEW_LOG=<path>` appends every host→webview
+        // envelope to a JSONL tape, so a session that misbehaved on screen can
+        // be replayed into a real browser later (test/e2e/replay.mjs) instead
+        // of being re-created by hand. Recording never blocks delivery:
+        // createRecordedPostMessage swallows fs errors and always forwards.
+        const tapePath = process.env.XRATU_WEBVIEW_LOG?.trim();
+        if (tapePath && !recordedWebviews.has(webviewView.webview)) {
+            try {
+                const fd = fs.openSync(tapePath, 'a');
+                recordedWebviews.add(webviewView.webview);
+                webviewView.webview.postMessage = createRecordedPostMessage(
+                    webviewView.webview.postMessage.bind(webviewView.webview),
+                    (line: string) => { fs.writeSync(fd, line); },
+                );
+            } catch (err) {
+                console.error('xratu: XRATU_WEBVIEW_LOG unusable, messages will not be recorded:', err);
+            }
+        }
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -6306,7 +6338,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     size: stat.size,
                     dataBase64: Buffer.from(bytes).toString('base64'),
                 });
-            } catch (e) {
+            } catch {
                 error = { key: 'attachReadError', params: { name } };
             }
         }
@@ -7002,7 +7034,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private async _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove = false, _retryCount = 0): Promise<void> {
         if (_retryCount > 1) return;
-        const epoch = this._sessionEpoch;
         const approvals = this._approvalCloseItems[approvalId] ?? [];
 
         const approvalsMap: Record<string, boolean> = {};
@@ -7154,6 +7185,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
     private _getHtmlForWebview(webview: vscode.Webview) {
         const nonce = getNonce();
         const cspSource = webview.cspSource;
+
+        // DEV-LOOP ESCAPE HATCH. `XRATU_DEV_WEBVIEW_URL` pointing at a running
+        // Vite dev server serves the app from the dev server instead of the
+        // built bundle, so React/CSS edits hot-reload instead of costing an
+        // esbuild+vite rebuild plus a webview reload. Off by default, and read
+        // from the environment rather than contributed as a setting so it can
+        // never appear in Settings UI (and needs no package.nls pair).
+        const devUrl = parseDevWebviewUrl(process.env.XRATU_DEV_WEBVIEW_URL);
+        if (devUrl) {
+            try {
+                const sourceHtml = fs.readFileSync(
+                    path.join(this._extensionUri.fsPath, 'webview-ui', 'index.html'),
+                    'utf-8',
+                );
+                const uiLocale = this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa';
+                const devHtml = buildDevWebviewHtml({ sourceHtml, devUrl, locale: uiLocale, nonce });
+                if (devHtml) return devHtml;
+                console.error('xratu: XRATU_DEV_WEBVIEW_URL set but webview-ui/index.html has no /src/main.tsx entry - using the built bundle');
+            } catch (err) {
+                console.error('xratu: dev webview unavailable, using the built bundle:', err);
+            }
+        }
 
         // The React webview is built by Vite into a single self-contained
         // index.html (JS + CSS inlined).  We inject a strict CSP with a

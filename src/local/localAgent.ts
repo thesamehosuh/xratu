@@ -3073,7 +3073,6 @@ function clipToolContent(content: LocalAgentMessage['content'], allowance: numbe
 // truncation marker. Failure degrades to the plain marker - never to a lost
 // turn without at least the mechanical trim.
 
-const SUMMARY_MAX_MSG_CHARS = 4000;
 const SUMMARY_MAX_TOTAL_CHARS = 60_000;
 const SUMMARY_TIMEOUT_MS = 60_000;
 /** Tool results are hard-capped per line regardless of the per-message

@@ -34,7 +34,6 @@ import {
     boundCarriers,
     clipHistoryContent,
     clipJsonValue,
-    type CarrierRow,
 } from './historyBounds';
 import { TOOL_RESULT_ELISION_MARKER } from './localAgent';
 

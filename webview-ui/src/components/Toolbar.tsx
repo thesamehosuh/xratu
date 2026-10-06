@@ -63,7 +63,7 @@ const GROUP_ORDER: Array<'today' | 'yesterday' | 'week' | 'older'> = ['today', '
 const GROUP_KEYS = { today: 'sessionsToday', yesterday: 'sessionsYesterday', week: 'sessionsLastWeek', older: 'sessionsOlder' } as const;
 
 export function Toolbar({
-    conn, yolo, plan,
+    conn: _conn, yolo, plan,
     sessionTitle, sessionsOpen, sessions, sessionsLoading, currentSessionId, sessionsScope,
     sessionQuery, searchResults, onSessionQuery,
     onNewSession, onToggleSessions, onSessionsScope, onOpenSession, onRenameSession, onDeleteSession,

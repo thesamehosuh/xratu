@@ -349,7 +349,7 @@ export function InputBar({
     onOpenUsage,
     contextWindow,
     defaultContextWindow,
-    planMode,
+    planMode: _planMode,
     modelVisionCapable,
     restoreDraft,
     onRestoreApplied,

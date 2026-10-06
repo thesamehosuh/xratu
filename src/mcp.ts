@@ -9,7 +9,6 @@ import {
     terminalToolDescription,
     terminalCommandParamDescription,
 } from './tooling/shellPlatform';
-import { ShadowCheckpointStore } from './shadowGit';
 import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
 import { executeWebTool } from './webTools';
 import {
@@ -21,7 +20,6 @@ import {
 import {
     DEFAULT_LOG_LINES,
     DEFAULT_WAIT_MS,
-    MAX_READBACK_CHARS,
     MAX_WAIT_MS,
     awaitTerminalJob,
     describeBackgroundHandoff,
@@ -546,7 +544,7 @@ export function getLocalToolDefinitions(opts?: {
         requiresApproval: false,
     }));
     const external = (opts?.external ?? [])
-        .filter((tool) => !plan)
+        .filter((_tool) => !plan)
         .map((tool) => ({
             name: tool.name,
             description: tool.description,

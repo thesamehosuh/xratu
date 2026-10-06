@@ -79,6 +79,7 @@ Rules that exist because their absence was a real failure mode:
 ## Verification — run before claiming done
 
 ```bash
+npm run lint
 node_modules/.bin/tsc --noEmit -p tsconfig.json
 npx tsc --noEmit -p webview-ui/tsconfig.json   # SEPARATE project — host tsc does NOT cover it
 node esbuild.js
@@ -89,8 +90,40 @@ CI runs exactly these on ubuntu, windows and macos, plus the host-side test
 suites. Skipping the webview tsc step is the classic CI-only failure — never
 skip it.
 
+`npm run lint` is `eslint.config.mjs`, which encodes the Non-negotiable rules
+below as AST rules (R1 killTree, R2 cross-spawn, R3 `dir`, R4 logical props).
+It must be GREEN on a clean tree — it reports 0 errors and a handful of
+`warn`s that are known, documented debt. Do not turn an R* rule down to make
+the lint pass; fix the code, or amend the rule's justification comment in
+`eslint.config.mjs`. A pre-commit hook runs eslint on staged files only.
+
 For packaging: `npm run package-vsix`. For interactive development:
 `npm run compile` + F5 via `.vscode/launch.json`.
+
+### Dev loop — hot reload and session replay
+
+Two ENVIRONMENT-DRIVEN escape hatches (`src/devWebview.ts`, covered by
+`test:dev-webview`). They are deliberately not contributed as settings: they
+are developer-only, a setting would need a `package.nls` pair in both
+locales, and an env var can only ever be on for someone who exported it
+themselves.
+
+- `XRATU_DEV_WEBVIEW_URL=http://localhost:5173` (with `npx vite` running)
+  serves the app from the Vite dev server instead of the built bundle, so
+  React/CSS edits hot-reload instead of costing an esbuild+vite rebuild plus
+  a webview reload. The value is interpolated into a CSP and into script
+  `src`, so it is validated to http(s) only. Invalid URL or missing
+  `webview-ui/index.html` falls back to the built bundle — never a blank page.
+- `XRATU_WEBVIEW_LOG=/path/tape.jsonl` appends every host→webview envelope
+  to a JSONL tape. Replay it into a real browser afterwards — no VS Code, no
+  credentials, no tokens spent:
+
+  ```bash
+  node test/e2e/replay.mjs /tmp/tape.jsonl --shot after.png --dump-out out.jsonl
+  ```
+
+  `--dump-out` records what the WEBVIEW sent back, so a passing run and a
+  broken run can be diffed to find the first divergent message.
 
 Host-side pure logic (path guards, parsers, protocol shapes) goes in
 testable modules with node test suites — precedent: `test/test-endpoint-guard.mjs`
@@ -158,6 +191,11 @@ browser and LOOK at it:
    `scrollHeight > clientHeight`).
 
 ## Non-negotiable rules
+
+Some of these are enforced by `npm run lint` (see `eslint.config.mjs`), which
+is exactly why they are numbered R1-R4 there: R1 `killTree`, R2 `cross-spawn`
+/ no shell strings, R3 `dir`, R4 logical CSS props. The rest — secrets, shadow
+git, SSRF, plan-mode tool gating, Windows paths — are review-only.
 
 - **WINDOWS-FIRST — consider Windows compatibility in EVERY change.** This is
   a Windows-first product; POSIX-only assumptions are bugs even if they

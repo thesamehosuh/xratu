@@ -36,3 +36,8 @@ npm-debug.log*
 .kilo/
 .playwright-mcp/
 kilo.json
+
+# husky's generated hook shims. `.husky/pre-commit` IS committed (it is the
+# actual rule); `_` is rewritten from the installed husky on every install by
+# the `prepare` script, so committing it only churns on husky upgrades.
+.husky/_/

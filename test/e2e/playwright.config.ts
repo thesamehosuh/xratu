@@ -1,4 +1,4 @@
-import { defineConfig, chromium } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -43,14 +43,20 @@ function localChromiumExecutable(): string | undefined {
 
 export default defineConfig({
     testDir: __dirname,
-    // `screenshots.spec.ts`, `approval-prototypes.spec.ts` and
-    // `approval-shots.spec.ts` are manual review harnesses, not gates: they
-    // only write PNGs of the states a human needs to look at. Running them in
-    // CI would produce screenshot artifacts nobody reads while still reporting
-    // green. Opt in with XRATU_SCREENSHOTS=1.
+    // `approval-prototypes.spec.ts` and `approval-shots.spec.ts` are manual
+    // review harnesses, not gates: they only write PNGs of the states a human
+    // needs to look at. Running them in CI would produce screenshot artifacts
+    // nobody reads while still reporting green. Opt in with
+    // XRATU_SCREENSHOTS=1.
+    //
+    // `screenshots.spec.ts` is NOT ignored any more: it carries the theme
+    // contract (the CI gate for webview-ui/src/styles/theme.css) - computed
+    // styles rather than pixels, because committed PNG baselines turned out to
+    // be machine-specific. Its own manual half skips itself unless
+    // XRATU_SCREENSHOTS is set.
     testIgnore: process.env.XRATU_SCREENSHOTS
         ? []
-        : ['**/screenshots.spec.ts', '**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
+        : ['**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
     // The webview mounts once per page load; parallel workers each get their
     // own browser context, so workers are safe - but keep the run small.
     fullyParallel: true,

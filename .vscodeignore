@@ -28,6 +28,14 @@ test/
 .playwright-mcp/
 kilo.json
 
+# Lint/format/commit-hook tooling. Contributor-only: none of it is loaded by
+# the extension host, and shipping it just grows the VSIX and the surface
+# test-vsix-contents.mjs has to keep pinned.
+eslint.config.mjs
+.editorconfig
+.gitattributes
+.husky/
+
 # tsc output for the node test suites. The extension runs from the esbuild
 # bundle (dist/extension.js - see "main"), so out/ is never needed at runtime.
 out/
