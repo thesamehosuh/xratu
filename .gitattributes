@@ -1,7 +1,0 @@
-# Playwright screenshot baselines are BINARY. `binary` expands to
-# -diff -merge -text, so git never tries a textual (or eol-mangled) diff of a
-# ~45KB PNG: `git diff` reports "Binary files differ" and the rendered PNG diff
-# in the PR's Files tab stays THE review artifact for a visual change - which
-# is the whole point of committing these files. Without this a stray
-# `core.autocrlf` / `.gitattributes` normalization could also corrupt them.
-/test/e2e/*.spec.ts-snapshots/*.png binary

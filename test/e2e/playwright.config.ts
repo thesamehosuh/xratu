@@ -49,9 +49,11 @@ export default defineConfig({
     // nobody reads while still reporting green. Opt in with
     // XRATU_SCREENSHOTS=1.
     //
-    // `screenshots.spec.ts` is NOT ignored any more: it carries the committed
-    // visual baselines (the CI gate for webview-ui/src/styles/theme.css). Its
-    // own manual half skips itself unless XRATU_SCREENSHOTS is set.
+    // `screenshots.spec.ts` is NOT ignored any more: it carries the theme
+    // contract (the CI gate for webview-ui/src/styles/theme.css) - computed
+    // styles rather than pixels, because committed PNG baselines turned out to
+    // be machine-specific. Its own manual half skips itself unless
+    // XRATU_SCREENSHOTS is set.
     testIgnore: process.env.XRATU_SCREENSHOTS
         ? []
         : ['**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
@@ -72,16 +74,6 @@ export default defineConfig({
             const executablePath = localChromiumExecutable();
             return executablePath ? { launchOptions: { executablePath } } : {};
         })(),
-    },
-    // Every screenshot comparison in this project is a visual-regression GATE, so
-    // the defaults must not depend on when the frame was captured:
-    // `animations: 'disabled'` fast-forwards finite animations and cancels
-    // infinite ones (the scanning spinner) to a fixed frame - a baseline baked
-    // from a mid-transition frame is flaky by construction. `caret: 'hide'`
-    // drops the blinking text caret, and `scale: 'css'` compares in CSS pixels
-    // so a devicePixelRatio change cannot fail every baseline at once.
-    expect: {
-        toHaveScreenshot: { animations: 'disabled', caret: 'hide', scale: 'css' },
     },
     webServer: {
         command: `node ${join('serve.mjs')} "${WEBVIEW_DIST}" ${PORT}`,

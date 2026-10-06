@@ -10,30 +10,25 @@
  *      npm run build:webview
  *      XRATU_SCREENSHOTS=1 npx playwright test -c test/e2e/playwright.config.ts screenshots.spec.ts
  *
- * 2. "committed visual baselines" (THE CI GATE, default) - the same ritual
- *    automated. `webview-ui/src/styles/theme.css` is the second most-edited file
- *    in this repo and had ZERO automated visual coverage, so a colour, spacing
- *    or RTL regression shipped on a green build. Every screen below is compared
- *    against a committed PNG in test/e2e/screenshots.spec.ts-snapshots/ and a
- *    mismatch fails CI with a diff image.
+ * 2. "theme contract" (THE CI GATE, default) - the automated form of AGENTS.md's
+ *    "screenshot the real UI before/after visual work" ritual, but asserting
+ *    COMPUTED STYLES rather than pixels. `webview-ui/src/styles/theme.css` is
+ *    the second most-edited file in this repo and had zero automated coverage,
+ *    so a colour or RTL regression could ship on a green build.
  *
- *    Regenerate (LINUX ONLY - see the platform gate below):
- *      npm run build:webview
- *      npx playwright test -c test/e2e/playwright.config.ts --update-snapshots
+ *    WHY NOT COMMITTED PNG BASELINES: they were tried first and every one of
+ *    the 32 failed on the ubuntu runner. A screenshot baseline is only
+ *    comparable against the exact image that produced it - Latin text resolves
+ *    to `system-ui`, which is a DIFFERENT FONT on a dev laptop and on
+ *    github's runner, and `platform === 'linux'` is not a fix because Linux
+ *    distros differ from each other too. Tolerating the delta with a pixel
+ *    threshold does not work either: a real accent-colour change moves well
+ *    under the threshold needed to absorb the font difference, so the gate
+ *    would go green exactly when it mattered.
  *
- *    A regeneration is a REVIEW ARTIFACT, not a chore: the PNG diff in the PR is
- *    the only evidence that a theme change was intended. `--update-snapshots`
- *    blindly rewrites every baseline it re-runs, so a careless regen silently
- *    rubber-stamps whatever is on screen - including a real regression that
- *    happened to be committed alongside its own fix. Never regen without reading
- *    the resulting PNG diff, and never regen on Windows or macOS (their
- *    rasterization differs, so the result is a baseline no Linux run can match).
- *
- * WHY THE BASELINES ARE LINUX-ONLY: font rasterization, subpixel antialiasing
- * and scrollbar rendering differ per OS, so a PNG generated on Linux does not
- * match Windows or macOS (the same reason every screenshot-diff service pins a
- * container image). The COMPARISON is therefore skipped off Linux; nothing else
- * in the e2e suite is, so all three CI legs keep running every other assertion.
+ *    Colors, direction and layout ARE machine-independent, so that is what is
+ *    pinned here: brand token values, the locale-driven root direction,
+ *    non-transparent surfaces, and the subject fitting its viewport.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
@@ -60,7 +55,7 @@ async function host(page: Page, message: Record<string, unknown>): Promise<void>
 }
 
 /* ===========================================================================
- * Committed visual baselines - the automated form of AGENTS.md's
+ * Theme contract - the automated form of AGENTS.md's
  * "screenshot the real UI before/after visual work" ritual.
  * ========================================================================= */
 
@@ -295,13 +290,13 @@ async function freezeClock(page: Page): Promise<void> {
 
 /**
  * Vazirmatn is declared `font-display: swap`, so the first paint of any Persian
- * string uses an OS fallback face. That difference is easy to miss in review
- * and permanent once baked: force the bundled webfont to load, wait for the
- * FontFaceSet to settle, then ASSERT it resolved - a silently swapped typeface
- * must fail the run, not freeze into the baseline.
+ * string uses an OS fallback face. That difference is easy to miss in review.
+ * Forcing the bundled webfont to load and ASSERTING it resolved means a
+ * silently swapped typeface fails the run.
  *
- * The Latin side is NOT pinned here (it resolves to the machine's `system-ui`),
- * which is exactly why the comparison is Linux-only - see the file header.
+ * The Latin side is deliberately NOT pinned (it resolves to `system-ui`), which
+ * is exactly why this suite asserts styles rather than pixels - a pixel
+ * comparison would depend on a font this repo does not ship.
  */
 async function freezeFonts(page: Page): Promise<void> {
     const loaded = await page.evaluate(async () => {
@@ -309,7 +304,7 @@ async function freezeFonts(page: Page): Promise<void> {
         await document.fonts.ready;
         return document.fonts.status === 'loaded' && document.fonts.check('400 14px Vazirmatn', 'سلام');
     });
-    expect(loaded, 'the bundled Vazirmatn webfont must be resolved before a baseline is captured').toBe(true);
+    expect(loaded, 'the bundled Vazirmatn webfont must be resolved before the contract is checked').toBe(true);
 }
 
 /** Shiki highlighting is async (`useHighlightedCode`). A baseline captured
@@ -338,23 +333,6 @@ async function expectNotClipped(subject: Locator): Promise<void> {
         return null;
     });
     expect(clipper, 'the captured subject is cut off by an overflow:hidden ancestor').toBeNull();
-}
-
-/**
- * Capture one baseline. VIEWPORT shots only, never `fullPage` (see the CAVEAT
- * above) and no `element.screenshot()` for a subject taller than the viewport -
- * both stitch, and a stitched image reads as a layout bug that is not there.
- */
-async function captureBaseline(page: Page, subject: Locator, name: string): Promise<void> {
-    await expect(subject).toBeVisible();
-    const box = await subject.boundingBox();
-    // Nudge only a subject that FITS. Scrolling an oversized one lands on an
-    // arbitrary scrollTop, and a baseline taken from an arbitrary offset is
-    // unreviewable - the tall sub-pages stay at their natural top instead.
-    if (box && box.height <= BASELINE_HEIGHT - 40) await subject.scrollIntoViewIfNeeded();
-    await expectNotClipped(subject);
-    await freezeFonts(page);
-    await expect(page).toHaveScreenshot(`${name}.png`);
 }
 
 /** Local discovery is kicked off on mount and holds its spinner for a ~1s
@@ -529,38 +507,65 @@ const SCREENS: { name: string; drive: (page: Page, locale: Locale) => Promise<Lo
     { name: 'proxy', drive: proxyScreen },
 ];
 
-test.describe('committed visual baselines', () => {
-    // The whole reason these baselines exist is theme.css churn, and the whole
-    // reason they are Linux-only is that Windows and macOS rasterize the same
-    // DOM differently. Only the COMPARISON is skipped there - every other spec
-    // in this suite still runs on all three legs.
-    test.skip(process.platform !== 'linux', 'committed screenshot baselines are Linux-only: font rasterization, antialiasing and scrollbar rendering differ per OS');
-    // The manual harness run below only exists to WRITE review PNGs; it must not
-    // also compare - a reviewer inspecting shots is not reviewing baselines.
-    test.skip(!!process.env.XRATU_SCREENSHOTS, 'XRATU_SCREENSHOTS=1 runs the manual harness only');
+/**
+ * Brand tokens are asserted BY VALUE on purpose.
+ *
+ * theme.css is the most-churned file in the repo, so a token edit has to be a
+ * deliberate, reviewed diff: changing a line here is the cost of changing the
+ * theme, and that is the point. The alternative - asserting only that a token
+ * "is some colour" - would have passed while the accent was silently magenta.
+ */
+const BRAND_TOKENS: ReadonlyArray<readonly [string, string]> = [
+    ['--xratu-accent', '#14e3c8'],
+    ['--xratu-accent-strong', '#2af0d6'],
+];
+
+test.describe('theme contract', () => {
     test.describe.configure({ timeout: 60_000 });
     // `timezoneId` is a determinism pin, not a preference: bubble timestamps and
-    // the usage axis render in LOCAL time, so a baseline generated in Tehran
-    // could never match one generated in CI's UTC. Scoped to this describe - a
-    // global switch would also move the existing specs' relative-time grouping.
+    // the usage axis render in LOCAL time, so a run in Tehran and a run in CI's
+    // UTC must not disagree about what is on screen.
     test.use({ timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce' });
 
     for (const { name, drive } of SCREENS) {
         for (const locale of LOCALES) {
             for (const [widthLabel, width] of WIDTHS) {
                 test(`${name} ${locale} ${widthLabel}`, async ({ page }) => {
-                    // `reducedMotion: 'reduce'` (above, via test.use) makes
-                    // theme.css's global block collapse every entrance to 0.01ms,
-                    // so a frame can never be captured mid-transition. The
-                    // standalone page still has NO VS Code theme, so the real
-                    // tokens go in FIRST - and before goto, or every surface
-                    // renders transparent while looking plausible.
                     await freezeClock(page);
+                    // The standalone page has NO VS Code theme, so the real
+                    // tokens go in FIRST - and before goto, or every surface
+                    // renders transparent while still looking plausible.
                     await installVscodeTheme(page);
                     await page.setViewportSize({ width, height: BASELINE_HEIGHT });
                     await page.goto('/');
                     const subject = await drive(page, locale);
-                    await captureBaseline(page, subject, `${name}-${locale}-${widthLabel}`);
+                    await expect(subject).toBeVisible();
+                    await expectNotClipped(subject);
+                    await freezeFonts(page);
+
+                    // R3: direction is locale-driven on the root, never
+                    // hardcoded on an inner component.
+                    await expect(page.locator('.app'), 'root direction follows the locale')
+                        .toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
+
+                    for (const [token, expected] of BRAND_TOKENS) {
+                        const actual = await page.evaluate(
+                            (t) => getComputedStyle(document.documentElement).getPropertyValue(t).trim(),
+                            token,
+                        );
+                        expect(actual, `document token ${token}`).toBe(expected);
+                    }
+
+                    // Layout: the subject must fit its viewport horizontally.
+                    // Pixel-independent, and the classic sidebar-width
+                    // regression (a 900px-fixed panel breaking at 420px).
+                    const box = await subject.boundingBox();
+                    expect(box, 'the subject has a box').toBeTruthy();
+                    if (box) {
+                        expect(box.x, `${name} starts inside the viewport`).toBeGreaterThanOrEqual(-1);
+                        expect(box.x + box.width, `${name} ends inside the viewport`)
+                            .toBeLessThanOrEqual(width + 1);
+                    }
                 });
             }
         }
