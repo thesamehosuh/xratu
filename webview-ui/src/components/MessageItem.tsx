@@ -4,50 +4,33 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type React
  *  the real webview is client-only). */
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 import {
-    Bot,
     Brain,
-    BookOpen,
     Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
     CircleDot,
-    Clock,
-    CodeXml,
     Copy,
     CornerDownRight,
-    Cpu,
     ExternalLink,
-    FilePen,
-    FileText,
-    FolderOpen,
-    FolderTree,
-    GitBranch,
     GripVertical,
     HelpCircle,
     History,
     Image as ImageIcon,
-    Globe,
     ListChecks,
     Minimize2,
-    Package,
-    PackagePlus,
     Paperclip,
     PencilLine,
     Plus,
     RefreshCw,
-    Search,
-    ShieldCheck,
-    SquareTerminal,
     Trash2,
     TriangleAlert,
-    Wrench,
     X,
 } from 'lucide-react';
 import type { ChatMessage, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { ApprovalCard } from './ApprovalCard';
 import { RenderedMarkdown } from './RenderedMarkdown';
-import { escapeHtml, extToLang, parseDiffLines } from '../diffText';
+import { escapeHtml, extToLang } from '../diffText';
 import { useHighlightedCode } from '../highlight';
 import { toolIcon, toolLabel } from '../toolMeta';
 import { getLocale, t, tf } from '../i18n';

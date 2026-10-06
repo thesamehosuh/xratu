@@ -9,7 +9,6 @@ import type {
     FromExtensionMessage,
     GitStatusSummary,
     InstallConfidence,
-    MarketplaceEntry,
     MarketplaceInstall,
     MarketplaceState,
     McpSaveTarget,
@@ -39,7 +38,7 @@ import { ProxyPage } from './components/ProxyPage';
 import { NotificationBanner } from './components/NotificationBanner';
 import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
-import { getLocale, setLocale, t, tf, tOrRaw } from './i18n';
+import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
 import { prefersReducedMotion } from './motion';
 import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';

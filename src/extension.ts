@@ -58,7 +58,7 @@ import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics } from 
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
 import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
-import type { LocalToolExecutor, LocalToolImage } from './local/localAgent';
+import type { LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
 import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
@@ -4356,7 +4356,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
+        _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
@@ -6306,7 +6306,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
                     size: stat.size,
                     dataBase64: Buffer.from(bytes).toString('base64'),
                 });
-            } catch (e) {
+            } catch {
                 error = { key: 'attachReadError', params: { name } };
             }
         }
@@ -7002,7 +7002,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider {
 
     private async _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove = false, _retryCount = 0): Promise<void> {
         if (_retryCount > 1) return;
-        const epoch = this._sessionEpoch;
         const approvals = this._approvalCloseItems[approvalId] ?? [];
 
         const approvalsMap: Record<string, boolean> = {};
