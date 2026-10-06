@@ -2,7 +2,7 @@
 /**
  * HTML Sanitizer Test Suite - OWASP XSS Cheat Sheet Vectors
  *
- * Tests the _sanitizeHtml() function from extension.ts against known XSS
+ * Tests the _sanitizeHtml() function from src/sanitizeHtml.ts against known XSS
  * attack vectors. Run:  node test/test-sanitizer.mjs
  *
  * The sanitizer uses an allowlist-based approach:
@@ -13,7 +13,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// Inline copy of the sanitizer logic from extension.ts (keep in sync)
+// Inline copy of the sanitizer logic from src/sanitizeHtml.ts (keep in sync)
 // ---------------------------------------------------------------------------
 
 function escapeHtml(str) {

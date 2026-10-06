@@ -105,3 +105,170 @@ function patchDiff(path: string, patchText: string): EditDiffPayload | null {
 function stripClips(text: string): string {
     return text.replace(CLIP_MARKERS, '');
 }
+
+// Cap for the approval diff's O(m·n) LCS table. 2000×2000 ≈ 4M cells; beyond
+// that the synchronous DP allocation (several GB at 20k×20k lines) would
+// freeze the extension host. Over-budget previews degrade to diff: null.
+export const MAX_DIFF_LCS_CELLS = 4_000_000;
+
+/** Apply <<<<<<< SEARCH / ======= / >>>>>>> REPLACE blocks in-memory so
+ *  approval cards show a real diff for apply_patch payloads. Returns
+ *  null when no block matches (the preview degrades gracefully). */
+export function applyMarkerPatch(content: string, patch: string): string | null {
+    // Shared parser, not a private copy of the regex: the approval card
+    // must preview exactly what apply_patch will do - including the
+    // dropped-final-closer repair - or the diff shown and the edit
+    // applied can disagree. A refusal (marker-like content inside a body)
+    // degrades to null; the preview is advisory, the tool reports.
+    let blocks: Array<{ search: string; replace: string }>;
+    try {
+        blocks = parsePatchBlocks(repairPatchMarkers(patch).patch);
+    } catch {
+        return null;
+    }
+    if (blocks.length === 0) return null;
+    let out = content;
+    for (const { search, replace } of blocks) {
+        if (out.split(search).length - 1 === 1) {
+            out = out.replace(search, () => replace);
+            continue;
+        }
+        const sLines = search.split('\n');
+        const cLines = out.split('\n');
+        let at = -1;
+        for (let i = 0; i <= cLines.length - sLines.length; i++) {
+            let match = true;
+            for (let j = 0; j < sLines.length; j++) {
+                if (cLines[i + j].trimEnd() !== sLines[j].trimEnd()) { match = false; break; }
+            }
+            if (match) { at = i; break; }
+        }
+        if (at < 0) return null;
+        cLines.splice(at, sLines.length, ...replace.split('\n'));
+        out = cLines.join('\n');
+    }
+    return out;
+}
+
+export function computeDiffHunks(oldContent: string, newContent: string): Array<{ oldStart: number; oldCount: number; newStart: number; newCount: number; removedLines: string[]; addedLines: string[] }> | null {
+    // Trim the shared prefix/suffix first: a small edit inside a huge
+    // file collapses to the changed region, keeping the LCS table tiny.
+    let oldLines = oldContent.split('\n');
+    let newLines = newContent.split('\n');
+    let trimmed = 0;
+    {
+        let prefix = 0;
+        while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++;
+        let suffix = 0;
+        while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix &&
+            oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix++;
+        if (prefix > 0 || suffix > 0) {
+            trimmed = prefix;
+            oldLines = oldLines.slice(prefix, oldLines.length - suffix);
+            newLines = newLines.slice(prefix, newLines.length - suffix);
+        }
+    }
+    const hunks: Array<{ oldStart: number; oldCount: number; newStart: number; newCount: number; removedLines: string[]; addedLines: string[] }> = [];
+
+    // Simple LCS-based diff
+    const m = oldLines.length;
+    const n = newLines.length;
+    if (m * n > MAX_DIFF_LCS_CELLS) {
+        return null;
+    }
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack to find diff regions
+    const changes: Array<{ type: 'keep' | 'remove' | 'add'; oldIdx: number; newIdx: number }> = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            changes.unshift({ type: 'keep', oldIdx: i - 1, newIdx: j - 1 });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            changes.unshift({ type: 'add', oldIdx: i, newIdx: j - 1 });
+            j--;
+        } else {
+            changes.unshift({ type: 'remove', oldIdx: i - 1, newIdx: j });
+            i--;
+        }
+    }
+
+    // Group consecutive changes into hunks (with 2 lines of context)
+    const contextLines = 2;
+    let hunkStart = 0;
+    while (hunkStart < changes.length) {
+        // Skip keep lines at the start
+        while (hunkStart < changes.length && changes[hunkStart].type === 'keep') {
+            hunkStart++;
+        }
+        if (hunkStart >= changes.length) break;
+
+        // Find the end of this change group (with context)
+        let hunkEnd = hunkStart;
+        let lastChangeIdx = hunkStart;
+        while (hunkEnd < changes.length) {
+            if (changes[hunkEnd].type !== 'keep') {
+                lastChangeIdx = hunkEnd;
+            }
+            // Stop if we've gone past the last change by contextLines
+            if (hunkEnd > lastChangeIdx + contextLines && hunkEnd < changes.length) {
+                // Check if there are more changes ahead
+                let hasMoreChanges = false;
+                for (let k = hunkEnd; k < changes.length; k++) {
+                    if (changes[k].type !== 'keep') { hasMoreChanges = true; break; }
+                }
+                if (!hasMoreChanges) break;
+                // Include context and start a new hunk
+                hunkEnd = Math.min(hunkEnd + contextLines, changes.length);
+                break;
+            }
+            hunkEnd++;
+        }
+
+        // Extract the hunk
+        const hunkChanges = changes.slice(hunkStart, hunkEnd);
+        const removedLines: string[] = [];
+        const addedLines: string[] = [];
+        let oldStart = -1;
+        let oldCount = 0;
+        let newStart = -1;
+        let newCount = 0;
+
+        for (const c of hunkChanges) {
+            if (c.type === 'remove') {
+                if (oldStart === -1) oldStart = c.oldIdx;
+                removedLines.push(oldLines[c.oldIdx]);
+                oldCount++;
+            } else if (c.type === 'add') {
+                if (newStart === -1) newStart = c.newIdx;
+                addedLines.push(newLines[c.newIdx]);
+                newCount++;
+            }
+        }
+
+        if (removedLines.length > 0 || addedLines.length > 0) {
+            hunks.push({
+                oldStart: oldStart + 1 + trimmed,
+                oldCount,
+                newStart: (newStart >= 0 ? newStart : oldStart) + 1 + trimmed,
+                newCount,
+                removedLines,
+                addedLines,
+            });
+        }
+
+        hunkStart = hunkEnd;
+    }
+
+    return hunks;
+}

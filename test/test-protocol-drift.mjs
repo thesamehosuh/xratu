@@ -56,17 +56,23 @@ function unionMembers(typesSource, name) {
  *
  * Scoped by INDENTATION, not by brace counting: string literals inside case
  * bodies routinely contain unbalanced braces, so a naive counter walks out of
- * the switch and swallows later, unrelated `case` statements. The switch sits
- * at 20 spaces, its cases at 24, and its closing brace back at 20.
+ * the switch and swallows later, unrelated `case` statements. The switch's
+ * own indentation is the base; its cases sit 4 deeper and its closing brace
+ * returns to the base (the router moved to src/webviewRouter.ts, so nothing
+ * is hard-coded to one nesting level).
  */
 function hostHandledTypes(source) {
     const switchLine = source.indexOf('switch (data.type)');
-    if (switchLine < 0) throw new Error('host message switch not found - extension.ts changed shape?');
-    const lines = source.slice(switchLine).split('\n');
+    if (switchLine < 0) throw new Error('host message switch not found - webviewRouter.ts changed shape?');
+    const lineStart = source.lastIndexOf('\n', switchLine) + 1;
+    const lines = source.slice(lineStart).split('\n');
+    const base = /^( *)/.exec(lines[0])[1].length;
+    const closeRe = new RegExp(`^ {${base}}\\}$`);
+    const caseRe = new RegExp(`^ {${base + 4}}case '([^']+)':`);
     const handled = new Set();
     for (let i = 1; i < lines.length; i++) {
-        if (/^ {20}\}$/.test(lines[i])) break;
-        const m = /^ {24}case '([^']+)':/.exec(lines[i]);
+        if (closeRe.test(lines[i])) break;
+        const m = caseRe.exec(lines[i]);
         if (m) handled.add(m[1]);
     }
     if (handled.size === 0) throw new Error('host switch yielded no cases');
@@ -99,7 +105,7 @@ function hostPostedTypes(root) {
 
 const repo = join(import.meta.dirname, '..');
 const typesSource = readFileSync(join(repo, 'webview-ui', 'src', 'types.ts'), 'utf-8');
-const hostSource = readFileSync(join(repo, 'src', 'extension.ts'), 'utf-8');
+const hostSource = readFileSync(join(repo, 'src', 'webviewRouter.ts'), 'utf-8');
 
 const fromUnion = unionMembers(typesSource, 'FromExtensionMessage');
 const toUnion = unionMembers(typesSource, 'ToExtensionMessage');
