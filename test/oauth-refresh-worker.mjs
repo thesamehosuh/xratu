@@ -50,6 +50,36 @@ const handler = {
 };
 
 const manager = new OAuthTokenManager({ store, lockDir });
-manager.resolve(handler, { fetch: async () => { throw new Error('unused'); } })
-    .then((token) => { console.log(token); })
-    .catch((err) => { console.error(err); process.exit(1); });
+
+// BARRIER: announce that this process has read the (stale) record, then wait
+// until BOTH processes have. Without it the test is a scheduling race - the
+// loser may read the store after the winner already wrote its tokens, see a
+// valid token, and skip the lock entirely, so "exactly one refresh" would be
+// testing process startup order rather than the lock. With the barrier both
+// processes provably hold the stale record, and the lock is the only thing
+// standing between them and a second rotation.
+const barrierFile = `${logFile}.readers`;
+const expectedReaders = Number(process.argv[5] ?? 2);
+fs.appendFileSync(barrierFile, `${process.pid}\n`);
+const waitForBoth = setInterval(() => {
+    let count = 0;
+    try { count = fs.readFileSync(barrierFile, 'utf8').split('\n').filter(Boolean).length; } catch { count = 0; }
+    if (count >= expectedReaders) {
+        clearInterval(waitForBoth);
+        resolveNow();
+    }
+}, 10);
+setTimeout(() => {
+    // Never hang the suite on a crashed sibling: proceed after a bounded wait.
+    clearInterval(waitForBoth);
+    resolveNow();
+}, 10_000).unref();
+
+let started = false;
+function resolveNow() {
+    if (started) return;
+    started = true;
+    manager.resolve(handler, { fetch: async () => { throw new Error('unused'); } })
+        .then((token) => { console.log(token); })
+        .catch((err) => { console.error(err); process.exit(1); });
+}

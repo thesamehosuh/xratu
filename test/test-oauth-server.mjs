@@ -54,6 +54,18 @@ async function occupy(port) {
 }
 const release = (srv) => new Promise((r) => srv.close(r));
 
+/** Wait for the port to become bindable again. `server.close()` stops
+ *  accepting synchronously but releases the listening socket asynchronously,
+ *  so a single fixed sleep is a flake waiting for a loaded CI worker. */
+async function waitForPortFree(port, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        if (await canBind(port)) return true;
+        if (Date.now() > deadline) return false;
+        await sleep(25);
+    }
+}
+
 /** Bind a throwaway server to learn whether a port is free again. */
 async function canBind(port) {
     const srv = http.createServer();
@@ -124,8 +136,7 @@ async function freePortTriple() {
     check('code delivered', result.code, 'abc');
     check('state delivered', result.state, 's1');
     check('RFC 9207 iss forwarded', result.iss, 'https://issuer.example');
-    await sleep(50);
-    check('port released after success', await canBind(port), true);
+    check('port released after success', await waitForPortFree(port), true);
 }
 
 // --- junk probes do not kill the flow ------------------------------------------
@@ -174,7 +185,7 @@ async function freePortTriple() {
     let err = null;
     try { await server.waitForCallback(); } catch (e) { err = e; }
     check('timeout code', err?.code, 'timeout');
-    check('port released after timeout', await canBind(port), true);
+    check('port released after timeout', await waitForPortFree(port), true);
 }
 
 // --- cancel: rejects, releases, late callback is 410 --------------------------------
@@ -186,7 +197,7 @@ async function freePortTriple() {
     let err = null;
     try { await waiting; } catch (e) { err = e; }
     check('cancel rejects with OAuthCancelledError', err instanceof OAuthCancelledError, true);
-    check('port released after cancel', await canBind(port), true);
+    check('port released after cancel', await waitForPortFree(port), true);
     // A late callback must not resolve anything. The listener is gone, so the
     // request fails at the TCP level - that is the correct outcome.
     let lateOk = null;
@@ -200,7 +211,7 @@ async function freePortTriple() {
     const server = await startLoopbackServer({ candidatePorts: [port], timeoutMs: 10_000 });
     server.waitForCallback(); // intentionally never awaited
     server.dispose();
-    check('port released after dispose', await canBind(port), true);
+    check('port released after dispose', await waitForPortFree(port), true);
 }
 
 // --- keep-alive pooled-socket regression ---------------------------------------------
