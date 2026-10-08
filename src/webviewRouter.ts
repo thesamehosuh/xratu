@@ -303,16 +303,24 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     void host._setLlmCredentials(undefined, data.target);
                     break;
                 case 'oauthSignIn':
-                    void host._startOAuthSignIn(data.providerId, data.method === 'device' ? 'device' : 'browser');
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._startOAuthSignIn(data.providerId, data.method === 'device' ? 'device' : 'browser');
                     break;
                 case 'oauthCancelSignIn':
-                    void host._cancelOAuthSignIn();
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._cancelOAuthSignIn();
                     break;
                 case 'oauthManualCode':
-                    void host._submitOAuthManualCode(String(data.code ?? ''));
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._submitOAuthManualCode(String(data.code ?? ''));
                     break;
                 case 'oauthSignOut':
-                    void host._oauthSignOut(data.credentialId);
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._oauthSignOut(data.credentialId);
                     break;
                 case 'toggleYolo':
                     host._yoloMode = !host._yoloMode;

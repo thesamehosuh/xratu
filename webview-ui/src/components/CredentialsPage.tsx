@@ -439,6 +439,20 @@ export function CredentialsPage({
                                 </div>
                             )}
 
+                            {/* The host classifies every flow failure into an i18n key
+                                and posts it here; without this the card would fail
+                                silently and the user would blame the browser. */}
+                            {busy && oauthState?.error?.valueKey && (
+                                <div className="cred-oauth-error" role="alert">
+                                    {tf(oauthState.error.valueKey as StringKey)}
+                                </div>
+                            )}
+                            {!inProgress && oauthState?.error?.valueKey && (
+                                <div className="cred-oauth-error" role="alert">
+                                    {tf(oauthState.error.valueKey as StringKey)}
+                                </div>
+                            )}
+
                             {/* Manual paste: the always-works escape hatch when the
                                 loopback callback cannot complete. */}
                             {busy && inProgress?.method === 'browser' && (

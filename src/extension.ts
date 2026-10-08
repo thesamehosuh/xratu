@@ -80,6 +80,7 @@ import {
     type OAuthTokenSet,
 } from './oauth/types';
 import { oauthErrorValueKey } from './oauth/errorKeys';
+import { createManualCodeSlot, type ManualCodeSlot } from './oauth/manualCode';
 
 /** One in-flight sign-in. The host owns the transport (browser launch,
  *  loopback socket, abort controller) so a cancel can actually stop it; the
@@ -92,9 +93,10 @@ interface OAuthFlowState {
     server?: LoopbackServer;
     verifier?: string;
     state?: string;
-    /** Settled by the manual-paste path; the browser flow races it against the
-     *  loopback callback. */
-    manualCode?: Promise<string>;
+    /** The manual-paste side of the callback race. Created PENDING when the
+     *  flow starts - see manualCode.ts for why reading a possibly-undefined
+     *  promise into Promise.race would end the flow instantly. */
+    manualCode: ManualCodeSlot;
 }
 
 /**
@@ -2270,7 +2272,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (this._oauthFlow) this._cancelOAuthFlow();
 
         const controller = new AbortController();
-        const flow: OAuthFlowState = { providerId, method, controller };
+        const flow: OAuthFlowState = { providerId, method, controller, manualCode: createManualCodeSlot() };
         this._oauthFlow = flow;
         this._postOAuthState({ inProgress: { providerId, method }, error: null, authorizeUrl: null, deviceCode: null });
 
@@ -2321,7 +2323,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         const callback = await Promise.race([
             server.waitForCallback().then((r) => r.code),
-            flow.manualCode,
+            flow.manualCode.promise,
         ]);
         server.dispose();
         if (!callback) throw new OAuthFlowError('no_code', 'No authorization code received');
@@ -2358,7 +2360,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._postOAuthState({ error: { valueKey: 'oauthCodeEmpty' } });
             return;
         }
-        flow.manualCode = Promise.resolve(code);
+        flow.manualCode.submit(code);
     }
 
     async _cancelOAuthSignIn(): Promise<void> {
@@ -2373,6 +2375,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!flow) return;
         this._oauthFlow = null;
         flow.controller.abort();
+        // Release the paste slot too: a flow that is gone must not leave a
+        // pending promise holding its caller.
+        flow.manualCode.release();
         flow.server?.cancel();
         flow.server?.dispose();
     }
@@ -3400,7 +3405,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // turn (refreshing when stale), then everything downstream keeps
         // receiving a plain bearer string - no async plumbing through the
         // header builders or the wire adapters.
-        const auth = await this._resolveCredentialAuth(active);
+        //
+        // A rejected/expired token must NOT escape as a thrown error: this
+        // runs before the try below, so it would bypass the error surface and
+        // leave the composer spinning with no explanation. "Sign in again" is
+        // a different action from "something went wrong" and the user needs to
+        // be told which one happened.
+        let auth: Awaited<ReturnType<typeof this._resolveCredentialAuth>>;
+        try {
+            auth = await this._resolveCredentialAuth(active);
+        } catch (e) {
+            this._view?.webview.postMessage({ type: 'error', valueKey: oauthErrorValueKey(e) });
+            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+        }
         const insecureError = insecureRemoteHttpError(active.baseUrl, auth.apiKey);
         if (insecureError) {
             this._view?.webview.postMessage({ type: 'error', valueKey: insecureError });

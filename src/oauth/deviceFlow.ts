@@ -153,7 +153,13 @@ export interface DevicePollLoopOptions<T> {
 }
 
 export async function pollUntilAuthorized<T>(opts: DevicePollLoopOptions<T>): Promise<T> {
-    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => {
+        const timer = setTimeout(r, ms);
+        opts.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            r();
+        }, { once: true });
+    }));
     const now = opts.nowMs ?? (() => Date.now());
     let intervalS = positiveSeconds(opts.intervalS, DEFAULT_INTERVAL_S);
     const deadline = now() + positiveSeconds(opts.expiresIn, DEFAULT_EXPIRES_S, DEFAULT_EXPIRES_S) * 1000;
@@ -163,6 +169,12 @@ export async function pollUntilAuthorized<T>(opts: DevicePollLoopOptions<T>): Pr
             throw new OAuthFlowError('cancelled', 'Device authorization polling cancelled');
         }
         await sleep(intervalS * 1000);
+        // Re-check the abort AFTER the wait: the interval can be minutes, and
+        // without this a cancelled flow would still make one more network call
+        // (and the user would wait out the sleep before the UI reacted).
+        if (opts.signal?.aborted) {
+            throw new OAuthFlowError('cancelled', 'Device authorization polling cancelled');
+        }
         if (now() >= deadline) {
             throw new OAuthFlowError('expired_token', 'Device code expired before authorization completed');
         }

@@ -267,6 +267,84 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     check('no refresh token -> no network', fetchCalled, false);
 }
 
+// --- a 401 retry must not join a NON-forced refresh --------------------------
+// Regression, and the subtlest bug found in review: forceRefresh() used to
+// return whatever refresh was already in flight, so a 401 that arrived while
+// an ordinary refresh was running got back the very token the provider had
+// just rejected. The replay then 401'd again and the recovery silently did
+// nothing.
+{
+    const store = memoryStore({ k: EXPIRED });
+    let calls = 0;
+    let releaseOrdinary;
+    const ordinaryGate = new Promise((r) => { releaseOrdinary = r; });
+    const m = managerFor(store);
+    const ordinary = handler(async () => {
+        calls++;
+        // Deliberately returns the SAME stale token: this is what a slow
+        // ordinary refresh looks like to the 401 path.
+        await ordinaryGate;
+        return { kind: 'refreshed', tokens: { ...EXPIRED } };
+    });
+    const forced = handler(async () => { calls++; return { kind: 'refreshed', tokens: RENEWED }; });
+
+    const slow = m.resolve(ordinary, ctx);       // in flight, not finished
+    await new Promise((r) => setTimeout(r, 100)); // let it take the lock
+    const retry = m.forceRefresh(forced, ctx);  // the 401 replay
+    releaseOrdinary();
+    check('ordinary refresh returned its own result', await slow, 'AT-OLD');
+    check('forced caller got the FORCED token, not the stale one', await retry, 'AT-NEW');
+    check('both refreshes actually ran', calls, 2);
+}
+{
+    // Concurrent forced callers still collapse onto ONE rotation.
+    const store = memoryStore({ k: EXPIRED });
+    let calls = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const m = managerFor(store);
+    const h = handler(async () => { calls++; await gate; return { kind: 'refreshed', tokens: RENEWED }; });
+    const p1 = m.forceRefresh(h, ctx);
+    const p2 = m.forceRefresh(h, ctx);
+    release();
+    const [a, b] = await Promise.all([p1, p2]);
+    check('concurrent forced callers share one refresh', calls, 1);
+    check('both forced callers get the token', a === 'AT-NEW' && b === 'AT-NEW', true);
+}
+
+// --- manual paste slot: a pending promise must not end the race ---------------
+// The blocker found in review: the paste side used to be a possibly-undefined
+// promise read at race-build time, and Promise.race treats `undefined` as an
+// already-resolved value - so every browser sign-in ended instantly with "no
+// code received" while the browser was still redirecting.
+{
+    const { createManualCodeSlot } = require('../out/oauth/manualCode.js');
+    const loopback = new Promise(() => {});   // never settles, like a pending server
+    const slot = createManualCodeSlot();
+    let raced = null;
+    Promise.race([loopback, slot.promise]).then((v) => { raced = v; });
+    await new Promise((r) => setTimeout(r, 30));
+    check('race does not settle before anything happens', raced, null);
+    slot.submit('pasted-code');
+    await new Promise((r) => setTimeout(r, 30));
+    check('a later submit still wins the race', raced, 'pasted-code');
+
+    const slot2 = createManualCodeSlot();
+    let first = null;
+    slot2.submit('first');
+    slot2.submit('second');
+    slot2.promise.then((v) => { first = v; });
+    await new Promise((r) => setTimeout(r, 20));
+    check('the first submission wins', first, 'first');
+
+    const slot3 = createManualCodeSlot();
+    let released = null;
+    slot3.promise.then((v) => { released = v; });
+    slot3.release();
+    await new Promise((r) => setTimeout(r, 20));
+    check('release settles the slot (cancel cannot hang a caller)', released, '');
+}
+
 // --- two REAL processes against one store (Cline's process.test.ts bar) -------
 {
     const { spawn } = await import('child_process');

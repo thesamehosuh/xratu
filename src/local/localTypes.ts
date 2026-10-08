@@ -292,8 +292,11 @@ export interface LocalAgentRequest {
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
     /** Provider-specific request headers (OAuth routing headers such as
-     *  ChatGPT-Account-Id). Merged last, so a provider can add to - never
-     *  accidentally shadow - the Authorization/content headers. */
+     *  ChatGPT-Account-Id). Applied AFTER the standard Authorization and
+     *  content headers, so a name collision would REPLACE them - which is
+     *  correct for an OAuth credential (the resolved bearer is the whole
+     *  point) but means a provider must not smuggle a reserved name in
+     *  here. */
     headers?: Record<string, string>;
     /** OAuth credentials only: called when the provider answers 401 so the
      *  turn can force a token refresh and replay the request ONCE. Returns

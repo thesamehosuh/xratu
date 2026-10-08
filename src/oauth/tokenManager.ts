@@ -64,6 +64,11 @@ export class OAuthTokenManager {
     private readonly skewMs: number;
     private readonly lockTimeoutMs?: number;
     private readonly inFlight = new Map<string, Promise<OAuthTokenSet>>();
+    /** Which kind of refresh is currently in flight, so a forced caller knows
+     *  whether it may join. A 401 retry that joined a NON-forced refresh would
+     *  get the very token the provider just rejected - the replay would 401
+     *  again and the recovery would silently not work. */
+    private readonly inFlightForced = new Map<string, boolean>();
 
     constructor(opts: TokenManagerOptions) {
         this.store = opts.store;
@@ -94,11 +99,24 @@ export class OAuthTokenManager {
     private resolveInternal(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<OAuthTokenSet> {
         const key = handler.storageKey;
         const existing = this.inFlight.get(key);
-        if (existing) return existing;
+        // Join the in-flight work only when it is at least as strong as ours.
+        // A forced caller waits for the non-forced refresh to settle, then runs
+        // its OWN; concurrent forced callers share that one, so a burst of 401s
+        // still costs a single rotation.
+        if (existing && (!force || this.inFlightForced.get(key) === true)) return existing;
+        if (existing && force) {
+            return existing
+                .catch(() => undefined)
+                .then(() => this.resolveInternal(handler, ctx, true));
+        }
         const promise = this.doResolve(handler, ctx, force).finally(() => {
-            if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
+            if (this.inFlight.get(key) === promise) {
+                this.inFlight.delete(key);
+                this.inFlightForced.delete(key);
+            }
         });
         this.inFlight.set(key, promise);
+        this.inFlightForced.set(key, force);
         return promise;
     }
 

@@ -16,6 +16,7 @@ import {
     HISTORY_TRUNCATION_MARKER,
 } from './contextWindow';
 import type { LocalAgentMessage, LocalAgentRequest } from './localTypes';
+import { isChatGptSubscriptionHost } from '../providerIdentity';
 import {
     endpointUrl,
     makeGoogleHeaders,
@@ -203,12 +204,13 @@ async function requestSummaryCompletion(
             messages: [{ role: 'user', content: prompt }],
         };
     } else if (style === 'responses') {
-        body = {
-            model: request.model,
-            input: prompt,
-            max_output_tokens: maxTokens,
-            temperature: 0.2,
-        };
+        body = isChatGptSubscriptionHost(request.baseUrl)
+            // Same rejection as the streaming path (see toResponsesBody): the
+            // Codex backend refuses max_output_tokens. A summarizer call that
+            // 400s would silently disable compaction for exactly the
+            // long-context OAuth users who need it most.
+            ? { model: request.model, input: prompt, store: false }
+            : { model: request.model, input: prompt, max_output_tokens: maxTokens, temperature: 0.2 };
     } else if (style === 'google') {
         body = {
             contents: [{ role: 'user', parts: [{ text: prompt }] }],

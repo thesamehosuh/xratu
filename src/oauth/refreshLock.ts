@@ -78,6 +78,16 @@ function readOwner(lockPath: string): OwnerRecord | null {
     }
 }
 
+/** Age of the lock directory itself, used when its owner record is missing or
+ *  unreadable. 0 when it cannot be stat'ed (never treated as stale). */
+function dirAgeMs(lockPath: string, nowMs: number): number {
+    try {
+        return nowMs - fs.statSync(lockPath).mtimeMs;
+    } catch {
+        return 0;
+    }
+}
+
 /** Remove the lock directory ONLY if the owner record still matches what we
  *  saw. A live holder that rewrote its record between our read and our rm is
  *  not stale - this compare is what keeps takeover from becoming theft. */
@@ -88,6 +98,21 @@ function rmIfOwnerUnchanged(lockPath: string, seen: OwnerRecord): void {
         fs.rmSync(lockPath, { recursive: true, force: true });
     } catch {
         // Best effort: if the rm fails the next acquire loop re-evaluates.
+    }
+}
+
+/** Reap an ownerless lock directory. There is no token to compare, so the
+ *  guard is the directory's mtime: if it changed since we measured its age,
+ *  something recreated or touched it and this is not the abandoned directory
+ *  we measured. mkdir arbitration then settles any residual race - the loser
+ *  gets EEXIST and retries. */
+function removeIfUnchanged(lockPath: string, measuredAgeMs: number, nowMs: number): void {
+    const age = dirAgeMs(lockPath, nowMs);
+    if (age === 0 || Math.abs(age - measuredAgeMs) > 1) return;
+    try {
+        fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch {
+        // Best effort: the acquire loop re-evaluates.
     }
 }
 
@@ -118,10 +143,18 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
         const owner = readOwner(lockPath);
         if (!firstSeenOwner && owner) firstSeenOwner = owner;
         const seen = owner ?? firstSeenOwner;
-        const acquiredAt = seen?.acquiredAt ?? 0;
+        // A holder that died between mkdir and the owner write leaves a
+        // directory with NO record - keying staleness off the record alone
+        // would wedge the lock forever (every waiter just times out). Age such
+        // a directory by its mtime instead, and only reap it once it is well
+        // past the grace period, so a live holder that has not written its
+        // record yet is never taken from.
+        const acquiredAge = dirAgeMs(lockPath, now());
+        const acquiredAt = seen?.acquiredAt ?? acquiredAge;
         const isStale = acquiredAt > 0 && now() - acquiredAt > staleMs;
-        if (isStale && seen) {
-            rmIfOwnerUnchanged(lockPath, seen);
+        if (isStale) {
+            if (seen) rmIfOwnerUnchanged(lockPath, seen);
+            else removeIfUnchanged(lockPath, acquiredAge, now());
             firstSeenOwner = null;
             continue;
         }
