@@ -56,3 +56,47 @@ export function isGeoBlockedError(error: unknown): boolean {
     if (!info) return false;
     return classifyProviderHttpError(info.status, info.body) === 'geoBlocked';
 }
+
+/**
+ * OAuth token-endpoint rejection classification: is this a PERMANENT
+ * credential rejection (refresh token revoked/expired/reused) rather than a
+ * transient failure? This is the distinction that decides "log the user out"
+ * vs "keep the session" in the refresh matrix - getting it wrong in the
+ * lenient direction logs users out on every network blip, and getting it
+ * wrong in the strict direction retries a dead credential forever.
+ *
+ * The status gate (400/401/403) matches Cline/Roo. The body check is
+ * STRICTER than theirs on purpose: they substring-match the raw body, which
+ * lets an intercepting proxy's injected HTML error page (a real thing on
+ * sanctioned-network OAuth endpoints, not a hypothetical) forge a logout by
+ * containing the word "revoked". A structured error code is required; a bare
+ * substring is only trusted on a small, exactly-400 (the RFC status) body.
+ */
+const INVALID_GRANT_CODE_RE = /^(invalid_grant|invalid_token|token_revoked|revoked|expired_token)$/i;
+const INVALID_GRANT_SUBSTR_RE = /invalid_grant|invalid_token|token_revoked|expired_token/i;
+/** Substring fallback is refused past this size - an injected page is big. */
+const INVALID_GRANT_SUBSTR_MAX = 4096;
+
+function oauthErrorCode(body: string): string | null {
+    const trimmed = body.trim();
+    if (trimmed.startsWith('{')) {
+        try {
+            const err = (JSON.parse(trimmed) as { error?: unknown })?.error;
+            return typeof err === 'string' ? err : null;
+        } catch {
+            return null;
+        }
+    }
+    const m = /(?:^|&)error=([^&]*)/.exec(trimmed);
+    return m ? m[1] : null;
+}
+
+export function isInvalidGrantError(status: number, body: string): boolean {
+    if (status !== 400 && status !== 401 && status !== 403) return false;
+    const code = oauthErrorCode(body);
+    if (code !== null) return INVALID_GRANT_CODE_RE.test(code);
+    if (status === 400 && body.length <= INVALID_GRANT_SUBSTR_MAX) {
+        return INVALID_GRANT_SUBSTR_RE.test(body);
+    }
+    return false;
+}
