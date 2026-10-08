@@ -62,7 +62,12 @@ export function isOpenRouterHost(baseUrl: string): boolean {
  * Resolve the API style for a request. Defaults to `chat` unless the host is
  * OpenCode and the model id maps to a different documented endpoint.
  */
-export function resolveApiStyle(baseUrl: string, model: string): ApiStyle {
+export function resolveApiStyle(baseUrl: string, model: string, forced?: ApiStyle): ApiStyle {
+    // An OAuth credential knows its own dialect (the handler declares it), and
+    // a subscription backend is NOT OpenAI-compatible: the ChatGPT Codex
+    // endpoint serves the Responses API only. The host-prefix map below can
+    // never infer that, so an explicit style wins over inference.
+    if (forced) return forced;
     if (!isOpenCodeHost(baseUrl)) return 'chat';
     const m = model.trim().toLowerCase();
     if (OPENCODE_MESSAGES_PREFIXES.some((prefix) => m.startsWith(prefix))) return 'messages';

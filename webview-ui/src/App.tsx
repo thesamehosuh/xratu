@@ -23,6 +23,7 @@ import type {
     ThinkingLevel,
     ToExtensionMessage,
     SavedCredential,
+    OAuthHostState,
 } from './types';
 import { createInitialChatState, reduceChat } from './state';
 import { Toolbar, type SessionsScope } from './components/Toolbar';
@@ -135,6 +136,7 @@ export function App() {
     /** Runtime card to pre-expand on the credentials page (echoed target). */
     const [credOpenCard, setCredOpenCard] = useState<'byok' | 'local' | null>(null);
     const [activeCredentialId, setActiveCredentialId] = useState<string | null>(null);
+    const [oauthState, setOauthState] = useState<OAuthHostState | null>(null);
     /** Where the credentials page's Back button returns to - 'settings' when
      *  it was opened from Settings, 'chat' for every other entry path. */
     const [credReturnTo, setCredReturnTo] = useState<'chat' | 'settings'>('chat');
@@ -817,6 +819,11 @@ export function App() {
                     if (msg.currentUrl !== undefined) setCredUrl(msg.currentUrl);
                     setActiveCredentialId(msg.activeCredentialId ?? null);
                     break;
+                case 'oauthState':
+                    // The host always sends the whole picture (it merges its own
+                    // patches), so a straight replace is correct here.
+                    setOauthState(msg.state);
+                    break;
                 case 'savedCredentials':
                     setSavedCredentials(msg.credentials);
                     setActiveCredentialId(msg.credentials.find((c) => c.active)?.id ?? null);
@@ -1112,7 +1119,12 @@ export function App() {
                     onUpdateCredential={(id, api_key) => send({ type: 'updateLlmCredential', id, api_key })}
                     onDiscoverLocalModels={startLocalScan}
                     onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
-                    onBack={() => setScreen(credReturnTo)}
+                    oauthState={oauthState}
+            onOAuthSignIn={(providerId, method) => send({ type: 'oauthSignIn', providerId, method })}
+            onOAuthCancelSignIn={() => send({ type: 'oauthCancelSignIn' })}
+            onOAuthManualCode={(code) => send({ type: 'oauthManualCode', code })}
+            onOAuthSignOut={(credentialId) => send({ type: 'oauthSignOut', credentialId })}
+            onBack={() => setScreen(credReturnTo)}
                 />
         );
     }

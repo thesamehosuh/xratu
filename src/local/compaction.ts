@@ -187,9 +187,9 @@ async function requestSummaryCompletion(
         : style === 'responses' ? 'responses'
             : style === 'google' ? `models/${encodeURIComponent(request.model)}:generateContent`
                 : 'chat/completions';
-    const headers = style === 'messages' ? makeMessagesHeaders(request.apiKey, request.sessionId)
-        : style === 'google' ? makeGoogleHeaders(request.apiKey, request.sessionId)
-            : makeHeaders(request.apiKey, request.sessionId);
+    const headers = style === 'messages' ? makeMessagesHeaders(request.apiKey, request.sessionId, request.headers)
+        : style === 'google' ? makeGoogleHeaders(request.apiKey, request.sessionId, request.headers)
+            : makeHeaders(request.apiKey, request.sessionId, request.headers);
     // This is a non-streaming JSON call; the SSE `Accept` from makeHeaders is
     // wrong here and some gateways branch on it.
     headers.set('Accept', 'application/json');

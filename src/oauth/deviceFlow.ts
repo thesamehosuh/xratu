@@ -43,6 +43,19 @@ const SLOW_DOWN_INCREMENT_S = 5;
  *  misbehaving endpoint, clamp rather than honor. */
 const MAX_INTERVAL_S = 60;
 
+/** Parse a JSON object, or null. A bare string/array/number is NOT an object -
+ *  returning it would let a nonsense 200 masquerade as a token set. */
+function parseJsonObject(body: string): Record<string, unknown> | null {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(body);
+    } catch {
+        return null;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+}
+
 /** Coerce a server-supplied seconds value to a sane positive number.
  *  Exported for tests - this is the exact function that kills the NaN
  *  busy-loop. `cap` differs per field: a poll interval past a minute is a
@@ -96,12 +109,8 @@ export async function requestDeviceAuthorization(opts: {
         );
     }
 
-    let json: Record<string, unknown>;
-    try {
-        json = JSON.parse(body) as Record<string, unknown>;
-    } catch {
-        throw new OAuthFlowError('bad_response', 'Device authorization response was not JSON');
-    }
+    const json = parseJsonObject(body);
+    if (!json) throw new OAuthFlowError('bad_response', 'Device authorization response was not a JSON object');
 
     const deviceCode = json.device_code;
     const userCode = json.user_code;
@@ -118,6 +127,49 @@ export async function requestDeviceAuthorization(opts: {
         interval: positiveSeconds(json.interval, DEFAULT_INTERVAL_S),
         expiresIn: positiveSeconds(json.expires_in, DEFAULT_EXPIRES_S, DEFAULT_EXPIRES_S),
     };
+}
+
+/**
+ * The poll core both device styles share.
+ *
+ * RFC 8628 (`pollDeviceToken` below) speaks the STANDARD: form-encoded token
+ * requests, `authorization_pending` / `slow_down` in the body. OpenAI's ChatGPT
+ * endpoint does NOT: it is JSON, has no `grant_type`, and signals "keep
+ * waiting" with an HTTP 403/404 and an empty body. Only the *loop* is common
+ * - wait the interval, try, interpret the answer, obey the deadline - so that
+ * is what lives here and each protocol supplies its own `attempt`.
+ */
+export interface DevicePollLoopOptions<T> {
+    intervalS: number; // seconds, already hardened
+    expiresIn: number; // seconds, already hardened
+    /** One poll. `done: true` resolves the loop with `value`; `done: false`
+     *  keeps waiting and may carry a new interval (that is how RFC 8628
+     *  `slow_down` reaches the loop - the attempt owns the protocol, the loop
+     *  owns the clock). */
+    attempt: () => Promise<{ done: true; value: T } | { done: false; intervalS?: number }>;
+    sleep?: (ms: number) => Promise<void>;
+    nowMs?: () => number;
+    signal?: AbortSignal;
+}
+
+export async function pollUntilAuthorized<T>(opts: DevicePollLoopOptions<T>): Promise<T> {
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const now = opts.nowMs ?? (() => Date.now());
+    let intervalS = positiveSeconds(opts.intervalS, DEFAULT_INTERVAL_S);
+    const deadline = now() + positiveSeconds(opts.expiresIn, DEFAULT_EXPIRES_S, DEFAULT_EXPIRES_S) * 1000;
+
+    for (;;) {
+        if (opts.signal?.aborted) {
+            throw new OAuthFlowError('cancelled', 'Device authorization polling cancelled');
+        }
+        await sleep(intervalS * 1000);
+        if (now() >= deadline) {
+            throw new OAuthFlowError('expired_token', 'Device code expired before authorization completed');
+        }
+        const outcome = await opts.attempt();
+        if (outcome.done) return outcome.value;
+        if (outcome.intervalS != null) intervalS = positiveSeconds(outcome.intervalS, intervalS);
+    }
 }
 
 /** Step 2: poll the token endpoint until the user completes authorization,
@@ -137,50 +189,40 @@ export async function pollDeviceToken(opts: {
     sleep?: (ms: number) => Promise<void>;
     nowMs?: () => number;
 }): Promise<Record<string, unknown>> {
-    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-    const now = opts.nowMs ?? (() => Date.now());
     let intervalS = positiveSeconds(opts.interval, DEFAULT_INTERVAL_S);
-    const deadline = now() + positiveSeconds(opts.expiresIn, DEFAULT_EXPIRES_S, DEFAULT_EXPIRES_S) * 1000;
+    return pollUntilAuthorized<Record<string, unknown>>({
+        intervalS,
+        expiresIn: opts.expiresIn,
+        signal: opts.signal,
+        sleep: opts.sleep,
+        nowMs: opts.nowMs,
+        attempt: async () => {
+            const { status, body } = await postForm(opts.fetch, opts.url, {
+                grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+                device_code: opts.deviceCode,
+                client_id: opts.clientId,
+                ...opts.extraParams,
+            }, opts.signal);
 
-    for (;;) {
-        if (opts.signal?.aborted) {
-            throw new OAuthFlowError('cancelled', 'Device authorization polling cancelled');
-        }
-        await sleep(intervalS * 1000);
-        if (now() >= deadline) {
-            throw new OAuthFlowError('expired_token', 'Device code expired before authorization completed');
-        }
-
-        const { status, body } = await postForm(opts.fetch, opts.url, {
-            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-            device_code: opts.deviceCode,
-            client_id: opts.clientId,
-            ...opts.extraParams,
-        }, opts.signal);
-
-        if (status === 200) {
-            let parsed: unknown;
-            try {
-                parsed = JSON.parse(body);
-            } catch {
-                throw new OAuthFlowError('bad_response', 'Device token response was not JSON');
+            if (status === 200) {
+                const parsed = parseJsonObject(body);
+                if (!parsed) throw new OAuthFlowError('bad_response', 'Device token response was not a JSON object');
+                return { done: true as const, value: parsed };
             }
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new OAuthFlowError('bad_response', 'Device token response was not a JSON object');
-            }
-            return parsed as Record<string, unknown>;
-        }
 
-        const parsed = parseOAuthErrorBody(body);
-        const code = parsed?.error ?? '';
-        if (code === 'authorization_pending') continue;
-        if (code === 'slow_down') {
-            intervalS += SLOW_DOWN_INCREMENT_S;
-            continue;
-        }
-        throw new OAuthFlowError(
-            code || `http_${status}`,
-            parsed?.description ?? `Device token poll failed (HTTP ${status})`,
-        );
-    }
+            const parsed = parseOAuthErrorBody(body);
+            const code = parsed?.error ?? '';
+            if (code === 'authorization_pending') return { done: false as const };
+            if (code === 'slow_down') {
+                // RFC 8628 section 3.5: add 5s and keep polling. An error, not
+                // a terminal state.
+                intervalS += SLOW_DOWN_INCREMENT_S;
+                return { done: false as const, intervalS };
+            }
+            throw new OAuthFlowError(
+                code || `http_${status}`,
+                parsed?.description ?? `Device token poll failed (HTTP ${status})`,
+            );
+        },
+    });
 }

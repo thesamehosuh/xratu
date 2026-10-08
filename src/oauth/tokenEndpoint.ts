@@ -37,6 +37,13 @@ export interface TokenEndpointRefreshOptions {
     extraParams?: Record<string, string>;
     /** Expiry skew for the still-valid check. Default 60s. */
     skewMs?: number;
+    /** Provider-specific PERMANENT-failure matcher, consulted alongside the
+     *  shared invalid-grant classifier. Needed because ChatGPT reports a dead
+     *  refresh token as `refresh_token_expired` / `_reused` / `_invalidated`
+     *  rather than `invalid_grant` - without this hook those would be read as
+     *  transient and the user would be stuck retrying a dead credential
+     *  forever instead of being asked to sign in again. */
+    isPermanentFailure?: (status: number, body: string) => boolean;
     /** Map the raw 200 JSON onto a token set. Default handles the RFC shape
      *  (access_token, refresh_token?, expires_in?, scope?). */
     parseTokens?: (json: Record<string, unknown>, previous: OAuthTokenSet) => OAuthTokenSet;
@@ -119,7 +126,7 @@ export async function refreshWithTokenEndpoint(opts: TokenEndpointRefreshOptions
         return { kind: 'refreshed', tokens: parse(json, tokens) };
     }
 
-    if (isInvalidGrantError(status, body)) {
+    if (isInvalidGrantError(status, body) || opts.isPermanentFailure?.(status, body)) {
         return { kind: 'reauth' };
     }
 

@@ -99,6 +99,38 @@ runtime. Everything runs inside the extension host, on your machine.
 All speak the OpenAI-compatible API. The first three work with nothing but
 the API key; the rest hand each service its own URL at signup.
 
+### Sign in with a ChatGPT subscription
+
+You do not need an API key if you already pay for ChatGPT Plus, Pro or
+Business. Open **Settings -> Connections**, press **Sign in** next to ChatGPT,
+and Xratu walks you through the browser login.
+
+Two transports, because one of them is always going to fail for somebody:
+
+- **Browser login** (default) opens the ChatGPT authorization page and waits
+  for a local callback. If the callback cannot reach VS Code - the port is
+  taken, you are in a remote window, or the browser runs on another machine -
+  a **paste the code** box appears in the same card. Paste either the bare
+  code or the whole redirect URL.
+- **Device code** shows a short code and a link instead of running anything
+  locally. Use it over SSH, WSL, in a devcontainer, or wherever a loopback
+  callback cannot work.
+
+Token handling, for the curious:
+
+- The token is stored in VS Code SecretStorage, in its own entry, and only
+  ever reaches the model request as a bearer header.
+- It is refreshed five minutes before it expires, and again automatically if
+  a request comes back `401` - once, not in a loop.
+- If the session is revoked, the connection is marked as needing sign-in
+  again rather than silently failing.
+- Signing out revokes the token at OpenAI, then deletes it locally. If the
+  revoke call fails, the local token is still removed.
+
+Note: the ChatGPT authorization endpoints are not reachable from every
+network. If the login fails with a network error, the device-code path or an
+Iranian provider from the table above are your fallbacks.
+
 ## Getting started
 
 Install from the VS Code Marketplace:

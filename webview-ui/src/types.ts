@@ -56,6 +56,15 @@ export type ToExtensionMessage =
     /** Open the credentials page; `target` preselects the matching provider
      *  (remote-provider chip vs local-runtime chip in the empty state). */
     | { type: 'openCredentials'; target?: 'byok' | 'local' }
+    /** Begin an OAuth sign-in. `method` 'browser' opens the authorize page
+     *  with a loopback callback; 'device' shows a user code instead - the
+     *  only transport that works in remote VS Code. */
+    | { type: 'oauthSignIn'; providerId: string; method?: 'browser' | 'device' }
+    | { type: 'oauthCancelSignIn' }
+    /** Hand-pasted redirect code, for when the loopback callback cannot
+     *  complete (port taken, remote window, browser elsewhere). */
+    | { type: 'oauthManualCode'; code: string }
+    | { type: 'oauthSignOut'; credentialId: string }
     /** Answer a pending decision card (`ask_user_question`). `answer` is the
      *  picked option label or the free-text "Other" answer; `dismissed` marks
      *  the card closed without a pick. */
@@ -247,6 +256,22 @@ export interface SavedCredential {
     maskedKey: string;
     label: string;
     active: boolean;
+    /** True when the connection is backed by an OAuth token, not this key. */
+    oauth?: boolean;
+}
+
+/** OAuth status the host owns: which providers can be connected, which are
+ *  connected (with the account), and what a flow in progress is waiting for. */
+export interface OAuthHostState {
+    providers?: Array<{ providerId: string; label: string }>;
+    accounts?: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string }>;
+    inProgress?: { providerId: string; method: 'browser' | 'device' } | null;
+    /** Where the browser must go. Host-generated; the webview only opens it. */
+    authorizeUrl?: string;
+    /** RFC 8628 user code to show (and copy) while a device flow waits. */
+    deviceCode?: { userCode: string; verificationUri: string };
+    account?: { providerId: string; accountLabel?: string };
+    error?: { valueKey: string };
 }
 
 /** Slim session list entry (metadata only - never transcripts). */
@@ -370,6 +395,7 @@ export type FromExtensionMessage =
      *  provider (echoed from openCredentials.target). */
     | { type: 'openCredentials'; reason?: string; currentUrl?: string; activeCredentialId?: string | null; openCard?: 'byok' | 'local' }
     | { type: 'savedCredentials'; credentials: SavedCredential[] }
+    | { type: 'oauthState'; state: OAuthHostState }
     | { type: 'credentialsSaved'; returnToChat?: boolean }
     | { type: 'byokReset' }
     | { type: 'openSettings' }

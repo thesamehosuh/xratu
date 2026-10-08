@@ -87,7 +87,14 @@ export async function fetchModelsDevCatalog(
 // Discovery
 // ---------------------------------------------------------------------------
 
-async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, apiKey?: string | null, dispatcher?: unknown): Promise<any> {
+async function fetchJson(
+    url: string,
+    signal?: AbortSignal,
+    timeoutMs = 1800,
+    apiKey?: string | null,
+    dispatcher?: unknown,
+    extraHeaders?: Record<string, string> | null,
+): Promise<any> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const onAbort = () => controller.abort();
@@ -100,6 +107,11 @@ async function fetchJson(url: string, signal?: AbortSignal, timeoutMs = 1800, ap
                 // Remote BYOK providers (OpenAI, Groq, …) require auth even
                 // for model listing; local runtimes ignore the header.
                 ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+                // OAuth credentials need their routing headers on discovery
+                // too (an OAuth credential whose token expired is REFRESHED by
+                // the turn path, not here - so these must not be missed, or
+                // discovery 401s while the model is perfectly usable).
+                ...(extraHeaders ?? {}),
             },
             signal: controller.signal,
         };
@@ -248,6 +260,7 @@ export async function probeLocalEndpoint(
     apiKey?: string | null,
     dispatcher?: unknown,
     modelsDev?: ModelsDevCatalog | null,
+    extraHeaders?: Record<string, string> | null,
 ): Promise<{ models: LocalModelInfo[] } | null> {
     const rawBase = baseUrl.trim().replace(/\/+$/, '');
     // Never proxy on-machine runtimes: a proxy would break localhost and is
@@ -321,7 +334,7 @@ export async function probeLocalEndpoint(
     } catch {
         return null;
     }
-    const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey, proxy);
+    const openai = await fetchJson(modelsUrl, signal, probeTimeoutMs, apiKey, proxy, extraHeaders);
     const parsed = parseModelList(openai);
     if (parsed) return { models: withFallbacks(parsed) };
 
@@ -369,8 +382,9 @@ export async function probeCustomEndpoint(
     apiKey?: string | null,
     dispatcher?: unknown,
     modelsDev?: ModelsDevCatalog | null,
+    extraHeaders?: Record<string, string> | null,
 ): Promise<DiscoveredLocalModel | null> {
-    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey, dispatcher, modelsDev);
+    const probed = await probeLocalEndpoint(baseUrl, signal, apiKey, dispatcher, modelsDev, extraHeaders);
     if (!probed) return null;
 
     const connection: LocalModelConnection = {

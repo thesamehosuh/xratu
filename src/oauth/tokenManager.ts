@@ -63,7 +63,7 @@ export class OAuthTokenManager {
     private readonly lockDir: string;
     private readonly skewMs: number;
     private readonly lockTimeoutMs?: number;
-    private readonly inFlight = new Map<string, Promise<string>>();
+    private readonly inFlight = new Map<string, Promise<OAuthTokenSet>>();
 
     constructor(opts: TokenManagerOptions) {
         this.store = opts.store;
@@ -74,16 +74,24 @@ export class OAuthTokenManager {
 
     /** Access token for the provider, refreshing when expired-or-nearly. */
     resolve(handler: OAuthProviderHandler, ctx: OAuthLoginContext): Promise<string> {
+        return this.resolveInternal(handler, ctx, false).then((r) => r.accessToken);
+    }
+
+    /** The WHOLE resolved token set - callers that also need provider header
+     *  material (the ChatGPT-Account-Id routing header lives in the account id)
+     *  must not re-read the store: that would race the single-flight and see a
+     *  pre-refresh record. */
+    resolveTokens(handler: OAuthProviderHandler, ctx: OAuthLoginContext): Promise<OAuthTokenSet> {
         return this.resolveInternal(handler, ctx, false);
     }
 
     /** Access token, refreshing even when the current one looks valid - the
      *  retry-once-on-401 path uses this. */
     forceRefresh(handler: OAuthProviderHandler, ctx: OAuthLoginContext): Promise<string> {
-        return this.resolveInternal(handler, ctx, true);
+        return this.resolveInternal(handler, ctx, true).then((r) => r.accessToken);
     }
 
-    private resolveInternal(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<string> {
+    private resolveInternal(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<OAuthTokenSet> {
         const key = handler.storageKey;
         const existing = this.inFlight.get(key);
         if (existing) return existing;
@@ -94,11 +102,11 @@ export class OAuthTokenManager {
         return promise;
     }
 
-    private async doResolve(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<string> {
+    private async doResolve(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<OAuthTokenSet> {
         const key = handler.storageKey;
         const snapshot = await this.store.read(key);
         if (!snapshot) throw new OAuthReauthRequiredError(handler.providerId);
-        if (!force && !isTokenExpired(snapshot, this.skewMs)) return snapshot.accessToken;
+        if (!force && !isTokenExpired(snapshot, this.skewMs)) return snapshot;
 
         const lockPath = oauthLockPath(this.lockDir, key);
         return withDirectoryLock(lockPath, { timeoutMs: this.lockTimeoutMs }, async () => {
@@ -109,14 +117,14 @@ export class OAuthTokenManager {
             if (!current) throw new OAuthReauthRequiredError(handler.providerId);
             let working = snapshot;
             if (!sameRecord(current, snapshot)) {
-                if (!force && !isTokenExpired(current, this.skewMs)) return current.accessToken;
+                if (!force && !isTokenExpired(current, this.skewMs)) return current;
                 working = current; // their record is also expired - refresh THAT
             }
-            if (!force && !isTokenExpired(working, this.skewMs)) return working.accessToken;
+            if (!force && !isTokenExpired(working, this.skewMs)) return working;
 
             const result = await handler.refresh(working, ctx);
 
-            if (result.kind === 'keep') return result.tokens.accessToken;
+            if (result.kind === 'keep') return result.tokens;
 
             if (result.kind === 'reauth') {
                 // We hold the lock and verified current===working above, so
@@ -129,12 +137,12 @@ export class OAuthTokenManager {
             // while our refresh was in flight must not be overwritten.
             const latest = await this.store.read(key);
             if (!sameRecord(latest, working)) {
-                if (latest && !isTokenExpired(latest, this.skewMs)) return latest.accessToken;
+                if (latest && !isTokenExpired(latest, this.skewMs)) return latest;
                 throw new OAuthReauthRequiredError(handler.providerId);
             }
 
             await this.store.write(key, result.tokens);
-            return result.tokens.accessToken;
+            return result.tokens;
         });
     }
 }

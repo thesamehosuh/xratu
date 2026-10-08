@@ -104,6 +104,10 @@ export interface WebviewMessageHost {
     _sessionId: string | null;
     _setContextWindowOverride(model: string, window: number | null): Promise<void>;
     _setLlmCredentials(reason?: string, openCard?: 'byok' | 'local'): Promise<void>;
+    _startOAuthSignIn(providerId: string, method?: 'browser' | 'device'): Promise<void>;
+    _cancelOAuthSignIn(): Promise<void>;
+    _submitOAuthManualCode(code: string): Promise<void>;
+    _oauthSignOut(credentialId: string): Promise<void>;
     _setSkillEnabled(id: string, enabled: boolean): Promise<void>;
     _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void>;
     _setTranscriptPref(id: string, enabled: boolean): Promise<void>;
@@ -297,6 +301,18 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'openCredentials':
                     void host._setLlmCredentials(undefined, data.target);
+                    break;
+                case 'oauthSignIn':
+                    void host._startOAuthSignIn(data.providerId, data.method === 'device' ? 'device' : 'browser');
+                    break;
+                case 'oauthCancelSignIn':
+                    void host._cancelOAuthSignIn();
+                    break;
+                case 'oauthManualCode':
+                    void host._submitOAuthManualCode(String(data.code ?? ''));
+                    break;
+                case 'oauthSignOut':
+                    void host._oauthSignOut(data.credentialId);
                     break;
                 case 'toggleYolo':
                     host._yoloMode = !host._yoloMode;

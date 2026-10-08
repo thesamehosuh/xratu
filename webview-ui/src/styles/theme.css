@@ -8962,3 +8962,105 @@ button:not(:disabled):active,
     }
 }
 
+
+/* --- OAuth subscription sign-in -----------------------------------------
+ * A row per provider: name + connection state on one line, actions on the
+ * other, and the flow's waiting surface underneath. Direction-safe by
+ * construction (logical properties only - AGENTS.md R4).
+ */
+.cred-oauth-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cred-oauth-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 7px;
+}
+
+.cred-oauth-row.busy {
+    border-color: var(--vscode-focusBorder);
+}
+
+.cred-oauth-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 160px;
+}
+
+.cred-oauth-name {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.cred-oauth-account {
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-hint {
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+    line-height: 1.45;
+}
+
+.cred-oauth-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* Waiting + device-code surfaces take the full row so the code is never
+ * squeezed into the action cluster. */
+.cred-oauth-wait,
+.cred-oauth-device,
+.cred-oauth-manual {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 0 100%;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-code {
+    align-self: flex-start;
+    padding: 5px 9px;
+    border: 1px dashed var(--vscode-widget-border);
+    border-radius: 6px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    user-select: all;
+}
+
+.cred-oauth-manual-title {
+    font-weight: 600;
+    color: var(--vscode-foreground);
+}
+
+.cred-oauth-manual-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.cred-oauth-manual-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+    border-radius: 5px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font-size: 12px;
+}

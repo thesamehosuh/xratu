@@ -291,6 +291,14 @@ export interface LocalAgentRequest {
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
+    /** Provider-specific request headers (OAuth routing headers such as
+     *  ChatGPT-Account-Id). Merged last, so a provider can add to - never
+     *  accidentally shadow - the Authorization/content headers. */
+    headers?: Record<string, string>;
+    /** OAuth credentials only: called when the provider answers 401 so the
+     *  turn can force a token refresh and replay the request ONCE. Returns
+     *  the fresh access token, or null to give up and surface the 401. */
+    onUnauthorized?: () => Promise<string | null>;
     /** Wire API to use. Resolved by the host via `resolveApiStyle`; defaults
      *  to OpenAI chat/completions. */
     apiStyle?: 'chat' | 'messages' | 'responses' | 'google';

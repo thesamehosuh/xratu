@@ -22,6 +22,9 @@ export interface OAuthTokenSet {
     refreshToken?: string;
     expiresAt: number; // epoch ms; 0 = unknown
     accountId?: string; // ChatGPT-Account-Id, Copilot tenant, etc.
+    /** Human-readable account ("Plus - you@example.com") when the IdP
+     *  discloses one. Display metadata only - never sent as a credential. */
+    accountLabel?: string;
     scopes?: string[];
     tokenType?: string;
 }
@@ -81,12 +84,24 @@ export interface OAuthProviderHandler {
     /** Canonical endpoint the tokens are for - OAuth providers have fixed
      *  base URLs the user must not be able to mistype. */
     canonicalBaseUrl: string;
+    /** API dialect this provider's base URL speaks. OAuth providers are NOT
+     *  OpenAI-compatible by default: the ChatGPT Codex backend serves the
+     *  Responses API only, so the credential must carry the style instead of
+     *  the request path guessing from the host. */
+    apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
+    /** Provider-specific request headers for a resolved token set (the
+     *  ChatGPT-Account-Id routing header, an `originator`, ...). Kept on the
+     *  handler so a base-URL heuristic never has to know provider trivia. */
+    headers?(tokens: OAuthTokenSet): Record<string, string>;
     /** Run a full login flow and return fresh tokens. Throws
      *  OAuthCancelledError when the user aborts, OAuthFlowError otherwise. */
     login(ctx: OAuthLoginContext): Promise<OAuthTokenSet>;
     /** Refresh per the matrix above. `refreshWithTokenEndpoint` in
      *  tokenEndpoint.ts implements it for any RFC 6749 section 6 endpoint. */
     refresh(tokens: OAuthTokenSet, ctx: OAuthLoginContext): Promise<OAuthRefreshResult>;
+    /** Server-side revocation (RFC 7009) for sign-out. Best-effort by
+     *  contract: the caller clears local credentials even if this throws. */
+    revoke?(tokens: OAuthTokenSet, ctx: OAuthLoginContext): Promise<void>;
 }
 
 /** Base flow failure. `code` is an OAuth/RFC error code where one exists

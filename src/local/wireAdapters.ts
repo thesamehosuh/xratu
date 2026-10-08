@@ -10,6 +10,7 @@
 import { proxyFetch } from '../proxyFetch';
 import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { isOpenRouterHost, supportsPromptCacheKey } from './apiStyle';
+import { isChatGptSubscriptionHost } from '../providerIdentity';
 import { dataUrlMime, dataUrlPayload } from './imageFormat';
 import type {
     LocalAgentMessage,
@@ -330,7 +331,7 @@ async function requestChatCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeHeaders(request.apiKey, request.sessionId),
+                headers: makeHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -754,7 +755,7 @@ async function requestMessagesCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeMessagesHeaders(request.apiKey, request.sessionId),
+                headers: makeMessagesHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -1066,7 +1067,16 @@ function toResponsesBody(
             parameters: tool.inputSchema,
         }));
     }
-    body.max_output_tokens = outputCapFor(request);
+    // The ChatGPT (Codex) backend REJECTS max_output_tokens, so sending a cap
+    // there would spend a round trip on the 400-degradation retry below; it
+    // also requires store:false, and only returns replayable reasoning when
+    // it is asked for the encrypted form (Codex CLI sends all three).
+    if (isChatGptSubscriptionHost(request.baseUrl)) {
+        body.store = false;
+        body.include = ['reasoning.encrypted_content'];
+    } else {
+        body.max_output_tokens = outputCapFor(request);
+    }
     if (request.temperature != null) body.temperature = request.temperature;
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
@@ -1117,7 +1127,7 @@ async function requestResponsesCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeHeaders(request.apiKey, request.sessionId),
+                headers: makeHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -1463,7 +1473,7 @@ async function requestGoogleCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeGoogleHeaders(request.apiKey, request.sessionId),
+                headers: makeGoogleHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));

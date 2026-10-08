@@ -65,6 +65,12 @@ export interface LoopbackServerOptions {
     callbackPath?: string;
     /** When set, a callback whose state does not match fails the flow. */
     expectedState?: string;
+    /** Custom state predicate for IdPs that decorate the returned state.
+     *  ChatGPT appends `.onboarding_entrypoint=life_sciences` to a state it
+     *  issued (Codex CLI strips it before comparing), so strict equality
+     *  would reject a perfectly good sign-in. Compared against the EXPECTED
+     *  state; defaults to `received === expectedState`. */
+    stateMatches?: (received: string, expected: string) => boolean;
     /** Inactivity deadline for the whole flow. Default 5 minutes. */
     timeoutMs?: number;
     successHtml?: string;
@@ -92,7 +98,7 @@ export async function startLoopbackServer(opts: LoopbackServerOptions): Promise<
     let lastError: unknown = null;
     for (const port of opts.candidatePorts) {
         try {
-            return await listenOn(port, callbackPath, timeoutMs, opts.expectedState, successHtml, errorHtml);
+            return await listenOn(port, callbackPath, timeoutMs, opts.expectedState, opts.stateMatches, successHtml, errorHtml);
         } catch (err) {
             lastError = err;
             if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err;
@@ -112,6 +118,7 @@ function listenOn(
     callbackPath: string,
     timeoutMs: number,
     expectedState: string | undefined,
+    stateMatches: ((received: string, expected: string) => boolean) | undefined,
     successHtml: string,
     errorHtml: string,
 ): Promise<LoopbackServer> {
@@ -221,7 +228,13 @@ function listenOn(
             }
 
             const state = url.searchParams.get('state') ?? undefined;
-            if (expectedState !== undefined && state !== expectedState) {
+            const stateOk = expectedState === undefined
+                ? true
+                : state !== undefined
+                    && (stateMatches
+                        ? stateMatches(state, expectedState)
+                        : state === expectedState);
+            if (!stateOk) {
                 // A real callback carrying the WRONG state is a confused-deputy
                 // signal - fail loudly rather than Continue's silent drop.
                 respondThen(res, 400, errorHtml, () => settle(
