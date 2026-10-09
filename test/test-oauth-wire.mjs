@@ -233,6 +233,42 @@ for (const [style, baseUrl, model, extraPath] of [
     check('public subscription groups local tools', call.body.tools[0].type, 'namespace');
     check('namespaced function preserves executor name', call.body.tools[0].tools[0].name, 'read_file');
 }
+{
+    const captured = [];
+    const original = globalThis.fetch;
+    let executions = 0;
+    const functionCall = {
+        id: 'fc_item_1', call_id: 'call_1', type: 'function_call',
+        namespace: 'xratu', name: 'read_file', arguments: '{"path":"README.md"}',
+    };
+    globalThis.fetch = async (_url, init) => {
+        captured.push(JSON.parse(String(init.body)));
+        if (captured.length === 1) return sse([
+            frame({ type: 'response.output_item.added', output_index: 0, item: { ...functionCall, arguments: '' } }),
+            frame({ type: 'response.function_call_arguments.delta', item_id: 'fc_item_1', delta: '{"path":"README.md"}' }),
+            frame({ type: 'response.output_item.done', output_index: 0, item: functionCall }),
+            frame({ type: 'response.completed', response: { output: [functionCall] } }),
+        ]);
+        return sse([
+            frame({ type: 'response.output_text.delta', delta: 'Read complete.' }),
+            frame({ type: 'response.completed', response: { output: [] } }),
+        ]);
+    };
+    const events = [];
+    try {
+        for await (const event of runLocalAgent({
+            ...baseRequest({ baseUrl: 'https://api.openai.com/v1', subscription: true, maxRounds: 3,
+                contextWindow: 100000, tools: [{ name: 'read_file', description: 'Read a file', inputSchema: { type: 'object' } }] }),
+        }, { execute: async (call) => { executions++; check('namespaced response dispatches the local tool', call.name, 'read_file'); check('tool arguments survive namespaced response', call.arguments.path, 'README.md'); return { output: 'file contents' }; } }, { requestApproval: async () => ({}) })) {
+            events.push(event);
+        }
+    } finally { globalThis.fetch = original; }
+    check('namespaced continuation executed one tool', executions, 1);
+    const nextInput = captured[1].input;
+    check('assistant function call is replayed with namespace', nextInput.some((item) => item.type === 'function_call' && item.namespace === 'xratu' && item.call_id === 'call_1'), true);
+    check('tool result follows the matching call id', nextInput.some((item) => item.type === 'function_call_output' && item.call_id === 'call_1' && item.output === 'file contents'), true);
+    check('agent continues after namespaced tool result', events.some((event) => event.type === 'chunk' && event.value === 'Read complete.'), true);
+}
 for (const terminal of [null, 'response.incomplete', 'response.failed']) {
     const original = globalThis.fetch;
     globalThis.fetch = async () => sse([

@@ -833,6 +833,7 @@ export function App() {
                     // The host always sends the whole picture (it merges its own
                     // patches), so a straight replace is correct here.
                     setOauthState(msg.state);
+                    if (!msg.state.inProgress) setOauthCopyResult(null);
                     break;
                 case 'savedCredentials':
                     setSavedCredentials(msg.credentials);
@@ -1130,10 +1131,10 @@ export function App() {
                     onDiscoverLocalModels={startLocalScan}
                     onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
                     oauthState={oauthState}
-            onOAuthSignIn={(providerId, method, credentialId) => send({ type: 'oauthSignIn', providerId, method, credentialId })}
+            onOAuthSignIn={(providerId, method, credentialId) => { setOauthCopyResult(null); send({ type: 'oauthSignIn', providerId, method, credentialId }); }}
             onOAuthCopy={(value, requestId) => { setOauthCopyResult(null); send({ type: 'copyToClipboard', value, requestId }); }}
             copyResult={oauthCopyResult}
-            onOAuthCancelSignIn={() => send({ type: 'oauthCancelSignIn' })}
+            onOAuthCancelSignIn={() => { setOauthCopyResult(null); send({ type: 'oauthCancelSignIn' }); }}
             onOAuthManualCode={(code) => send({ type: 'oauthManualCode', code })}
             onOAuthSignOut={(credentialId) => send({ type: 'oauthSignOut', credentialId })}
             onBack={() => setScreen(credReturnTo)}

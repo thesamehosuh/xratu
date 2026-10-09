@@ -161,7 +161,8 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
             if (seen) rmIfOwnerUnchanged(lockPath, seen);
             else removeIfUnchanged(lockPath, acquiredAge, measuredAt);
             firstSeenOwner = null;
-            continue;
+            // Use the same deadline and abortable wait even if removal failed,
+            // so stale takeover cannot spin without yielding the event loop.
         }
 
         if (now() >= deadline) throw new LockTimeoutError(lockPath);

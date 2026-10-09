@@ -70,6 +70,11 @@ for (const change of [{ nonce: 'wrong' }, { aud: 'wrong' }, { iss: 'https://evil
 overrideClaims = {};
 const { privateKey: wrongKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 await assert.rejects(validateChatGptIdToken(ctx, jwt(claimsFor('n'), wrongKey), clientId, 'n'), /signature/);
+const malformedJwks = { ...ctx, async fetch(url, init) {
+    if (url.endsWith('jwks.json')) return response({ keys: [{ ...jwk, n: '!', e: '!' }] });
+    return ctx.fetch(url, init);
+} };
+await assert.rejects(validateChatGptIdToken(malformedJwks, jwt(claimsFor('n')), clientId, 'n'), (e) => e.code === 'invalid_id_token');
 callbackExtra = { clientId: undefined };
 await assert.rejects(handler.login(ctx), (e) => e.code === 'invalid_registration');
 callbackExtra = { state: 'wrong' };

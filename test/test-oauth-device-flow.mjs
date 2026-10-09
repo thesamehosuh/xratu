@@ -40,6 +40,28 @@ check('Infinity falls back', positiveSeconds(Infinity, 5), 5);
 check('capped at 60', positiveSeconds(300, 5), 60);
 check('custom cap', positiveSeconds(9999, 5, 900), 900);
 
+// The default sleep releases its abort listener on ordinary timer completion.
+{
+    const controller = new AbortController();
+    const signal = controller.signal;
+    let added = 0;
+    let removed = 0;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = (...args) => { if (args[0] === 'abort') added++; return add(...args); };
+    signal.removeEventListener = (...args) => { if (args[0] === 'abort') removed++; return remove(...args); };
+    let polls = 0;
+    const result = await require('../out/oauth/deviceFlow.js').pollUntilAuthorized({
+        intervalS: 0.001,
+        expiresIn: 2,
+        signal,
+        attempt: async () => ({ done: ++polls === 12, value: 'authorized' }),
+    });
+    check('default poll sleep reaches authorization', result, 'authorized');
+    check('default poll sleep adds one abort listener per wait', added, 12);
+    check('default poll sleep removes each completed timer listener', removed, 12);
+}
+
 // --- requestDeviceAuthorization ---------------------------------------------------
 {
     const fetch = async () => jsonResponse(200, {

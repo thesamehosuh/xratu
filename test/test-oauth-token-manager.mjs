@@ -428,6 +428,32 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     fs.rmSync(lock, { recursive: true });
 }
 {
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'stale-removal-failure');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ token: 'stale', acquiredAt: 0, pid: -1 }));
+    const oldRemove = require('node:fs').rmSync;
+    let attempts = 0;
+    require('node:fs').rmSync = (target, ...args) => {
+        if (target === lock) { attempts++; const error = new Error('busy'); error.code = 'EBUSY'; throw error; }
+        return oldRemove(target, ...args);
+    };
+    let error;
+    let clock = Date.now();
+    let waits = 0;
+    try {
+        await withDirectoryLock(lock, {
+            timeoutMs: 15, staleMs: 0, sleepMs: 5,
+            nowMs: () => clock,
+            sleep: (ms) => { waits++; clock += ms; return new Promise((resolve) => setImmediate(resolve)); },
+        }, async () => {});
+    } catch (e) { error = e; }
+    finally { require('node:fs').rmSync = oldRemove; oldRemove(lock, { recursive: true, force: true }); }
+    check('failed stale removal is bounded by the lock deadline', error?.name, 'LockTimeoutError');
+    checkTrue('failed stale removal yields and retries', attempts > 1);
+    check('failed stale removal waits until the virtual deadline', waits, 3);
+}
+{
     const nearly = { ...VALID, expiresAt: Date.now() + 240000 };
     const m = managerFor(memoryStore({ k: nearly }));
     const h = handler((tokens) => refreshWithTokenEndpoint(endpointOpts(async () => { throw new Error('temporary outage'); }, tokens)));

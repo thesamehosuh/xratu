@@ -153,12 +153,13 @@ export interface DevicePollLoopOptions<T> {
 }
 
 export async function pollUntilAuthorized<T>(opts: DevicePollLoopOptions<T>): Promise<T> {
-    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => {
-        const timer = setTimeout(r, ms);
-        opts.signal?.addEventListener('abort', () => {
-            clearTimeout(timer);
-            r();
-        }, { once: true });
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => {
+        const cleanup = () => opts.signal?.removeEventListener('abort', onAbort);
+        const onTimer = () => { cleanup(); resolve(); };
+        const onAbort = () => { clearTimeout(timer); cleanup(); resolve(); };
+        const timer = setTimeout(onTimer, ms);
+        opts.signal?.addEventListener('abort', onAbort, { once: true });
+        if (opts.signal?.aborted) onAbort();
     }));
     const now = opts.nowMs ?? (() => Date.now());
     let intervalS = positiveSeconds(opts.intervalS, DEFAULT_INTERVAL_S);

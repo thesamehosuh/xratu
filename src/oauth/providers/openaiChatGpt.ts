@@ -73,8 +73,15 @@ export async function validateChatGptIdToken(ctx: OAuthLoginContext, token: stri
     const key = Array.isArray(jwks.keys) ? jwks.keys.map((candidate: unknown) => asObject(candidate))
         .find((k) => k && k.kid === header.kid && k.kty === 'RSA'
             && (!k.use || k.use === 'sig') && (!k.alg || k.alg === 'RS256')) : undefined;
-    if (!key || !verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`),
-        createPublicKey({ key: key as JsonWebKey, format: 'jwk' }), Buffer.from(parts[2], 'base64url'))) {
+    if (!key) throw new OAuthFlowError('invalid_id_token', 'Invalid ID token signature');
+    let validSignature = false;
+    try {
+        validSignature = verify('RSA-SHA256', Buffer.from(`${parts[0]}.${parts[1]}`),
+            createPublicKey({ key: key as JsonWebKey, format: 'jwk' }), Buffer.from(parts[2], 'base64url'));
+    } catch {
+        throw new OAuthFlowError('invalid_id_token', 'Invalid ID token signature');
+    }
+    if (!validSignature) {
         throw new OAuthFlowError('invalid_id_token', 'Invalid ID token signature');
     }
     const now = Date.now() / 1000;

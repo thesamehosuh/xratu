@@ -479,7 +479,9 @@ export function CredentialsPage({
                                 </div>
                             )}
 
-                            {copyResult?.ok === false && <div className="cred-oauth-error" role="alert">{t('oauthCopyFailed')}</div>}
+                            {busy && copyResult?.ok === false
+                                && copyResult.requestId === (inProgress?.method === 'browser' ? 'oauth-browser-url' : 'oauth-device-code')
+                                && <div className="cred-oauth-error" role="alert">{t('oauthCopyFailed')}</div>}
                             {!busy && registrations.length > 0 && <details className="cred-oauth-remembered">
                                 <summary>{t('credOAuthPreviousAccounts')}</summary>
                                 <div className="cred-oauth-remembered-list">
