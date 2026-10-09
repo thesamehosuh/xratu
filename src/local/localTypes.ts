@@ -8,12 +8,12 @@ export type XratuRuntimeMode = 'cloud' | 'local';
  * parameter so the runtime's own default applies). Superset of the efforts
  * providers report (OpenAI's `minimal..high`, OpenRouter's `xhigh`/`max`).
  */
-export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /** Ordered weakest → strongest; the single source for validating persisted
  *  levels and filtering provider-reported effort lists. */
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
-    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ];
 
 /** Effort levels a model accepts with reasoning enabled. Excludes `none`. */
@@ -239,6 +239,8 @@ export interface LocalAgentMessage {
 }
 
 export interface LocalAgentRequest {
+    /** OAuth permission to use a ChatGPT plan via the public Responses API. */
+    subscription?: boolean;
     baseUrl: string;
     apiKey?: string | null;
     model: string;

@@ -62,25 +62,19 @@ import { getOAuthProvider, listOAuthProviders } from './oauth/providerAuthRegist
 import './oauth/providers/register';
 import { OAuthTokenManager, type OAuthTokenStore } from './oauth/tokenManager';
 import { startLoopbackServer, type LoopbackServer } from './oauth/server';
-import {
-    buildChatGptPkce,
-    chatGptLoopbackConfig,
-    exchangeChatGptCode,
-    exchangeChatGptDeviceGrant,
-    normalizeChatGptManualCode,
-    OPENAI_CODEX_DEVICE_VERIFICATION_URL,
-    openAiCodexStateMatches,
-    pollChatGptDeviceGrant,
-    requestChatGptDeviceCode,
-} from './oauth/providers/openaiCodex';
+import { chatGptPlanEnabled, chatGptStorageKey } from './oauth/providers/openaiChatGpt';
 import {
     OAuthFlowError,
+    OAuthCancelledError,
+    type OAuthAuthorization,
+    type OAuthCallback,
     type OAuthLoginContext,
     type OAuthProviderHandler,
     type OAuthTokenSet,
 } from './oauth/types';
 import { oauthErrorValueKey } from './oauth/errorKeys';
 import { createManualCodeSlot, type ManualCodeSlot } from './oauth/manualCode';
+import { abortable } from './oauth/refreshLock';
 
 /** One in-flight sign-in. The host owns the transport (browser launch,
  *  loopback socket, abort controller) so a cancel can actually stop it; the
@@ -91,8 +85,6 @@ interface OAuthFlowState {
     method: 'browser' | 'device';
     controller: AbortController;
     server?: LoopbackServer;
-    verifier?: string;
-    state?: string;
     /** The manual-paste side of the callback race. Created PENDING when the
      *  flow starts - see manualCode.ts for why reading a possibly-undefined
      *  promise into Promise.race would end the flow instantly. */
@@ -118,6 +110,7 @@ interface StoredCredential {
     label: string;
     /** Present => the real credential is an OAuth token set, not this key. */
     oauthProviderId?: string;
+    oauthStorageKey?: string;
 }
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
@@ -1603,6 +1596,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             // instead of a turn that throws at request time.
                             if (typeof c.oauthProviderId === 'string' && getOAuthProvider(c.oauthProviderId)) {
                                 record.oauthProviderId = c.oauthProviderId;
+                                if (typeof c.oauthStorageKey === 'string') record.oauthStorageKey = c.oauthStorageKey;
                             }
                             return record;
                         });
@@ -2140,38 +2134,53 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  egress that honours a configured proxy dispatcher, and a token request
      *  that bypasses it fails for exactly the users who need OAuth most. */
     private _oauthContext(signal?: AbortSignal): OAuthLoginContext {
-        return { fetch: proxyFetch as unknown as typeof fetch, signal };
+        return {
+            fetch: ((input, init) => {
+                const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+                return proxyFetch(input, { ...init, dispatcher: getProxyDispatcher(url) });
+            }) as typeof fetch,
+            signal,
+        };
     }
 
     /** Resolve what a request needs from a credential: the bearer value plus
      *  any provider routing headers. This is the ONLY async seam - everything
      *  downstream (header builders, wire adapters) keeps receiving a plain
      *  string, so OAuth costs one await per turn, not per request. */
-    private async _resolveCredentialAuth(active: StoredCredential): Promise<{
+    private async _resolveCredentialAuth(active: StoredCredential, signal?: AbortSignal): Promise<{
         apiKey: string | null;
         headers?: Record<string, string>;
         apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
+        subscription?: boolean;
+        tokens?: OAuthTokenSet;
         onUnauthorized?: () => Promise<string | null>;
     }> {
         if (!active.oauthProviderId) {
             return { apiKey: active.apiKey || null };
         }
-        const handler = getOAuthProvider(active.oauthProviderId);
+        const provider = getOAuthProvider(active.oauthProviderId);
+        const handler = provider ? { ...provider, storageKey: active.oauthStorageKey ?? provider.storageKey } : undefined;
         // A record whose provider vanished (older install, half-removed
         // feature) degrades to "no key" instead of throwing at turn start.
         if (!handler) return { apiKey: null };
+        if (handler.subscription && !active.oauthStorageKey) throw new OAuthFlowError('reauth_required', 'Legacy ChatGPT connection needs sign-in');
         const manager = this._oauthTokenManager();
-        const ctx = this._oauthContext();
+        const ctx = this._oauthContext(signal);
         const tokens = await manager.resolveTokens(handler, ctx);
+        if (handler.subscription && !chatGptPlanEnabled(tokens)) throw new OAuthFlowError('plan_permission_missing', 'ChatGPT plan permission was not granted');
         return {
             apiKey: tokens.accessToken,
             headers: handler.headers?.(tokens),
             apiStyle: handler.apiStyle,
+            subscription: handler.subscription,
+            tokens,
             // The 401 retry: force ONE refresh, replay the round. Never a
             // loop - a second 401 is a real rejection, not a stale token.
             onUnauthorized: async () => {
                 try {
-                    return await manager.forceRefresh(handler, this._oauthContext());
+                    const next = await manager.forceRefreshTokens(handler, this._oauthContext(signal));
+                    if (handler.subscription && !chatGptPlanEnabled(next)) return null;
+                    return next.accessToken;
                 } catch {
                     return null;
                 }
@@ -2185,24 +2194,30 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const credentials = await this._getSavedCredentials();
         const target = credentials.find((c) => c.id === credentialId);
         if (!target?.oauthProviderId) return;
-        const handler = getOAuthProvider(target.oauthProviderId);
-        const store = this._oauthTokenStore();
-        if (handler) {
-            const tokens = await store.read(handler.storageKey);
-            if (tokens) {
-                try {
-                    await handler.revoke?.(tokens, this._oauthContext());
-                } catch {
-                    // A revoke outage must not strand the local session: the
-                    // token is being thrown away either way.
+        const provider = getOAuthProvider(target.oauthProviderId);
+        let revoked = true;
+        if (provider) {
+            const handler = { ...provider, storageKey: target.oauthStorageKey ?? (provider.subscription ? 'openai-codex' : provider.storageKey) };
+            if (this._globalState.get<string>('xratu.activeLlmCredentialId') === credentialId) this._abortControllers.get('chat')?.abort();
+            if (this._oauthFlow?.providerId === provider.providerId) this._cancelOAuthFlow();
+            await this._oauthTokenManager().withTokenLock(handler, async () => {
+                const store = this._oauthTokenStore();
+                const tokens = await store.read(handler.storageKey);
+                if (tokens) {
+                    try { await handler.revoke?.(tokens, this._oauthContext(AbortSignal.timeout(60_000))); }
+                    catch { revoked = false; }
                 }
-            }
-            await store.write(handler.storageKey, null);
+                await store.write(handler.storageKey, null);
+                await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-credential-vault' },
+                    () => this._deleteLlmCredential(credentialId, true, false));
+            });
+        } else {
+            await this._deleteLlmCredential(credentialId, true, false);
         }
-        await this._persistSavedCredentials(credentials.filter((c) => c.id !== credentialId));
         await this._fetchModels();
         await this._sendSavedCredentials();
         await this._sendOAuthState();
+        if (!revoked) this._postOAuthState({ error: { valueKey: 'oauthRevocationUnconfirmed' } });
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
@@ -2226,29 +2241,35 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private async _sendOAuthState(): Promise<void> {
         const credentials = await this._getSavedCredentials();
         const store = this._oauthTokenStore();
-        const accounts: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string }> = [];
+        const accounts: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string; planEnabled?: boolean; active?: boolean }> = [];
         for (const credential of credentials) {
             if (!credential.oauthProviderId) continue;
             const handler = getOAuthProvider(credential.oauthProviderId);
             if (!handler) continue;
-            const tokens = await store.read(handler.storageKey);
+            const tokens = await store.read(credential.oauthStorageKey ?? handler.storageKey);
             if (!tokens) continue;
             accounts.push({
                 providerId: handler.providerId,
                 credentialId: credential.id,
-                accountLabel: tokens.accountLabel,
+                accountLabel: tokens.email ?? tokens.accountLabel,
                 accountId: tokens.accountId,
+                active: this._globalState.get<string>('xratu.activeLlmCredentialId') === credential.id,
+                planEnabled: handler.subscription ? chatGptPlanEnabled(tokens) : true,
             });
         }
         this._postOAuthState({
             providers: listOAuthProviders().map((h) => ({
                 providerId: h.providerId,
-                label: h.canonicalBaseUrl ? this._providerLabelForUrl(h.canonicalBaseUrl) : h.providerId,
+                label: h.label ?? this._providerLabelForUrl(h.canonicalBaseUrl),
+                methods: h.methods,
             })),
             accounts,
+            registrations: Object.entries(this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {})
+                .map(([credentialId, r]) => ({ providerId: 'chatgpt-codex', credentialId, label: r.email ?? '' })),
             inProgress: this._oauthFlow ? { providerId: this._oauthFlow.providerId, method: this._oauthFlow.method } : null,
             // The device code belongs to the flow that asked for it.
             deviceCode: this._oauthFlow?.method === 'device' ? this._oauthState.deviceCode : null,
+            authorizeUrl: this._oauthFlow?.method === 'browser' ? this._oauthState.authorizeUrl : null,
         });
     }
 
@@ -2263,9 +2284,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * Device flow: no local server at all - the only transport that works in
      * remote VS Code and behind a filtering network.
      */
-    async _startOAuthSignIn(providerId: string, method: 'browser' | 'device' = 'browser'): Promise<void> {
+    async _startOAuthSignIn(providerId: string, method: 'browser' | 'device' = 'browser', credentialId?: string): Promise<void> {
         const handler = getOAuthProvider(providerId);
-        if (!handler) {
+        if (!handler || !(handler.methods ?? ['browser']).includes(method)) {
             this._postOAuthState({ error: { valueKey: 'oauthUnavailable' }, inProgress: null });
             return;
         }
@@ -2277,11 +2298,35 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._postOAuthState({ inProgress: { providerId, method }, error: null, authorizeUrl: null, deviceCode: null });
 
         try {
-            const tokens = method === 'device'
-                ? await this._runDeviceSignIn(handler, flow)
-                : await this._runBrowserSignIn(handler, flow);
-            if (this._oauthFlow !== flow) return; // cancelled while exchanging
-            await this._oauthCompleteSignIn(handler, tokens);
+            const hostId = await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-host-id' }, async () => {
+                let value = await this._secrets.get('xratu.oauthHostId');
+                if (!value) {
+                    value = this._globalState.get<string>('xratu.oauthHostId') ?? `urn:uuid:${crypto.randomUUID()}`;
+                    await this._secrets.store('xratu.oauthHostId', value);
+                }
+                return value;
+            }, controller.signal);
+            const registrations = this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {};
+            const registration = credentialId ? registrations[credentialId] : undefined;
+            const credentials = await this._getSavedCredentials();
+            const selected = credentials.find((c) => c.id === credentialId);
+            const previous = selected ? await this._oauthTokenStore().read(selected.oauthStorageKey ?? handler.storageKey) : null;
+            this._assertOAuthFlow(flow);
+            const tokens = await handler.login({ ...this._oauthContext(controller.signal), hostId, method,
+                openExternal: async (url) => {
+                    this._assertOAuthFlow(flow);
+                    await abortable(Promise.resolve(vscode.env.openExternal(vscode.Uri.parse(url))), controller.signal);
+                    this._assertOAuthFlow(flow);
+                },
+                registration: registration ? { ...registration, idToken: previous?.idToken } : undefined,
+                authorize: (options) => this._runBrowserSignIn(flow, options),
+                onEvent: (event) => {
+                    this._assertOAuthFlow(flow);
+                    if (event.type === 'device-code') this._postOAuthState({ deviceCode: event });
+                },
+            });
+            this._assertOAuthFlow(flow);
+            await this._oauthCompleteSignIn(handler, tokens, flow);
         } catch (error) {
             if (this._oauthFlow === flow) {
                 this._postOAuthState({ error: { valueKey: oauthErrorValueKey(error) }, inProgress: null });
@@ -2294,56 +2339,64 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    private async _runBrowserSignIn(handler: OAuthProviderHandler, flow: OAuthFlowState): Promise<OAuthTokenSet> {
-        const config = chatGptLoopbackConfig();
-        const pkce = buildChatGptPkce();
-        flow.verifier = pkce.verifier;
-        flow.state = pkce.state;
-
-        const server = await startLoopbackServer({
-            ...config,
-            // ChatGPT appends its own suffix to the returned state; the
-            // matcher normalizes it instead of failing a valid sign-in.
-            expectedState: pkce.state,
-            stateMatches: (received) => openAiCodexStateMatches(received, pkce.state),
-            successHtml: '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;text-align:center;padding:3em"><p>' + ui('oauthCallbackDone') + '</p></body>',
-            errorHtml: '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;text-align:center;padding:3em"><p>' + ui('oauthCallbackFailed') + '</p></body>',
-        });
-        flow.server = server;
-        // The registered redirect URI keeps the `localhost` spelling even
-        // when the flow landed on the fallback port - OpenAI matches it
-        // literally, and the bound socket is 127.0.0.1 either way.
-        const redirectUri = `http://localhost:${server.port}${config.callbackPath}`;
-        const authorizeUrl = pkce.authorizeUrl.replace(
-            /redirect_uri=[^&]*/,
-            `redirect_uri=${encodeURIComponent(redirectUri)}`,
-        );
-        this._postOAuthState({ inProgress: { providerId: handler.providerId, method: 'browser' }, authorizeUrl });
-        await vscode.env.openExternal(vscode.Uri.parse(authorizeUrl));
-
-        const callback = await Promise.race([
-            server.waitForCallback().then((r) => r.code),
-            flow.manualCode.promise,
-        ]);
-        server.dispose();
-        if (!callback) throw new OAuthFlowError('no_code', 'No authorization code received');
-        return exchangeChatGptCode(this._oauthContext(flow.controller.signal), {
-            code: normalizeChatGptManualCode(callback) || callback,
-            verifier: flow.verifier,
-            redirectUri,
-        });
+    private _assertOAuthFlow(flow: OAuthFlowState): void {
+        if (this._oauthFlow !== flow || flow.controller.signal.aborted) throw new OAuthCancelledError();
     }
 
-    private async _runDeviceSignIn(handler: OAuthProviderHandler, flow: OAuthFlowState): Promise<OAuthTokenSet> {
-        const ctx = this._oauthContext(flow.controller.signal);
-        const session = await requestChatGptDeviceCode(ctx);
-        this._postOAuthState({
-            inProgress: { providerId: handler.providerId, method: 'device' },
-            deviceCode: { userCode: session.userCode, verificationUri: OPENAI_CODEX_DEVICE_VERIFICATION_URL },
-        });
-        await vscode.env.openExternal(vscode.Uri.parse(OPENAI_CODEX_DEVICE_VERIFICATION_URL));
-        const grant = await pollChatGptDeviceGrant(ctx, session);
-        return exchangeChatGptDeviceGrant(ctx, grant);
+    private async _runBrowserSignIn(flow: OAuthFlowState, options: OAuthAuthorization): Promise<OAuthCallback> {
+        const signal = flow.controller.signal;
+        const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+        let server: LoopbackServer | undefined;
+        try {
+            try {
+                server = await startLoopbackServer({
+                    candidatePorts: [1455, 1457, 0], callbackPath: '/auth/callback',
+                    expectedState: options.expectedState, timeoutMs,
+                    successHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackDone') + '</p>',
+                    errorHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackFailed') + '</p>',
+                });
+                flow.server = server;
+            } catch (error) {
+                this._assertOAuthFlow(flow);
+                if (!(error instanceof OAuthFlowError) || error.code !== 'ports_busy') throw error;
+                this._postOAuthState({ error: { valueKey: 'oauthPortsBusy' } });
+            }
+            this._assertOAuthFlow(flow);
+            const redirectUri = server?.redirectUri ?? 'http://127.0.0.1:1455/auth/callback';
+            const authorizeUrl = options.buildUrl(redirectUri);
+            const safeUrl = new URL(authorizeUrl);
+            safeUrl.searchParams.delete('id_token_hint');
+            this._postOAuthState({ authorizeUrl: safeUrl.toString() });
+            // The visible link also lets the user continue when the launcher
+            // throws or returns false; the pending callback remains usable.
+            try { await abortable(Promise.resolve(vscode.env.openExternal(vscode.Uri.parse(authorizeUrl))), deadline); }
+            catch { deadline.throwIfAborted(); /* manual browser link remains available */ }
+            this._assertOAuthFlow(flow);
+            const manual = flow.manualCode.promise.then((input): OAuthCallback => {
+                this._assertOAuthFlow(flow);
+                let url: URL;
+                try { url = new URL(input); }
+                catch { throw new OAuthFlowError('bad_response', 'Paste the complete callback URL'); }
+                if (url.origin !== new URL(redirectUri).origin || url.pathname !== '/auth/callback'
+                    || url.searchParams.get('state') !== options.expectedState) {
+                    throw new OAuthFlowError('state_mismatch', 'Invalid manual callback');
+                }
+                const error = url.searchParams.get('error');
+                if (error) throw new OAuthFlowError(error, 'Authorization declined');
+                const code = url.searchParams.get('code');
+                if (!code) throw new OAuthFlowError('no_code', 'No authorization code received');
+                return { code, state: options.expectedState, clientId: url.searchParams.get('client_id') ?? undefined, redirectUri };
+            });
+            const callback = await abortable(Promise.race([
+                ...(server ? [server.waitForCallback().then((result) => ({ ...result, redirectUri }))] : []), manual,
+            ]), deadline);
+            this._assertOAuthFlow(flow);
+            return callback;
+        } finally {
+            server?.dispose();
+            if (flow.server === server) flow.server = undefined;
+        }
     }
 
     /** Accept a hand-pasted redirect code: the escape hatch when the loopback
@@ -2355,7 +2408,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._postOAuthState({ error: { valueKey: 'oauthNoFlow' } });
             return;
         }
-        const code = normalizeChatGptManualCode(input);
+        const code = input.trim();
         if (!code) {
             this._postOAuthState({ error: { valueKey: 'oauthCodeEmpty' } });
             return;
@@ -2382,29 +2435,33 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         flow.server?.dispose();
     }
 
-    private async _oauthCompleteSignIn(handler: OAuthProviderHandler, tokens: OAuthTokenSet): Promise<void> {
-        await this._oauthTokenStore().write(handler.storageKey, tokens);
-        const credentials = await this._getSavedCredentials();
-        // One connection per provider: a re-sign-in replaces the record
-        // instead of stacking a second entry for the same account.
-        const existing = credentials.find((c) => c.oauthProviderId === handler.providerId);
-        const record: StoredCredential = {
-            id: existing?.id ?? crypto.randomUUID(),
-            providerId: handler.providerId,
-            baseUrl: handler.canonicalBaseUrl,
-            apiKey: '',
-            label: this._providerLabelForUrl(handler.canonicalBaseUrl),
-            oauthProviderId: handler.providerId,
-        };
-        const next = credentials.filter((c) => c.id !== record.id);
-        next.push(record);
-        await this._persistSavedCredentials(next);
-        await this._globalState.update('xratu.activeLlmCredentialId', record.id);
-        // Legacy slots stay consistent for anything still reading them.
-        await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
+    private async _oauthCompleteSignIn(handler: OAuthProviderHandler, tokens: OAuthTokenSet, flow: OAuthFlowState): Promise<void> {
+        const storageKey = handler.subscription ? chatGptStorageKey(tokens) : handler.storageKey;
+        let record!: StoredCredential;
+        await this._oauthTokenManager().withTokenLock({ ...handler, storageKey }, async () => {
+            this._assertOAuthFlow(flow);
+            await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-credential-vault' }, async () => {
+                const credentials = await this._getSavedCredentials();
+                const registrations = this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {};
+                const existing = credentials.find((c) => c.oauthStorageKey === storageKey);
+                const registrationId = Object.keys(registrations).find((id) => registrations[id].clientId === tokens.clientId && registrations[id].subject === tokens.subject);
+                record = {
+                    id: existing?.id ?? registrationId ?? crypto.randomUUID(), providerId: handler.providerId,
+                    baseUrl: handler.canonicalBaseUrl, apiKey: '', label: tokens.accountLabel ?? handler.label ?? handler.providerId,
+                    oauthProviderId: handler.providerId, oauthStorageKey: storageKey,
+                };
+                await this._oauthTokenStore().write(storageKey, tokens);
+                if (tokens.clientId && tokens.subject) {
+                    registrations[record.id] = { clientId: tokens.clientId, subject: tokens.subject, email: tokens.email };
+                    await this._globalState.update('xratu.oauthRegistrations', registrations);
+                }
+                await this._persistSavedCredentials([...credentials.filter((c) => c.id !== record.id), record]);
+                await this._globalState.update('xratu.activeLlmCredentialId', record.id);
+                await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
+            }, flow.controller.signal);
+        }, flow.controller.signal);
         await this._fetchModels();
         await this._sendSavedCredentials();
-        this._postOAuthState({ account: { providerId: handler.providerId, accountLabel: tokens.accountLabel } });
     }
 
     private _maskApiKey(apiKey: string): string {
@@ -2420,6 +2477,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         llm_api_key?: string;
         llm_base_url?: string;
         extra_headers?: Record<string, string>;
+        discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>;
     }> {
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) return {};
@@ -2435,11 +2493,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (active.oauthProviderId) {
             try {
                 const auth = await this._resolveCredentialAuth(active);
-                return { llm_api_key: auth.apiKey ?? undefined, llm_base_url: active.baseUrl, extra_headers: auth.headers };
+                const handler = getOAuthProvider(active.oauthProviderId)!;
+                const tokens = auth.tokens;
+                return { llm_api_key: auth.apiKey ?? undefined, llm_base_url: active.baseUrl, extra_headers: auth.headers,
+                    discoverModels: handler.discoverModels && tokens ? () => handler.discoverModels!(this._oauthContext(), tokens) : undefined };
             } catch {
                 // A dead/rejected token must not turn model listing into an
                 // error toast; the turn path surfaces the re-auth requirement.
-                return { llm_base_url: active.baseUrl };
+                return {};
             }
         }
         return { llm_api_key: active.apiKey, llm_base_url: active.baseUrl };
@@ -2547,12 +2608,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._selectedModel = null;
             await this._fetchModels();
             await this._sendSavedCredentials();
+            await this._sendOAuthState();
             this._view?.webview.postMessage({ type: 'credentialsSaved' });
             return;
         }
         await this._globalState.update('xratu.activeLlmCredentialId', id);
         await this._fetchModels();
         await this._sendSavedCredentials();
+        await this._sendOAuthState();
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
@@ -2576,8 +2639,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
-    async _deleteLlmCredential(id: string): Promise<void> {
+    async _deleteLlmCredential(id: string, oauthCleared = false, refresh = true): Promise<void> {
         const credentials = await this._getSavedCredentials();
+        const target = credentials.find((c) => c.id === id);
+        if (target?.oauthProviderId && !oauthCleared) return this._oauthSignOut(id);
         const next = credentials.filter((c) => c.id !== id);
         if (next.length === credentials.length) return;
 
@@ -2606,8 +2671,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await this._secrets.store('xratu.llmBaseUrl', active.baseUrl);
             await this._globalState.update('xratu.activeLlmCredentialId', active.id);
         }
-        await this._fetchModels();
-        await this._sendSavedCredentials();
+        if (refresh) {
+            await this._fetchModels();
+            await this._sendSavedCredentials();
+        }
     }
 
     // --- Per-credential model memory -------------------------------------
@@ -3411,22 +3478,31 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // leave the composer spinning with no explanation. "Sign in again" is
         // a different action from "something went wrong" and the user needs to
         // be told which one happened.
+        const controller = existingController ?? new AbortController();
+        this._abortControllers.set('chat', controller);
+        const noRun = (): StreamOutcome => {
+            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
+            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+        };
         let auth: Awaited<ReturnType<typeof this._resolveCredentialAuth>>;
         try {
-            auth = await this._resolveCredentialAuth(active);
+            auth = await this._resolveCredentialAuth(active, controller.signal);
         } catch (e) {
-            this._view?.webview.postMessage({ type: 'error', valueKey: oauthErrorValueKey(e) });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            if (!controller.signal.aborted) {
+                this._view?.webview.postMessage({ type: 'error', valueKey: oauthErrorValueKey(e) });
+                if (active.oauthProviderId) await this._sendOAuthState();
+            }
+            return noRun();
         }
         const insecureError = insecureRemoteHttpError(active.baseUrl, auth.apiKey);
         if (insecureError) {
             this._view?.webview.postMessage({ type: 'error', valueKey: insecureError });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return noRun();
         }
         const model = this._selectedModel;
         if (!model) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'noModelSelected' });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return noRun();
         }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -3435,8 +3511,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Reuse the controller registered by _handleChatRequest when the
         // caller already owns one (local branch) so cancel covers the full
         // isTyping window; standalone invocations create their own.
-        const controller = existingController ?? new AbortController();
-        this._abortControllers.set('chat', controller);
         // Matches the caller's epoch (captured right before this call) -
         // post-cancel messages must not leak into a new session view.
         const epoch = this._sessionEpoch;
@@ -3550,6 +3624,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         apiKey: auth.apiKey,
                         headers: auth.headers,
                         ...(auth.onUnauthorized ? { onUnauthorized: auth.onUnauthorized } : {}),
+                        subscription: auth.subscription,
                         model: childModel,
                         signal: controller.signal,
                         maxOutputLimit: this._maxOutputLimitFor(childModel, active.baseUrl),
@@ -3677,6 +3752,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     apiKey: auth.apiKey,
                     headers: auth.headers,
                     ...(auth.onUnauthorized ? { onUnauthorized: auth.onUnauthorized } : {}),
+                        subscription: auth.subscription,
                     model,
                     systemPrompt,
                     userText: localUserText,
@@ -4074,7 +4150,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Runtime collapse: every credential - remote BYOK or on-machine
             // runtime - is an OpenAI-compatible endpoint the extension probes
             // and chats with directly.
-            return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key, llm.extra_headers);
+            return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key, llm.extra_headers, llm.discoverModels);
         } catch (e) {
             // Probe failure - tell the user instead of failing silently.
             this._view.webview.postMessage({
@@ -4087,7 +4163,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    private async _fetchLocalModels(baseUrl: string, apiKey?: string, extraHeaders?: Record<string, string>): Promise<boolean> {
+    private async _fetchLocalModels(baseUrl: string, apiKey?: string, extraHeaders?: Record<string, string>, discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>): Promise<boolean> {
         if (!this._view) return false;
         const insecureError = insecureRemoteHttpError(baseUrl, apiKey);
         if (insecureError) {
@@ -4105,7 +4181,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl))
                 ? await this._ensureModelsDevCatalog()
                 : null;
-            let probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev, extraHeaders);
+            let probed = discoverModels ? await discoverModels() : await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev, extraHeaders);
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }
@@ -4197,6 +4273,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 type: 'modelInfo',
                 defaultModel: models[0] ?? '',
                 models,
+                displayNames: Object.fromEntries(probed.models.filter((m) => m.displayName).map((m) => [m.id, m.displayName!])),
                 contextWindows: servedWindows,
                 overrides: this._contextWindowOverrides(),
                 thinkingLevels: this._thinkingLevels(),

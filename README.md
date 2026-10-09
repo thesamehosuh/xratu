@@ -101,35 +101,39 @@ the API key; the rest hand each service its own URL at signup.
 
 ### Sign in with a ChatGPT subscription
 
-You do not need an API key if you already pay for ChatGPT Plus, Pro or
-Business. Open **Settings -> Connections**, press **Sign in** next to ChatGPT,
-and Xratu walks you through the browser login.
+Open **Settings -> Connections** and choose **Continue with ChatGPT**. Xratu
+uses OpenAI's [documented open-source sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+registers Xratu for your account and workspace, and validates the signed ID
+token before saving the connection. ChatGPT plan access must be granted during
+consent; identity sign-in alone does not enable inference.
 
-Two transports, because one of them is always going to fail for somebody:
+Use **Copy link** to open sign-in in your preferred browser. Browser login
+starts a callback listener on `127.0.0.1`, trying another port when one is
+occupied. If the browser cannot reach the extension host (for example over SSH
+or in a container), expand **Browser didn’t connect?** and paste the
+**complete redirect URL**. It carries the state and issued client ID needed to validate a new
+registration. The documented integration currently uses browser sign-in.
 
-- **Browser login** (default) opens the ChatGPT authorization page and waits
-  for a local callback. If the callback cannot reach VS Code - the port is
-  taken, you are in a remote window, or the browser runs on another machine -
-  a **paste the code** box appears in the same card. Paste either the bare
-  code or the whole redirect URL.
-- **Device code** shows a short code and a link instead of running anything
-  locally. Use it over SSH, WSL, in a devcontainer, or wherever a loopback
-  callback cannot work.
+Each account/workspace registration has its own credentials in VS Code
+SecretStorage. Add or select accounts in Connections; signing in again reuses
+that registration's issued client ID and the host's persistent ID. Sign-out
+removes its access, refresh, and ID tokens while retaining the account/client
+mapping for a later sign-in.
 
-Token handling, for the curious:
+Model discovery and inference use the public `https://api.openai.com/v1`
+endpoints, with streaming Responses requests and `store: false`. Model names,
+ordering, context windows, and reasoning options come from the signed-in
+account's catalog. The legacy Codex public client and ChatGPT backend endpoints
+are no longer used; connections made by that earlier implementation need a
+fresh sign-in.
 
-- The token is stored in VS Code SecretStorage, in its own entry, and only
-  ever reaches the model request as a bearer header.
-- It is refreshed five minutes before it expires, and again automatically if
-  a request comes back `401` - once, not in a loop.
-- If the session is revoked, the connection is marked as needing sign-in
-  again rather than silently failing.
-- Signing out revokes the token at OpenAI, then deletes it locally. If the
-  revoke call fails, the local token is still removed.
+Tokens refresh five minutes early and on an authentication rejection. A
+temporary renewal failure can keep a still-valid token; a permanent rejection
+requires sign-in again. Requests and refresh waiting honor Stop and the
+configured proxy. Sign-out attempts server revocation before clearing locally;
+if revocation cannot be confirmed, Xratu reports it so you can disconnect the
+app in ChatGPT settings.
 
-Note: the ChatGPT authorization endpoints are not reachable from every
-network. If the login fails with a network error, the device-code path or an
-Iranian provider from the table above are your fallbacks.
 
 ## Getting started
 

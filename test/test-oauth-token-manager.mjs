@@ -176,6 +176,21 @@ const noStore = memoryStore();
 // --- stale-write guard: sign-out during in-flight refresh -----------------------------
 {
     const store = memoryStore({ k: EXPIRED });
+    let started, release;
+    const ready = new Promise((r) => { started = r; });
+    const gate = new Promise((r) => { release = r; });
+    let calls = 0;
+    const a = managerFor(store), b = managerFor(store);
+    const first = a.forceRefresh(handler(async () => { calls++; started(); await gate; return { kind: 'refreshed', tokens: RENEWED }; }), ctx);
+    await ready;
+    const second = b.forceRefresh(handler(async () => { calls++; return { kind: 'refreshed', tokens: RENEWED }; }), ctx);
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    await Promise.all([first, second]);
+    check('forced refresh across windows uses the winning rotation', calls, 1);
+}
+{
+    const store = memoryStore({ k: EXPIRED });
     let release;
     const gate = new Promise((r) => { release = r; });
     const m = managerFor(store);
@@ -370,6 +385,82 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
 }
 
 // silence unused warning for the shared fixture
+{
+    const root = path.join(tmp, 'new', 'oauth-locks');
+    const store = memoryStore({ k: EXPIRED });
+    const m = managerFor(store, { lockDir: root });
+    check('refresh creates a nonexistent lock root', await m.resolve(handler(async () => ({ kind: 'refreshed', tokens: RENEWED })), ctx), 'AT-NEW');
+}
+{
+    const store = memoryStore({ k: EXPIRED });
+    let started, release;
+    const ready = new Promise((r) => { started = r; });
+    const gate = new Promise((r) => { release = r; });
+    const m = managerFor(store);
+    const pending = m.resolve(handler(async () => { started(); await gate; return { kind: 'reauth' }; }), ctx);
+    await ready;
+    await store.write('k', RENEWED);
+    release();
+    check('permanent old rejection returns newer sign-in', await pending, 'AT-NEW');
+    check('permanent old rejection preserves newer tokens', store.data.get('k'), RENEWED);
+}
+{
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'ownerless');
+    fs.mkdirSync(lock);
+    let error;
+    try { await withDirectoryLock(lock, { timeoutMs: 15, staleMs: 120000 }, async () => {}); }
+    catch (e) { error = e; }
+    check('fresh ownerless lock cannot be stolen', error?.name, 'LockTimeoutError');
+    const old = new Date(Date.now() - 150000);
+    fs.utimesSync(lock, old, old);
+    check('abandoned ownerless lock can be recovered', await withDirectoryLock(lock, {}, async () => 'ok'), 'ok');
+    await withDirectoryLock(lock, {}, async () => {
+        fs.rmSync(lock, { recursive: true });
+        fs.mkdirSync(lock);
+        fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ token: 'replacement', acquiredAt: Date.now(), pid: 1 }));
+    });
+    check('release cannot delete a replacement owner', fs.existsSync(lock), true);
+    const controller = new AbortController();
+    const wait = withDirectoryLock(lock, { signal: controller.signal }, async () => {}).catch((e) => e);
+    controller.abort();
+    check('lock waiting honors cancellation', (await wait).name, 'AbortError');
+    fs.rmSync(lock, { recursive: true });
+}
+{
+    const nearly = { ...VALID, expiresAt: Date.now() + 240000 };
+    const m = managerFor(memoryStore({ k: nearly }));
+    const h = handler((tokens) => refreshWithTokenEndpoint(endpointOpts(async () => { throw new Error('temporary outage'); }, tokens)));
+    check('proactive refresh outage keeps a valid four-minute token', await m.resolve(h, ctx), 'AT-VALID');
+    const r = await refreshWithTokenEndpoint(endpointOpts(async () => jsonResponse(200, 'malformed'), nearly));
+    check('malformed refresh can keep an actually-valid token', r.kind, 'keep');
+}
+{
+    const store = memoryStore({ k: EXPIRED });
+    const m = managerFor(store);
+    const controller = new AbortController();
+    let started;
+    const ready = new Promise((r) => { started = r; });
+    const pending = m.resolve(handler(async () => { started(); return new Promise(() => {}); }), { ...ctx, signal: controller.signal }).catch((e) => e);
+    await ready;
+    controller.abort();
+    check('refresh waiting honors cancellation', (await pending).name, 'AbortError');
+    check('cancelled refresh keeps the credential', store.data.get('k'), EXPIRED);
+}
+{
+    const store = memoryStore({ k: EXPIRED });
+    const m = managerFor(store);
+    let started, release;
+    const ready = new Promise((r) => { started = r; });
+    const gate = new Promise((r) => { release = r; });
+    const h = handler(async () => { started(); await gate; return { kind: 'reauth' }; });
+    const refresh = m.resolve(h, ctx).catch((e) => e);
+    await ready;
+    const signIn = m.withTokenLock(h, () => store.write('k', RENEWED));
+    release();
+    await Promise.all([refresh, signIn]);
+    check('sign-in shares refresh mutation discipline', store.data.get('k'), RENEWED);
+}
 check('fixture store readable', typeof noStore.read, 'function');
 
 fs.rmSync(tmp, { recursive: true, force: true });

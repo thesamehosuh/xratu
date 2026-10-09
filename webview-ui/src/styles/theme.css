@@ -8985,12 +8985,26 @@ button:not(:disabled):active,
 }
 
 .cred-oauth-row.busy {
-    border-color: var(--vscode-focusBorder);
+    border-color: color-mix(in srgb, var(--xratu-accent) 45%, transparent);
+}
+
+.cred-oauth-row.connected {
+    padding: 0;
+    border: 0;
+}
+
+.cred-oauth-header {
+    display: flex;
+    flex: 1 0 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
 }
 
 .cred-oauth-copy {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 2px;
     min-width: 0;
     flex: 1 1 160px;
@@ -9002,8 +9016,88 @@ button:not(:disabled):active,
 }
 
 .cred-oauth-account {
-    font-size: 11.5px;
-    color: var(--vscode-descriptionForeground);
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+}
+
+.cred-oauth-account bdi {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.cred-oauth-accounts {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 100%;
+    min-width: 0;
+    gap: 8px;
+}
+
+.cred-oauth-account-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--xratu-border-quiet);
+    border-radius: 6px;
+    background: var(--xratu-surface-inset);
+}
+
+.cred-oauth-account-card.active {
+    border-color: var(--xratu-accent-dim);
+}
+
+.cred-oauth-account-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.cred-oauth-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-active {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 3px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+}
+
+.cred-oauth-signout {
+    margin-inline-start: auto;
+    flex: 0 0 26px;
+}
+
+.app[dir='rtl'] .cred-oauth-signout svg {
+    transform: scaleX(-1);
+}
+
+.cred-oauth-account-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .cred-oauth-hint {
@@ -9019,11 +9113,74 @@ button:not(:disabled):active,
     flex-wrap: wrap;
 }
 
+.cred-oauth-row .cred-oauth-action {
+    width: auto;
+    height: auto;
+    min-height: 28px;
+    padding: 5px 9px;
+    flex: 0 0 auto;
+    gap: 5px;
+    white-space: nowrap;
+    font-size: 11.5px;
+    text-decoration: none;
+}
+
+.cred-oauth-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cred-oauth-status svg {
+    flex-shrink: 0;
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-registration {
+    display: flex;
+    flex: 1 0 100%;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    min-width: 0;
+}
+
+.cred-oauth-registration > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cred-oauth-remembered {
+    flex: 1 0 100%;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-remembered summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: 3px;
+}
+
+.cred-oauth-remembered summary:hover {
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-remembered-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-block-start: 8px;
+}
+
 /* Waiting + device-code surfaces take the full row so the code is never
  * squeezed into the action cluster. */
 .cred-oauth-wait,
-.cred-oauth-device,
-.cred-oauth-manual {
+.cred-oauth-device {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -9032,20 +9189,46 @@ button:not(:disabled):active,
     color: var(--vscode-descriptionForeground);
 }
 
+.cred-oauth-manual {
+    flex: 1 0 100%;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-manual summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: 3px;
+}
+
+.cred-oauth-manual summary:hover {
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-manual-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-block-start: 8px;
+}
+
 .cred-oauth-code {
     align-self: flex-start;
-    padding: 5px 9px;
-    border: 1px dashed var(--vscode-widget-border);
+    padding: 8px 12px;
+    border: 1px dashed var(--xratu-accent-dim);
     border-radius: 6px;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 14px;
+    font-size: 18px;
+    color: var(--vscode-foreground);
     letter-spacing: 0.06em;
     user-select: all;
 }
 
-.cred-oauth-manual-title {
-    font-weight: 600;
-    color: var(--vscode-foreground);
+.cred-oauth-url {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .cred-oauth-manual-row {
@@ -9054,23 +9237,30 @@ button:not(:disabled):active,
     align-items: center;
 }
 
-.cred-oauth-manual-row input {
+.cred-oauth-manual-row input,
+.cred-oauth-url {
     flex: 1 1 auto;
     min-width: 0;
     padding: 6px 8px;
-    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+    border: 1px solid var(--xratu-accent-dim);
     border-radius: 5px;
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     font-size: 12px;
 }
 
+.cred-oauth-manual-row input:focus,
+.cred-oauth-url:focus {
+    border-color: var(--xratu-accent);
+    outline-color: var(--xratu-accent);
+}
+
 .cred-oauth-error {
     flex: 1 0 100%;
     padding: 6px 9px;
-    border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-widget-border));
+    border: 1px solid var(--xratu-accent-dim);
     border-radius: 6px;
-    background: var(--vscode-inputValidation-errorBackground);
+    background: var(--xratu-accent-faint);
     color: var(--vscode-errorForeground);
     font-size: 11.5px;
     line-height: 1.45;

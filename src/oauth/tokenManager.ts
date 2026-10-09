@@ -28,7 +28,7 @@
 import type { OAuthLoginContext, OAuthProviderHandler, OAuthTokenSet } from './types';
 import { OAuthReauthRequiredError } from './types';
 import { isTokenExpired } from './utils';
-import { oauthLockPath, withDirectoryLock } from './refreshLock';
+import { abortable, oauthLockPath, withDirectoryLock } from './refreshLock';
 
 export interface OAuthTokenStore {
     read(storageKey: string): Promise<OAuthTokenSet | null>;
@@ -96,16 +96,28 @@ export class OAuthTokenManager {
         return this.resolveInternal(handler, ctx, true).then((r) => r.accessToken);
     }
 
+    /** All token mutations, including sign-in/out, share the refresh mutex. */
+    withTokenLock<T>(handler: OAuthProviderHandler, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+        return withDirectoryLock(oauthLockPath(this.lockDir, handler.storageKey), {
+            timeoutMs: this.lockTimeoutMs, signal,
+        }, fn);
+    }
+
+    forceRefreshTokens(handler: OAuthProviderHandler, ctx: OAuthLoginContext): Promise<OAuthTokenSet> {
+        return this.resolveInternal(handler, ctx, true);
+    }
+
     private resolveInternal(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<OAuthTokenSet> {
+        ctx.signal?.throwIfAborted();
         const key = handler.storageKey;
         const existing = this.inFlight.get(key);
         // Join the in-flight work only when it is at least as strong as ours.
         // A forced caller waits for the non-forced refresh to settle, then runs
         // its OWN; concurrent forced callers share that one, so a burst of 401s
         // still costs a single rotation.
-        if (existing && (!force || this.inFlightForced.get(key) === true)) return existing;
+        if (existing && (!force || this.inFlightForced.get(key) === true)) return abortable(existing, ctx.signal);
         if (existing && force) {
-            return existing
+            return abortable(existing, ctx.signal)
                 .catch(() => undefined)
                 .then(() => this.resolveInternal(handler, ctx, true));
         }
@@ -126,8 +138,7 @@ export class OAuthTokenManager {
         if (!snapshot) throw new OAuthReauthRequiredError(handler.providerId);
         if (!force && !isTokenExpired(snapshot, this.skewMs)) return snapshot;
 
-        const lockPath = oauthLockPath(this.lockDir, key);
-        return withDirectoryLock(lockPath, { timeoutMs: this.lockTimeoutMs }, async () => {
+        return this.withTokenLock(handler, async () => {
             // Layer 3: reload-before-network. Someone may have rotated the
             // token while we waited for the lock; if so, theirs wins and we
             // make no network call at all.
@@ -135,32 +146,31 @@ export class OAuthTokenManager {
             if (!current) throw new OAuthReauthRequiredError(handler.providerId);
             let working = snapshot;
             if (!sameRecord(current, snapshot)) {
+                if (force && current.accessToken !== snapshot.accessToken && !isTokenExpired(current, 0)) return current;
                 if (!force && !isTokenExpired(current, this.skewMs)) return current;
                 working = current; // their record is also expired - refresh THAT
             }
             if (!force && !isTokenExpired(working, this.skewMs)) return working;
 
-            const result = await handler.refresh(working, ctx);
-
-            if (result.kind === 'keep') return result.tokens;
-
-            if (result.kind === 'reauth') {
-                // We hold the lock and verified current===working above, so
-                // clearing cannot erase a concurrent sign-IN.
-                await this.store.write(key, null);
-                throw new OAuthReauthRequiredError(handler.providerId);
-            }
+            const result = await abortable(handler.refresh(working, ctx), ctx.signal);
+            ctx.signal?.throwIfAborted();
 
             // Layer 4: stale-write guard. A sign-out or re-auth that landed
             // while our refresh was in flight must not be overwritten.
             const latest = await this.store.read(key);
             if (!sameRecord(latest, working)) {
-                if (latest && !isTokenExpired(latest, this.skewMs)) return latest;
+                if (latest && !isTokenExpired(latest, 0)) return latest;
+                throw new OAuthReauthRequiredError(handler.providerId);
+            }
+
+            if (result.kind === 'keep') return result.tokens;
+            if (result.kind === 'reauth') {
+                await this.store.write(key, null);
                 throw new OAuthReauthRequiredError(handler.providerId);
             }
 
             await this.store.write(key, result.tokens);
             return result.tokens;
-        });
+        }, ctx.signal);
     }
 }

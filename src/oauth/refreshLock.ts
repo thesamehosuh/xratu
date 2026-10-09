@@ -50,6 +50,7 @@ export interface LockOptions {
     /** Injectable for tests. */
     sleep?: (ms: number) => Promise<void>;
     nowMs?: () => number;
+    signal?: AbortSignal;
 }
 
 export class LockTimeoutError extends Error {
@@ -107,6 +108,7 @@ function rmIfOwnerUnchanged(lockPath: string, seen: OwnerRecord): void {
  *  we measured. mkdir arbitration then settles any residual race - the loser
  *  gets EEXIST and retries. */
 function removeIfUnchanged(lockPath: string, measuredAgeMs: number, nowMs: number): void {
+    if (readOwner(lockPath)) return;
     const age = dirAgeMs(lockPath, nowMs);
     if (age === 0 || Math.abs(age - measuredAgeMs) > 1) return;
     try {
@@ -127,12 +129,15 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
     const sleepMs = opts.sleepMs ?? 25;
     const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const now = opts.nowMs ?? (() => Date.now());
+    opts.signal?.throwIfAborted();
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
     const token = `${process.pid}:${now()}:${Math.random().toString(36).slice(2)}`;
     const deadline = now() + timeoutMs;
     let firstSeenOwner: OwnerRecord | null = null;
 
     for (;;) {
+        opts.signal?.throwIfAborted();
         try {
             fs.mkdirSync(lockPath);
             break; // acquired
@@ -149,26 +154,29 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
         // a directory by its mtime instead, and only reap it once it is well
         // past the grace period, so a live holder that has not written its
         // record yet is never taken from.
-        const acquiredAge = dirAgeMs(lockPath, now());
-        const acquiredAt = seen?.acquiredAt ?? acquiredAge;
-        const isStale = acquiredAt > 0 && now() - acquiredAt > staleMs;
+        const measuredAt = now();
+        const acquiredAge = dirAgeMs(lockPath, measuredAt);
+        const isStale = seen ? measuredAt - seen.acquiredAt > staleMs : acquiredAge > staleMs;
         if (isStale) {
             if (seen) rmIfOwnerUnchanged(lockPath, seen);
-            else removeIfUnchanged(lockPath, acquiredAge, now());
+            else removeIfUnchanged(lockPath, acquiredAge, measuredAt);
             firstSeenOwner = null;
             continue;
         }
 
         if (now() >= deadline) throw new LockTimeoutError(lockPath);
-        await sleep(sleepMs);
+        await abortable(sleep(sleepMs), opts.signal);
     }
 
+    const acquiredStat = fs.statSync(lockPath);
+    let ownerWritten = false;
     try {
         fs.writeFileSync(path.join(lockPath, OWNER_FILE), JSON.stringify({
             pid: process.pid,
             token,
             acquiredAt: now(),
         } satisfies OwnerRecord));
+        ownerWritten = true;
     } catch {
         // A missing owner record makes us look stale to others. Acceptable:
         // the record exists to detect DEAD holders, and a live holder without
@@ -177,13 +185,38 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
     }
 
     try {
+        opts.signal?.throwIfAborted();
         return await fn();
     } finally {
         try {
-            fs.rmSync(lockPath, { recursive: true, force: true });
+            const owner = readOwner(lockPath);
+            const currentStat = fs.statSync(lockPath);
+            if (owner?.token === token || (!ownerWritten && !owner
+                && currentStat.ino === acquiredStat.ino && currentStat.birthtimeMs === acquiredStat.birthtimeMs)) {
+                fs.rmSync(lockPath, { recursive: true, force: true });
+            }
         } catch {
             // Process is exiting or the FS is misbehaving; the stale path
             // recovers this for the next caller.
         }
+    }
+}
+
+/** Cancel a caller's wait without leaving an abort listener behind. */
+export async function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return work;
+    if (signal.aborted) {
+        void work.catch(() => undefined);
+        signal.throwIfAborted();
+    }
+    let onAbort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        return await Promise.race([work, cancelled]);
+    } finally {
+        signal.removeEventListener('abort', onAbort);
     }
 }

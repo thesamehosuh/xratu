@@ -29,6 +29,7 @@ const CODE_KEYS: Record<string, string> = {
     not_implemented: 'oauthUnavailable',
     // Protocol-level
     bad_response: 'oauthFailed',
+    plan_permission_missing: 'oauthPlanPermissionMissing',
 };
 
 export const OAUTH_GENERIC_ERROR_KEY = 'oauthFailed';
@@ -36,6 +37,7 @@ export const OAUTH_GENERIC_ERROR_KEY = 'oauthFailed';
 /** Key for an error thrown by a login flow. `OAuthCancelledError` is a quiet
  *  reset, not a failure - the webview shows it as a neutral "cancelled". */
 export function oauthErrorValueKey(error: unknown): string {
+    if (error instanceof Error && error.name === 'TimeoutError') return 'oauthTimeout';
     if (error instanceof OAuthCancelledError) return 'oauthCancelled';
     if (error instanceof OAuthReauthRequiredError) return CODE_KEYS.reauth_required;
     if (error instanceof OAuthFlowError) return CODE_KEYS[error.code] ?? OAUTH_GENERIC_ERROR_KEY;

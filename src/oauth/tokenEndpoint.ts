@@ -26,6 +26,7 @@
 import { isInvalidGrantError } from '../providerErrors';
 import type { OAuthRefreshResult, OAuthTokenSet } from './types';
 import { OAuthFlowError } from './types';
+import { oauthRequest } from './http';
 import { isTokenExpired, parseOAuthErrorBody } from './utils';
 
 export interface TokenEndpointRefreshOptions {
@@ -35,7 +36,7 @@ export interface TokenEndpointRefreshOptions {
     fetch: typeof fetch;
     /** Extra form params (e.g. resource, audience) for IdPs that need them. */
     extraParams?: Record<string, string>;
-    /** Expiry skew for the still-valid check. Default 60s. */
+    /** Request safety margin, independent of proactive refresh. Default 0. */
     skewMs?: number;
     /** Provider-specific PERMANENT-failure matcher, consulted alongside the
      *  shared invalid-grant classifier. Needed because ChatGPT reports a dead
@@ -86,12 +87,12 @@ export async function refreshWithTokenEndpoint(opts: TokenEndpointRefreshOptions
     }
 
     const parse = opts.parseTokens ?? defaultParseTokenResponse;
-    const skewMs = opts.skewMs ?? 60_000;
+    const skewMs = opts.skewMs ?? 0;
 
     let status: number;
     let body: string;
     try {
-        const res = await opts.fetch(opts.tokenUrl, {
+        const res = await oauthRequest({ fetch: opts.fetch, signal: opts.signal }, opts.tokenUrl, {
             method: 'POST',
             headers: {
                 'content-type': 'application/x-www-form-urlencoded',
@@ -103,11 +104,11 @@ export async function refreshWithTokenEndpoint(opts: TokenEndpointRefreshOptions
                 client_id: opts.clientId,
                 ...opts.extraParams,
             }).toString(),
-            signal: opts.signal ?? AbortSignal.timeout(30_000),
         });
         status = res.status;
-        body = await res.text();
+        body = res.body;
     } catch (networkError) {
+        opts.signal?.throwIfAborted();
         // Transport failure. Still-valid token: keep serving it silently.
         // Expired token: this turn is dead, but the CREDENTIALS are not -
         // throwing (not `reauth`) is what keeps the user logged in across a
@@ -121,9 +122,15 @@ export async function refreshWithTokenEndpoint(opts: TokenEndpointRefreshOptions
         try {
             json = JSON.parse(body) as Record<string, unknown>;
         } catch {
+            if (!isTokenExpired(tokens, skewMs)) return { kind: 'keep', tokens };
             throw new OAuthFlowError('bad_response', 'Token endpoint 200 response was not JSON');
         }
-        return { kind: 'refreshed', tokens: parse(json, tokens) };
+        try {
+            return { kind: 'refreshed', tokens: parse(json, tokens) };
+        } catch (error) {
+            if (!isTokenExpired(tokens, skewMs)) return { kind: 'keep', tokens };
+            throw error;
+        }
     }
 
     if (isInvalidGrantError(status, body) || opts.isPermanentFailure?.(status, body)) {

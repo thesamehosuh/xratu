@@ -221,5 +221,49 @@ for (const [style, baseUrl, model, extraPath] of [
     check('and is NOT retried', attempts, 1);
 }
 
+// Public ChatGPT plan requests have their own contract on api.openai.com.
+{
+    const call = await capture(baseRequest({ baseUrl: 'https://api.openai.com/v1', subscription: true,
+        temperature: 0.2, tools: [{ name: 'read_file', description: 'Read a file', inputSchema: { type: 'object' } }] }));
+    check('public subscription responses URL', call.url, 'https://api.openai.com/v1/responses');
+    check('public subscription store false', call.body.store, false);
+    check('public subscription streams', call.body.stream, true);
+    check('public subscription omits max_output_tokens', 'max_output_tokens' in call.body, false);
+    check('public subscription omits temperature', 'temperature' in call.body, false);
+    check('public subscription groups local tools', call.body.tools[0].type, 'namespace');
+    check('namespaced function preserves executor name', call.body.tools[0].tools[0].name, 'read_file');
+}
+for (const terminal of [null, 'response.incomplete', 'response.failed']) {
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => sse([
+        frame({ type: 'response.output_text.delta', delta: 'partial' }),
+        ...(terminal ? [frame({ type: terminal, response: { error: { message: 'limited' }, incomplete_details: { reason: 'limited' } } })] : []),
+    ]);
+    let error;
+    try {
+        await requestStreamingCompletion(baseRequest({ baseUrl: 'https://api.openai.com/v1', subscription: true }), [user], '', () => {});
+    } catch (e) { error = e; }
+    finally { globalThis.fetch = original; }
+    checkTrue(`subscription refuses ${terminal ?? 'missing completion'}`, error);
+}
+{
+    const { compactWithSummary } = require('../out/local/compaction.js');
+    const messages = [{ role: 'system', content: 'sys' }];
+    for (let i = 0; i < 8; i++) messages.push({ role: 'user', content: `turn ${i}` }, { role: 'assistant', content: 'result '.repeat(1800) });
+    const original = globalThis.fetch;
+    let captured;
+    globalThis.fetch = async (_url, init) => {
+        captured = JSON.parse(init.body);
+        return sse([frame({ type: 'response.output_text.delta', delta: 'rolling summary' }),
+            frame({ type: 'response.completed', response: { output: [] } })]);
+    };
+    let summary;
+    try { summary = await compactWithSummary(messages, baseRequest({ baseUrl: 'https://api.openai.com/v1', subscription: true }), 16384, 20000, null); }
+    finally { globalThis.fetch = original; }
+    check('subscription compaction consumes SSE', summary, 'rolling summary');
+    check('subscription compaction requests streaming', captured?.stream, true);
+    check('subscription compaction carries rolling summary', messages.some((m) => String(m.content).includes('rolling summary')), true);
+}
+
 console.log(failed === 0 ? '\noauth-wire tests: all passed' : `\noauth-wire tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

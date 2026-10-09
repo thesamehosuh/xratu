@@ -27,6 +27,23 @@ export interface OAuthTokenSet {
     accountLabel?: string;
     scopes?: string[];
     tokenType?: string;
+    clientId?: string;
+    subject?: string;
+    idToken?: string;
+    email?: string;
+}
+
+export interface OAuthCallback {
+    code: string;
+    state?: string;
+    clientId?: string;
+    redirectUri: string;
+}
+
+export interface OAuthAuthorization {
+    expectedState: string;
+    buildUrl: (redirectUri: string) => string;
+    timeoutMs?: number;
 }
 
 /**
@@ -53,6 +70,10 @@ export interface OAuthLoginContext {
     openExternal?: (url: string) => void | Promise<void>;
     onEvent?: (event: OAuthFlowEvent) => void;
     signal?: AbortSignal;
+    method?: 'browser' | 'device';
+    hostId?: string;
+    registration?: { clientId: string; subject: string; email?: string; idToken?: string };
+    authorize?: (options: OAuthAuthorization) => Promise<OAuthCallback>;
 }
 
 /**
@@ -89,6 +110,10 @@ export interface OAuthProviderHandler {
      *  Responses API only, so the credential must carry the style instead of
      *  the request path guessing from the host. */
     apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
+    label?: string;
+    methods?: Array<'browser' | 'device'>;
+    subscription?: boolean;
+    discoverModels?(ctx: OAuthLoginContext, tokens: OAuthTokenSet): Promise<{ models: import('../local/localTypes').LocalModelInfo[] }>;
     /** Provider-specific request headers for a resolved token set (the
      *  ChatGPT-Account-Id routing header, an `originator`, ...). Kept on the
      *  handler so a base-URL heuristic never has to know provider trivia. */

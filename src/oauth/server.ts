@@ -42,6 +42,7 @@ export interface LoopbackCallbackResult {
     state?: string;
     /** RFC 9207 issuer identifier, when the IdP forwards it. */
     iss?: string;
+    clientId?: string;
 }
 
 export interface LoopbackServer {
@@ -212,6 +213,13 @@ function listenOn(
 
             const errorParam = url.searchParams.get('error');
             if (errorParam !== null) {
+                const state = url.searchParams.get('state');
+                if (expectedState !== undefined && (state === null || !(stateMatches
+                    ? stateMatches(state, expectedState) : state === expectedState))) {
+                    respondThen(res, 400, errorHtml, () => settle(undefined,
+                        new OAuthFlowError('state_mismatch', 'OAuth state mismatch')));
+                    return;
+                }
                 const desc = url.searchParams.get('error_description');
                 respondThen(res, 400, errorHtml, () => settle(undefined, new OAuthFlowError(
                     errorParam,
@@ -248,6 +256,7 @@ function listenOn(
                 code,
                 state,
                 iss: url.searchParams.get('iss') ?? undefined,
+                clientId: url.searchParams.get('client_id') ?? undefined,
             };
             respondThen(res, 200, successHtml, () => settle(result, undefined));
         });

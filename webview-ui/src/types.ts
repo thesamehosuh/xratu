@@ -59,7 +59,7 @@ export type ToExtensionMessage =
     /** Begin an OAuth sign-in. `method` 'browser' opens the authorize page
      *  with a loopback callback; 'device' shows a user code instead - the
      *  only transport that works in remote VS Code. */
-    | { type: 'oauthSignIn'; providerId: string; method?: 'browser' | 'device' }
+    | { type: 'oauthSignIn'; providerId: string; method?: 'browser' | 'device'; credentialId?: string }
     | { type: 'oauthCancelSignIn' }
     /** Hand-pasted redirect code, for when the loopback callback cannot
      *  complete (port taken, remote window, browser elsewhere). */
@@ -147,7 +147,7 @@ export type ToExtensionMessage =
     | { type: 'proxyTest' }
     /** Copy a code block to the OS clipboard via the host (webview clipboard
      *  permissions are unreliable). */
-    | { type: 'copyToClipboard'; value: string }
+    | { type: 'copyToClipboard'; value: string; requestId?: string }
     /** Open the native side-by-side diff for one or more completed edit tool
      *  calls. `callId` keys the before/after snapshot the host captured when
      *  the edit ran; without one the host reconstructs the diff from `args`
@@ -194,7 +194,7 @@ export interface NotificationItem {
 
 /** Reasoning-effort variants a model may accept (Default is encoded as
  *  null/absent, never a string). Superset of the efforts providers report. */
-export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /** A file attached to a chat message.  `id` is UI-local only (never sent);
  *  `dataBase64` travels with the request but is NOT persisted
@@ -263,8 +263,9 @@ export interface SavedCredential {
 /** OAuth status the host owns: which providers can be connected, which are
  *  connected (with the account), and what a flow in progress is waiting for. */
 export interface OAuthHostState {
-    providers?: Array<{ providerId: string; label: string }>;
-    accounts?: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string }>;
+    providers?: Array<{ providerId: string; label: string; methods?: Array<'browser' | 'device'> }>;
+    accounts?: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string; planEnabled?: boolean; active?: boolean }>;
+    registrations?: Array<{ providerId: string; credentialId: string; label: string }>;
     inProgress?: { providerId: string; method: 'browser' | 'device' } | null;
     /** Where the browser must go. Host-generated; the webview only opens it. */
     authorizeUrl?: string;
@@ -378,7 +379,7 @@ export type FromExtensionMessage =
     | { type: 'decisionResolved'; decision_id: string; answer: string | null }
     | { type: 'yoloMode'; enabled: boolean }
     | { type: 'planMode'; enabled: boolean }
-    | { type: 'modelInfo'; defaultModel: string; models: string[]; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
+    | { type: 'modelInfo'; defaultModel: string; models: string[]; displayNames?: Record<string, string>; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
     | { type: 'modelsRefreshing'; active: boolean }
     /** History was rewound to before the userIndex-th user message. */
     | { type: 'truncateFromUser'; userIndex: number }
@@ -396,6 +397,7 @@ export type FromExtensionMessage =
     | { type: 'openCredentials'; reason?: string; currentUrl?: string; activeCredentialId?: string | null; openCard?: 'byok' | 'local' }
     | { type: 'savedCredentials'; credentials: SavedCredential[] }
     | { type: 'oauthState'; state: OAuthHostState }
+    | { type: 'clipboardResult'; requestId: string; ok: boolean }
     | { type: 'credentialsSaved'; returnToChat?: boolean }
     | { type: 'byokReset' }
     | { type: 'openSettings' }

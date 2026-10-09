@@ -6,6 +6,6 @@
  * cannot be turned off at runtime should at least be greppable and obvious.
  */
 import { registerOAuthProvider } from '../providerAuthRegistry';
-import { openAiCodexHandler } from './openaiCodex';
+import { openAiChatGptHandler } from './openaiChatGpt';
 
-registerOAuthProvider(openAiCodexHandler);
+registerOAuthProvider(openAiChatGptHandler);

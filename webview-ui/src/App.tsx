@@ -136,6 +136,7 @@ export function App() {
     /** Runtime card to pre-expand on the credentials page (echoed target). */
     const [credOpenCard, setCredOpenCard] = useState<'byok' | 'local' | null>(null);
     const [activeCredentialId, setActiveCredentialId] = useState<string | null>(null);
+    const [oauthCopyResult, setOauthCopyResult] = useState<{ ok: boolean; seq: number; requestId: string } | null>(null);
     const [oauthState, setOauthState] = useState<OAuthHostState | null>(null);
     /** Where the credentials page's Back button returns to - 'settings' when
      *  it was opened from Settings, 'chat' for every other entry path. */
@@ -172,6 +173,7 @@ export function App() {
     const [modelInfo, setModelInfo] = useState<{
         defaultModel: string;
         models: string[];
+        displayNames: Record<string, string>;
         contextWindows: Record<string, number>;
         capabilities: Record<string, ModelCapability>;
     } | null>(null);
@@ -747,6 +749,7 @@ export function App() {
                     setModelInfo({
                         defaultModel: msg.defaultModel,
                         models: msg.models,
+                        displayNames: msg.displayNames ?? {},
                         contextWindows: msg.contextWindows ?? {},
                         capabilities: msg.capabilities ?? {},
                     });
@@ -756,6 +759,11 @@ export function App() {
                     setThinkingLevels(msg.thinkingLevels ?? {});
                     setByokHint(false);
                     setByokError(null);
+                    break;
+                case 'clipboardResult':
+                    if (msg.requestId === 'oauth-device-code' || msg.requestId === 'oauth-browser-url') {
+                        setOauthCopyResult({ ok: msg.ok, seq: Date.now(), requestId: msg.requestId });
+                    }
                     break;
                 case 'modelsRefreshing':
                     setModelsRefreshing(msg.active);
@@ -1120,7 +1128,9 @@ export function App() {
                     onDiscoverLocalModels={startLocalScan}
                     onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
                     oauthState={oauthState}
-            onOAuthSignIn={(providerId, method) => send({ type: 'oauthSignIn', providerId, method })}
+            onOAuthSignIn={(providerId, method, credentialId) => send({ type: 'oauthSignIn', providerId, method, credentialId })}
+            onOAuthCopy={(value, requestId) => { setOauthCopyResult(null); send({ type: 'copyToClipboard', value, requestId }); }}
+            copyResult={oauthCopyResult}
             onOAuthCancelSignIn={() => send({ type: 'oauthCancelSignIn' })}
             onOAuthManualCode={(code) => send({ type: 'oauthManualCode', code })}
             onOAuthSignOut={(credentialId) => send({ type: 'oauthSignOut', credentialId })}
@@ -1596,6 +1606,7 @@ export function App() {
                 injectedText={injectedText}
                 onInjectedApplied={() => setInjectedText(null)}
                 models={modelInfo?.models ?? []}
+                modelDisplayNames={modelInfo?.displayNames}
                 modelCapabilities={modelInfo?.capabilities}
                 modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}
