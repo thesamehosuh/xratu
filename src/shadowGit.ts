@@ -464,14 +464,15 @@ export class ShadowCheckpointStore {
         return this._serialized(async () => {
             await this.ensureRepo(workspaceRoot);
             const numstat = await this.gitAsync(
-                [...this.repoConfigArgs(), 'diff', '--numstat', '--no-renames', fromSha, '--'],
+                [...this.repoConfigArgs(), 'diff', '--numstat', '-z', '--no-renames', fromSha, '--'],
                 workspaceRoot
             );
             if (numstat.code !== 0) {
                 throw new Error(numstat.stderr.trim() || `git diff exited ${numstat.code}`);
             }
             const files = new Map<string, ChangedFile>();
-            for (const line of numstat.stdout.split('\n')) {
+            // NUL records preserve literal paths, including quotes and newlines.
+            for (const line of numstat.stdout.split('\0')) {
                 if (!line.trim()) continue;
                 const cols = line.split('\t');
                 if (cols.length < 3) continue;
@@ -491,11 +492,11 @@ export class ShadowCheckpointStore {
             // index and invisible to `git diff` - the same blind spot that
             // once made restore silently no-op (see restoreCheckpoint).
             const others = await this.gitAsync(
-                [...this.repoConfigArgs(), 'ls-files', '--others', '--exclude-standard'],
+                [...this.repoConfigArgs(), 'ls-files', '-z', '--others', '--exclude-standard'],
                 workspaceRoot
             );
             if (others.code === 0) {
-                for (const rel of others.stdout.split('\n')) {
+                for (const rel of others.stdout.split('\0')) {
                     if (rel && !files.has(rel)) {
                         files.set(rel, { path: rel, added: 0, removed: 0, untracked: true, binary: false });
                     }
