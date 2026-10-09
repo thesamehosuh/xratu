@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
+import { BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
     AttachmentMeta,
     ComposerAttachment,
     DiscoveredLocalRuntime,
+    LocalModelOperation,
+    ProviderBenchmark,
     FromExtensionMessage,
     GitStatusSummary,
     InstallConfidence,
@@ -190,6 +192,10 @@ export function App() {
     const [localRuntimes, setLocalRuntimes] = useState<DiscoveredLocalRuntime[]>([]);
     const [localModelsScanning, setLocalModelsScanning] = useState(false);
     /** Host-reported discovery failure - distinct from an empty result. */
+    const [offline, setOffline] = useState(false);
+    const [errorExplanations, setErrorExplanations] = useState(true);
+    const [localModelOperation, setLocalModelOperation] = useState<LocalModelOperation | null>(null);
+    const [benchmarks, setBenchmarks] = useState<ProviderBenchmark[]>([]);
     const [localScanError, setLocalScanError] = useState<string | null>(null);
     /** Heuristic vision support of the selected model (null = unknown). */
     const [visionCapable, setVisionCapable] = useState<boolean | null>(null);
@@ -856,6 +862,16 @@ export function App() {
                     setLocale(msg.locale);
                     setLocaleState(msg.locale);
                     break;
+                case 'runtimePreferences':
+                    setOffline(msg.offline);
+                    setErrorExplanations(msg.errorExplanations);
+                    break;
+                case 'localModelOperation':
+                    setLocalModelOperation(msg);
+                    break;
+                case 'providerBenchmark':
+                    setBenchmarks((previous) => [...previous.filter((r) => r.credentialId !== msg.credentialId || r.model !== msg.model), msg]);
+                    break;
                 case 'replyLanguage':
                     setReplyLanguageState(msg.replyLanguage);
                     break;
@@ -1093,6 +1109,11 @@ export function App() {
 
     // In-app notification banner - rendered on every screen so host
     // notifications (and confirm banners) are always visible.
+    const offlineBanner = offline && <div className="offline-banner" role="status" title={t('offlineBanner')}>
+        <WifiOff size={12} aria-hidden="true" /><span>{t('offlineMode')}</span>
+        <button className="ghost-btn small" aria-label={t('offlineHelp')} title={t('offlineHelp')}
+            onClick={() => send({ type: 'openBundledGuide', guide: 'offline' })}><BookOpen size={13} /></button>
+    </div>;
     const banner = (
         <NotificationBanner notifications={notifications} onDismiss={dismissNotification} />
     );
@@ -1113,6 +1134,12 @@ export function App() {
                     currentUrl={credUrl}
                     activeCredentialId={activeCredentialId}
                     initialOpenCard={credOpenCard}
+                    offline={offline}
+                    localModelOperation={localModelOperation}
+                    benchmarks={benchmarks}
+                    onManageLocalModel={(action, baseUrl, model) => send({ type: 'manageLocalModel', action, baseUrl, model })}
+                    onBenchmark={() => send({ type: 'benchmarkProvider' })}
+                    onOpenGuide={(guide) => send({ type: 'openBundledGuide', guide })}
                     savedCredentials={savedCredentials}
                     localRuntimes={localRuntimes}
                     localModelsScanning={localModelsScanning}
@@ -1247,6 +1274,11 @@ export function App() {
                     onBack={() => setScreen('chat')}
                     error={byokError}
                     version={extensionVersion}
+                    offline={offline}
+                    errorExplanations={errorExplanations}
+                    onSetOffline={(enabled) => send({ type: 'setOfflineMode', enabled })}
+                    onSetErrorExplanations={(enabled) => send({ type: 'setErrorExplanations', enabled })}
+                    onOfflineHelp={() => send({ type: 'openBundledGuide', guide: 'offline' })}
                     locale={locale}
                     onSetLocale={(l) => {
                         setLocale(l);
@@ -1306,6 +1338,7 @@ export function App() {
     if (screen === 'welcome') {
         return (
             <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+                {offlineBanner}
                 <Welcome
                     localRuntimes={localRuntimes}
                     localModelsScanning={localModelsScanning}
@@ -1337,6 +1370,7 @@ export function App() {
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
         <div className={`app${overlayOpen ? ' behind' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+            {offlineBanner}
             <Toolbar
                 conn={conn}
                 yolo={yolo}
@@ -1681,6 +1715,7 @@ export function App() {
             cannot hide it. The banner rides along: a notification has to stay
             readable above whatever screen is open. */}
         <ScreenOverlay open={overlayOpen} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+            {offlineBanner}
             {overlay}
             {banner}
         </ScreenOverlay>

@@ -253,7 +253,7 @@ function stripLocalImageFields(message: LocalAgentMessage): LocalAgentMessage {
     return changed ? { ...message, content } : message;
 }
 
-export function requestStreamingCompletion(
+export async function requestStreamingCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
     tailNote: string,
@@ -261,16 +261,25 @@ export function requestStreamingCompletion(
     onThinking?: (thinking: string) => void,
     onToolCall?: () => void,
 ): Promise<CompletionResult> {
-    if (request.apiStyle === 'messages') {
-        return requestMessagesCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
-    }
-    if (request.apiStyle === 'responses') {
-        return requestResponsesCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
-    }
-    if (request.apiStyle === 'google') {
-        return requestGoogleCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
-    }
-    return requestChatCompletion(request, messages, tailNote, onDelta, onThinking, onToolCall);
+    const controller = new AbortController();
+    const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
+    let timedOut = false;
+    // SSE heartbeats are transport activity, not model progress. Bound the
+    // entire wait for text, thinking or a tool call, including header wait.
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, FIRST_BYTE_TIMEOUT_MS);
+    const progressed = () => clearTimeout(timer);
+    const delta = (value: string) => { if (value) progressed(); onDelta(value); };
+    const thinking = (value: string) => { if (value) progressed(); onThinking?.(value); };
+    const tool = () => { progressed(); onToolCall?.(); };
+    const adapter = request.apiStyle === 'messages' ? requestMessagesCompletion
+        : request.apiStyle === 'responses' ? requestResponsesCompletion
+        : request.apiStyle === 'google' ? requestGoogleCompletion : requestChatCompletion;
+    try {
+        return await adapter({ ...request, signal }, messages, tailNote, delta, thinking, tool);
+    } catch (error) {
+        if (timedOut && !request.signal?.aborted) throw transportTimeoutError('Model first-token timeout (300s): no text, thinking or tool call received.');
+        throw error;
+    } finally { clearTimeout(timer); }
 }
 
 async function requestChatCompletion(

@@ -13,7 +13,8 @@ const WEBVIEW_DIST = join(__dirname, '..', '..', 'dist', 'webview-ui');
  * installs the pinned build, so the default launch stays untouched there.
  */
 function localChromiumExecutable(): string | undefined {
-    if (process.env.CI) return undefined;
+    // Pixel baselines must use the lockfile-pinned headless shell locally too.
+    if (process.env.CI || process.env.XRATU_VISUAL === '1') return undefined;
     const cache = process.env.PLAYWRIGHT_BROWSERS_PATH
         || (process.platform === 'win32'
             ? join(process.env.LOCALAPPDATA ?? '', 'ms-playwright')
@@ -72,7 +73,11 @@ export default defineConfig({
         viewport: { width: 900, height: 900 },
         ...(() => {
             const executablePath = localChromiumExecutable();
-            return executablePath ? { launchOptions: { executablePath } } : {};
+            // Host fontconfig defaults differ even on Linux. Keep snapshot
+            // text grayscale and unhinted so the bundled font renders alike.
+            const args = process.env.XRATU_VISUAL === '1'
+                ? ['--disable-lcd-text', '--font-render-hinting=none'] : undefined;
+            return executablePath || args ? { launchOptions: { executablePath, args } } : {};
         })(),
     },
     webServer: {

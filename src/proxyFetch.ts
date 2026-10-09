@@ -14,11 +14,16 @@
  * harnesses (which stub `globalThis.fetch`).
  */
 import { fetch as undiciFetch } from 'undici';
+import { isOfflineMode, networkSignal } from './networkPolicy';
 
 export async function proxyFetch(
     input: string | URL | Request,
     init?: RequestInit & { dispatcher?: unknown },
 ): Promise<Response> {
+    const url = typeof input === 'string' || input instanceof URL ? input : input.url;
+    const signal = networkSignal(url, init?.signal ?? (typeof input === 'object' && 'signal' in input ? input.signal : undefined));
+    // Offline requests cannot follow a local endpoint's redirect off-machine.
+    init = { ...init, signal, ...(isOfflineMode() ? { redirect: 'error' as const, dispatcher: undefined } : {}) };
     if (init && (init as { dispatcher?: unknown }).dispatcher) {
         return undiciFetch(input as never, init as never) as unknown as Promise<Response>;
     }

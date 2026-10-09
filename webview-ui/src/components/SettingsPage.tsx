@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
     Activity,
+    BookOpen,
     ArrowLeft,
     ArrowRight,
     ChevronLeft,
@@ -37,6 +38,11 @@ interface SettingsPageProps {
     onOpenProxy?: () => void;
     /** Live resolution summary shown on the proxy row (e.g. a proxy URL). */
     proxySummary?: string | null;
+    offline?: boolean;
+    errorExplanations?: boolean;
+    onSetOffline?: (enabled: boolean) => void;
+    onSetErrorExplanations?: (enabled: boolean) => void;
+    onOfflineHelp?: () => void;
     onClearHistory?: () => void;
 }
 
@@ -56,6 +62,7 @@ export function SettingsPage({
     onOpenProxy,
     proxySummary = null,
     onClearHistory,
+    offline = false, errorExplanations = true, onSetOffline, onSetErrorExplanations, onOfflineHelp,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
 
@@ -137,6 +144,15 @@ export function SettingsPage({
                         </div>
                         {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
                     </button>
+                    <div className="settings-nav-row">
+                        <div className="settings-nav-main">
+                            <strong>{t('offlineMode')}</strong>
+                            <span>{t('offlineModeDesc')}</span>
+                        </div>
+                        <button className="ghost-btn small" aria-label={t('offlineHelp')} title={t('offlineHelp')} onClick={onOfflineHelp}><BookOpen size={13} /></button>
+                        <button type="button" className={`mcp-switch${offline ? ' on' : ''}`} role="switch"
+                            aria-checked={offline} aria-label={t('offlineMode')} onClick={() => onSetOffline?.(!offline)}><span className="mcp-switch-knob" /></button>
+                    </div>
                 </section>
 
                 <section className="settings-card">
@@ -234,7 +250,14 @@ export function SettingsPage({
                         </div>
                         <MessageSquare size={14} />
                     </div>
-
+                    <div className="settings-nav-row">
+                        <div className="settings-nav-main">
+                            <strong>{t('errorExplanations')}</strong>
+                            <span>{t('errorExplanationsDesc')}</span>
+                        </div>
+                        <button type="button" className={`mcp-switch${errorExplanations ? ' on' : ''}`} role="switch"
+                            aria-checked={errorExplanations} aria-label={t('errorExplanations')} onClick={() => onSetErrorExplanations?.(!errorExplanations)}><span className="mcp-switch-knob" /></button>
+                    </div>
                 </section>
 
                 <section className="settings-card">

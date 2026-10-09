@@ -79,13 +79,13 @@ const BASELINE_HEIGHT = 900;
  */
 const SETTINGS_ROW: Record<Locale, Record<'credentials' | 'capabilities' | 'usage' | 'proxy', string>> = {
     fa: {
-        credentials: 'کلید های API',
+        credentials: 'سرویس دهنده ها',
         capabilities: 'سرور ها و مهارت ها',
         usage: 'مصرف',
         proxy: 'تنظیمات پروکسی',
     },
     en: {
-        credentials: 'API keys',
+        credentials: 'Providers',
         capabilities: 'Servers & Skills',
         usage: 'Usage',
         proxy: 'Proxy settings',
@@ -420,7 +420,10 @@ async function settingsScreen(page: Page, locale: Locale): Promise<Locator> {
     await expect(view).toBeVisible();
     // Three transcript switches = the page really mounted its cards (the same
     // signal app.spec.ts uses), not just an empty scroll shell.
-    await expect(page.locator('.settings-card .mcp-switch')).toHaveCount(3);
+    const activity = page.locator('.settings-card').filter({ has: page.getByRole('heading', {
+        name: locale === 'fa' ? 'نمایش فعالیت ها' : 'Activity view', exact: true,
+    }) });
+    await expect(activity.getByRole('switch')).toHaveCount(3);
     return view;
 }
 

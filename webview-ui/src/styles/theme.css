@@ -19,6 +19,42 @@
     unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200D;
 }
 
+.runtime-guide {
+    margin-block: 12px;
+    padding-block: 8px;
+    border-block-start: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+.runtime-guide summary { cursor: pointer; font-weight: 500; }
+.runtime-guide p { color: var(--vscode-descriptionForeground); line-height: 1.7; }
+.runtime-actions, .runtime-model-row, .runtime-operation {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-block: 8px;
+    min-inline-size: 0;
+}
+.runtime-actions input { flex: 1; min-inline-size: 120px; }
+.runtime-model-row > span, .runtime-model-row > strong { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+.runtime-operation progress { max-inline-size: 100%; }
+.runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.provider-onboarding { text-decoration: none; }
+.offline-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 2px 12px;
+    border-block-end: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-sideBar-background);
+    font-size: 12px;
+}
+.offline-banner > span { flex: 1; }
+
 :root {
     /* Bright teal accent - used sparingly */
     --xratu-accent: #14e3c8;
@@ -8524,6 +8560,7 @@ button.mcp-row-main:hover strong {
     opacity: 0.75;
 }
 
+.runtime-actions input,
 .mcp-field input,
 .mcp-field select,
 .mcp-field textarea {
@@ -8541,6 +8578,7 @@ button.mcp-row-main:hover strong {
     resize: vertical;
 }
 
+.runtime-actions input:focus,
 .mcp-field input:focus,
 .mcp-field select:focus,
 .mcp-field textarea:focus {

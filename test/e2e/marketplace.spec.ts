@@ -8,6 +8,8 @@
  * mcp.json before the confirm step (a remote catalog is untrusted input).
  */
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { installVscodeTheme } from './vscodeTheme';
 
 const ENTRIES = [
@@ -88,14 +90,15 @@ async function sentMessages(page: Page): Promise<Array<Record<string, unknown>>>
 }
 
 /** Open the capabilities page and land on the marketplace tab. */
-async function openMarketplace(page: Page): Promise<void> {
+async function openMarketplace(page: Page, locale: 'fa' | 'en' = 'fa'): Promise<void> {
     await installVscodeTheme(page);
     await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale });
     await hostMessage(page, { type: 'showChat' });
-    await page.getByTitle('سرور ها و مهارت ها').click();
+    await page.getByTitle(locale === 'fa' ? 'سرور ها و مهارت ها' : 'Servers & Skills').click();
     await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await hostMessage(page, { type: 'skillsState', skills: [] });
-    await page.getByRole('tab', { name: 'فروشگاه' }).click();
+    await page.getByRole('tab', { name: locale === 'fa' ? 'فروشگاه' : 'Marketplace' }).click();
     // The tab requests the catalog on first open.
     await expect.poll(async () => (await sentMessages(page)).some((m) => m.type === 'mcpMarketplaceGetState')).toBe(true);
     await hostMessage(page, MARKET_STATE);
@@ -305,4 +308,37 @@ test('source and tag filters render as two separate groups', async ({ page }) =>
     const a = await sources.boundingBox();
     const b = await tags.boundingBox();
     expect(b!.y).toBeGreaterThan(a!.y + a!.height - 1);
+});
+
+// Cross-platform layout gate plus Linux pixel baselines. Every glyph uses the
+// same bundled font, removing the system-font mismatch of earlier baselines.
+// The lockfile pins Playwright/Chromium; CI installs that browser explicitly.
+test.describe('marketplace visual contract', () => {
+    test.use({ colorScheme: 'dark', reducedMotion: 'reduce', timezoneId: 'UTC' });
+    for (const locale of ['fa', 'en'] as const) for (const width of [420, 900]) {
+        test(`${locale} ${width}`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await openMarketplace(page, locale);
+            const font = readFileSync(join(__dirname, '../../webview-ui/src/styles/fonts/vazirmatn-variable.woff2')).toString('base64');
+            await page.addStyleTag({ content: `@font-face{font-family:VisualFixture;src:url(data:font/woff2;base64,${font});font-weight:100 900;}*{font-family:VisualFixture!important;}` });
+            await page.evaluate(async () => { await document.fonts.load('400 14px VisualFixture', 'Hello سلام'); await document.fonts.ready; });
+            await expect(page.locator('.app')).toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
+            const verify = async (state: string) => {
+                const overflow = await page.locator('.settings-page').evaluate((el) => el.scrollWidth - el.clientWidth);
+                expect(overflow).toBeLessThanOrEqual(1);
+                if (process.env.XRATU_VISUAL === '1' && process.platform === 'linux') {
+                    await expect(page).toHaveScreenshot(`marketplace-${locale}-${width}-${state}.png`, {
+                        animations: 'disabled', maxDiffPixelRatio: 0.001,
+                    });
+                }
+            };
+            await verify('catalog');
+            await page.locator('.mp-row').first().getByRole('button', { name: locale === 'fa' ? 'افزودن' : 'Add', exact: true }).click();
+            await expect(page.locator('.mp-confirm-json')).toBeVisible();
+            await verify('confirm');
+            await hostMessage(page, { ...MARKET_STATE, status: 'offline', entries: [ENTRIES[0]], error: 'Catalog unavailable' });
+            await expect(page.locator('.mp-status')).toContainText(locale === 'fa' ? 'آفلاین' : 'Offline');
+            await verify('offline');
+        });
+    }
 });

@@ -248,12 +248,9 @@ export function isRetryableProviderHttpError(error: unknown): boolean {
 export const NETWORK_RETRY_BASE_DELAY_MS = 1000;
 export const NETWORK_RETRY_MAX_DELAY_MS = 15_000;
 const NETWORK_RETRY_JITTER = 0.25;
-/** Hard ceiling on WALL-CLOCK spent retrying one round (attempt time included),
- *  so a provider that is down cannot make the agent wait forever. Sized above
- *  the 120s stream idle deadline so a single stalled attempt still earns one
- *  retry, but deliberately BELOW FIRST_BYTE_TIMEOUT_MS: a server that takes
- *  minutes to produce headers is treated as unrecoverable within the round
- *  rather than retried, which keeps a dead provider's total wait bounded. */
+/** Window in which another retry may start, including time spent in prior
+ *  attempts. In-flight generation has its own first-output and idle deadlines;
+ *  it is not cut short just because the retry window closes. */
 export const NETWORK_RETRY_MAX_TOTAL_MS = 180_000;
 
 /** Backoff before retry `attempt` (1-based). Jitter spreads retries so a

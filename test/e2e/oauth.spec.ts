@@ -152,7 +152,7 @@ test('browser sign-in link is selectable and copies through the host', async ({ 
 
 test('subscription subtitle is neutral and is not repeated on the provider card', async ({ page }) => {
     await post(page, { type: 'oauthState', state: { providers: [provider] } });
-    await expect(page.getByText('Use your provider subscription instead of an API key.', { exact: true })).toHaveCount(1);
+    await expect(page.getByText('Use your provider subscription instead of an API key', { exact: true })).toHaveCount(1);
     await expect(page.locator('.cred-oauth-row .cred-oauth-hint')).toHaveCount(0);
 });
 

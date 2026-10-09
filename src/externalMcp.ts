@@ -14,6 +14,7 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { isOfflineMode } from './networkPolicy';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -260,6 +261,7 @@ async function closeState(state: ServerState | null | undefined): Promise<void> 
 
 export class ExternalMcpManager {
     private _states = new Map<string, Promise<ServerState | null>>();
+    private _connectingTransports = new Set<{ close: () => Promise<void>; pid?: number | null }>();
     private _statuses = new Map<string, ExternalServerStatus>();
     private _stopped = false;
 
@@ -267,6 +269,7 @@ export class ExternalMcpManager {
 
     async stopAll(): Promise<void> {
         this._stopped = true;
+        await this.closeConnectingTransports();
         for (const pending of this._states.values()) {
             try {
                 const state = await pending;
@@ -279,6 +282,7 @@ export class ExternalMcpManager {
     /** Drop cached clients + status memory so the next call reconnects from
      *  fresh config (used after the MCP page saves and for manual restarts). */
     async reload(): Promise<void> {
+        await this.closeConnectingTransports();
         for (const [name, pending] of [...this._states.entries()]) {
             this._states.delete(name);
             try {
@@ -287,6 +291,16 @@ export class ExternalMcpManager {
             } catch { /* already dead */ }
         }
         this._statuses.clear();
+    }
+
+    private async closeConnectingTransports(): Promise<void> {
+        const pending = [...this._connectingTransports];
+        this._connectingTransports.clear();
+        await Promise.allSettled(pending.map((transport) => closeState({
+            name: 'connecting',
+            client: { close: () => transport.close() } as Client,
+            pid: transport.pid ?? undefined,
+        })));
     }
 
     /** Restart one server: drop its cached client and reconnect eagerly so
@@ -434,7 +448,13 @@ export class ExternalMcpManager {
                 }
                 const client = new Client({ name: 'xratu-external-bridge', version: '1.0.0' });
                 client.onerror = (e) => console.error(`xratu mcpServers[${name}] error:`, e);
-                await client.connect(built.transport as never, { timeout: CONNECT_TIMEOUT_MS });
+                const transport = built.transport as { close: () => Promise<void>; pid?: number | null };
+                this._connectingTransports.add(transport);
+                try {
+                    await client.connect(built.transport as never, { timeout: CONNECT_TIMEOUT_MS });
+                } finally {
+                    this._connectingTransports.delete(transport);
+                }
                 console.log(`xratu: connected to external MCP server '${name}' (${built.type})`);
                 this._markStatus(name, { state: 'connected', transport: built.type }, source);
                 return { name, client, pid: (built.transport as { pid?: number | null }).pid ?? undefined };
@@ -454,12 +474,17 @@ export class ExternalMcpManager {
     }
 
     private async getState(name: string, cfg: ExternalServerConfig, source: 'global' | 'workspace' | 'legacy'): Promise<ServerState | null> {
-        if (this._stopped || cfg.disabled) return null;
+        if (this._stopped || cfg.disabled || isOfflineMode()) return null;
         let pending = this._states.get(name);
         if (!pending) {
             pending = this.connect(name, cfg, source);
         }
         const state = await pending;
+        if (isOfflineMode() && state) {
+            await closeState(state);
+            this._states.delete(name);
+            return null;
+        }
         if (!state) {
             // Forget the failure so the next call retries (config may be fixed).
             this._states.delete(name);
@@ -469,6 +494,7 @@ export class ExternalMcpManager {
 
     /** Aggregate tool listings from every enabled server. Failures degrade quietly. */
     async listTools(): Promise<AggregatedTool[]> {
+        if (isOfflineMode()) return [];
         const config = await this.loadConfig();
         const out: AggregatedTool[] = [];
         for (const [name, cfg] of Object.entries(config.servers)) {
@@ -502,6 +528,7 @@ export class ExternalMcpManager {
 
     /** Route a namespaced call. One transparent reconnect retry on stale clients. */
     async callTool(namespaced: string, args: Record<string, unknown>): Promise<ExternalToolResult> {
+        if (isOfflineMode()) return textResult('Error: external MCP is disabled in offline mode.');
         const rest = namespaced.startsWith(EXTERNAL_PREFIX)
             ? namespaced.slice(EXTERNAL_PREFIX.length)
             : namespaced;

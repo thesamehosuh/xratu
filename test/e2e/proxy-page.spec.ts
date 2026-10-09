@@ -297,7 +297,7 @@ test('entering credentials from settings requests the saved providers', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    await page.locator('.settings-nav-row', { hasText: /API keys/i }).click();
+    await page.getByRole('button', { name: /^Providers / }).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
     // openCredentials makes the host push the saved provider list.

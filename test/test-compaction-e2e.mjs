@@ -310,6 +310,79 @@ for (const mode of ['fail', 'empty']) {
     ok('temperature-400: summary extracted after the retry', !!comp && comp.value.includes('probe goal'));
 }
 
+// Cancelling while summarization is pending must reach the request signal,
+// settle the real loop, preserve the caller's history, and never dial main.
+for (const lateSuccess of [false, true]) {
+    const original = globalThis.fetch;
+    const controller = new AbortController();
+    const history = makeHistory();
+    const before = JSON.stringify(history);
+    const events = [];
+    let calls = 0;
+    let sawAbort = false;
+    let deadline;
+    globalThis.fetch = async (_url, init) => {
+        calls++;
+        return new Promise((resolve, reject) => {
+            init.signal.addEventListener('abort', () => {
+                sawAbort = true;
+                // A response can win the race with transport cancellation.
+                if (lateSuccess) resolve(jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }] }));
+                else reject(init.signal.reason);
+            }, { once: true });
+            queueMicrotask(() => controller.abort());
+        });
+    };
+    try {
+        const run = (async () => {
+            for await (const event of runLocalAgent({
+                baseUrl: 'https://example.invalid/v1', apiKey: 'k', model: 'test-model',
+                systemPrompt: SYSTEM_PROMPT, userText: 'now do it', history, tools: [],
+                contextWindow: WINDOW, signal: controller.signal,
+            }, { execute: async () => ({ output: 'unused' }) }, { requestApproval: async () => ({}) })) events.push(event);
+        })();
+        const error = await Promise.race([
+            run.then(() => null, (e) => e),
+            new Promise((resolve) => { deadline = setTimeout(() => resolve(new Error('did not settle')), 1000); }),
+        ]);
+        ok('cancel: summary fetch sees abort', sawAbort);
+        ok('cancel: loop promptly rejects AbortError', error?.name === 'AbortError');
+        ok('cancel: no main request starts', calls === 1);
+        ok('cancel: no summary committed', !events.some((e) => e.type === 'compactionSummary'));
+        ok('cancel: original history intact', JSON.stringify(history) === before);
+    } finally { clearTimeout(deadline); globalThis.fetch = original; }
+}
+
+// Exercise executor -> model request, not just the trimming helper. A huge
+// result in the CURRENT turn must fit before the second request is sent.
+{
+    const original = globalThis.fetch;
+    const requests = [];
+    globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(init.body);
+        requests.push(body);
+        if (requests.length === 1) return sse([
+            frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'huge', type: 'function', function: { name: 'read_file', arguments: '{}' } }] } }] }),
+            'data: [DONE]\n\n',
+        ]);
+        return sse([frame({ choices: [{ delta: { content: 'done' } }] }), 'data: [DONE]\n\n']);
+    };
+    try {
+        for await (const _event of runLocalAgent({
+            baseUrl: 'https://example.invalid/v1', apiKey: 'k', model: 'test-model',
+            systemPrompt: 'Code assistant', userText: 'read a file', tools: [{ name: 'read_file', description: 'read', inputSchema: {}, requiresApproval: false }],
+            contextWindow: 8192, maxRounds: 3,
+        }, { execute: async () => ({ output: 'R'.repeat(200_000) }) }, { requestApproval: async () => ({}) })) {}
+        const replay = requests[1]?.messages ?? [];
+        const result = replay.find((m) => m.role === 'tool' && m.tool_call_id === 'huge');
+        ok('huge current result: second request exists', requests.length === 2);
+        ok('huge current result: content bounded before send', result && result.content.length < 20_000);
+        ok('huge current result: clipping marked', result && /truncat|omitt|clip/i.test(result.content));
+        ok('huge current result: current user preserved', replay.some((m) => m.role === 'user' && m.content.includes('read a file')));
+        ok('huge current result: call immediately precedes result', replay[replay.indexOf(result) - 1]?.tool_calls?.[0]?.id === 'huge');
+    } finally { globalThis.fetch = original; }
+}
+
 if (failed) {
     console.error(`\n${failed} check(s) failed`);
     process.exit(1);

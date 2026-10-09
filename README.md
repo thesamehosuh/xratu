@@ -69,7 +69,7 @@ runtime. Everything runs inside the extension host, on your machine.
 
 - **Iranian gateways as first-class presets** - Kaya AI, Avalai, Metis AI,
   Liara AI, ArvanCloud AI, Navaan, and GapGPT sit in their own group in
-  Settings → API keys, take rial payment, and need no VPN. Usage costs show
+  Settings → Providers, take rial payment, and need no VPN. Usage costs show
   in Toman on the Usage page.
 - **Fully local is fully offline** - a local runtime (Ollama, LM Studio,
   vLLM, llama.cpp) makes the agent complete with zero network dependency.
@@ -348,6 +348,16 @@ Ubuntu, Windows, and macOS. See [AGENTS.md](AGENTS.md) for details.
 
 Issues and PRs welcome. Open an issue before large changes. Conventional
 Commits, CI green, and code review required for every PR.
+
+### Local setup and connection comparison
+
+Settings now includes **Offline mode** and **Explain errors**. Offline mode limits Xratu-managed HTTP requests to loopback, disables web/external MCP tools, and cancels active operations when enabled. Terminal subprocesses remain unrestricted. A persistent banner links to the bundled [offline setup and hardware guide](assets/guides/offline.en.md), which is also available from Providers and ships in the VSIX.
+
+In **Providers**, expand **Manage Ollama models** for a discovered Ollama runtime on port 11434: download with progress/cancel, or delete after confirmation. Other runtimes manage weights in their own apps. The guide covers quantization, RAM/VRAM sizing and offline troubleshooting.
+
+Iranian presets link to official onboarding pages. The bundled [provider comparison](assets/guides/providers.en.md) separates verified pricing/payment information from unverified tariffs. **Compare connection latency** sends a small, opt-in request to the active model and shows first-text-token time, total time, and known rates/estimated cost. No project context is sent; requests may incur charges. Compare the same model across connections and repeat measurements instead of treating a single sample as a ranking.
+
+Marketplace visual regressions are CI-gated on Linux for fa/en at 420px/900px, including catalog, confirmation and offline states. Baselines use the bundled font and lockfile-pinned Chromium; the same layout checks run on Windows and macOS. To deliberately update them, review the generated images after running `XRATU_VISUAL=1 npx playwright test -c test/e2e/playwright.config.ts marketplace.spec.ts --grep 'visual contract' --update-snapshots` on Linux.
 
 ## License
 
