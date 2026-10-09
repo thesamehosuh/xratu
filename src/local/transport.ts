@@ -43,7 +43,11 @@ export function extractSseData(buffer: string): { events: string[]; remainder: s
     return { events, remainder };
 }
 
-export function makeHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
+export function makeHeaders(
+    apiKey?: string | null,
+    sessionId?: string | null,
+    extra?: Record<string, string> | null,
+): Headers {
     const headers = new Headers({
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
@@ -52,6 +56,7 @@ export function makeHeaders(apiKey?: string | null, sessionId?: string | null): 
     // OpenCode Go rejects requests without a stable per-conversation session
     // id (MissingSessionID); harmless for other providers.
     if (sessionId) headers.set('x-opencode-session', sessionId);
+    for (const [name, value] of Object.entries(extra ?? {})) headers.set(name, value);
     return headers;
 }
 
@@ -422,8 +427,12 @@ export function endpointUrl(baseUrl: string, endpoint: string): string {
     }
 }
 
-export function makeMessagesHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
-    const headers = makeHeaders(apiKey, sessionId);
+export function makeMessagesHeaders(
+    apiKey?: string | null,
+    sessionId?: string | null,
+    extra?: Record<string, string> | null,
+): Headers {
+    const headers = makeHeaders(apiKey, sessionId, extra);
     // Anthropic uses x-api-key; OpenAI-compatible gateways use Bearer. Send
     // both so either front end works (the extra header is ignored).
     if (apiKey) headers.set('x-api-key', apiKey);
@@ -431,8 +440,12 @@ export function makeMessagesHeaders(apiKey?: string | null, sessionId?: string |
     return headers;
 }
 
-export function makeGoogleHeaders(apiKey?: string | null, sessionId?: string | null): Headers {
-    const headers = makeHeaders(apiKey, sessionId);
+export function makeGoogleHeaders(
+    apiKey?: string | null,
+    sessionId?: string | null,
+    extra?: Record<string, string> | null,
+): Headers {
+    const headers = makeHeaders(apiKey, sessionId, extra);
     if (apiKey) headers.set('x-goog-api-key', apiKey);
     return headers;
 }

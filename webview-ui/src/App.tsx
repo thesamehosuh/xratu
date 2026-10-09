@@ -23,6 +23,7 @@ import type {
     ThinkingLevel,
     ToExtensionMessage,
     SavedCredential,
+    OAuthHostState,
 } from './types';
 import { createInitialChatState, reduceChat } from './state';
 import { Toolbar, type SessionsScope } from './components/Toolbar';
@@ -41,7 +42,7 @@ import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
 import { prefersReducedMotion } from './motion';
-import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
+import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy';
 
@@ -135,6 +136,8 @@ export function App() {
     /** Runtime card to pre-expand on the credentials page (echoed target). */
     const [credOpenCard, setCredOpenCard] = useState<'byok' | 'local' | null>(null);
     const [activeCredentialId, setActiveCredentialId] = useState<string | null>(null);
+    const [oauthCopyResult, setOauthCopyResult] = useState<{ ok: boolean; seq: number; requestId: string } | null>(null);
+    const [oauthState, setOauthState] = useState<OAuthHostState | null>(null);
     /** Where the credentials page's Back button returns to - 'settings' when
      *  it was opened from Settings, 'chat' for every other entry path. */
     const [credReturnTo, setCredReturnTo] = useState<'chat' | 'settings'>('chat');
@@ -146,6 +149,7 @@ export function App() {
         rates: ModelRateView[];
         history: LedgerDay[];
         allTime: UsageTotals;
+        chatgpt?: ChatGptUsageView;
     } | null>(null);
     const [usageReturnTo, setUsageReturnTo] = useState<'chat' | 'settings'>('settings');
     /** Proxy page state (host-owned settings + live resolution) + Back target. */
@@ -170,6 +174,7 @@ export function App() {
     const [modelInfo, setModelInfo] = useState<{
         defaultModel: string;
         models: string[];
+        displayNames: Record<string, string>;
         contextWindows: Record<string, number>;
         capabilities: Record<string, ModelCapability>;
     } | null>(null);
@@ -715,6 +720,7 @@ export function App() {
                         rates: msg.rates,
                         history: msg.history,
                         allTime: msg.allTime,
+                        chatgpt: msg.chatgpt,
                     });
                     break;
                 case 'proxyState':
@@ -745,6 +751,7 @@ export function App() {
                     setModelInfo({
                         defaultModel: msg.defaultModel,
                         models: msg.models,
+                        displayNames: msg.displayNames ?? {},
                         contextWindows: msg.contextWindows ?? {},
                         capabilities: msg.capabilities ?? {},
                     });
@@ -754,6 +761,11 @@ export function App() {
                     setThinkingLevels(msg.thinkingLevels ?? {});
                     setByokHint(false);
                     setByokError(null);
+                    break;
+                case 'clipboardResult':
+                    if (msg.requestId === 'oauth-device-code' || msg.requestId === 'oauth-browser-url') {
+                        setOauthCopyResult({ ok: msg.ok, seq: Date.now(), requestId: msg.requestId });
+                    }
                     break;
                 case 'modelsRefreshing':
                     setModelsRefreshing(msg.active);
@@ -816,6 +828,12 @@ export function App() {
                     setCredReason(msg.reason ?? null);
                     if (msg.currentUrl !== undefined) setCredUrl(msg.currentUrl);
                     setActiveCredentialId(msg.activeCredentialId ?? null);
+                    break;
+                case 'oauthState':
+                    // The host always sends the whole picture (it merges its own
+                    // patches), so a straight replace is correct here.
+                    setOauthState(msg.state);
+                    if (!msg.state.inProgress) setOauthCopyResult(null);
                     break;
                 case 'savedCredentials':
                     setSavedCredentials(msg.credentials);
@@ -1112,7 +1130,14 @@ export function App() {
                     onUpdateCredential={(id, api_key) => send({ type: 'updateLlmCredential', id, api_key })}
                     onDiscoverLocalModels={startLocalScan}
                     onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
-                    onBack={() => setScreen(credReturnTo)}
+                    oauthState={oauthState}
+            onOAuthSignIn={(providerId, method, credentialId) => { setOauthCopyResult(null); send({ type: 'oauthSignIn', providerId, method, credentialId }); }}
+            onOAuthCopy={(value, requestId) => { setOauthCopyResult(null); send({ type: 'copyToClipboard', value, requestId }); }}
+            copyResult={oauthCopyResult}
+            onOAuthCancelSignIn={() => { setOauthCopyResult(null); send({ type: 'oauthCancelSignIn' }); }}
+            onOAuthManualCode={(code) => send({ type: 'oauthManualCode', code })}
+            onOAuthSignOut={(credentialId) => send({ type: 'oauthSignOut', credentialId })}
+            onBack={() => setScreen(credReturnTo)}
                 />
         );
     }
@@ -1152,6 +1177,7 @@ export function App() {
         overlay = (
                 <UsagePage
                     state={usage}
+                    oauthState={oauthState}
                     onBack={() => setScreen(usageReturnTo)}
                     onSaveModel={(id, input, output, cachedInput, currency) =>
                         send({ type: 'usageSaveModel', id, input, output, cachedInput, currency })}
@@ -1584,6 +1610,7 @@ export function App() {
                 injectedText={injectedText}
                 onInjectedApplied={() => setInjectedText(null)}
                 models={modelInfo?.models ?? []}
+                modelDisplayNames={modelInfo?.displayNames}
                 modelCapabilities={modelInfo?.capabilities}
                 modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}

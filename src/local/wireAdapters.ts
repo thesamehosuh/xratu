@@ -10,6 +10,7 @@
 import { proxyFetch } from '../proxyFetch';
 import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { isOpenRouterHost, supportsPromptCacheKey } from './apiStyle';
+import { isChatGptSubscriptionHost } from '../providerIdentity';
 import { dataUrlMime, dataUrlPayload } from './imageFormat';
 import type {
     LocalAgentMessage,
@@ -95,6 +96,7 @@ function thinkingBudgetFor(level: ThinkingLevel): number {
         case 'high': return 24_576;
         case 'xhigh': return 32_768;
         case 'max': return 49_152;
+        case 'ultra': return 65_536;
     }
 }
 
@@ -330,7 +332,7 @@ async function requestChatCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeHeaders(request.apiKey, request.sessionId),
+                headers: makeHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -754,7 +756,7 @@ async function requestMessagesCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeMessagesHeaders(request.apiKey, request.sessionId),
+                headers: makeMessagesHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -1010,6 +1012,7 @@ function toResponsesBody(
                     call_id: call.id,
                     name: call.function.name,
                     arguments: call.function.arguments || '{}',
+                    ...(request.subscription ? { namespace: 'xratu' } : {}),
                 });
             }
             continue;
@@ -1066,8 +1069,20 @@ function toResponsesBody(
             parameters: tool.inputSchema,
         }));
     }
-    body.max_output_tokens = outputCapFor(request);
-    if (request.temperature != null) body.temperature = request.temperature;
+    // The ChatGPT (Codex) backend REJECTS max_output_tokens, so sending a cap
+    // there would spend a round trip on the 400-degradation retry below; it
+    // also requires store:false, and only returns replayable reasoning when
+    // it is asked for the encrypted form (Codex CLI sends all three).
+    if (request.subscription || isChatGptSubscriptionHost(request.baseUrl)) {
+        body.store = false;
+        body.include = ['reasoning.encrypted_content'];
+        if (request.subscription && body.tools) body.tools = [{
+            type: 'namespace', name: 'xratu', description: 'Tools executed locally by Xratu', tools: body.tools,
+        }];
+    } else {
+        body.max_output_tokens = outputCapFor(request);
+    }
+    if (!request.subscription && request.temperature != null) body.temperature = request.temperature;
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
     if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort };
@@ -1117,7 +1132,7 @@ async function requestResponsesCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeHeaders(request.apiKey, request.sessionId),
+                headers: makeHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -1183,6 +1198,7 @@ async function requestResponsesCompletion(
     // + tool-call turn can be replayed verbatim on the continuation request.
     const itemsByIndex = new Map<number, any>();
     let completedItems: any[] | null = null;
+    let completed = false;
 
     const consume = (payload: string) => {
         let json: any;
@@ -1232,11 +1248,14 @@ async function requestResponsesCompletion(
                 break;
             }
             case 'response.completed':
+                completed = true;
                 if (json.response?.usage) usage = responsesUsage(json.response.usage);
                 if (Array.isArray(json.response?.output)) completedItems = json.response.output;
                 break;
             case 'response.failed':
                 throw new Error(`Model response failed: ${json.response?.error?.message ?? 'unknown error'}`);
+            case 'response.incomplete':
+                throw new Error(`Model response incomplete: ${json.response?.incomplete_details?.reason ?? 'unknown reason'}`);
             case 'error':
                 throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         }
@@ -1250,6 +1269,7 @@ async function requestResponsesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
+    if (request.subscription && !completed) throw new Error('Model stream ended without response.completed');
     // If the stream omitted output_item.done / completed.output, the stored
     // function_call item still has empty arguments - backfill from the
     // accumulated deltas so the continuation isn't sent with an empty call.
@@ -1463,7 +1483,7 @@ async function requestGoogleCompletion(
         try {
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeGoogleHeaders(request.apiKey, request.sessionId),
+                headers: makeGoogleHeaders(request.apiKey, request.sessionId, request.headers),
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));

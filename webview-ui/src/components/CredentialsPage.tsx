@@ -4,20 +4,25 @@ import {
     ArrowLeft,
     ArrowRight,
     Check,
+    Copy,
     Eye,
     EyeOff,
     Laptop,
     Link,
     Lock,
+    LogOut,
     Pencil,
+    Plus,
     RefreshCw,
     Search,
     Server,
     Trash2,
+    UserRound,
     X,
 } from 'lucide-react';
 import type {
     DiscoveredLocalRuntime,
+    OAuthHostState,
     SavedCredential,
 } from '../types';
 import { getLocale, t, tf } from '../i18n';
@@ -44,6 +49,16 @@ interface CredentialsPageProps {
     onUpdateCredential: (id: string, apiKey: string) => void;
     onDiscoverLocalModels: () => void;
     onSaveLocalRuntime: (baseUrl: string, apiKey: string | null) => void;
+    /** Host-owned OAuth status: registered providers, connected accounts, and
+     *  what an in-flight flow is waiting for. The page renders; the HOST runs
+     *  the flow (it owns the browser launch, the loopback socket, the abort). */
+    oauthState?: OAuthHostState | null;
+    onOAuthSignIn: (providerId: string, method: 'browser' | 'device', credentialId?: string) => void;
+    onOAuthCopy: (value: string, requestId: 'oauth-device-code' | 'oauth-browser-url') => void;
+    copyResult?: { ok: boolean; seq: number; requestId: string } | null;
+    onOAuthCancelSignIn: () => void;
+    onOAuthManualCode: (code: string) => void;
+    onOAuthSignOut: (credentialId: string) => void;
     onBack: () => void;
 }
 
@@ -163,6 +178,13 @@ export function CredentialsPage({
     onUpdateCredential,
     onDiscoverLocalModels,
     onSaveLocalRuntime,
+    oauthState,
+    onOAuthSignIn,
+    onOAuthCopy,
+    copyResult,
+    onOAuthCancelSignIn,
+    onOAuthManualCode,
+    onOAuthSignOut,
     onBack,
 }: CredentialsPageProps) {
     /** Entry-point target wins over any currentUrl echo: the setup chips
@@ -182,6 +204,14 @@ export function CredentialsPage({
     const [providerQuery, setProviderQuery] = useState('');
     const [providerOpen, setProviderOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [oauthCode, setOauthCode] = useState('');
+    const [oauthCopied, setOauthCopied] = useState<string | null>(null);
+    useEffect(() => {
+        setOauthCopied(copyResult?.ok ? copyResult.requestId : null);
+        if (!copyResult?.ok) return;
+        const timer = setTimeout(() => setOauthCopied(null), 1500);
+        return () => clearTimeout(timer);
+    }, [copyResult]);
     const [editKey, setEditKey] = useState('');
     /** Runtime id (or 'manual' for the custom-URL form) currently connecting -
      *  drives the per-row busy spinner. */
@@ -252,7 +282,8 @@ export function CredentialsPage({
     const askDelete = (id: string) => {
         if (deletingId === id) {
             setDeletingId(null);
-            onDeleteCredential(id);
+            if (savedCredentials.find((c) => c.id === id)?.oauth) onOAuthSignOut(id);
+            else onDeleteCredential(id);
             return;
         }
         setDeletingId(id);
@@ -304,6 +335,227 @@ export function CredentialsPage({
                     </button>
                 )}
             </div>
+        );
+    };
+
+    /** Sign in with a subscription instead of holding an API key. Four states
+     *  are rendered explicitly - signed out, waiting (browser), waiting for a
+     *  device code, signed in - because collapsing "your session expired, sign
+     *  in again" into "signed out" is what every competitor does and it costs
+     *  the user their whole history of context. */
+    const renderOauthSection = () => {
+        const providers = oauthState?.providers ?? [];
+        if (!providers.length) return null;
+        const inProgress = oauthState?.inProgress ?? null;
+
+        return renderSection(
+            <Lock size={15} />,
+            t('credOAuthTitle'),
+            t('credOAuthDesc'),
+            <div className="cred-oauth-list">
+                {providers.map((provider) => {
+                    const accounts = oauthState?.accounts?.filter((a) => a.providerId === provider.providerId) ?? [];
+                    const registrations = oauthState?.registrations?.filter((r) => r.providerId === provider.providerId
+                        && !accounts.some((a) => a.credentialId === r.credentialId)) ?? [];
+                    const busy = inProgress?.providerId === provider.providerId;
+                    return (
+                        <div key={provider.providerId} className={`cred-oauth-row${accounts.length ? ' connected' : ''}${busy ? ' busy' : ''}`}>
+                            <div className="cred-oauth-header">
+                                <div className="cred-oauth-copy">
+                                    <span className="cred-oauth-name" dir="ltr">{provider.label}</span>
+                                </div>
+                                <div className="cred-oauth-actions">
+                                    {!busy && accounts.length > 0 && <button type="button" className="ghost-btn cred-oauth-action"
+                                        disabled={!!inProgress} onClick={() => onOAuthSignIn(provider.providerId, 'browser')}>
+                                        <Plus size={13} />
+                                        {t('credOAuthAddAccount')}
+                                    </button>}
+                                    {!busy && accounts.length === 0 && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                className="primary-btn cred-oauth-action"
+                                                onClick={() => onOAuthSignIn(provider.providerId, 'browser')}
+                                                disabled={!!inProgress}
+                                            >
+                                                <Link size={13} />
+                                                {t('credOAuthSignIn')}
+                                            </button>
+                                            {provider.methods?.includes('device') && <button
+                                                type="button"
+                                                className="ghost-btn cred-oauth-action"
+                                                onClick={() => onOAuthSignIn(provider.providerId, 'device')}
+                                                disabled={!!inProgress}
+                                            >
+                                                {t('credOAuthSignInDevice')}
+                                            </button>}
+                                        </>
+                                    )}
+                                    {busy && (
+                                        <button
+                                            type="button"
+                                            className="ghost-btn cred-oauth-action"
+                                            onClick={onOAuthCancelSignIn}
+                                        >
+                                            {t('credOAuthCancel')}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {accounts.length > 0 && <div className="cred-oauth-accounts">
+                                {accounts.map((account) => (
+                                    <div className={`cred-oauth-account-card${account.active ? ' active' : ''}`} key={account.credentialId}>
+                                        <div className="cred-oauth-account-head">
+                                            <span className="cred-oauth-avatar" aria-hidden="true"><UserRound size={15} /></span>
+                                            <span className="cred-oauth-account" title={account.accountLabel}>
+                                                <bdi dir="auto">{account.accountLabel || t('credOAuthAccount')}</bdi>
+                                            </span>
+                                            {account.active && <span className="cred-oauth-active"><Check size={11} />{t('credActive')}</span>}
+                                            <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
+                                                aria-label={t('credOAuthSignOut')} title={t('credOAuthSignOut')}
+                                                onClick={() => onOAuthSignOut(account.credentialId)}><LogOut size={14} /></button>
+                                        </div>
+                                        {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
+                                        {!account.active && <div className="cred-oauth-account-actions">
+                                            <button type="button" className="ghost-btn cred-oauth-action"
+                                                disabled={!!inProgress || selectingId === account.credentialId}
+                                                onClick={() => { setSelectingId(account.credentialId); onSelectCredential(account.credentialId); }}>
+                                                {selectingId === account.credentialId && <RefreshCw size={12} className="spinning" />}
+                                                {t('credOAuthUseAccount')}
+                                            </button>
+                                        </div>}
+                                    </div>
+                                ))}
+                            </div>}
+
+                            {busy && inProgress?.method === 'browser' && (
+                                <div className="cred-oauth-wait">
+                                    <span className="cred-oauth-status"><RefreshCw size={13} className="spinning" />{t('credOAuthWaiting')}</span>
+                                    {oauthState?.authorizeUrl && <>
+                                        <div className="cred-oauth-actions">
+                                            <a className="primary-btn cred-oauth-action" href={oauthState.authorizeUrl}
+                                                target="_blank" rel="noreferrer">{t('credOAuthOpenBrowser')}</a>
+                                            <button type="button" className="ghost-btn cred-oauth-action"
+                                                onClick={() => onOAuthCopy(oauthState.authorizeUrl!, 'oauth-browser-url')}>
+                                                {oauthCopied === 'oauth-browser-url' ? <Check size={13} /> : <Copy size={13} />}
+                                                {oauthCopied === 'oauth-browser-url' ? t('credOAuthCopied') : t('credOAuthCopyLink')}
+                                            </button>
+                                        </div>
+                                        <input className="cred-oauth-url" type="text" dir="ltr" readOnly
+                                            value={oauthState.authorizeUrl} aria-label={t('credOAuthSignInLink')}
+                                            onFocus={(e) => e.currentTarget.select()} />
+                                    </>}
+                                </div>
+                            )}
+
+                            {busy && inProgress?.method === 'device' && (
+                                <div className="cred-oauth-device">
+                                    <span className="cred-oauth-status">
+                                        {!oauthState?.deviceCode && <RefreshCw size={13} className="spinning" />}
+                                        {t(oauthState?.deviceCode ? 'credOAuthWaitingDevice' : 'credOAuthGettingDeviceCode')}
+                                    </span>
+                                    {oauthState?.deviceCode && <>
+                                        <code className="cred-oauth-code" dir="ltr">{oauthState.deviceCode.userCode}</code>
+                                        <div className="cred-oauth-actions">
+                                            <button
+                                                type="button"
+                                                className="ghost-btn cred-oauth-action"
+                                                onClick={() => onOAuthCopy(oauthState.deviceCode!.userCode, 'oauth-device-code')}
+                                            >
+                                                {oauthCopied === 'oauth-device-code' ? <Check size={13} /> : <Copy size={13} />}
+                                                {oauthCopied === 'oauth-device-code' ? t('credOAuthCopied') : t('credOAuthCopyCode')}
+                                            </button>
+                                            <a
+                                                className="primary-btn cred-oauth-action"
+                                                href={oauthState.deviceCode.verificationUri}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                {t('credOAuthOpenPage')}
+                                            </a>
+                                        </div>
+                                    </>}
+                                </div>
+                            )}
+
+                            {busy && copyResult?.ok === false
+                                && copyResult.requestId === (inProgress?.method === 'browser' ? 'oauth-browser-url' : 'oauth-device-code')
+                                && <div className="cred-oauth-error" role="alert">{t('oauthCopyFailed')}</div>}
+                            {!busy && registrations.length > 0 && <details className="cred-oauth-remembered">
+                                <summary>{t('credOAuthPreviousAccounts')}</summary>
+                                <div className="cred-oauth-remembered-list">
+                                    {registrations.map((r) => (
+                                        <div className="cred-oauth-registration" key={r.credentialId}>
+                                            <span dir="auto" title={r.label}>{r.label || t('credOAuthAccount')}</span>
+                                            <div className="cred-oauth-actions">
+                                                <button type="button" className="ghost-btn cred-oauth-action" disabled={!!inProgress}
+                                                    onClick={() => onOAuthSignIn(provider.providerId, 'browser', r.credentialId)}>{t('credOAuthReconnect')}</button>
+                                                {savedCredentials.some((c) => c.id === r.credentialId) && <button type="button"
+                                                    className="ghost-btn cred-oauth-action" disabled={!!inProgress}
+                                                    onClick={() => onOAuthSignOut(r.credentialId)}>{t('credOAuthSignOut')}</button>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </details>}
+                            {/* The host classifies every flow failure into an i18n key
+                                and posts it here; without this the card would fail
+                                silently and the user would blame the browser. */}
+                            {busy && oauthState?.error?.valueKey && (
+                                <div className="cred-oauth-error" role="alert">
+                                    {tf(oauthState.error.valueKey as StringKey)}
+                                </div>
+                            )}
+                            {!inProgress && oauthState?.error?.valueKey && (
+                                <div className="cred-oauth-error" role="alert">
+                                    {tf(oauthState.error.valueKey as StringKey)}
+                                </div>
+                            )}
+
+                            {/* Manual paste: the always-works escape hatch when the
+                                loopback callback cannot complete. */}
+                            {busy && inProgress?.method === 'browser' && (
+                                <details className="cred-oauth-manual" open={oauthState?.error?.valueKey === 'oauthPortsBusy' ? true : undefined}>
+                                    <summary>{t('credOAuthManualTitle')}</summary>
+                                    <div className="cred-oauth-manual-body">
+                                        <span className="cred-oauth-hint">{t('credOAuthManualDesc')}</span>
+                                        <div className="cred-oauth-manual-row">
+                                            <input
+                                                type="text"
+                                                dir="ltr"
+                                                value={oauthCode}
+                                                onChange={(e) => setOauthCode(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && oauthCode.trim()) {
+                                                        onOAuthManualCode(oauthCode.trim());
+                                                        setOauthCode('');
+                                                    }
+                                                }}
+                                                placeholder={t('credOAuthManualPlaceholder')}
+                                                aria-label={t('credOAuthManualPlaceholder')}
+                                                autoComplete="off"
+                                                spellCheck={false}
+                                            />
+                                            <button
+                                                type="button"
+                                                className="primary-btn cred-oauth-action"
+                                                disabled={!oauthCode.trim()}
+                                                onClick={() => {
+                                                    onOAuthManualCode(oauthCode.trim());
+                                                    setOauthCode('');
+                                                }}
+                                            >
+                                                {t('credOAuthManualSubmit')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </details>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>,
         );
     };
 
@@ -509,14 +761,16 @@ export function CredentialsPage({
 
     /** Every saved connection listed at page level. */
     const renderSavedList = () => {
-        if (savedCredentials.length === 0) return null;
+        const credentials = savedCredentials.filter((c) => !c.oauth || (!oauthState?.accounts?.some((a) => a.credentialId === c.id)
+            && !oauthState?.registrations?.some((r) => r.credentialId === c.id)));
+        if (credentials.length === 0) return null;
         return (
             <>
                 <div className="cred-divider" role="separator">
                     <span>{t('credSavedHeading')}</span>
                 </div>
                 <div className="cred-saved-list">
-                    {savedCredentials.map((credential) => {
+                    {credentials.map((credential) => {
                         const preset = PRESETS.find((p) => p.id === credential.providerId) ?? presetForUrl(credential.baseUrl) ?? PRESETS.find((p) => p.id === 'custom')!;
                         const isActive = credential.id === active?.id;
                         const editing = editingId === credential.id;
@@ -612,6 +866,7 @@ export function CredentialsPage({
                                 )}
                                 {!editing && (
                                     <span className="saved-credential-actions">
+                                        {!credential.oauth && (
                                         <button
                                             type="button"
                                             className="saved-edit"
@@ -625,6 +880,7 @@ export function CredentialsPage({
                                         >
                                             <Pencil size={13} />
                                         </button>
+                                        )}
                                         <button
                                             type="button"
                                             className={`saved-delete${deletingId === credential.id ? ' confirm' : ''}`}
@@ -698,6 +954,8 @@ export function CredentialsPage({
                     {!error && reason && <div className="cred-notice-body">{reason}</div>}
                 </div>
             )}
+
+            {renderOauthSection()}
 
             {renderSection(
                 <Link size={15} />,

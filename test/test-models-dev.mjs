@@ -117,10 +117,10 @@ check('modelsDevModelInfo: unknown model', modelsDevModelInfo(catalog, 'opencode
 // A hand-edited cache cannot inject a bogus window or an unknown effort level.
 const tampered = readModelsDevCache(JSON.stringify({
     fetchedAt: 1,
-    catalog: { 'opencode-go': { m: { contextWindow: 5, reasoningLevels: ['ultra', 'high'] } } },
+    catalog: { 'opencode-go': { m: { contextWindow: 5, reasoningLevels: ['unknown', 'ultra', 'high'] } } },
 }));
 check('cache: bogus window dropped', tampered.catalog['opencode-go'].m.contextWindow, undefined);
-check('cache: unknown level dropped', tampered.catalog['opencode-go'].m.reasoningLevels, ['high']);
+check('cache: unknown level dropped, ultra preserved', tampered.catalog['opencode-go'].m.reasoningLevels, ['ultra', 'high']);
 
 // --- Fetch (stubbed transport) ---------------------------------------------
 async function withFetch(impl, fn) {

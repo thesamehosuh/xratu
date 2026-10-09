@@ -8,12 +8,12 @@ export type XratuRuntimeMode = 'cloud' | 'local';
  * parameter so the runtime's own default applies). Superset of the efforts
  * providers report (OpenAI's `minimal..high`, OpenRouter's `xhigh`/`max`).
  */
-export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ThinkingLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /** Ordered weakest → strongest; the single source for validating persisted
  *  levels and filtering provider-reported effort lists. */
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
-    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ];
 
 /** Effort levels a model accepts with reasoning enabled. Excludes `none`. */
@@ -239,6 +239,8 @@ export interface LocalAgentMessage {
 }
 
 export interface LocalAgentRequest {
+    /** OAuth permission to use a ChatGPT plan via the public Responses API. */
+    subscription?: boolean;
     baseUrl: string;
     apiKey?: string | null;
     model: string;
@@ -291,6 +293,17 @@ export interface LocalAgentRequest {
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
     dispatcher?: unknown;
+    /** Provider-specific request headers (OAuth routing headers such as
+     *  ChatGPT-Account-Id). Applied AFTER the standard Authorization and
+     *  content headers, so a name collision would REPLACE them - which is
+     *  correct for an OAuth credential (the resolved bearer is the whole
+     *  point) but means a provider must not smuggle a reserved name in
+     *  here. */
+    headers?: Record<string, string>;
+    /** OAuth credentials only: called when the provider answers 401 so the
+     *  turn can force a token refresh and replay the request ONCE. Returns
+     *  the fresh access token, or null to give up and surface the 401. */
+    onUnauthorized?: () => Promise<string | null>;
     /** Wire API to use. Resolved by the host via `resolveApiStyle`; defaults
      *  to OpenAI chat/completions. */
     apiStyle?: 'chat' | 'messages' | 'responses' | 'google';

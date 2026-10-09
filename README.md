@@ -99,6 +99,47 @@ runtime. Everything runs inside the extension host, on your machine.
 All speak the OpenAI-compatible API. The first three work with nothing but
 the API key; the rest hand each service its own URL at signup.
 
+### Sign in with a ChatGPT subscription
+
+Open **Settings -> Connections** and choose **Continue with ChatGPT**. Xratu
+uses OpenAI's [documented open-source sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+registers Xratu for your account and workspace, and validates the signed ID
+token before saving the connection. ChatGPT plan access must be granted during
+consent; identity sign-in alone does not enable inference.
+
+Use **Copy link** to open sign-in in your preferred browser. Browser login
+starts a callback listener on `127.0.0.1`, trying another port when one is
+occupied. If the browser cannot reach the extension host (for example over SSH
+or in a container), expand **Browser didn’t connect?** and paste the
+**complete redirect URL**. It carries the state and issued client ID needed to validate a new
+registration. The documented integration currently uses browser sign-in.
+
+Each account/workspace registration has its own credentials in VS Code
+SecretStorage. Add or select accounts in Connections; signing in again reuses
+that registration's issued client ID and the host's persistent ID. Sign-out
+removes its access, refresh, and ID tokens while retaining the account/client
+mapping for a later sign-in.
+
+Model discovery and inference use the public `https://api.openai.com/v1`
+endpoints, with streaming Responses requests and `store: false`. Model names,
+ordering, context windows, and reasoning options come from the signed-in
+account's catalog. The legacy Codex public client and ChatGPT backend endpoints
+are no longer used; connections made by that earlier implementation need a
+fresh sign-in.
+
+**Usage** shows ChatGPT plan tokens recorded in Xratu over the last 30 days,
+with a per-model breakdown and **Manage usage** linking to ChatGPT settings for
+plan limits and credits. Plan requests are kept separate from API-key spend and
+are never assigned API prices, including after a rate edit.
+
+Tokens refresh five minutes early and on an authentication rejection. A
+temporary renewal failure can keep a still-valid token; a permanent rejection
+requires sign-in again. Requests and refresh waiting honor Stop and the
+configured proxy. Sign-out attempts server revocation before clearing locally;
+if revocation cannot be confirmed, Xratu reports it so you can disconnect the
+app in ChatGPT settings.
+
+
 ## Getting started
 
 Install from the VS Code Marketplace:

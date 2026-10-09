@@ -29,6 +29,7 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
     ['api.groq.com', 'groq'],
     ['googleapis.com', 'google'],
     ['openai.com', 'openai'],
+    ['chatgpt.com', 'chatgpt-codex'],
     ['groq.com', 'groq'],
     ['deepseek.com', 'deepseek'],
     ['mistral.ai', 'mistral'],
@@ -52,6 +53,7 @@ export const PROVIDER_HOSTS: ReadonlyArray<readonly [string, string]> = [
 // shows its stored label, so a divergence surfaces as an inconsistent name.
 export const PROVIDER_LABELS: Record<string, string> = {
     openai: 'OpenAI', openrouter: 'OpenRouter', groq: 'Groq', kayaai: 'Kaya AI',
+    'chatgpt-codex': 'ChatGPT (Codex)',
     deepseek: 'DeepSeek', mistral: 'Mistral', together: 'Together AI',
     fireworks: 'Fireworks AI', cerebras: 'Cerebras', anthropic: 'Anthropic',
     google: 'Google Gemini', xai: 'xAI', ollama: 'Ollama', lmstudio: 'LM Studio',
@@ -102,6 +104,17 @@ export function providerIdForUrl(baseUrl: string): string {
 
 export function providerLabelForUrl(baseUrl: string): string {
     return PROVIDER_LABELS[providerIdForUrl(baseUrl)] ?? 'Custom';
+}
+
+/** The ChatGPT subscription backend (Codex), reached with an OAuth token
+ *  rather than an API key. Two request-shape rules key off this: the base URL
+ *  must be recognized as canonical (never a user-typed host), and the
+ *  Responses body must omit fields that endpoint rejects. */
+export function isChatGptSubscriptionHost(baseUrl: string): boolean {
+    const host = baseUrlHost(baseUrl);
+    if (!host) return false;
+    const name = host.split(':')[0];
+    return name === 'chatgpt.com' || name.endsWith('.chatgpt.com');
 }
 
 /** Iranian providers (no VPN, rial billing) - used for Toman cost display. */

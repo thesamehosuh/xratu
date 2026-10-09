@@ -10,6 +10,7 @@
  */
 
 import { reminderTaskList, taskListReminderLine } from '../taskList';
+import { providerHttpStatus } from '../providerErrors';
 import { resolveAgentRounds } from '../tooling/agentRounds';
 import {
     IMAGE_FORMAT_ERROR_RE,
@@ -148,6 +149,10 @@ export {
     summaryInputCharBudget,
     summaryMaxTokens,
 } from './compaction';
+
+/** Forced token refreshes allowed per agent run after a 401 (see the recovery
+ *  block in the round loop). Bounds the OAuth replay path without looping. */
+const MAX_AUTH_RETRIES = 2;
 
 // ---------------------------------------------------------------------------
 // Loop-private helpers (the agent loop's own request/steering assembly).
@@ -302,6 +307,13 @@ export async function* runLocalAgent(
     // Overflow recovery is a one-shot per run: if the mechanically compacted
     // retry ALSO overflows, the request itself cannot fit - fail the turn.
     let overflowRecovered = false;
+    // An OAuth token that expired mid-run is force-refreshed and the round
+    // replayed. Bounded, not one-shot: a long tool-using run can outlive a
+    // token lifetime twice (the fresh token is only re-resolved at the next
+    // TURN, so the rest of THIS run keeps using the one it was given). Two
+    // retries cover that and still cannot loop - every further 401 is a real
+    // rejection (revoked account, wrong workspace) and must surface.
+    let authRetries = 0;
     // The current turn's opening user message is held by REFERENCE so the
     // steering-safe compaction boundary can be recovered after turns are
     // spliced out. A steer is a user row appended AFTER this one, so scanning
@@ -589,6 +601,31 @@ export async function* runLocalAgent(
             // retry backoff, must reach the host as an AbortError - otherwise
             // it renders as a network error instead of a cancellation.
             if (request.signal?.aborted) throw abortError();
+            // OAuth credentials only: a 401 whose access token expired
+            // mid-turn is force-refreshed and the round replayed ONCE. Only
+            // credentials WITHOUT a static key ever set onUnauthorized, so
+            // this branch is dead for BYOK turns. `messages` is reused as-is -
+            // no delta reached the user (a 401 with body text would have been
+            // a different error), so replaying cannot duplicate output.
+            if (
+                authRetries < MAX_AUTH_RETRIES
+                && request.onUnauthorized
+                && providerHttpStatus(requestError)?.status === 401
+            ) {
+                authRetries++;
+                let fresh: string | null = null;
+                try {
+                    fresh = await request.onUnauthorized();
+                } catch {
+                    fresh = null; // refresh itself failed - surface the 401
+                }
+                if (fresh) {
+                    request.apiKey = fresh;
+                    requestError = null;
+                    round--;
+                    continue;
+                }
+            }
             // Some local servers (LM Studio, Ollama) reject the OpenAI-standard
             // data: URI in image_url.url and demand raw base64 - flip the
             // encoding ONCE and retry the round instead of failing the turn.

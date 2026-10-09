@@ -44,7 +44,7 @@ const CTX_PRESETS: Array<{ label: string; value: number }> = [
 const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ['low', 'medium', 'high'];
 
 /** Canonical weakest → strongest order for sorting provider-reported variants. */
-const THINKING_ORDER: ThinkingLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const THINKING_ORDER: ThinkingLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 /** i18n key per effort variant (resolved at render time, never at module scope). */
 const THINKING_KEYS = {
@@ -55,6 +55,7 @@ const THINKING_KEYS = {
     high: 'thinkingHigh',
     xhigh: 'thinkingXhigh',
     max: 'thinkingMax',
+    ultra: 'thinkingUltra',
 } as const satisfies Record<ThinkingLevel, string>;
 
 const ATTACH_MAX_COUNT = 20;
@@ -269,6 +270,7 @@ interface InputBarProps {
     injectedText?: { id: number; text: string } | null;
     onInjectedApplied?: () => void;
     models?: string[];
+    modelDisplayNames?: Record<string, string>;
     /** Per-model capability badges (vision / no tools). */
     modelCapabilities?: Record<string, ModelCapability>;
     /** Per-model context windows, shown as a compact badge. */
@@ -334,6 +336,7 @@ export function InputBar({
     injectedText,
     onInjectedApplied,
     models = [],
+    modelDisplayNames,
     modelCapabilities,
     modelWindows,
     selectedModel,
@@ -591,8 +594,8 @@ export function InputBar({
     const filteredModels = useMemo(() => {
         const q = normalizeModelQuery(filter);
         if (!q) return models;
-        return models.filter((m) => normalizeModelQuery(m).includes(q));
-    }, [filter, models]);
+        return models.filter((m) => normalizeModelQuery(`${m} ${modelDisplayNames?.[m] ?? ''}`).includes(q));
+    }, [filter, models, modelDisplayNames]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
         setAttachError(null);
@@ -1097,7 +1100,7 @@ export function InputBar({
                     >
                         <Cpu size={12} />
                         <span dir="ltr" className="chip-model-name">
-                            {selectedModel ?? t('modelPlaceholder')}
+                            {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}
                         </span>
                         {activeThinking && modelCapabilities?.[selectedModel ?? '']?.noReasoning !== true && (
                             <span
@@ -1241,7 +1244,7 @@ export function InputBar({
                                     className={`model-item${m === selectedModel ? ' selected' : ''}`}
                                     onClick={() => pickModel(m)}
                                 >
-                                    <span dir="ltr" className="model-item-name">{m}</span>
+                                    <span dir="ltr" className="model-item-name" title={m}>{modelDisplayNames?.[m] ?? m}</span>
                                     <span className="model-badges">
                                         {modelWindows?.[m] ? (
                                             <span className="model-badge" dir="ltr" title={t('modelWindowTitle')} aria-label={t('modelWindowTitle')}>

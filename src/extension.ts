@@ -58,6 +58,60 @@ import { closeStaleSkillEditors, isDir, isKnownSkillsPath } from './skillsHost';
 import { classifyWorkspace } from './workspaceKind';
 import { applyMarkerPatch, computeDiffHunks, editDiffFromArgs, hunkSummaries } from './editDiff';
 import { routeWebviewMessage, type WebviewMessageHost } from './webviewRouter';
+import { getOAuthProvider, listOAuthProviders } from './oauth/providerAuthRegistry';
+import './oauth/providers/register';
+import { OAuthTokenManager, type OAuthTokenStore } from './oauth/tokenManager';
+import { startLoopbackServer, type LoopbackServer } from './oauth/server';
+import { chatGptPlanEnabled, chatGptStorageKey } from './oauth/providers/openaiChatGpt';
+import {
+    OAuthFlowError,
+    OAuthCancelledError,
+    type OAuthAuthorization,
+    type OAuthCallback,
+    type OAuthLoginContext,
+    type OAuthProviderHandler,
+    type OAuthTokenSet,
+} from './oauth/types';
+import { oauthErrorValueKey } from './oauth/errorKeys';
+import { createManualCodeSlot, type ManualCodeSlot } from './oauth/manualCode';
+import { abortable } from './oauth/refreshLock';
+
+/** One in-flight sign-in. The host owns the transport (browser launch,
+ *  loopback socket, abort controller) so a cancel can actually stop it; the
+ *  `manualCode` promise is the escape hatch race for a user who cannot reach
+ *  the loopback callback. */
+interface OAuthFlowState {
+    providerId: string;
+    method: 'browser' | 'device';
+    controller: AbortController;
+    server?: LoopbackServer;
+    /** The manual-paste side of the callback race. Created PENDING when the
+     *  flow starts - see manualCode.ts for why reading a possibly-undefined
+     *  promise into Promise.race would end the flow instantly. */
+    manualCode: ManualCodeSlot;
+}
+
+/**
+ * A saved connection in the `xratu.llmCredentials` vault.
+ *
+ * `apiKey` stays a plain string on EVERY record - it is the filter the reader
+ * applies (`typeof c.apiKey === 'string'`) and the shape every existing
+ * consumer expects, so an OAuth connection stores `''` here and keeps its
+ * token set in its own `xratu.oauthTokens.*` secret. That keeps the vault
+ * format readable by every pre-existing version: an older Xratu sees an
+ * empty-key remote credential and simply fails to use it, instead of
+ * crashing on an unknown field or a missing key.
+ */
+interface StoredCredential {
+    id: string;
+    providerId: string;
+    baseUrl: string;
+    apiKey: string;
+    label: string;
+    /** Present => the real credential is an OAuth token set, not this key. */
+    oauthProviderId?: string;
+    oauthStorageKey?: string;
+}
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
@@ -257,6 +311,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _runCostCurrency: 'USD' | 'IRT' = 'USD';
     /** Base URL of the current run/provider, used to resolve its pricing. */
     private _runBaseUrl: string | null = null;
+    private _runSubscription = false;
     _history: HistoryMessage[] = [];
     private _sessionSummary: string | null = null;
     /** Display title of the CURRENT session (toolbar button + picker).
@@ -265,6 +320,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _sessionTitle: string | null = null;
     /** Turn-scoped checkpoint store (owned by activate, shared with the bridge). */
     private readonly _checkpoints: ShadowCheckpointStore;
+    private readonly _storagePath: string;
+    private _oauthManager: OAuthTokenManager | null = null;
+    private _oauthFlow: OAuthFlowState | null = null;
+    private _oauthState: Record<string, unknown> = {};
     /**
      * Timeline rows that must be closed when an approval round resolves,
      * keyed by approval_id: approval-required calls, pre-denied calls, and
@@ -653,6 +712,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         localStorageUri: vscode.Uri
     ) {
         this._checkpoints = checkpoints;
+        this._storagePath = localStorageUri.fsPath;
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
         this._usageLedger = new UsageLedgerStore(localStorageUri.fsPath);
         // Prune once per host session: the append counter resets with the
@@ -1503,13 +1563,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * receives metadata + a masked key; the real API key never leaves the extension host.
      * Runtime collapse: every credential is an OpenAI-compatible endpoint - the
      * old `runtimeMode` discriminator is accepted on read and dropped. */
-    private async _getSavedCredentials(): Promise<Array<{
-        id: string;
-        providerId: string;
-        baseUrl: string;
-        apiKey: string;
-        label: string;
-    }>> {
+    private async _getSavedCredentials(): Promise<StoredCredential[]> {
         const raw = await this._secrets.get('xratu.llmCredentials');
         if (raw) {
             try {
@@ -1530,13 +1584,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             const providerId = storedId === 'opencode' && derivedId === 'opencode-go'
                                 ? derivedId
                                 : (storedId || derivedId);
-                            return {
+                            const record: StoredCredential = {
                                 id: c.id,
                                 providerId,
                                 baseUrl: c.baseUrl.trim(),
                                 apiKey: c.apiKey,
                                 label: typeof c.label === 'string' ? c.label : this._providerLabelForUrl(c.baseUrl),
                             };
+                            // Only a record naming a REGISTERED provider counts
+                            // as OAuth-backed: an unknown id (feature removed,
+                            // older install) degrades to a keyless credential
+                            // instead of a turn that throws at request time.
+                            if (typeof c.oauthProviderId === 'string' && getOAuthProvider(c.oauthProviderId)) {
+                                record.oauthProviderId = c.oauthProviderId;
+                                if (typeof c.oauthStorageKey === 'string') record.oauthStorageKey = c.oauthStorageKey;
+                            }
+                            return record;
                         });
                 }
             } catch { /* fall through to legacy migration */ }
@@ -1628,7 +1691,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Cost of one usage record for the CURRENT run's provider, in the
      *  currency the price is quoted in (never converted). */
     private _costFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
-        if (!usage) return null;
+        if (!usage || this._runSubscription) return null;
         const price = priceForModel(
             this._selectedModel ?? '',
             this._modelPriceOverrides(),
@@ -1864,6 +1927,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const credentials = await this._getSavedCredentials();
         const byHost = new Map<string, { label: string; iranian: boolean }>();
         for (const c of credentials) {
+            if (c.oauthProviderId && getOAuthProvider(c.oauthProviderId)?.subscription) continue;
             const host = baseUrlHost(c.baseUrl);
             if (host && !byHost.has(host)) {
                 byHost.set(host, { label: c.label || c.baseUrl, iranian: isIranianProvider(c.providerId) });
@@ -1871,7 +1935,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
 
         const ledger = await this._usageLedger.read();
-        const providers = totalsByHost(ledger).map((t) => ({
+        const apiLedger = ledger.filter((entry) => entry.billing !== 'chatgpt-plan');
+        const planLedger = ledger.filter((entry) => entry.billing === 'chatgpt-plan');
+        const cutoff = Date.now() - 30 * 86_400_000;
+        const recentPlan = planLedger.filter((entry) => entry.ts >= cutoff);
+        const providers = totalsByHost(apiLedger).map((t) => ({
             host: t.host,
             label: byHost.get(t.host)?.label ?? (t.host || '—'),
             iranian: byHost.get(t.host)?.iranian ?? false,
@@ -1885,12 +1953,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._view.webview.postMessage({
             type: 'usageState',
             providers,
-            rates: this._modelRates(ledger, byHost),
+            rates: this._modelRates(apiLedger, byHost),
             // Sparse per-day/per-model/per-host cells: the chart's month,
             // model and provider filters all run in the webview.
-            history: aggregateByDayAndModel(ledger, USAGE_CHART_DAYS),
-            allTime: sumUsage(ledger),
+            history: aggregateByDayAndModel(apiLedger, USAGE_CHART_DAYS),
+            allTime: sumUsage(apiLedger),
+            chatgpt: {
+                totals: sumUsage(recentPlan),
+                models: modelHosts(recentPlan).map(({ model, tokens }) => ({ model, tokens })),
+                hasHistory: planLedger.length > 0,
+            },
         });
+        await this._sendOAuthState();
     }
 
     /**
@@ -2028,22 +2102,395 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         await this._refreshCostDisplay();
     }
 
+    // --- OAuth credentials ------------------------------------------------
+    // The token set lives in its OWN secret per provider, never inside the
+    // credential vault: `apiKey` stays a string on every record (the reader
+    // filters on it and every older version expects it), so an OAuth
+    // connection carries `''` there and a real key here. Deleting the OAuth
+    // feature therefore cannot strand a record the vault cannot parse.
+
+    private _oauthTokenStore(): OAuthTokenStore {
+        return {
+            read: async (storageKey) => {
+                const raw = await this._secrets.get(`xratu.oauthTokens.${storageKey}`);
+                if (!raw) return null;
+                try {
+                    const parsed = JSON.parse(raw) as OAuthTokenSet;
+                    return parsed && typeof parsed.accessToken === 'string' ? parsed : null;
+                } catch {
+                    return null;
+                }
+            },
+            write: async (storageKey, tokens) => {
+                const key = `xratu.oauthTokens.${storageKey}`;
+                if (tokens === null) {
+                    await this._secrets.delete(key);
+                    return;
+                }
+                await this._secrets.store(key, JSON.stringify(tokens));
+            },
+        };
+    }
+
+    private _oauthTokenManager(): OAuthTokenManager {
+        return this._oauthManager ??= new OAuthTokenManager({
+            store: this._oauthTokenStore(),
+            // Locks live beside the other per-window state: one directory per
+            // storage key, shared by every window on this machine (the
+            // refresh rotation race is cross-PROCESS, not cross-tab).
+            lockDir: path.join(this._storagePath, 'oauth-locks'),
+        });
+    }
+
+    /** One context for every OAuth network call: proxyFetch is the only
+     *  egress that honours a configured proxy dispatcher, and a token request
+     *  that bypasses it fails for exactly the users who need OAuth most. */
+    private _oauthContext(signal?: AbortSignal): OAuthLoginContext {
+        return {
+            fetch: ((input, init) => {
+                const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+                return proxyFetch(input, { ...init, dispatcher: getProxyDispatcher(url) });
+            }) as typeof fetch,
+            signal,
+        };
+    }
+
+    /** Resolve what a request needs from a credential: the bearer value plus
+     *  any provider routing headers. This is the ONLY async seam - everything
+     *  downstream (header builders, wire adapters) keeps receiving a plain
+     *  string, so OAuth costs one await per turn, not per request. */
+    private async _resolveCredentialAuth(active: StoredCredential, signal?: AbortSignal): Promise<{
+        apiKey: string | null;
+        headers?: Record<string, string>;
+        apiStyle?: 'chat' | 'messages' | 'responses' | 'google';
+        subscription?: boolean;
+        tokens?: OAuthTokenSet;
+        onUnauthorized?: () => Promise<string | null>;
+    }> {
+        if (!active.oauthProviderId) {
+            return { apiKey: active.apiKey || null };
+        }
+        const provider = getOAuthProvider(active.oauthProviderId);
+        const handler = provider ? { ...provider, storageKey: active.oauthStorageKey ?? provider.storageKey } : undefined;
+        // A record whose provider vanished (older install, half-removed
+        // feature) degrades to "no key" instead of throwing at turn start.
+        if (!handler) return { apiKey: null };
+        if (handler.subscription && !active.oauthStorageKey) throw new OAuthFlowError('reauth_required', 'Legacy ChatGPT connection needs sign-in');
+        const manager = this._oauthTokenManager();
+        const ctx = this._oauthContext(signal);
+        const tokens = await manager.resolveTokens(handler, ctx);
+        if (handler.subscription && !chatGptPlanEnabled(tokens)) throw new OAuthFlowError('plan_permission_missing', 'ChatGPT plan permission was not granted');
+        return {
+            apiKey: tokens.accessToken,
+            headers: handler.headers?.(tokens),
+            apiStyle: handler.apiStyle,
+            subscription: handler.subscription,
+            tokens,
+            // The 401 retry: force ONE refresh, replay the round. Never a
+            // loop - a second 401 is a real rejection, not a stale token.
+            onUnauthorized: async () => {
+                try {
+                    const next = await manager.forceRefreshTokens(handler, this._oauthContext(signal));
+                    if (handler.subscription && !chatGptPlanEnabled(next)) return null;
+                    return next.accessToken;
+                } catch {
+                    return null;
+                }
+            },
+        };
+    }
+
+    /** Sign out: revoke server-side (best effort), clear the token, drop the
+     *  credential record. Idempotent. */
+    async _oauthSignOut(credentialId: string): Promise<void> {
+        const credentials = await this._getSavedCredentials();
+        const target = credentials.find((c) => c.id === credentialId);
+        if (!target?.oauthProviderId) return;
+        const provider = getOAuthProvider(target.oauthProviderId);
+        let revoked = true;
+        if (provider) {
+            const handler = { ...provider, storageKey: target.oauthStorageKey ?? (provider.subscription ? 'openai-codex' : provider.storageKey) };
+            if (this._globalState.get<string>('xratu.activeLlmCredentialId') === credentialId) this._abortControllers.get('chat')?.abort();
+            if (this._oauthFlow?.providerId === provider.providerId) this._cancelOAuthFlow();
+            await this._oauthTokenManager().withTokenLock(handler, async () => {
+                const store = this._oauthTokenStore();
+                const tokens = await store.read(handler.storageKey);
+                if (tokens) {
+                    try { await handler.revoke?.(tokens, this._oauthContext(AbortSignal.timeout(60_000))); }
+                    catch { revoked = false; }
+                }
+                await store.write(handler.storageKey, null);
+                await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-credential-vault' },
+                    () => this._deleteLlmCredential(credentialId, true, false));
+            });
+        } else {
+            await this._deleteLlmCredential(credentialId, true, false);
+        }
+        await this._fetchModels();
+        await this._sendSavedCredentials();
+        await this._sendOAuthState();
+        if (!revoked) this._postOAuthState({ error: { valueKey: 'oauthRevocationUnconfirmed' } });
+        this._view?.webview.postMessage({ type: 'credentialsSaved' });
+    }
+
+    /** Post a PATCH of the OAuth status; the webview always receives the whole
+     *  picture. A partial post would make the page drop the connected-account
+     *  list every time a flow reports progress. `null`/`undefined` clears a
+     *  key rather than storing an empty value, so a stale device code cannot
+     *  outlive its flow. */
+    private _postOAuthState(patch: Record<string, unknown>): void {
+        const next: Record<string, unknown> = { ...this._oauthState };
+        for (const [key, value] of Object.entries(patch)) {
+            if (value === null || value === undefined) delete next[key];
+            else next[key] = value;
+        }
+        this._oauthState = next;
+        this._view?.webview.postMessage({ type: 'oauthState', state: next as never });
+    }
+
+    /** Push the authoritative OAuth status: which providers exist, which are
+     *  connected (with the account), and whether a flow is in progress. */
+    private async _sendOAuthState(): Promise<void> {
+        const credentials = await this._getSavedCredentials();
+        const store = this._oauthTokenStore();
+        const accounts: Array<{ providerId: string; credentialId: string; accountLabel?: string; accountId?: string; planEnabled?: boolean; active?: boolean }> = [];
+        for (const credential of credentials) {
+            if (!credential.oauthProviderId) continue;
+            const handler = getOAuthProvider(credential.oauthProviderId);
+            if (!handler) continue;
+            const tokens = await store.read(credential.oauthStorageKey ?? handler.storageKey);
+            if (!tokens) continue;
+            accounts.push({
+                providerId: handler.providerId,
+                credentialId: credential.id,
+                accountLabel: tokens.email ?? tokens.accountLabel,
+                accountId: tokens.accountId,
+                active: this._globalState.get<string>('xratu.activeLlmCredentialId') === credential.id,
+                planEnabled: handler.subscription ? chatGptPlanEnabled(tokens) : true,
+            });
+        }
+        this._postOAuthState({
+            providers: listOAuthProviders().map((h) => ({
+                providerId: h.providerId,
+                label: h.label ?? this._providerLabelForUrl(h.canonicalBaseUrl),
+                methods: h.methods,
+            })),
+            accounts,
+            registrations: Object.entries(this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {})
+                .map(([credentialId, r]) => ({ providerId: 'chatgpt-codex', credentialId, label: r.email ?? '' })),
+            inProgress: this._oauthFlow ? { providerId: this._oauthFlow.providerId, method: this._oauthFlow.method } : null,
+            // The device code belongs to the flow that asked for it.
+            deviceCode: this._oauthFlow?.method === 'device' ? this._oauthState.deviceCode : null,
+            authorizeUrl: this._oauthFlow?.method === 'browser' ? this._oauthState.authorizeUrl : null,
+        });
+    }
+
+    /**
+     * Drive one sign-in flow. The HOST owns the transport - it is the only
+     * place with a browser launcher, a socket, and an abort controller - and
+     * the handler supplies the protocol pieces.
+     *
+     * Browser flow: PKCE authorize URL -> system browser -> loopback callback,
+     * with a manual-code race so a user who cannot reach 127.0.0.1 (SSH,
+     * container, occupied port) is never stuck.
+     * Device flow: no local server at all - the only transport that works in
+     * remote VS Code and behind a filtering network.
+     */
+    async _startOAuthSignIn(providerId: string, method: 'browser' | 'device' = 'browser', credentialId?: string): Promise<void> {
+        const handler = getOAuthProvider(providerId);
+        if (!handler || !(handler.methods ?? ['browser']).includes(method)) {
+            this._postOAuthState({ error: { valueKey: 'oauthUnavailable' }, inProgress: null });
+            return;
+        }
+        if (this._oauthFlow) this._cancelOAuthFlow();
+
+        const controller = new AbortController();
+        const flow: OAuthFlowState = { providerId, method, controller, manualCode: createManualCodeSlot() };
+        this._oauthFlow = flow;
+        this._postOAuthState({ inProgress: { providerId, method }, error: null, authorizeUrl: null, deviceCode: null });
+
+        try {
+            const hostId = await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-host-id' }, async () => {
+                let value = await this._secrets.get('xratu.oauthHostId');
+                if (!value) {
+                    value = this._globalState.get<string>('xratu.oauthHostId') ?? `urn:uuid:${crypto.randomUUID()}`;
+                    await this._secrets.store('xratu.oauthHostId', value);
+                }
+                return value;
+            }, controller.signal);
+            const registrations = this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {};
+            const registration = credentialId ? registrations[credentialId] : undefined;
+            const credentials = await this._getSavedCredentials();
+            const selected = credentials.find((c) => c.id === credentialId);
+            const previous = selected ? await this._oauthTokenStore().read(selected.oauthStorageKey ?? handler.storageKey) : null;
+            this._assertOAuthFlow(flow);
+            const tokens = await handler.login({ ...this._oauthContext(controller.signal), hostId, method,
+                openExternal: async (url) => {
+                    this._assertOAuthFlow(flow);
+                    await abortable(Promise.resolve(vscode.env.openExternal(vscode.Uri.parse(url))), controller.signal);
+                    this._assertOAuthFlow(flow);
+                },
+                registration: registration ? { ...registration, idToken: previous?.idToken } : undefined,
+                authorize: (options) => this._runBrowserSignIn(flow, options),
+                onEvent: (event) => {
+                    this._assertOAuthFlow(flow);
+                    if (event.type === 'device-code') this._postOAuthState({ deviceCode: event });
+                },
+            });
+            this._assertOAuthFlow(flow);
+            await this._oauthCompleteSignIn(handler, tokens, flow);
+        } catch (error) {
+            if (this._oauthFlow === flow) {
+                this._postOAuthState({ error: { valueKey: oauthErrorValueKey(error) }, inProgress: null });
+            }
+        } finally {
+            if (this._oauthFlow === flow) {
+                this._oauthFlow = null;
+                await this._sendOAuthState();
+            }
+        }
+    }
+
+    private _assertOAuthFlow(flow: OAuthFlowState): void {
+        if (this._oauthFlow !== flow || flow.controller.signal.aborted) throw new OAuthCancelledError();
+    }
+
+    private async _runBrowserSignIn(flow: OAuthFlowState, options: OAuthAuthorization): Promise<OAuthCallback> {
+        const signal = flow.controller.signal;
+        const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+        let server: LoopbackServer | undefined;
+        try {
+            try {
+                server = await startLoopbackServer({
+                    candidatePorts: [1455, 1457, 0], callbackPath: '/auth/callback',
+                    expectedState: options.expectedState, timeoutMs,
+                    successHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackDone') + '</p>',
+                    errorHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackFailed') + '</p>',
+                });
+                flow.server = server;
+            } catch (error) {
+                this._assertOAuthFlow(flow);
+                if (!(error instanceof OAuthFlowError) || error.code !== 'ports_busy') throw error;
+                this._postOAuthState({ error: { valueKey: 'oauthPortsBusy' } });
+            }
+            this._assertOAuthFlow(flow);
+            const redirectUri = server?.redirectUri ?? 'http://127.0.0.1:1455/auth/callback';
+            const authorizeUrl = options.buildUrl(redirectUri);
+            const safeUrl = new URL(authorizeUrl);
+            safeUrl.searchParams.delete('id_token_hint');
+            this._postOAuthState({ authorizeUrl: safeUrl.toString() });
+            // The visible link also lets the user continue when the launcher
+            // throws or returns false; the pending callback remains usable.
+            try { await abortable(Promise.resolve(vscode.env.openExternal(vscode.Uri.parse(authorizeUrl))), deadline); }
+            catch { deadline.throwIfAborted(); /* manual browser link remains available */ }
+            this._assertOAuthFlow(flow);
+            const manual = flow.manualCode.promise.then((input): OAuthCallback => {
+                this._assertOAuthFlow(flow);
+                let url: URL;
+                try { url = new URL(input); }
+                catch { throw new OAuthFlowError('bad_response', 'Paste the complete callback URL'); }
+                if (url.origin !== new URL(redirectUri).origin || url.pathname !== '/auth/callback'
+                    || url.searchParams.get('state') !== options.expectedState) {
+                    throw new OAuthFlowError('state_mismatch', 'Invalid manual callback');
+                }
+                const error = url.searchParams.get('error');
+                if (error) throw new OAuthFlowError(error, 'Authorization declined');
+                const code = url.searchParams.get('code');
+                if (!code) throw new OAuthFlowError('no_code', 'No authorization code received');
+                return { code, state: options.expectedState, clientId: url.searchParams.get('client_id') ?? undefined, redirectUri };
+            });
+            const callback = await abortable(Promise.race([
+                ...(server ? [server.waitForCallback().then((result) => ({ ...result, redirectUri }))] : []), manual,
+            ]), deadline);
+            this._assertOAuthFlow(flow);
+            return callback;
+        } finally {
+            server?.dispose();
+            if (flow.server === server) flow.server = undefined;
+        }
+    }
+
+    /** Accept a hand-pasted redirect code: the escape hatch when the loopback
+     *  callback cannot complete (port taken by another process, remote
+     *  window, browser on another machine). */
+    async _submitOAuthManualCode(input: string): Promise<void> {
+        const flow = this._oauthFlow;
+        if (!flow) {
+            this._postOAuthState({ error: { valueKey: 'oauthNoFlow' } });
+            return;
+        }
+        const code = input.trim();
+        if (!code) {
+            this._postOAuthState({ error: { valueKey: 'oauthCodeEmpty' } });
+            return;
+        }
+        flow.manualCode.submit(code);
+    }
+
+    async _cancelOAuthSignIn(): Promise<void> {
+        if (!this._oauthFlow) return;
+        this._cancelOAuthFlow();
+        this._postOAuthState({ inProgress: null });
+        await this._sendOAuthState();
+    }
+
+    private _cancelOAuthFlow(): void {
+        const flow = this._oauthFlow;
+        if (!flow) return;
+        this._oauthFlow = null;
+        flow.controller.abort();
+        // Release the paste slot too: a flow that is gone must not leave a
+        // pending promise holding its caller.
+        flow.manualCode.release();
+        flow.server?.cancel();
+        flow.server?.dispose();
+    }
+
+    private async _oauthCompleteSignIn(handler: OAuthProviderHandler, tokens: OAuthTokenSet, flow: OAuthFlowState): Promise<void> {
+        const storageKey = handler.subscription ? chatGptStorageKey(tokens) : handler.storageKey;
+        let record!: StoredCredential;
+        await this._oauthTokenManager().withTokenLock({ ...handler, storageKey }, async () => {
+            this._assertOAuthFlow(flow);
+            await this._oauthTokenManager().withTokenLock({ ...handler, storageKey: 'oauth-credential-vault' }, async () => {
+                const credentials = await this._getSavedCredentials();
+                const registrations = this._globalState.get<Record<string, { clientId: string; subject: string; email?: string }>>('xratu.oauthRegistrations') ?? {};
+                const existing = credentials.find((c) => c.oauthStorageKey === storageKey);
+                const registrationId = Object.keys(registrations).find((id) => registrations[id].clientId === tokens.clientId && registrations[id].subject === tokens.subject);
+                record = {
+                    id: existing?.id ?? registrationId ?? crypto.randomUUID(), providerId: handler.providerId,
+                    baseUrl: handler.canonicalBaseUrl, apiKey: '', label: tokens.accountLabel ?? handler.label ?? handler.providerId,
+                    oauthProviderId: handler.providerId, oauthStorageKey: storageKey,
+                };
+                await this._oauthTokenStore().write(storageKey, tokens);
+                if (tokens.clientId && tokens.subject) {
+                    registrations[record.id] = { clientId: tokens.clientId, subject: tokens.subject, email: tokens.email };
+                    await this._globalState.update('xratu.oauthRegistrations', registrations);
+                }
+                await this._persistSavedCredentials([...credentials.filter((c) => c.id !== record.id), record]);
+                await this._globalState.update('xratu.activeLlmCredentialId', record.id);
+                await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
+            }, flow.controller.signal);
+        }, flow.controller.signal);
+        await this._fetchModels();
+        await this._sendSavedCredentials();
+    }
+
     private _maskApiKey(apiKey: string): string {
         if (apiKey.length <= 8) return '••••••••';
         return `${apiKey.slice(0, 3)}••••${apiKey.slice(-4)}`;
     }
 
-    private async _persistSavedCredentials(credentials: Array<{
-        id: string;
-        providerId: string;
-        baseUrl: string;
-        apiKey: string;
-        label: string;
-    }>): Promise<void> {
+    private async _persistSavedCredentials(credentials: StoredCredential[]): Promise<void> {
         await this._secrets.store('xratu.llmCredentials', JSON.stringify(credentials));
     }
 
-    private async _getLlmCredentials(): Promise<{ llm_api_key?: string; llm_base_url?: string }> {
+    private async _getLlmCredentials(): Promise<{
+        llm_api_key?: string;
+        llm_base_url?: string;
+        extra_headers?: Record<string, string>;
+        discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>;
+    }> {
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) return {};
         const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
@@ -2052,6 +2499,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (activeId === '') return {};
         const active = credentials.find((c) => c.id === activeId) ?? credentials[0];
         if (active.id !== activeId) await this._globalState.update('xratu.activeLlmCredentialId', active.id);
+        // An OAuth credential has no static key to hand the prober, and its
+        // routing headers are part of auth: resolve them here or model
+        // discovery 401s while the credential itself is perfectly usable.
+        if (active.oauthProviderId) {
+            try {
+                const auth = await this._resolveCredentialAuth(active);
+                const handler = getOAuthProvider(active.oauthProviderId)!;
+                const tokens = auth.tokens;
+                return { llm_api_key: auth.apiKey ?? undefined, llm_base_url: active.baseUrl, extra_headers: auth.headers,
+                    discoverModels: handler.discoverModels && tokens ? () => handler.discoverModels!(this._oauthContext(), tokens) : undefined };
+            } catch {
+                // A dead/rejected token must not turn model listing into an
+                // error toast; the turn path surfaces the re-auth requirement.
+                return {};
+            }
+        }
         return { llm_api_key: active.apiKey, llm_base_url: active.baseUrl };
     }
 
@@ -2068,6 +2531,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 maskedKey: this._maskApiKey(c.apiKey),
                 label: c.label,
                 active: c.id === activeId,
+                // Presence only - the webview renders a sign-out button for an
+                // OAuth connection, it never learns a token's contents.
+                oauth: !!c.oauthProviderId,
             })),
         });
     }
@@ -2084,6 +2550,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             openCard,
         });
         await this._sendSavedCredentials();
+        // The page renders OAuth state on entry; without this push it would
+        // show no providers until the first flow reported something.
+        await this._sendOAuthState();
     }
 
     async _saveLlmCredentials(base_url: string, api_key: string, returnToChat = false): Promise<void> {
@@ -2151,12 +2620,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._selectedModel = null;
             await this._fetchModels();
             await this._sendSavedCredentials();
+            await this._sendOAuthState();
             this._view?.webview.postMessage({ type: 'credentialsSaved' });
             return;
         }
         await this._globalState.update('xratu.activeLlmCredentialId', id);
         await this._fetchModels();
         await this._sendSavedCredentials();
+        await this._sendOAuthState();
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
@@ -2180,8 +2651,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._view?.webview.postMessage({ type: 'credentialsSaved' });
     }
 
-    async _deleteLlmCredential(id: string): Promise<void> {
+    async _deleteLlmCredential(id: string, oauthCleared = false, refresh = true): Promise<void> {
         const credentials = await this._getSavedCredentials();
+        const target = credentials.find((c) => c.id === id);
+        if (target?.oauthProviderId && !oauthCleared) return this._oauthSignOut(id);
         const next = credentials.filter((c) => c.id !== id);
         if (next.length === credentials.length) return;
 
@@ -2210,8 +2683,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await this._secrets.store('xratu.llmBaseUrl', active.baseUrl);
             await this._globalState.update('xratu.activeLlmCredentialId', active.id);
         }
-        await this._fetchModels();
-        await this._sendSavedCredentials();
+        if (refresh) {
+            await this._fetchModels();
+            await this._sendSavedCredentials();
+        }
     }
 
     // --- Per-credential model memory -------------------------------------
@@ -3005,15 +3480,41 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
         const active = credentials.find((c) => c.id === activeId) ?? credentials[0];
-        const insecureError = insecureRemoteHttpError(active.baseUrl, active.apiKey);
+        // The async seam: an OAuth connection resolves its token set ONCE per
+        // turn (refreshing when stale), then everything downstream keeps
+        // receiving a plain bearer string - no async plumbing through the
+        // header builders or the wire adapters.
+        //
+        // A rejected/expired token must NOT escape as a thrown error: this
+        // runs before the try below, so it would bypass the error surface and
+        // leave the composer spinning with no explanation. "Sign in again" is
+        // a different action from "something went wrong" and the user needs to
+        // be told which one happened.
+        const controller = existingController ?? new AbortController();
+        this._abortControllers.set('chat', controller);
+        const noRun = (): StreamOutcome => {
+            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
+            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+        };
+        let auth: Awaited<ReturnType<typeof this._resolveCredentialAuth>>;
+        try {
+            auth = await this._resolveCredentialAuth(active, controller.signal);
+        } catch (e) {
+            if (!controller.signal.aborted) {
+                this._view?.webview.postMessage({ type: 'error', valueKey: oauthErrorValueKey(e) });
+                if (active.oauthProviderId) await this._sendOAuthState();
+            }
+            return noRun();
+        }
+        const insecureError = insecureRemoteHttpError(active.baseUrl, auth.apiKey);
         if (insecureError) {
             this._view?.webview.postMessage({ type: 'error', valueKey: insecureError });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return noRun();
         }
         const model = this._selectedModel;
         if (!model) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'noModelSelected' });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return noRun();
         }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -3022,8 +3523,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Reuse the controller registered by _handleChatRequest when the
         // caller already owns one (local branch) so cancel covers the full
         // isTyping window; standalone invocations create their own.
-        const controller = existingController ?? new AbortController();
-        this._abortControllers.set('chat', controller);
         // Matches the caller's epoch (captured right before this call) -
         // post-cancel messages must not leak into a new session view.
         const epoch = this._sessionEpoch;
@@ -3134,7 +3633,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         : this._reasoningEffortFor(childModel, active.baseUrl);
                     return {
                         baseUrl: active.baseUrl,
-                        apiKey: active.apiKey || null,
+                        apiKey: auth.apiKey,
+                        headers: auth.headers,
+                        ...(auth.onUnauthorized ? { onUnauthorized: auth.onUnauthorized } : {}),
+                        subscription: auth.subscription,
                         model: childModel,
                         signal: controller.signal,
                         maxOutputLimit: this._maxOutputLimitFor(childModel, active.baseUrl),
@@ -3143,7 +3645,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
                         contextWindow: this._contextWindowHint(childModel) ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
                         dispatcher: getProxyDispatcher(active.baseUrl),
-                        apiStyle: resolveApiStyle(active.baseUrl, childModel),
+                        apiStyle: resolveApiStyle(active.baseUrl, childModel, auth.apiStyle),
                         ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
                         cacheKey: subagentConversationId,
                     };
@@ -3248,6 +3750,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
         this._setCostCurrencyFor(active.baseUrl);
+        this._runSubscription = auth.subscription === true;
 
         try {
             // Seed the live reminder list for this run; model writes refresh it
@@ -3259,7 +3762,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const agent = runLocalAgent(
                 {
                     baseUrl: active.baseUrl,
-                    apiKey: active.apiKey || null,
+                    apiKey: auth.apiKey,
+                    headers: auth.headers,
+                    ...(auth.onUnauthorized ? { onUnauthorized: auth.onUnauthorized } : {}),
+                        subscription: auth.subscription,
                     model,
                     systemPrompt,
                     userText: localUserText,
@@ -3312,7 +3818,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // OpenCode Zen/Go route some model families to /messages
                     // or /responses on the same base URL; everything else is
                     // OpenAI chat/completions.
-                    apiStyle: resolveApiStyle(active.baseUrl, model),
+                    apiStyle: resolveApiStyle(active.baseUrl, model, auth.apiStyle),
                     // OpenCode Go requires a stable per-conversation session id
                     // (MissingSessionID otherwise). Other hosts only need the
                     // cache-key identity below.
@@ -3534,6 +4040,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         sessionId: this._sessionId,
                         host: baseUrlHost(this._runBaseUrl ?? '') ?? '',
                         model: this._selectedModel ?? '',
+                        ...(this._runSubscription ? { billing: 'chatgpt-plan' as const } : {}),
                         input: event.usage.promptTokens ?? 0,
                         output: event.usage.completionTokens ?? 0,
                         cached: event.usage.cachedTokens ?? 0,
@@ -3657,7 +4164,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Runtime collapse: every credential - remote BYOK or on-machine
             // runtime - is an OpenAI-compatible endpoint the extension probes
             // and chats with directly.
-            return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key);
+            return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key, llm.extra_headers, llm.discoverModels);
         } catch (e) {
             // Probe failure - tell the user instead of failing silently.
             this._view.webview.postMessage({
@@ -3670,7 +4177,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    private async _fetchLocalModels(baseUrl: string, apiKey?: string): Promise<boolean> {
+    private async _fetchLocalModels(baseUrl: string, apiKey?: string, extraHeaders?: Record<string, string>, discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>): Promise<boolean> {
         if (!this._view) return false;
         const insecureError = insecureRemoteHttpError(baseUrl, apiKey);
         if (insecureError) {
@@ -3688,7 +4195,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl))
                 ? await this._ensureModelsDevCatalog()
                 : null;
-            let probed = await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev);
+            let probed = discoverModels ? await discoverModels() : await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev, extraHeaders);
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }
@@ -3780,6 +4287,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 type: 'modelInfo',
                 defaultModel: models[0] ?? '',
                 models,
+                displayNames: Object.fromEntries(probed.models.filter((m) => m.displayName).map((m) => [m.id, m.displayName!])),
                 contextWindows: servedWindows,
                 overrides: this._contextWindowOverrides(),
                 thinkingLevels: this._thinkingLevels(),

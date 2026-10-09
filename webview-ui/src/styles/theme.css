@@ -7136,6 +7136,96 @@ pre.tool-cmd {
 }
 
 /* Usage + pricing page */
+.usage-plan-account {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-block-end: 8px;
+}
+
+.usage-plan-account bdi {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.usage-plan-total {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-plan-total strong {
+    font-size: 28px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    color: var(--xratu-accent);
+}
+
+.usage-plan-models {
+    display: grid;
+    gap: 6px;
+    margin-block-start: 12px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-plan-models > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.usage-plan-models > div > span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.usage-plan-models > div > span:last-child {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-plan-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-block-start: 14px;
+    padding-block-start: 12px;
+    border-block-start: 1px solid var(--xratu-border-quiet);
+}
+
+.usage-plan-footer p {
+    flex: 1 1 180px;
+    margin: 0;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-manage {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--xratu-accent);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.usage-api > summary {
+    cursor: pointer;
+    padding-block: 8px;
+    margin-block-end: 8px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.usage-api .settings-card + .settings-card {
+    margin-block-start: 12px;
+}
+
 /* The page's type runs a step larger than the rest of the app: it is dense
    with small figures, and at sidebar width the defaults read as fine print. */
 .usage-page .settings-section-head p {
@@ -8962,3 +9052,306 @@ button:not(:disabled):active,
     }
 }
 
+
+/* --- OAuth subscription sign-in -----------------------------------------
+ * A row per provider: name + connection state on one line, actions on the
+ * other, and the flow's waiting surface underneath. Direction-safe by
+ * construction (logical properties only - AGENTS.md R4).
+ */
+.cred-oauth-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cred-oauth-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 7px;
+}
+
+.cred-oauth-row.busy {
+    border-color: color-mix(in srgb, var(--xratu-accent) 45%, transparent);
+}
+
+.cred-oauth-row.connected {
+    padding: 0;
+    border: 0;
+}
+
+.cred-oauth-header {
+    display: flex;
+    flex: 1 0 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+}
+
+.cred-oauth-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 160px;
+}
+
+.cred-oauth-name {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.cred-oauth-account {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+}
+
+.cred-oauth-account bdi {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.cred-oauth-accounts {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 100%;
+    min-width: 0;
+    gap: 8px;
+}
+
+.cred-oauth-account-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--xratu-border-quiet);
+    border-radius: 6px;
+    background: var(--xratu-surface-inset);
+}
+
+.cred-oauth-account-card.active {
+    border-color: var(--xratu-accent-dim);
+}
+
+.cred-oauth-account-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.cred-oauth-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--xratu-accent-faint);
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-active {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 3px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    color: var(--xratu-accent);
+    background: var(--xratu-accent-faint);
+}
+
+.cred-oauth-signout {
+    margin-inline-start: auto;
+    flex: 0 0 26px;
+}
+
+.app[dir='rtl'] .cred-oauth-signout svg {
+    transform: scaleX(-1);
+}
+
+.cred-oauth-account-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.cred-oauth-hint {
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+    line-height: 1.45;
+}
+
+.cred-oauth-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.cred-oauth-row .cred-oauth-action {
+    width: auto;
+    height: auto;
+    min-height: 28px;
+    padding: 5px 9px;
+    flex: 0 0 auto;
+    gap: 5px;
+    white-space: nowrap;
+    font-size: 11.5px;
+    text-decoration: none;
+}
+
+.cred-oauth-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cred-oauth-status svg {
+    flex-shrink: 0;
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-registration {
+    display: flex;
+    flex: 1 0 100%;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    min-width: 0;
+}
+
+.cred-oauth-registration > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cred-oauth-remembered {
+    flex: 1 0 100%;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-remembered summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: 3px;
+}
+
+.cred-oauth-remembered summary:hover {
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-remembered-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-block-start: 8px;
+}
+
+/* Waiting + device-code surfaces take the full row so the code is never
+ * squeezed into the action cluster. */
+.cred-oauth-wait,
+.cred-oauth-device {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 0 100%;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-manual {
+    flex: 1 0 100%;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.cred-oauth-manual summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: 3px;
+}
+
+.cred-oauth-manual summary:hover {
+    color: var(--xratu-accent);
+}
+
+.cred-oauth-manual-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-block-start: 8px;
+}
+
+.cred-oauth-code {
+    align-self: flex-start;
+    padding: 8px 12px;
+    border: 1px dashed var(--xratu-accent-dim);
+    border-radius: 6px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 18px;
+    color: var(--vscode-foreground);
+    letter-spacing: 0.06em;
+    user-select: all;
+}
+
+.cred-oauth-url {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.cred-oauth-manual-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.cred-oauth-manual-row input,
+.cred-oauth-url {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: 5px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font-size: 12px;
+}
+
+.cred-oauth-manual-row input:focus,
+.cred-oauth-url:focus {
+    border-color: var(--xratu-accent);
+    outline-color: var(--xratu-accent);
+}
+
+.cred-oauth-error {
+    flex: 1 0 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--xratu-accent-dim);
+    border-radius: 6px;
+    background: var(--xratu-accent-faint);
+    color: var(--vscode-errorForeground);
+    font-size: 11.5px;
+    line-height: 1.45;
+}

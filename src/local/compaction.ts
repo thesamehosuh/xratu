@@ -16,6 +16,8 @@ import {
     HISTORY_TRUNCATION_MARKER,
 } from './contextWindow';
 import type { LocalAgentMessage, LocalAgentRequest } from './localTypes';
+import { isChatGptSubscriptionHost } from '../providerIdentity';
+import { requestStreamingCompletion } from './wireAdapters';
 import {
     endpointUrl,
     makeGoogleHeaders,
@@ -174,7 +176,7 @@ export function clippedConversationForSummary(
  * return 503 on `/chat/completions`, and `/messages` rejects them as "not
  * supported for format anthropic"), so a hardcoded chat call would fail and
  * compaction would silently degrade to the bare marker on exactly the gateway
- * Xratu supports. Non-streaming; returns the extracted text or null.
+ * Xratu supports. Returns the extracted text or null; ChatGPT plan requests use SSE.
  */
 async function requestSummaryCompletion(
     request: LocalAgentRequest,
@@ -183,13 +185,21 @@ async function requestSummaryCompletion(
     signal: AbortSignal,
 ): Promise<string | null> {
     const style = request.apiStyle ?? 'chat';
+    if (style === 'responses' && (request.subscription || isChatGptSubscriptionHost(request.baseUrl))) {
+        const result = await requestStreamingCompletion({
+            ...request, signal, tools: [], temperature: undefined, reasoningEffort: undefined,
+            maxTokens: undefined, maxOutputLimit: undefined, toolChoice: undefined,
+            subscription: true,
+        }, [{ role: 'user', content: prompt }], '', () => {});
+        return result.text.trim() || null;
+    }
     const endpoint = style === 'messages' ? 'messages'
         : style === 'responses' ? 'responses'
             : style === 'google' ? `models/${encodeURIComponent(request.model)}:generateContent`
                 : 'chat/completions';
-    const headers = style === 'messages' ? makeMessagesHeaders(request.apiKey, request.sessionId)
-        : style === 'google' ? makeGoogleHeaders(request.apiKey, request.sessionId)
-            : makeHeaders(request.apiKey, request.sessionId);
+    const headers = style === 'messages' ? makeMessagesHeaders(request.apiKey, request.sessionId, request.headers)
+        : style === 'google' ? makeGoogleHeaders(request.apiKey, request.sessionId, request.headers)
+            : makeHeaders(request.apiKey, request.sessionId, request.headers);
     // This is a non-streaming JSON call; the SSE `Accept` from makeHeaders is
     // wrong here and some gateways branch on it.
     headers.set('Accept', 'application/json');
@@ -203,12 +213,7 @@ async function requestSummaryCompletion(
             messages: [{ role: 'user', content: prompt }],
         };
     } else if (style === 'responses') {
-        body = {
-            model: request.model,
-            input: prompt,
-            max_output_tokens: maxTokens,
-            temperature: 0.2,
-        };
+        body = { model: request.model, input: prompt, max_output_tokens: maxTokens, temperature: 0.2 };
     } else if (style === 'google') {
         body = {
             contents: [{ role: 'user', parts: [{ text: prompt }] }],

@@ -104,6 +104,10 @@ export interface WebviewMessageHost {
     _sessionId: string | null;
     _setContextWindowOverride(model: string, window: number | null): Promise<void>;
     _setLlmCredentials(reason?: string, openCard?: 'byok' | 'local'): Promise<void>;
+    _startOAuthSignIn(providerId: string, method?: 'browser' | 'device', credentialId?: string): Promise<void>;
+    _cancelOAuthSignIn(): Promise<void>;
+    _submitOAuthManualCode(code: string): Promise<void>;
+    _oauthSignOut(credentialId: string): Promise<void>;
     _setSkillEnabled(id: string, enabled: boolean): Promise<void>;
     _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void>;
     _setTranscriptPref(id: string, enabled: boolean): Promise<void>;
@@ -298,6 +302,26 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'openCredentials':
                     void host._setLlmCredentials(undefined, data.target);
                     break;
+                case 'oauthSignIn':
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._startOAuthSignIn(data.providerId, data.method === 'device' ? 'device' : 'browser', data.credentialId);
+                    break;
+                case 'oauthCancelSignIn':
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._cancelOAuthSignIn();
+                    break;
+                case 'oauthManualCode':
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._submitOAuthManualCode(String(data.code ?? ''));
+                    break;
+                case 'oauthSignOut':
+                    // Awaited (not `void`): these touch storage and can reject,
+                    // and the router's catch is what surfaces that.
+                    await host._oauthSignOut(data.credentialId);
+                    break;
                 case 'toggleYolo':
                     host._yoloMode = !host._yoloMode;
                     host._view?.webview.postMessage({ type: 'yoloMode', enabled: host._yoloMode });
@@ -327,9 +351,13 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'setThinkingLevel':
                     void host._setThinkingLevel(data.model, data.level);
                     break;
-                case 'copyToClipboard':
-                    void vscode.env.clipboard.writeText(data.value);
+                case 'copyToClipboard': {
+                    let ok = true;
+                    try { await vscode.env.clipboard.writeText(data.value); }
+                    catch { ok = false; }
+                    if (typeof data.requestId === 'string') host._view?.webview.postMessage({ type: 'clipboardResult', requestId: data.requestId, ok });
                     break;
+                }
                 case 'openDiff':
                     void host._openEditDiff(data.edits).catch((e) =>
                         console.error('xratu: open diff failed:', e));

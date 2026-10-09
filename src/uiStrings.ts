@@ -62,6 +62,9 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     geoBlockedSwitch: { fa: 'سوئیچ به ارائه دهنده ایرانی', en: 'Switch to an Iranian provider' },
     geoBlockedSwitched: { fa: 'به ارائه دهنده ایرانی سوئیچ شد.', en: 'Switched to the Iranian provider.' },
     geoBlockedNoProvider: { fa: 'هنوز ارائه دهنده ایرانی ذخیره نشده؛ از تنظیمات اضافه کن.', en: 'No Iranian provider saved yet; add one in Settings.' },
+    // OAuth loopback callback pages (host-rendered HTML the BROWSER shows).
+    oauthCallbackDone: { fa: 'ورود انجام شد. میتونی این تب رو ببندی.', en: 'Sign-in complete. You can close this tab.' },
+    oauthCallbackFailed: { fa: 'ورود انجام نشد. به VS Code برگرد.', en: 'Sign-in did not complete. Return to VS Code.' },
     agentPickerTitle: { fa: 'فایل های زیرعامل', en: 'Agent files' },
     agentPickerPlaceholder: { fa: 'یه زیرعامل انتخاب کن تا فایلش باز بشه', en: 'Pick an agent to open its file' },
     agentCreateItem: { fa: 'ساخت فایل زیرعامل جدید', en: 'Create a new agent file' },
