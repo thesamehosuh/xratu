@@ -162,25 +162,30 @@ Two invariants in that workflow are load-bearing and guarded by
 ## Webview UI inspection — screenshot the real UI before/after visual work
 
 Never judge webview UI from CSS alone; drive the built bundle in a real
-browser and LOOK at it:
+browser and LOOK at it. Prefer browser-control APIs provided by the active
+agent harness for navigation, inspection, interaction, and screenshots.
+Use Playwright only when no suitable harness browser controls are available,
+or when they cannot perform a specific required check.
 
 1. Build: `npm run build:webview`, then serve it:
    `node test/e2e/serve.mjs dist/webview-ui 4173` (same server the Playwright
    e2e suite uses).
-2. Drive it like `test/e2e/app.spec.ts` does: `addInitScript` a mock
+2. Drive it like `test/e2e/app.spec.ts` does: initialize a mock
    `acquireVsCodeApi` (records outbound messages), then post
    `FromExtensionMessage` envelopes at the page via
    `window.postMessage(msg, '*')` — `showChat`, `showWelcome`,
    `openCredentials`, `openSettings`, `mcpState`, `skillsState`, etc. (shapes
-   in `webview-ui/src/types.ts`). No VS Code needed.
+   in `webview-ui/src/types.ts`). If the harness cannot set up the mock or
+   post these messages, use the Playwright fixture. No VS Code needed.
 3. Install the `--vscode-*` tokens with the shared fixture — the standalone
    page has NO VS Code theme, and hand-rolling the block silently fails when
    injected before `document.documentElement` exists (every surface renders
    transparent while still looking plausible, so screenshot reviews become
-   worthless). Use `import { installVscodeTheme } from './vscodeTheme'`
-   (`test/e2e/vscodeTheme.ts`) and `await installVscodeTheme(page)` BEFORE
-   `page.goto`; it applies Dark Modern values and the `vscode-dark` body class
-   the Shiki highlighter keys off. Do not hand-write the token block.
+   worthless). When using Playwright, use `import { installVscodeTheme } from
+   './vscodeTheme'` (`test/e2e/vscodeTheme.ts`) and
+   `await installVscodeTheme(page)` BEFORE `page.goto`; it applies Dark Modern
+   values and the `vscode-dark` body class the Shiki highlighter keys off. Do
+   not hand-write the token block.
 4. Screenshot each page state at SIDEBAR width (~420px) AND wide, in both
    `fa` (RTL) and `en` — RTL breaks differently than LTR.
 5. CAVEAT: `fullPage: true` screenshots stitch artifacts into pages with
