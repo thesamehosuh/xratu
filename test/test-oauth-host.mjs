@@ -149,3 +149,43 @@ console.log('oauth-host: configured proxy, browser launch, cancellation, manual 
     assert.equal(JSON.stringify(state).includes('oaiapp_'), false);
 }
 console.log('oauth-host: connected and remembered account labels omit OAuth identifiers');
+
+{
+    const ledger = require('../out/local/usageLedger.js');
+    const h = hostMethods(['_sendUsageState', '_costFor'], {
+        ...ledger,
+        baseUrlHost: () => 'api.openai.com',
+        getOAuthProvider: () => ({ subscription: true }),
+        isIranianProvider: () => false,
+        priceForModel: () => { throw new Error('Plan usage must not resolve API prices'); },
+    });
+    const posts = [];
+    h._view = { webview: { postMessage: (value) => posts.push(value) } };
+    h._getSavedCredentials = async () => [{ oauthProviderId: 'chatgpt-codex', label: 'account@example.test', baseUrl: 'https://api.openai.com/v1' }];
+    const round = { ts: Date.now(), sessionId: 's', host: 'api.openai.com', model: 'gpt-6-luna', input: 100, output: 20, cached: 30, cacheWrite: 0, amount: null, currency: null };
+    h._usageLedger = { read: async () => [
+        { ...round, billing: 'chatgpt-plan' },
+        { ...round, billing: 'chatgpt-plan', ts: Date.now() - 31 * 86_400_000 },
+        { ...round, amount: 2, currency: 'USD' },
+    ] };
+    h._modelRates = (entries) => {
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].billing, undefined);
+        return [];
+    };
+    let accountStateSent = false;
+    h._sendOAuthState = async () => { accountStateSent = true; };
+    await h._sendUsageState();
+    const state = posts[0];
+    assert.equal(state.chatgpt.totals.input, 100);
+    assert.equal(state.chatgpt.totals.USD, 0);
+    assert.equal(state.chatgpt.models[0].tokens, 120);
+    assert.equal(state.chatgpt.hasHistory, true);
+    assert.equal(state.history[0].cells[0].input, 100);
+    assert.equal(state.allTime.USD, 2);
+    assert.equal(state.providers[0].label, 'api.openai.com');
+    assert.equal(accountStateSent, true);
+    h._runSubscription = true;
+    assert.equal(h._costFor({ promptTokens: 100, completionTokens: 20 }), null);
+}
+console.log('oauth-host: Usage separates plan tokens from API spend on the same host');

@@ -127,6 +127,11 @@ account's catalog. The legacy Codex public client and ChatGPT backend endpoints
 are no longer used; connections made by that earlier implementation need a
 fresh sign-in.
 
+**Usage** shows ChatGPT plan tokens recorded in Xratu over the last 30 days,
+with a per-model breakdown and **Manage usage** linking to ChatGPT settings for
+plan limits and credits. Plan requests are kept separate from API-key spend and
+are never assigned API prices, including after a rate edit.
+
 Tokens refresh five minutes early and on an authentication rejection. A
 temporary renewal failure can keep a still-valid token; a permanent rejection
 requires sign-in again. Requests and refresh waiting honor Stop and the

@@ -30,6 +30,8 @@ export interface UsageEntry {
     host: string;
     /** Model id as requested. */
     model: string;
+    /** Plan usage is tracked in tokens, never priced as API spend. */
+    billing?: 'chatgpt-plan';
     input: number;
     output: number;
     cached: number;
@@ -82,7 +84,8 @@ export function normalizeEntry(raw: unknown): UsageEntry | null {
     if (ts == null) return null;
     const model = typeof e.model === 'string' ? e.model : '';
     const host = typeof e.host === 'string' ? e.host : '';
-    const currency = e.currency === 'USD' || e.currency === 'IRT' ? e.currency : null;
+    const billing = e.billing === 'chatgpt-plan' ? 'chatgpt-plan' : undefined;
+    const currency = !billing && (e.currency === 'USD' || e.currency === 'IRT') ? e.currency : null;
     const amount = currency && typeof e.amount === 'number' && Number.isFinite(e.amount) && e.amount >= 0
         ? e.amount
         : null;
@@ -91,6 +94,7 @@ export function normalizeEntry(raw: unknown): UsageEntry | null {
         sessionId: typeof e.sessionId === 'string' ? e.sessionId : null,
         host,
         model,
+        ...(billing ? { billing } : {}),
         input: finiteCount(e.input),
         output: finiteCount(e.output),
         cached: finiteCount(e.cached),
@@ -162,7 +166,7 @@ export function recomputeCosts(
     let changed = false;
     const next = entries.map((entry) => {
         if (key && entry.model.trim().toLowerCase() !== key) return entry;
-        const resolved = resolve(entry);
+        const resolved = entry.billing === 'chatgpt-plan' ? null : resolve(entry);
         const amount = resolved ? resolved.amount : null;
         const currency = resolved ? resolved.currency : null;
         if (amount !== entry.amount || currency !== entry.currency) changed = true;

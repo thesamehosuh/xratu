@@ -362,6 +362,11 @@ const fa = {
 
     // Usage page
     usagePageTitle: 'مصرف',
+    usageChatGptTitle: 'مصرف اشتراک ChatGPT',
+    usageChatGptPeriod: 'توکن های ثبت شده در Xratu، در ۳۰ روز گذشته.',
+    usageChatGptHint: 'سقف مصرف و اعتبار باقی مونده رو در تنظیمات ChatGPT ببین.',
+    usageManage: 'مدیریت مصرف',
+    usageApiTitle: 'مصرف API و نرخ مدل ها',
     pricingDesc: 'این صفحه مصرف همین گفتگو و قیمت مدل هاست. هیچ نرخی خودکار حدس زده نمیشه؛ اگه عددی با صورتحساب ارائه دهنده شما نمیخونه، همون مدل رو با قیمت درست بازنویسی کن.',
     pricingIranianBadge: 'ایرانی',
     ratesTitle: 'نرخ مدل ها',
@@ -1118,6 +1123,11 @@ const en: Record<keyof typeof fa, string> = {
 
     // Usage page
     usagePageTitle: 'Usage',
+    usageChatGptTitle: 'ChatGPT plan usage',
+    usageChatGptPeriod: 'Tokens recorded in Xratu over the last 30 days.',
+    usageChatGptHint: 'View plan limits and remaining credits in ChatGPT settings.',
+    usageManage: 'Manage usage',
+    usageApiTitle: 'API usage and model rates',
     pricingDesc: 'This page shows this conversation\u2019s usage and the price of each model. No rate is ever guessed \u2014 if a number disagrees with your provider\u2019s bill, override that model with the real price.',
     pricingIranianBadge: 'Iranian',
     ratesTitle: 'Model rates',

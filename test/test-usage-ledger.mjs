@@ -254,5 +254,21 @@ check('USAGE_MAX_ENTRIES is a sane cap', USAGE_MAX_ENTRIES >= 1000, true);
     check('an id-less model is skipped', modelTotals(modelHosts([entry({ model: '', host: 'a' })])).size, 0);
 }
 
+// Plan tokens survive storage and price edits without acquiring API charges.
+{
+    const plan = normalizeEntry(entry({ billing: 'chatgpt-plan', host: 'api.openai.com' }));
+    check('plan usage keeps its billing identity', parseLedger(serializeLedger([plan]))[0].billing, 'chatgpt-plan');
+    check('plan usage ignores a stored API price', [plan.amount, plan.currency], [null, null]);
+    let resolutions = 0;
+    const repriced = recomputeCosts([plan, entry({ host: 'api.openai.com' })], () => {
+        resolutions++;
+        return { amount: 9, currency: 'USD' };
+    });
+    check('reprice only resolves API usage on the shared OpenAI host', resolutions, 1);
+    check('price overrides leave plan tokens unpriced', [repriced.entries[0].input, repriced.entries[0].output, repriced.entries[0].amount], [100, 20, null]);
+    check('API usage on the same host still reprices', repriced.entries[1].amount, 9);
+    check('mixed totals count all tokens but only API cost', sumUsage(repriced.entries), { input: 200, output: 40, cached: 0, USD: 9, IRT: 0 });
+}
+
 console.log(failed === 0 ? '\nusage-ledger tests: all passed' : `\nusage-ledger tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

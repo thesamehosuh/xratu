@@ -311,6 +311,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _runCostCurrency: 'USD' | 'IRT' = 'USD';
     /** Base URL of the current run/provider, used to resolve its pricing. */
     private _runBaseUrl: string | null = null;
+    private _runSubscription = false;
     _history: HistoryMessage[] = [];
     private _sessionSummary: string | null = null;
     /** Display title of the CURRENT session (toolbar button + picker).
@@ -1690,7 +1691,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Cost of one usage record for the CURRENT run's provider, in the
      *  currency the price is quoted in (never converted). */
     private _costFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
-        if (!usage) return null;
+        if (!usage || this._runSubscription) return null;
         const price = priceForModel(
             this._selectedModel ?? '',
             this._modelPriceOverrides(),
@@ -1926,6 +1927,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const credentials = await this._getSavedCredentials();
         const byHost = new Map<string, { label: string; iranian: boolean }>();
         for (const c of credentials) {
+            if (c.oauthProviderId && getOAuthProvider(c.oauthProviderId)?.subscription) continue;
             const host = baseUrlHost(c.baseUrl);
             if (host && !byHost.has(host)) {
                 byHost.set(host, { label: c.label || c.baseUrl, iranian: isIranianProvider(c.providerId) });
@@ -1933,7 +1935,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
 
         const ledger = await this._usageLedger.read();
-        const providers = totalsByHost(ledger).map((t) => ({
+        const apiLedger = ledger.filter((entry) => entry.billing !== 'chatgpt-plan');
+        const planLedger = ledger.filter((entry) => entry.billing === 'chatgpt-plan');
+        const cutoff = Date.now() - 30 * 86_400_000;
+        const recentPlan = planLedger.filter((entry) => entry.ts >= cutoff);
+        const providers = totalsByHost(apiLedger).map((t) => ({
             host: t.host,
             label: byHost.get(t.host)?.label ?? (t.host || '—'),
             iranian: byHost.get(t.host)?.iranian ?? false,
@@ -1947,12 +1953,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._view.webview.postMessage({
             type: 'usageState',
             providers,
-            rates: this._modelRates(ledger, byHost),
+            rates: this._modelRates(apiLedger, byHost),
             // Sparse per-day/per-model/per-host cells: the chart's month,
             // model and provider filters all run in the webview.
-            history: aggregateByDayAndModel(ledger, USAGE_CHART_DAYS),
-            allTime: sumUsage(ledger),
+            history: aggregateByDayAndModel(apiLedger, USAGE_CHART_DAYS),
+            allTime: sumUsage(apiLedger),
+            chatgpt: {
+                totals: sumUsage(recentPlan),
+                models: modelHosts(recentPlan).map(({ model, tokens }) => ({ model, tokens })),
+                hasHistory: planLedger.length > 0,
+            },
         });
+        await this._sendOAuthState();
     }
 
     /**
@@ -3738,6 +3750,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
         this._setCostCurrencyFor(active.baseUrl);
+        this._runSubscription = auth.subscription === true;
 
         try {
             // Seed the live reminder list for this run; model writes refresh it
@@ -4027,6 +4040,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         sessionId: this._sessionId,
                         host: baseUrlHost(this._runBaseUrl ?? '') ?? '',
                         model: this._selectedModel ?? '',
+                        ...(this._runSubscription ? { billing: 'chatgpt-plan' as const } : {}),
                         input: event.usage.promptTokens ?? 0,
                         output: event.usage.completionTokens ?? 0,
                         cached: event.usage.cachedTokens ?? 0,

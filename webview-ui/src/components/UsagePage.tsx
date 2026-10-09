@@ -8,6 +8,7 @@ import {
     ChevronRight,
     ChevronUp,
     Coins,
+    ExternalLink,
     Info,
     Pencil,
     Plus,
@@ -18,7 +19,7 @@ import { formatCost } from '../cost';
 import { formatCalendarDate, localDayTimestamp, shiftLocalDay } from '../datetime';
 import { totalTokens, uncachedInput } from '../usageTokens';
 import { Dropdown, popupPlacement } from './Dropdown';
-import type { LedgerDay, ModelRateView, ProviderUsageView, UsageTotals } from '../types';
+import type { ChatGptUsageView, LedgerDay, ModelRateView, OAuthHostState, ProviderUsageView, UsageTotals } from '../types';
 
 type Currency = 'USD' | 'IRT';
 
@@ -27,10 +28,12 @@ interface UsageState {
     rates: ModelRateView[];
     history: LedgerDay[];
     allTime: UsageTotals;
+    chatgpt?: ChatGptUsageView;
 }
 
 interface UsagePageProps {
     state: UsageState | null;
+    oauthState?: OAuthHostState | null;
     onBack: () => void;
     onSaveModel: (id: string, input: number, output: number, cachedInput: number | null, currency: 'USD' | 'IRT') => void;
     onRemoveModel: (id: string) => void;
@@ -453,12 +456,15 @@ function AddModelForm({ onSave, onCancel }: { onSave: UsagePageProps['onSaveMode
     );
 }
 
-export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePageProps) {
+export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveModel }: UsagePageProps) {
     const locale = getLocale();
     const history = state?.history ?? [];
     const providers = state?.providers ?? [];
     const rates = state?.rates ?? [];
     const allTime = state?.allTime;
+    const plan = state?.chatgpt;
+    const accounts = oauthState?.accounts?.filter((account) => account.providerId === 'chatgpt-codex' && account.planEnabled) ?? [];
+    const showPlan = accounts.length > 0 || plan?.hasHistory;
     const [adding, setAdding] = useState(false);
 
     /** Models used through more than one provider: only then is the host worth
@@ -601,6 +607,44 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
             </header>
 
             <div className="settings-scroll">
+                {showPlan && (
+                    <section className="settings-card usage-plan">
+                        <div className="settings-section-head">
+                            <div className="settings-section-icon" aria-hidden="true"><Activity size={15} /></div>
+                            <div>
+                                <h3>{t('usageChatGptTitle')}</h3>
+                                <p>{t('usageChatGptPeriod')}</p>
+                            </div>
+                        </div>
+                        <div className="settings-card-body">
+                            {accounts.map((account) => (
+                                <div className="usage-plan-account" key={account.credentialId}>
+                                    <bdi dir="auto">{account.accountLabel || t('credOAuthConnected')}</bdi>
+                                    {account.active && <span className="cred-oauth-active">{t('credActive')}</span>}
+                                </div>
+                            ))}
+                            <div className="usage-plan-total">
+                                <strong dir="ltr">{plan ? formatTokens(totalTokens(plan.totals)) : '—'}</strong>
+                                <span>{t('usageTokens')}</span>
+                            </div>
+                            {(plan?.models.length ?? 0) > 0 && (
+                                <div className="usage-plan-models">
+                                    {plan?.models.map(({ model, tokens }) => (
+                                        <div key={model}><span dir="ltr">{model}</span><span dir="ltr">{formatTokens(tokens)}</span></div>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="usage-plan-footer">
+                                <p>{t('usageChatGptHint')}</p>
+                                <a className="usage-manage" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">
+                                    {t('usageManage')}<ExternalLink size={12} aria-hidden="true" />
+                                </a>
+                            </div>
+                        </div>
+                    </section>
+                )}
+                <details className="usage-api" open={showPlan ? history.length > 0 : true}>
+                    <summary hidden={!showPlan}>{t('usageApiTitle')}</summary>
                 <section className="settings-card">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
@@ -881,6 +925,7 @@ export function UsagePage({ state, onBack, onSaveModel, onRemoveModel }: UsagePa
                     <Info size={12} aria-hidden="true" />
                     <span>{t('pricingDesc')}</span>
                 </div>
+                </details>
             </div>
         </div>
     );

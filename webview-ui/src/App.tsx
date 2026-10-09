@@ -42,7 +42,7 @@ import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
 import { prefersReducedMotion } from './motion';
-import type { LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
+import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy';
 
@@ -149,6 +149,7 @@ export function App() {
         rates: ModelRateView[];
         history: LedgerDay[];
         allTime: UsageTotals;
+        chatgpt?: ChatGptUsageView;
     } | null>(null);
     const [usageReturnTo, setUsageReturnTo] = useState<'chat' | 'settings'>('settings');
     /** Proxy page state (host-owned settings + live resolution) + Back target. */
@@ -719,6 +720,7 @@ export function App() {
                         rates: msg.rates,
                         history: msg.history,
                         allTime: msg.allTime,
+                        chatgpt: msg.chatgpt,
                     });
                     break;
                 case 'proxyState':
@@ -1174,6 +1176,7 @@ export function App() {
         overlay = (
                 <UsagePage
                     state={usage}
+                    oauthState={oauthState}
                     onBack={() => setScreen(usageReturnTo)}
                     onSaveModel={(id, input, output, cachedInput, currency) =>
                         send({ type: 'usageSaveModel', id, input, output, cachedInput, currency })}

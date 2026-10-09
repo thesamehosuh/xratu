@@ -466,6 +466,7 @@ export type FromExtensionMessage =
           history: LedgerDay[];
           /** Machine-global totals across every recorded day. */
           allTime: UsageTotals;
+          chatgpt?: ChatGptUsageView;
       }
     /** Response to proxyGetState / proxySave - the Proxy page's view. */
     | ({ type: 'proxyState' } & ProxyStateView)
@@ -552,6 +553,13 @@ export interface UsageTotals {
     cached: number;
     USD: number;
     IRT: number;
+}
+
+/** Locally recorded plan tokens over the last 30 days, not a plan allowance. */
+export interface ChatGptUsageView {
+    totals: UsageTotals;
+    models: Array<{ model: string; tokens: number }>;
+    hasHistory: boolean;
 }
 
 /** Where an effective per-model rate came from. */
