@@ -309,6 +309,7 @@ export interface LocalModelOperation {
 }
 export interface ProviderBenchmark {
     credentialId: string; model: string; busy: boolean; firstTokenMs?: number | null; totalMs?: number; error?: string;
+    errorKey?: string;
     cost?: { amount: number; currency: 'USD' | 'IRT' } | null;
     price?: { input: number; output: number; currency?: 'USD' | 'IRT' } | null;
 }

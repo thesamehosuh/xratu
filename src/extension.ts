@@ -3234,6 +3234,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private _modelManagementController: AbortController | null = null;
+    private _modelManagementAction: 'pull' | 'delete' | null = null;
     private _benchmarkController: AbortController | null = null;
 
     _sendRuntimePreferences(): void {
@@ -3243,9 +3244,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _setOfflineMode(enabled: boolean): Promise<void> {
         setOfflineMode(enabled);
-        this._cancelActiveRequests();
-        this._modelManagementController?.abort();
-        this._benchmarkController?.abort();
+        // Remote requests share the network-policy signal. Local work stays
+        // permitted, except a pull asks Ollama to download from the network.
+        if (enabled && this._modelManagementAction === 'pull') this._modelManagementController?.abort();
         if (enabled) await this._cancelOAuthSignIn();
         await this._globalState.update('xratu.offlineMode', enabled);
         this._sendRuntimePreferences();
@@ -3267,6 +3268,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!isLoopbackUrl(baseUrl)) { this.notifyBanner('error', 'localModelEndpoint'); return; }
         const controller = new AbortController();
         this._modelManagementController = controller;
+        this._modelManagementAction = action;
         const emit = (state: Record<string, unknown>) => this._view?.webview.postMessage({
             type: 'localModelOperation', baseUrl, model, action, ...state,
         });
@@ -3279,7 +3281,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const active = (await this._getLlmCredentials()).llm_base_url;
                 if (active?.replace(/\/+$/, '') === baseUrl.replace(/\/+$/, '')) {
                     this._selectedModel = null;
-                    await this._rememberModelForActiveCredential(null);
+                    const credentialId = await this._resolveActiveCredentialId();
+                    if (credentialId) await this._forgetCredentialModel(credentialId);
                     await this._secrets.delete('xratu.selectedModel');
                 }
             }
@@ -3292,7 +3295,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         } catch (error) {
             emit({ busy: false, errorKey: controller.signal.aborted ? 'requestCancelled' : 'localModelFailed',
                 detail: error instanceof Error ? error.message : String(error) });
-        } finally { this._modelManagementController = null; }
+        } finally {
+            this._modelManagementController = null;
+            this._modelManagementAction = null;
+        }
     }
 
     async _benchmarkProvider(): Promise<void> {
@@ -3308,6 +3314,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         try {
             const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
             const auth = await this._resolveCredentialAuth(active, signal);
+            const insecureError = insecureRemoteHttpError(active.baseUrl, auth.apiKey);
+            if (insecureError) {
+                this._view?.webview.postMessage({ type: 'providerBenchmark', credentialId, model, busy: false, errorKey: insecureError });
+                return;
+            }
             const started = performance.now();
             let firstTokenMs: number | null = null;
             const result = await requestStreamingCompletion({

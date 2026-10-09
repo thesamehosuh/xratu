@@ -126,7 +126,9 @@ if (files.length >= MIN_EXPECTED_FILES) {
     );
 
     // --- the things that MUST ship must actually ship ---------------------
-    for (const needed of ['package.json', 'dist/extension.js', 'LICENSE', 'README.md', 'assets/icon.png']) {
+    for (const needed of ['package.json', 'dist/extension.js', 'LICENSE', 'README.md', 'assets/icon.png',
+        'assets/guides/offline.en.md', 'assets/guides/offline.fa.md',
+        'assets/guides/providers.en.md', 'assets/guides/providers.fa.md']) {
         ok(`still packaged: ${needed}`, files.includes(needed), 'excluded by an over-broad ignore rule');
     }
 

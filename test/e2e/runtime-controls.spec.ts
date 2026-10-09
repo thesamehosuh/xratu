@@ -82,3 +82,29 @@ test('provider onboarding and measured latency retain errors and unknown prices'
     await expect(page.locator('.provider-comparison')).toContainText('Provider unavailable');
     await expect(page.locator('.provider-comparison .runtime-model-row')).toHaveCount(2);
 });
+
+test('offline benchmarks allow only the active loopback connection', async ({ page }) => {
+    await page.goto('/');
+    await host(page, { type: 'locale', locale: 'en' });
+    await host(page, { type: 'showChat' });
+    await host(page, { type: 'openCredentials' });
+    await host(page, { type: 'runtimePreferences', offline: true, errorExplanations: true });
+    await page.getByText('Compare connection latency', { exact: true }).click();
+    const button = page.getByRole('button', { name: 'Test active model' });
+    const connection = { id: 'test', providerId: 'custom', maskedKey: '', label: 'Test', active: true };
+    for (const baseUrl of ['https://provider.example/v1', 'http://localhost.evil.test/v1', 'http://localhost:11434@provider.example/v1', 'http://192.168.1.2:11434/v1']) {
+        await host(page, { type: 'savedCredentials', credentials: [{ ...connection, baseUrl }] });
+        await expect(button).toBeDisabled();
+    }
+    for (const baseUrl of ['http://localhost:11434/v1', 'http://127.0.0.1:1234/v1', 'http://[::1]:11434/v1']) {
+        await host(page, { type: 'savedCredentials', credentials: [{ ...connection, baseUrl }] });
+        await expect(button).toBeEnabled();
+    }
+    await button.click();
+    expect((await sent(page)).some((m) => m.type === 'benchmarkProvider')).toBe(true);
+    await host(page, { type: 'providerBenchmark', credentialId: 'test', model: 'test', busy: true });
+    await expect(button).toBeDisabled();
+    await host(page, { type: 'providerBenchmark', credentialId: 'test', model: 'test', busy: false, errorKey: 'insecureEndpointHttp' });
+    await expect(page.locator('.provider-comparison')).not.toContainText('insecureEndpointHttp');
+    await expect(button).toBeEnabled();
+});

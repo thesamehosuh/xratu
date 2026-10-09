@@ -37,6 +37,7 @@ export async function manageOllamaModel(
     let pending = '';
     let success = false;
     const consume = (line: string) => {
+        if (line.length > 64_000) throw new Error('Ollama download status exceeds the size limit.');
         if (!line.trim()) return;
         const item = JSON.parse(line);
         if (item.error) throw new Error(String(item.error).slice(0, 2000));
@@ -49,12 +50,12 @@ export async function manageOllamaModel(
             signal.throwIfAborted();
             const chunk = await readStreamChunk(reader);
             pending += decoder.decode(chunk.value, { stream: !chunk.done });
-            if (pending.length > 64_000) throw new Error('Ollama download status exceeds the size limit.');
             let newline: number;
             while ((newline = pending.indexOf('\n')) >= 0) {
                 consume(pending.slice(0, newline));
                 pending = pending.slice(newline + 1);
             }
+            if (pending.length > 64_000) throw new Error('Ollama download status exceeds the size limit.');
             if (chunk.done) break;
         }
         consume(pending);

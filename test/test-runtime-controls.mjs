@@ -71,6 +71,14 @@ try {
     await manageOllamaModel('http://localhost:11434/v1', 'delete', 'qwen:3b', new AbortController().signal, () => {});
     assert.equal(calls.at(-1).init.method, 'DELETE');
     await assert.rejects(manageOllamaModel('http://localhost:11434/v1', 'pull', '../bad', new AbortController().signal, () => {}), /Invalid/);
+    const manyStatuses = '{"status":"downloading"}\n'.repeat(4000) + '{"status":"success"}\n';
+    let statuses = 0;
+    globalThis.fetch = async (url) => String(url).endsWith('/api/version') ? Response.json({ version: '0.6' }) : new Response(manyStatuses);
+    await manageOllamaModel('http://localhost:11434/v1', 'pull', 'qwen:3b', new AbortController().signal, () => { statuses++; });
+    assert.equal(statuses, 4001, 'large chunks of valid status lines are consumed before bounding the remainder');
+    const oversizedStatus = JSON.stringify({ status: 'x'.repeat(64_001) }) + '\n';
+    globalThis.fetch = async (url) => String(url).endsWith('/api/version') ? Response.json({ version: '0.6' }) : new Response(oversizedStatus);
+    await assert.rejects(manageOllamaModel('http://localhost:11434/v1', 'pull', 'qwen:3b', new AbortController().signal, () => {}), /size limit/);
     for (const body of ['{"error":"disk full"}\n', '{"status":"downloading"}\n', 'x'.repeat(64_001)]) {
         globalThis.fetch = async (url) => String(url).endsWith('/api/version') ? Response.json({ version: '0.6' }) : new Response(body);
         await assert.rejects(manageOllamaModel('http://localhost:11434/v1', 'pull', 'qwen:3b', new AbortController().signal, () => {}));

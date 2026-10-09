@@ -207,6 +207,7 @@ console.log('oauth-host: Usage separates plan tokens from API spend on the same 
     try {
         const h = hostMethods(['_benchmarkProvider'], {
             requestStreamingCompletion, resolveApiStyle, performance, crypto: { randomUUID },
+            insecureRemoteHttpError: require('../out/endpointGuard.js').insecureRemoteHttpError,
             getProxyDispatcher: () => undefined,
             priceForModel: () => { throw new Error('A subscription probe must not use API prices'); },
         });
@@ -230,3 +231,71 @@ console.log('oauth-host: Usage separates plan tokens from API spend on the same 
     } finally { globalThis.fetch = originalFetch; }
 }
 console.log('oauth-host: latency probe preserves the subscription wire contract and billing');
+
+{
+    const h = hostMethods(['_benchmarkProvider'], {
+        insecureRemoteHttpError: require('../out/endpointGuard.js').insecureRemoteHttpError,
+        requestStreamingCompletion: () => { throw new Error('Insecure benchmark reached the transport'); },
+    });
+    const posts = [];
+    h._view = { webview: { postMessage: (value) => posts.push(value) } };
+    h._selectedModel = 'test-model';
+    h._resolveActiveCredentialId = async () => 'insecure';
+    h._getSavedCredentials = async () => [{ id: 'insecure', baseUrl: 'http://provider.example/v1' }];
+    h._resolveCredentialAuth = async () => ({ apiKey: 'secret-key' });
+    await h._benchmarkProvider();
+    assert.equal(posts.at(-1).errorKey, 'insecureEndpointHttp', 'remote HTTP rejected before transport');
+    assert.equal(posts.at(-1).busy, false);
+    assert.equal(h._benchmarkController, null);
+}
+
+{
+    const policy = require('../out/networkPolicy.js');
+    const h = hostMethods(['_setOfflineMode'], { setOfflineMode: policy.setOfflineMode, externalMcpInstance: null });
+    h._globalState = { update: async () => {} };
+    h._sendRuntimePreferences = () => {};
+    h._cancelOAuthSignIn = async () => {};
+    h._cancelActiveRequests = () => { throw new Error('Offline toggle cancelled permitted local chat'); };
+    h._modelManagementController = new AbortController();
+    h._benchmarkController = new AbortController();
+    h._modelManagementAction = 'delete';
+    try {
+        policy.setOfflineMode(false);
+        const remote = policy.networkSignal('https://provider.example/v1');
+        const local = policy.networkSignal('http://localhost:11434/v1', h._benchmarkController.signal);
+        await h._setOfflineMode(true);
+        assert.equal(remote.aborted, true, 'offline policy cancels remote requests');
+        assert.equal(local.aborted, false, 'offline policy preserves loopback benchmarks');
+        assert.equal(h._modelManagementController.signal.aborted, false, 'local deletion remains permitted');
+        await h._setOfflineMode(false);
+        assert.equal(h._benchmarkController.signal.aborted, false, 'going online preserves local work');
+        h._modelManagementAction = 'pull';
+        await h._setOfflineMode(true);
+        assert.equal(h._modelManagementController.signal.aborted, true, 'offline cancels model downloads');
+    } finally { policy.setOfflineMode(false); }
+}
+
+{
+    const state = new Map([['xratu.modelsByCredential', JSON.stringify({ local: 'deleted-model', other: 'keep-model' })]]);
+    const deletedSecrets = [];
+    const h = hostMethods(['_manageLocalModel', '_forgetCredentialModel', '_credentialModelMap'], {
+        isLoopbackUrl: require('../out/networkPolicy.js').isLoopbackUrl,
+        manageOllamaModel: async () => {},
+    });
+    h._globalState = { get: (key) => state.get(key), update: async (key, value) => state.set(key, value) };
+    h._secrets = { delete: async (key) => deletedSecrets.push(key) };
+    h._selectedModel = 'deleted-model';
+    h._getLlmCredentials = async () => ({ llm_base_url: 'http://localhost:11434/v1' });
+    h._resolveActiveCredentialId = async () => 'local';
+    h.discoverLocalModels = async () => [];
+    h._fetchModels = async () => {
+        assert.equal(JSON.parse(state.get('xratu.modelsByCredential')).local, undefined, 'deleted model cannot be restored during refresh');
+    };
+    await h._manageLocalModel('delete', 'http://localhost:11434/v1', 'deleted-model');
+    assert.equal(h._selectedModel, null);
+    assert.deepEqual(JSON.parse(state.get('xratu.modelsByCredential')), { other: 'keep-model' });
+    assert.deepEqual(deletedSecrets, ['xratu.selectedModel']);
+    assert.equal(h._modelManagementController, null);
+    assert.equal(h._modelManagementAction, null);
+}
+console.log('oauth-host: benchmark credential guard, offline local work and deleted-model memory passed');

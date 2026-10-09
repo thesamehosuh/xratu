@@ -49,6 +49,26 @@ try {
     await exercise('chat', 'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n', true);
     await exercise('chat', 'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n', true);
     await exercise('chat', 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{}"}}]}}]}\n\n', true);
+    const progressFrames = {
+        messages: [
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } },
+            { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'thinking' } },
+            { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'c', name: 'read_file', input: {} } },
+        ],
+        responses: [
+            { type: 'response.output_text.delta', delta: 'OK' },
+            { type: 'response.reasoning_summary_text.delta', delta: 'thinking' },
+            { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'c', call_id: 'c', name: 'read_file' } },
+        ],
+        google: [
+            { candidates: [{ content: { parts: [{ text: 'OK' }] } }] },
+            { candidates: [{ content: { parts: [{ text: 'thinking', thought: true }] } }] },
+            { candidates: [{ content: { parts: [{ functionCall: { name: 'read_file', args: {} } }] } }] },
+        ],
+    };
+    for (const [style, frames] of Object.entries(progressFrames)) {
+        for (const frame of frames) await exercise(style, `data: ${JSON.stringify(frame)}\n\n`, true);
+    }
     console.log('first-token-timeout: heartbeat, cancellation, text, reasoning and tools passed');
 } finally {
     globalThis.fetch = originalFetch;
