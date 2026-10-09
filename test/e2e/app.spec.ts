@@ -688,7 +688,7 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
         .toEqual([false, true]);
 
     await hostMessage(page, { type: 'openSettings' });
-    const switches = page.locator('.settings-card .mcp-switch');
+    const switches = page.locator('.settings-card').filter({ has: page.getByRole('heading', { name: 'Activity view', exact: true }) }).getByRole('switch');
     // The card mounts on a later commit than the message that requested it, so
     // read the switches only once they exist. A bare `evaluateAll` here got `[]`
     // on the slower macOS leg - an empty result that reads like "no switches

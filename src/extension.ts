@@ -5,6 +5,9 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { isOfflineMode, setOfflineMode, isLoopbackUrl } from './networkPolicy';
+import { manageOllamaModel } from './local/ollamaManagement';
+import { requestStreamingCompletion } from './local/wireAdapters';
 import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
 import {
     adoptDetachedJob,
@@ -711,6 +714,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         readonly _globalState: vscode.Memento,
         localStorageUri: vscode.Uri
     ) {
+        setOfflineMode(this._globalState.get<boolean>('xratu.offlineMode') === true);
         this._checkpoints = checkpoints;
         this._storagePath = localStorageUri.fsPath;
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
@@ -815,6 +819,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  local-only or Iranian-provider install never makes the request. */
     private async _initModelsDev(): Promise<void> {
         await this._ensureModelsDevLoaded();
+        if (isOfflineMode()) return;
         try {
             const credentials = await this._getSavedCredentials();
             if (credentials.some((c) => modelsDevProviderKey(providerIdForUrl(c.baseUrl)))) {
@@ -872,6 +877,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Never fetch before the disk load has settled, or the load could
         // clobber a just-fetched catalog with the older persisted copy.
         await this._ensureModelsDevLoaded();
+        if (isOfflineMode()) return this._modelsDevCatalog;
         if (this._modelsDevCatalog && Date.now() - this._modelsDevFetchedAt < MODELS_DEV_TTL_MS) {
             return this._modelsDevCatalog;
         }
@@ -2297,6 +2303,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * remote VS Code and behind a filtering network.
      */
     async _startOAuthSignIn(providerId: string, method: 'browser' | 'device' = 'browser', credentialId?: string): Promise<void> {
+        if (isOfflineMode()) {
+            this.notifyBanner('warning', 'offlineRemoteBlocked');
+            return;
+        }
         const handler = getOAuthProvider(providerId);
         if (!handler || !(handler.methods ?? ['browser']).includes(method)) {
             this._postOAuthState({ error: { valueKey: 'oauthUnavailable' }, inProgress: null });
@@ -3223,7 +3233,104 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return this._isLocalRuntime();
     }
 
-    /** Public: discover reachable local runtimes. */
+    private _modelManagementController: AbortController | null = null;
+    private _benchmarkController: AbortController | null = null;
+
+    _sendRuntimePreferences(): void {
+        this._view?.webview.postMessage({ type: 'runtimePreferences', offline: isOfflineMode(),
+            errorExplanations: this._globalState.get<boolean>('xratu.errorExplanations') !== false });
+    }
+
+    async _setOfflineMode(enabled: boolean): Promise<void> {
+        setOfflineMode(enabled);
+        this._cancelActiveRequests();
+        this._modelManagementController?.abort();
+        this._benchmarkController?.abort();
+        if (enabled) await this._cancelOAuthSignIn();
+        await this._globalState.update('xratu.offlineMode', enabled);
+        this._sendRuntimePreferences();
+        await externalMcpInstance?.reload();
+    }
+
+    async _openBundledGuide(guide: 'offline' | 'providers'): Promise<void> {
+        const locale = this._globalState.get<string>('xratu.locale') === 'en' ? 'en' : 'fa';
+        const uri = vscode.Uri.joinPath(this._extensionUri, 'assets', 'guides', `${guide}.${locale}.md`);
+        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    }
+
+    async _manageLocalModel(action: 'pull' | 'delete' | 'cancel', baseUrl: string, model: string): Promise<void> {
+        if (action === 'cancel') { this._modelManagementController?.abort(); return; }
+        if (this._modelManagementController || this._localRunActive) {
+            this.notifyBanner('warning', 'localModelBusy'); return;
+        }
+        // Re-probe: webview input alone never establishes that this is Ollama.
+        if (!isLoopbackUrl(baseUrl)) { this.notifyBanner('error', 'localModelEndpoint'); return; }
+        const controller = new AbortController();
+        this._modelManagementController = controller;
+        const emit = (state: Record<string, unknown>) => this._view?.webview.postMessage({
+            type: 'localModelOperation', baseUrl, model, action, ...state,
+        });
+        emit({ busy: true });
+        try {
+            const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60_000)]);
+            await manageOllamaModel(baseUrl, action, model, signal, (progress) => emit({ busy: true, ...progress }));
+            emit({ busy: false, status: 'success' });
+            if (action === 'delete' && this._selectedModel === model) {
+                const active = (await this._getLlmCredentials()).llm_base_url;
+                if (active?.replace(/\/+$/, '') === baseUrl.replace(/\/+$/, '')) {
+                    this._selectedModel = null;
+                    await this._rememberModelForActiveCredential(null);
+                    await this._secrets.delete('xratu.selectedModel');
+                }
+            }
+            const discovered = await this.discoverLocalModels();
+            this._view?.webview.postMessage({ type: 'localModelsDiscovered', runtimes: discovered.map((d) => ({
+                ...d.connection, models: d.models.map((m) => m.id), modelCount: d.models.length,
+                supportsTools: d.supportsTools, supportsVision: d.supportsVision,
+            })) });
+            await this._fetchModels();
+        } catch (error) {
+            emit({ busy: false, errorKey: controller.signal.aborted ? 'requestCancelled' : 'localModelFailed',
+                detail: error instanceof Error ? error.message : String(error) });
+        } finally { this._modelManagementController = null; }
+    }
+
+    async _benchmarkProvider(): Promise<void> {
+        if (this._benchmarkController || this._localRunActive) { this.notifyBanner('warning', 'localModelBusy'); return; }
+        const credentialId = await this._resolveActiveCredentialId();
+        const model = this._selectedModel;
+        if (!credentialId || !model) { this.notifyBanner('warning', 'benchmarkSelectModel'); return; }
+        const active = (await this._getSavedCredentials()).find((c) => c.id === credentialId);
+        if (!active) return;
+        const controller = new AbortController();
+        this._benchmarkController = controller;
+        this._view?.webview.postMessage({ type: 'providerBenchmark', credentialId, model, busy: true });
+        try {
+            const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
+            const auth = await this._resolveCredentialAuth(active, signal);
+            const started = performance.now();
+            let firstTokenMs: number | null = null;
+            const result = await requestStreamingCompletion({
+                baseUrl: active.baseUrl, apiKey: auth.apiKey ?? '', model,
+                userText: 'Reply with OK.', systemPrompt: '', tools: [], maxTokens: 32,
+                signal,
+                headers: auth.headers, dispatcher: getProxyDispatcher(active.baseUrl),
+                apiStyle: resolveApiStyle(active.baseUrl, model, auth.apiStyle),
+                subscription: auth.subscription,
+                sessionId: crypto.randomUUID(),
+            }, [{ role: 'user', content: 'Reply with OK.' }], '', (text) => {
+                if (text && firstTokenMs == null) firstTokenMs = Math.round(performance.now() - started);
+            });
+            const price = auth.subscription ? null : priceForModel(model, this._modelPriceOverrides(), this._priceLookupFor(active.baseUrl, model));
+            const cost = price && result.usage ? costForUsage(price, result.usage) : null;
+            this._view?.webview.postMessage({ type: 'providerBenchmark', credentialId, model, busy: false,
+                firstTokenMs, totalMs: Math.round(performance.now() - started), cost, price });
+        } catch (error) {
+            this._view?.webview.postMessage({ type: 'providerBenchmark', credentialId, model, busy: false,
+                error: error instanceof Error ? error.message : String(error) });
+        } finally { this._benchmarkController = null; }
+    }
+
     public async discoverLocalModels(signal?: AbortSignal): Promise<DiscoveredLocalModel[]> {
         const discovered = await discoverLocalRuntimes(signal);
         // Also probe saved custom credentials - after the runtime collapse
@@ -3866,7 +3973,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // class (offline, deterministic - see local/errorExplain);
                 // unknown failures keep passing through raw.
                 const http = providerHttpStatus(err);
-                const explained = explainError(http ? `${msg} ${http.body}` : msg, http?.status);
+                const explained = this._globalState.get<boolean>('xratu.errorExplanations') === false ? null : explainError(http ? `${msg} ${http.body}` : msg, http?.status);
                 if (explained) {
                     this._view?.webview.postMessage({ type: 'error', valueKey: explained.valueKey, params: explained.params });
                 } else {
@@ -4119,7 +4226,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 break;
             case 'error': {
                 outcome.errorEvent = { error: event.value };
-                const explained = explainError(event.value);
+                const explained = this._globalState.get<boolean>('xratu.errorExplanations') === false ? null : explainError(event.value);
                 this._view?.webview.postMessage(explained
                     ? { type: 'error', valueKey: explained.valueKey, params: explained.params }
                     : { type: 'error', value: event.value });
@@ -5884,6 +5991,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void> {
         if (!this._view) { return; }
+        if (this._modelManagementController || this._benchmarkController) {
+            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'localModelBusy', prompt, attachments });
+            return;
+        }
         // Plan mode is captured BEFORE any await: the run later builds its
         // system prompt, toolset and approval gate from this snapshot, so a
         // toggle during pre-flight can never expose mutating tools in an
@@ -6594,6 +6705,7 @@ async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void
 const MAX_PENDING_JOB_NOTICES = 16;
 
 export function activate(context: vscode.ExtensionContext) {
+    setOfflineMode(context.globalState.get<boolean>('xratu.offlineMode') === true);
     const checkpoints = new ShadowCheckpointStore(context);
     diagnosticsChannel = vscode.window.createOutputChannel('Xratu');
     context.subscriptions.push(diagnosticsChannel);

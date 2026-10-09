@@ -38,6 +38,7 @@ const ALLOWED_FILES = new Set([
 const ALLOWED_PREFIXES = [
     'dist/',            // esbuild host bundle + built webview + pdf worker
     'assets/skills/',   // bundled default skills
+    'assets/guides/',   // offline setup and provider onboarding
     'assets/fonts/',    // font licence text
 ];
 const ALLOWED_EXACT_ASSETS = new Set([

@@ -80,6 +80,10 @@ jobs:
         if: runner.os == 'macOS'
 
       - name: Webview E2E (Playwright)
+        env:
+          # Pixel baselines use the bundled font and lockfile-pinned Chromium.
+          # Other OS legs still run the same locale/width layout assertions.
+          XRATU_VISUAL: ${{ runner.os == 'Linux' && '1' || '' }}
         run: npm run test:e2e
 
       # A failed Playwright run writes `test-results/*/error-context.md` - a

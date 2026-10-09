@@ -374,6 +374,7 @@ export async function* runLocalAgent(
         messages, request, windowTokens, undefined, sessionSummary, toolTokens, turnStartIndex(),
         Math.min(request.autoCompactRatio ?? AUTO_COMPACT_RATIO, HISTORY_BOUND_RATIO),
     );
+    request.signal?.throwIfAborted();
     if (preSummary) {
         sessionSummary = preSummary;
         yield { type: 'compactionSummary', value: preSummary, droppedUserTurns: compactedUserTurns() };

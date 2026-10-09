@@ -114,6 +114,11 @@ export type ToExtensionMessage =
     | { type: 'skillsCreate' }
     /** Permanently delete a skill folder (webview confirms first). */
     | { type: 'skillsDelete'; dirPath: string }
+    | { type: 'setOfflineMode'; enabled: boolean }
+    | { type: 'setErrorExplanations'; enabled: boolean }
+    | { type: 'openBundledGuide'; guide: 'offline' | 'providers' }
+    | { type: 'manageLocalModel'; action: 'pull' | 'delete' | 'cancel'; baseUrl: string; model: string }
+    | { type: 'benchmarkProvider' }
     | { type: 'discoverLocalModels' }
     /** An in-app banner answer: the picked action label, or null on dismiss. */
     | { type: 'notificationAction'; id: string; action: string | null }
@@ -298,7 +303,20 @@ export interface SessionMeta {
     updatedAt: number;
 }
 
+export interface LocalModelOperation {
+    baseUrl: string; model: string; action: 'pull' | 'delete'; busy: boolean;
+    status?: string; completed?: number; total?: number; errorKey?: string; detail?: string;
+}
+export interface ProviderBenchmark {
+    credentialId: string; model: string; busy: boolean; firstTokenMs?: number | null; totalMs?: number; error?: string;
+    cost?: { amount: number; currency: 'USD' | 'IRT' } | null;
+    price?: { input: number; output: number; currency?: 'USD' | 'IRT' } | null;
+}
+
 export type FromExtensionMessage =
+    | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
+    | ({ type: 'localModelOperation' } & LocalModelOperation)
+    | ({ type: 'providerBenchmark' } & ProviderBenchmark)
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
     | { type: 'showWelcome' }
     /** Enter the chat view. `workspaceKind` picks the empty-state suggestion

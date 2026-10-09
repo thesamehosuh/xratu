@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isOfflineMode } from './networkPolicy';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
@@ -537,14 +538,14 @@ export function getLocalToolDefinitions(opts?: {
             inputSchema: tool.inputSchema,
             requiresApproval: yolo ? false : MUTATING_TOOLS.has(tool.name),
         }));
-    const web = WEB_TOOL_DEFINITIONS.map((tool) => ({
+    const web = (isOfflineMode() ? [] : WEB_TOOL_DEFINITIONS).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
         requiresApproval: false,
     }));
     const external = (opts?.external ?? [])
-        .filter((_tool) => !plan)
+        .filter((_tool) => !plan && !isOfflineMode())
         .map((tool) => ({
             name: tool.name,
             description: tool.description,
@@ -1392,6 +1393,9 @@ export async function executeLocalTool(
     nested?: boolean,
 ): Promise<LocalToolResult> {
     try {
+        if (isOfflineMode() && (name === 'web_search' || name === 'fetch_url' || name.startsWith(EXTERNAL_PREFIX))) {
+            return { output: 'Error: this network tool is disabled in offline mode.', isError: true };
+        }
         if (name.startsWith(EXTERNAL_PREFIX)) {
             if (!externalMcp) {
                 return { output: 'Error: external MCP servers are not available in this session.', isError: true };

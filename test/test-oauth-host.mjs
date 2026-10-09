@@ -189,3 +189,44 @@ console.log('oauth-host: connected and remembered account labels omit OAuth iden
     assert.equal(h._costFor({ promptTokens: 100, completionTokens: 20 }), null);
 }
 console.log('oauth-host: Usage separates plan tokens from API spend on the same host');
+
+{
+    const { requestStreamingCompletion } = require('../out/local/wireAdapters.js');
+    const { resolveApiStyle } = require('../out/local/apiStyle.js');
+    const { randomUUID } = require('node:crypto');
+    const originalFetch = globalThis.fetch;
+    let captured;
+    globalThis.fetch = async (url, init) => {
+        captured = { url: String(url), headers: init.headers, body: JSON.parse(init.body) };
+        assert.equal(captured.body.store, false, 'latency probe must use the subscription wire contract');
+        return new Response([
+            'data: {"type":"response.output_text.delta","delta":"OK"}\n\n',
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":1},"output":[]}}\n\n',
+        ].join(''), { headers: { 'content-type': 'text/event-stream' } });
+    };
+    try {
+        const h = hostMethods(['_benchmarkProvider'], {
+            requestStreamingCompletion, resolveApiStyle, performance, crypto: { randomUUID },
+            getProxyDispatcher: () => undefined,
+            priceForModel: () => { throw new Error('A subscription probe must not use API prices'); },
+        });
+        const posts = [];
+        h._view = { webview: { postMessage: (value) => posts.push(value) } };
+        h._selectedModel = 'gpt-6-luna';
+        h._resolveActiveCredentialId = async () => 'account';
+        h._getSavedCredentials = async () => [{ id: 'account', baseUrl: 'https://api.openai.com/v1' }];
+        h._resolveCredentialAuth = async () => ({ apiKey: 'test-token', subscription: true,
+            apiStyle: 'responses', headers: { 'ChatGPT-Account-ID': 'test-account' } });
+        await h._benchmarkProvider();
+        assert.equal(captured.url, 'https://api.openai.com/v1/responses');
+        assert.equal(new Headers(captured.headers).get('ChatGPT-Account-ID'), 'test-account');
+        assert.equal('max_output_tokens' in captured.body, false);
+        assert.equal(captured.body.input.length, 1, 'probe includes no project history');
+        assert.equal(posts.at(-1).error, undefined);
+        assert.equal(posts.at(-1).busy, false);
+        assert.equal(typeof posts.at(-1).firstTokenMs, 'number');
+        assert.equal(posts.at(-1).price, null);
+        assert.equal(posts.at(-1).cost, null);
+    } finally { globalThis.fetch = originalFetch; }
+}
+console.log('oauth-host: latency probe preserves the subscription wire contract and billing');

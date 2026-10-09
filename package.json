@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -296,7 +296,9 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:runtime-controls": "node test/test-runtime-controls.mjs",
+    "test:first-token-timeout": "node test/test-first-token-timeout.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [

@@ -431,7 +431,7 @@ export async function compactWithSummary(
     // summarizer reads (see `summarizableDroppedTurns`).
     const droppedTurns = summarizableDroppedTurns(dropped);
     const summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
-    if (!summary) {
+    if (!summary || request.signal?.aborted) {
         // Nothing to carry: leave `messages` untouched so forced recovery
         // (deterministic) or the next compaction handles it. The previous
         // rolling summary - if any - is still in the caller's `existingSummary`

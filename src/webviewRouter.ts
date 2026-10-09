@@ -48,6 +48,11 @@ export interface WebviewMessageHost {
     _deleteSkillFolder(dirPath: string): Promise<void>;
     _detectProxies(): Promise<void>;
     _fetchModels(): Promise<boolean>;
+    _sendRuntimePreferences(): void;
+    _setOfflineMode(enabled: boolean): Promise<void>;
+    _openBundledGuide(guide: 'offline' | 'providers'): Promise<void>;
+    _manageLocalModel(action: 'pull' | 'delete' | 'cancel', baseUrl: string, model: string): Promise<void>;
+    _benchmarkProvider(): Promise<void>;
     _gitCheckout(branch: string): Promise<void>;
     _globalState: vscode.Memento;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
@@ -149,6 +154,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // Transcript display prefs (auto-expanded diffs / commands /
                     // reasoning). Pushed here so a reload never renders
                     // pills at the wrong default.
+                    host._sendRuntimePreferences();
                     host._sendTranscriptPrefs();
                     host._startConnectionPolling();
                     // Re-echo the policy toggles: a webview reload
@@ -192,6 +198,22 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         type: 'replyLanguage',
                         replyLanguage: host._resolveReplyLanguage(),
                     });
+                    break;
+                case 'setOfflineMode':
+                    await host._setOfflineMode(data.enabled === true);
+                    break;
+                case 'setErrorExplanations':
+                    await host._globalState.update('xratu.errorExplanations', data.enabled === true);
+                    host._sendRuntimePreferences();
+                    break;
+                case 'openBundledGuide':
+                    if (data.guide === 'offline' || data.guide === 'providers') await host._openBundledGuide(data.guide);
+                    break;
+                case 'manageLocalModel':
+                    if (['pull', 'delete', 'cancel'].includes(data.action)) await host._manageLocalModel(data.action, String(data.baseUrl ?? ''), String(data.model ?? ''));
+                    break;
+                case 'benchmarkProvider':
+                    await host._benchmarkProvider();
                     break;
                 case 'setReplyLanguage':
                     void host._globalState.update('xratu.replyLanguage', data.replyLanguage);

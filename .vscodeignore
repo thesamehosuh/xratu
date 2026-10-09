@@ -66,3 +66,6 @@ assets/brand/**
 # tree and the test bundles.
 webview-ui/
 dist/*.map
+
+# Offline setup/provider guides are opened locally by the extension.
+!assets/guides/**

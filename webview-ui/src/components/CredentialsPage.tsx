@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
+    BookOpen,
+    ExternalLink,
     Check,
     Copy,
     Eye,
@@ -22,9 +24,13 @@ import {
 } from 'lucide-react';
 import type {
     DiscoveredLocalRuntime,
+    LocalModelOperation,
+    ProviderBenchmark,
     OAuthHostState,
     SavedCredential,
 } from '../types';
+import { LocalModelManager } from './LocalModelManager';
+import { ProviderComparison } from './ProviderComparison';
 import { getLocale, t, tf } from '../i18n';
 import type { StringKey } from '../i18n';
 
@@ -59,6 +65,12 @@ interface CredentialsPageProps {
     onOAuthCancelSignIn: () => void;
     onOAuthManualCode: (code: string) => void;
     onOAuthSignOut: (credentialId: string) => void;
+    offline?: boolean;
+    localModelOperation?: LocalModelOperation | null;
+    benchmarks?: ProviderBenchmark[];
+    onManageLocalModel?: (action: 'pull' | 'delete' | 'cancel', baseUrl: string, model: string) => void;
+    onBenchmark?: () => void;
+    onOpenGuide?: (guide: 'offline' | 'providers') => void;
     onBack: () => void;
 }
 
@@ -85,21 +97,21 @@ const PRESETS: Preset[] = [
     { id: 'groq', label: 'Groq', group: 'other', baseUrl: 'https://api.groq.com/openai/v1' },
     // Iranian providers - no VPN required, rial payment.
     // Kaya and Avalai expose a shared, documented OpenAI-compatible base URL.
-    { id: 'kayaai', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
-    { id: 'avalai', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
+    { id: 'kayaai', docs: 'https://kayaai.ir', label: 'Kaya AI', group: 'iranian', baseUrl: 'https://kayaai.ir/api', hintKey: 'kayaHint' },
+    { id: 'avalai', docs: 'https://chat.avalai.ir/platform', label: 'Avalai', group: 'iranian', baseUrl: 'https://api.avalai.ir/v1', hintKey: 'credIranianHint' },
     // GapGPT (گپ جی پی تی) publishes a shared OpenAI-compatible endpoint
     // (api.gapgpt.app/v1 verified: OpenAI error envelope, ArvanCloud-hosted),
     // Persian docs, rial payment.
-    { id: 'gapgpt', label: 'GapGPT', group: 'iranian', baseUrl: 'https://api.gapgpt.app/v1', hintKey: 'credIranianHint' },
+    { id: 'gapgpt', docs: 'https://gapgpt.app', label: 'GapGPT', group: 'iranian', baseUrl: 'https://api.gapgpt.app/v1', hintKey: 'credIranianHint' },
     // Metis, Liara, ArvanCloud and Navaan do NOT expose a shared base URL:
     // Metis routes through per-provider wrappers (no stable OpenAI base we can
     // verify), and Liara hands each AI service its own `baseUrl` containing an
     // account id (see docs.liara.ir/ai). Leave the URL EMPTY so the user pastes
     // the one from their dashboard instead of shipping a route that would 404.
     // Selecting these clears the previous endpoint (see `pick`).
-    { id: 'metis', label: 'Metis AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
-    { id: 'liara', label: 'Liara AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
-    { id: 'arvan', label: 'ArvanCloud AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'metis', docs: 'https://metisai.ir', label: 'Metis AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'liara', docs: 'https://console.liara.ir', label: 'Liara AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
+    { id: 'arvan', docs: 'https://www.arvancloud.ir', label: 'ArvanCloud AI', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'navaan', label: 'Navaan', group: 'iranian', baseUrl: '', hintKey: 'credIranianUrlHint' },
     { id: 'xai', label: 'xAI', group: 'other', baseUrl: 'https://api.x.ai/v1' },
     { id: 'perplexity', label: 'Perplexity', group: 'other', baseUrl: 'https://api.perplexity.ai' },
@@ -186,6 +198,7 @@ export function CredentialsPage({
     onOAuthManualCode,
     onOAuthSignOut,
     onBack,
+    offline = false, localModelOperation, benchmarks = [], onManageLocalModel, onBenchmark, onOpenGuide,
 }: CredentialsPageProps) {
     /** Entry-point target wins over any currentUrl echo: the setup chips
      *  ask for a specific provider kind (remote vs local). */
@@ -670,7 +683,11 @@ export function CredentialsPage({
             {/* Both texts (label + hint) sit ABOVE the chips: the group must
                 not be sandwiched between them. */}
             <div className="cred-provider-section">
-                <span className="cred-provider-section-label">{t('credIranian')}</span>
+                <div className="runtime-heading">
+                    <span className="cred-provider-section-label">{t('credIranian')}</span>
+                    <button className="ghost-btn small" aria-label={t('providerGuide')} title={t('providerGuide')}
+                        onClick={() => onOpenGuide?.('providers')}><BookOpen size={13} /></button>
+                </div>
                 <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
                 <div className="cred-providers-inline" role="radiogroup" aria-label={t('credIranian')}>
                     {IRANIAN.map((p) => (
@@ -696,6 +713,9 @@ export function CredentialsPage({
                     LEFT. Inheriting RTL keeps the label right-aligned
                     while bidi still renders the Latin brand name LTR. */}
                 <strong>{presetLabel(selectedPreset)}</strong>
+                {selectedPreset.docs && <a className="ghost-btn small provider-onboarding" href={selectedPreset.docs}
+                    target="_blank" rel="noreferrer" aria-label={`${t('providerOnboarding')} · ${presetLabel(selectedPreset)}`}
+                    title={t('providerOnboarding')}><ExternalLink size={13} /></a>}
                 <span>{presetHint(selectedPreset) ?? t('credOpenAICompatible')}</span>
             </div>
 
@@ -916,7 +936,11 @@ export function CredentialsPage({
                     </div>
                 )}
 
-                {localRuntimes.map(renderRuntimeRow)}
+                {localRuntimes.map((runtime) => <div key={runtime.id}>
+                    {renderRuntimeRow(runtime)}
+                    {runtime.runtime === 'ollama' && onManageLocalModel && <LocalModelManager runtime={runtime}
+                        operation={localModelOperation} offline={offline} onManage={onManageLocalModel} />}
+                </div>)}
             </div>
         </div>
     );
@@ -972,6 +996,8 @@ export function CredentialsPage({
                         <span>{localRuntimes.length > 0 ? tf('credDetectedCount', { count: String(localRuntimes.length) }) : t('credLocalDiscoveredDesc')}</span>
                     </span>
                     <span className="cred-card-side">
+                        <button className="ghost-btn small" aria-label={t('offlineHelp')} title={t('offlineHelp')}
+                            onClick={() => onOpenGuide?.('offline')}><BookOpen size={13} /></button>
                         <button
                             type="button"
                             className="ghost-btn small"
@@ -990,6 +1016,8 @@ export function CredentialsPage({
             </section>
 
             {renderSavedList()}
+            <ProviderComparison results={benchmarks} credentials={savedCredentials} offline={offline}
+                onRun={() => onBenchmark?.()} onGuide={() => onOpenGuide?.('providers')} />
         </div>
     );
 }
