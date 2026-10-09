@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { test } from 'node:test';
 const require = createRequire(import.meta.url);
-const { readReviewFile, validateReviewCheckpoint, REVIEW_FILE_LIMIT } = require('../out/workSurface.js');
+const { readReviewFile, validateReviewCheckpoint, REVIEW_FILE_LIMIT, StartupPageIntent } = require('../out/workSurface.js');
 const SHA = 'a'.repeat(40);
 const parent = await mkdtemp(path.join(os.tmpdir(), 'xratu-review-'));
 const root = path.join(parent, 'workspace');
@@ -13,6 +13,23 @@ await mkdir(root);
 const changes = [{ path: 'changed.txt', added: 1, removed: 1, binary: false, untracked: false }];
 const store = { diffCheckpoint: async () => changes, readCheckpointFile: async () => 'before\n' };
 try {
+    await test('native page intent waits for startup, follows the latest command, and survives a reload', () => {
+        const startup = new StartupPageIntent();
+        const opened = [];
+        startup.open(() => opened.push('settings'));
+        startup.open(() => opened.push('providers'));
+        assert.deepEqual(opened, []);
+        startup.complete(); startup.complete();
+        assert.deepEqual(opened, ['providers']);
+        startup.open(() => opened.push('settings'));
+        assert.deepEqual(opened, ['providers', 'settings']);
+        startup.reset();
+        startup.open(() => opened.push('providers'));
+        startup.reset();
+        assert.deepEqual(opened, ['providers', 'settings']);
+        startup.complete();
+        assert.deepEqual(opened, ['providers', 'settings', 'providers']);
+    });
     await test('review reads a changed file and computes a real diff', async () => {
         await writeFile(path.join(root, 'changed.txt'), 'after\n');
         const file = await readReviewFile(store, root, SHA, 'changed.txt');

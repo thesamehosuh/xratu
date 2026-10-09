@@ -4,6 +4,24 @@ import { sanitizePath } from './paths';
 import type { ChangedFile } from './shadowGit';
 import type { SubagentSource } from './subagents';
 
+/** Native page commands must follow the webview's initial screen verdict. */
+export class StartupPageIntent {
+    private ready = false;
+    private pending: (() => void) | null = null;
+
+    reset(): void { this.ready = false; }
+    open(action: () => void): void {
+        if (this.ready) action();
+        else this.pending = action;
+    }
+    complete(): void {
+        this.ready = true;
+        const action = this.pending;
+        this.pending = null;
+        action?.();
+    }
+}
+
 export type ReviewChange = ChangedFile;
 export type ReviewFile = {
     path: string;

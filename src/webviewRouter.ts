@@ -38,6 +38,7 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _completeWebviewStartup(): void;
     _sendChangesState(sha: string, requestId: string): Promise<void>;
     _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean): Promise<void>;
     _sendAgentsState(): Promise<void>;
@@ -203,11 +204,13 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // the transition queue keeps a boot racing
                     // openSession/clearHistory from restoring a stale
                     // session id over the newer transition's state.
-                    await host._serializeSessionTransition(async () => {
-                        await host._localSessionStore.reconcile(host._localWorkspaceKey()).catch((e) =>
-                            console.error('xratu: local session reconcile failed', e));
-                        await host._showStartScreen();
-                    });
+                    try {
+                        await host._serializeSessionTransition(async () => {
+                            await host._localSessionStore.reconcile(host._localWorkspaceKey()).catch((e) =>
+                                console.error('xratu: local session reconcile failed', e));
+                            await host._showStartScreen();
+                        });
+                    } finally { host._completeWebviewStartup(); }
                     host._pushEditorContext();
                     break;
                 case 'setLocale':

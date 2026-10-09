@@ -1,4 +1,4 @@
-import { readReviewFile, validateReviewCheckpoint } from './workSurface';
+import { readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -615,6 +615,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  reconstruction in editDiff.ts. */
     private readonly _editSnapshots = new Map<string, { path: string; before: string; after: string }>();
     private _webviewSubscriptions: vscode.Disposable[] = [];
+    private readonly _startupPage = new StartupPageIntent();
+
+    _completeWebviewStartup(): void { this._startupPage.complete(); }
 
     public provideTextDocumentContent(uri: vscode.Uri): string {
         return this._virtualDocuments.get(uri.toString()) || '';
@@ -4483,13 +4486,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Command-palette entry point (keeps _setLlmCredentials private-adjacent). */
     public async setLlmCredentialsPublic(): Promise<void> {
         await this.ensureView();
-        void this._setLlmCredentials();
+        this._startupPage.open(() => { void this._setLlmCredentials(); });
     }
 
     /** Command-palette entry point: focus the webview and route to Settings. */
     public async openSettingsPublic(): Promise<void> {
         await this.ensureView();
-        this._view?.webview.postMessage({ type: 'openSettings' });
+        this._startupPage.open(() => { this._view?.webview.postMessage({ type: 'openSettings' }); });
     }
 
     /**
@@ -4623,6 +4626,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
+        this._startupPage.reset();
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
         // Dispose old subscriptions before creating new ones (prevents listener leak on re-init)
@@ -5401,6 +5405,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // handler runs _showStartScreen() exactly once - never call it here
         // too: both calls replay the chat history and every message renders
         // TWICE on the fresh page (hello, response, hello, response).
+        this._startupPage.reset();
         this._view.webview.html = this._getHtmlForWebview(this._view.webview);
     }
 
