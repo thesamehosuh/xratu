@@ -5,16 +5,19 @@ const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const post = (page: Page, message: Record<string, unknown>) => page.evaluate((msg) => window.postMessage(msg, '*'), message);
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> => page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
-const latest = async (page: Page, type: string) => {
-    await expect.poll(async () => (await sent(page)).filter((m) => m.type === type).length).toBeGreaterThan(0);
+const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
+    await expect.poll(async () => {
+        const message = (await sent(page)).filter((m) => m.type === type).at(-1);
+        return !!message && (afterRequestId === undefined || message.requestId !== afterRequestId);
+    }).toBe(true);
     return (await sent(page)).filter((m) => m.type === type).at(-1)!;
 };
 const changes = [
     { path: 'src/first.ts', added: 1, removed: 1, binary: false },
     { path: 'src/second.ts', added: 1, removed: 0, binary: false, untracked: true },
 ];
-const replyFile = async (page: Page, after = 'new') => {
-    const request = await latest(page, 'changeFileGet');
+const replyFile = async (page: Page, after = 'new', afterRequestId?: unknown) => {
+    const request = await latest(page, 'changeFileGet', afterRequestId);
     await post(page, { ...request, file: { path: request.path, kind: 'text', before: 'old', after,
         hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: [after] }] }, type: 'changeFileState' });
 };
@@ -135,10 +138,12 @@ test('reviewed status expires when file content changes; the native diff gets th
     await expect(page.getByRole('button', { name: 'Reviewed', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Open in editor', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'changeFileOpen', sha, path: changes[0].path });
+    const previousList = await latest(page, 'changesGetState');
+    const previousFile = await latest(page, 'changeFileGet');
     await page.locator('.review-head').getByRole('button', { name: 'Refresh' }).click();
-    const request = await latest(page, 'changesGetState');
+    const request = await latest(page, 'changesGetState', previousList.requestId);
     await post(page, { ...request, type: 'changesState', files: changes });
-    await replyFile(page, 'changed again');
+    await replyFile(page, 'changed again', previousFile.requestId);
     await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toBeVisible();
 });
 
@@ -174,7 +179,7 @@ test('a session switch clears review notes and rejects the previous file respons
     const currentList = await latest(page, 'changesGetState');
     await post(page, { ...currentList, type: 'changesState', files: changes });
     await page.locator('#surface-tab-changes').click();
-    await replyFile(page);
+    await replyFile(page, 'new', previousFile.requestId);
     await post(page, { ...previousFile, type: 'changeFileState', errorKey: 'surfaceChangesFailed' });
     await expect(page.locator('.review-input')).toHaveValue('');
     await expect(page.locator('.review-diff')).toBeVisible();
