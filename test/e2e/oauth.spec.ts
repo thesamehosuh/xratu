@@ -15,6 +15,7 @@ test.beforeEach(async ({ page }) => {
     });
     await page.goto('/');
     await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'savedCredentials', credentials: [] });
     await post(page, { type: 'openCredentials' });
 });
 
@@ -46,7 +47,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
                 const bounds = await page.locator('.cred-oauth-manual-row').evaluate((row) => {
                     const input = row.querySelector('input')!.getBoundingClientRect();
                     const button = row.querySelector('button')!.getBoundingClientRect();
-                    return { width: input.width, overlap: input.right > button.left + 1 && button.right > input.left + 1 };
+                    return { width: input.width, overlap: input.right > button.left + 1 && button.right > input.left + 1 && input.bottom > button.top + 1 && button.bottom > input.top + 1 };
                 });
                 expect(bounds.width).toBeGreaterThan(150);
                 expect(bounds.overlap).toBe(false);
@@ -158,6 +159,7 @@ test('subscription subtitle is neutral and is not repeated on the provider card'
 
 test('deleting a saved OAuth connection invokes sign-out', async ({ page }) => {
     await post(page, { type: 'savedCredentials', credentials: [{ id: 'oauth', providerId: provider.providerId, baseUrl: 'https://api.openai.com/v1', maskedKey: '', label: 'ChatGPT', active: true, oauth: true }], activeId: 'oauth' });
+    await page.locator('.drawer-head .icon-btn').click();
     const button = page.locator('.saved-delete');
     await button.click();
     await button.click();

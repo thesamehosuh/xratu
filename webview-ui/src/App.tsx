@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
+import { PageSidebar, type SettingsSection } from './components/PageSidebar';
+import { AgentsPage } from './components/AgentsPage';
+import { ChangesPanel } from './components/ChangesPanel';
+import { ActivityTimeline } from './components/MessageItem';
+import type { AgentProfileView, ReviewChange } from './types';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { CodeXml, List, MessageSquare, BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
@@ -34,7 +39,7 @@ import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep, toolCallFailed } fro
 import { CredentialsPage } from './components/CredentialsPage';
 import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
-import { CapabilitiesPage } from './components/CapabilitiesPage';
+import { CapabilitiesPage, type CapabilityTab } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
 import { UsagePage } from './components/UsagePage';
 import { ProxyPage } from './components/ProxyPage';
@@ -43,10 +48,9 @@ import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
-import { prefersReducedMotion } from './motion';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy';
+type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -76,44 +80,6 @@ function formatUptime(seconds: number) {
  *  transcript, so only a window is mounted - a long session must not grow the
  *  DOM without limit. Older bubbles stay reachable via "show earlier". */
 const HISTORY_PAGE_SIZE = 40;
-
-/** Overlay pages (credentials/settings/capabilities/usage/proxy) enter and
- *  leave with motion - theme.css `.screen-overlay` / `.is-leaving`. A plain
- *  conditional unmount cannot animate an exit, so the last page stays mounted
- *  for one exit beat (170ms) while it fades; the chat behind it becomes
- *  visible again the moment the leave starts. */
-function ScreenOverlay({ open, dir, children }: { open: boolean; dir: 'rtl' | 'ltr'; children: ReactNode }) {
-    const [mounted, setMounted] = useState(open);
-    const [leaving, setLeaving] = useState(false);
-    const latest = useRef<ReactNode>(null);
-    if (open) latest.current = children;
-    useEffect(() => {
-        if (open) {
-            setMounted(true);
-            setLeaving(false);
-            return;
-        }
-        if (!mounted) return;
-        setLeaving(true);
-        const ms = prefersReducedMotion() ? 0 : 170;
-        const timer = window.setTimeout(() => {
-            latest.current = null;
-            setMounted(false);
-            setLeaving(false);
-        }, ms);
-        return () => window.clearTimeout(timer);
-    }, [open, mounted]);
-    if (!mounted) return null;
-    return (
-        <div
-            className={`screen-overlay${leaving ? ' is-leaving' : ''}`}
-            dir={dir}
-            aria-hidden={leaving || undefined}
-        >
-            {latest.current}
-        </div>
-    );
-}
 
 export function App() {
     // 'boot' = waiting for the host's start-screen verdict (showWelcome /
@@ -163,8 +129,9 @@ export function App() {
         { ok: boolean; detail?: string; detailKey?: string; params?: Record<string, string> } | null
     >(null);
     const [proxyReturnTo, setProxyReturnTo] = useState<'chat' | 'settings'>('settings');
+    const [credentialsReady, setCredentialsReady] = useState(false);
     const [savedCredentials, setSavedCredentials] = useState<SavedCredential[]>([]);
-    const [injectedText, setInjectedText] = useState<{ id: number; text: string } | null>(null);
+    const [injectedText, setInjectedText] = useState<{ id: number; text: string; autoSend?: boolean } | null>(null);
     // Workspace-relative path of the file open in the active editor - the
     // host pushes it on focus/editor changes; suggestion workflows name it.
     const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -228,6 +195,15 @@ export function App() {
     const [transcriptPrefs, setTranscriptPrefs] = useState<TranscriptPrefs>(EMPTY_TRANSCRIPT_PREFS);
     /** Session picker state - the toolbar's centered title button drives it. */
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
+    const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
+    const [taskChipOpen, setTaskChipOpen] = useState(false);
+    const [surfaceTab, setSurfaceTab] = useState<'conversation' | 'changes' | 'activity'>('conversation');
+    const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
+    const [reviewPath, setReviewPath] = useState<string | null>(null);
+    const [changeCount, setChangeCount] = useState(0);
+    const [reviewFiles, setReviewFiles] = useState<ReviewChange[]>([]);
+    const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
+    const [agentsError, setAgentsError] = useState<string | undefined>();
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [sessionsOpen, setSessionsOpen] = useState(false);
     const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -651,7 +627,8 @@ export function App() {
             case 'capabilities': setScreen(capReturnTo); return true;
             case 'usage': setScreen(usageReturnTo); return true;
             case 'proxy': setScreen(proxyReturnTo); return true;
-            case 'settings': setScreen('chat'); return true;
+            case 'settings':
+            case 'agents': setScreen('chat'); return true;
             default: return false;
         }
     }, [screen, credReturnTo, capReturnTo, usageReturnTo, proxyReturnTo]);
@@ -663,10 +640,12 @@ export function App() {
     // subpage Escape leaves instead - see backFromOverlay.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') return;
+            if (e.key !== 'Escape' || e.defaultPrevented) return;
+            if (document.querySelector('[role="dialog"]')) return;
+            if (taskChipOpen) { e.preventDefault(); setTaskChipOpen(false); return; }
             const target = e.target as HTMLElement | null;
             if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
-            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop')) return;
+            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop, .composer-policy-menu')) return;
             // A subpage owns Escape first: leaving it is the expected
             // meaning, and the run behind it must be left alone.
             if (backFromOverlay()) {
@@ -679,7 +658,7 @@ export function App() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [send, backFromOverlay]);
+    }, [send, backFromOverlay, taskChipOpen]);
 
     useEffect(() => {
         send({ type: 'webviewReady' });
@@ -697,6 +676,10 @@ export function App() {
                 case 'showChat':
                     setScreen('chat');
                     if (msg.workspaceKind) setWorkspaceKind(msg.workspaceKind);
+                    break;
+                case 'agentsState':
+                    setAgentProfiles(msg.profiles);
+                    setAgentsError(msg.errorKey);
                     break;
                 case 'sessionState':
                     setCurrentSessionId(msg.id);
@@ -842,6 +825,7 @@ export function App() {
                     if (!msg.state.inProgress) setOauthCopyResult(null);
                     break;
                 case 'savedCredentials':
+                    setCredentialsReady(true);
                     setSavedCredentials(msg.credentials);
                     setActiveCredentialId(msg.credentials.find((c) => c.active)?.id ?? null);
                     break;
@@ -999,10 +983,11 @@ export function App() {
         (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
         [send]
     );
-    const handleReviewChanges = useCallback(
-        (sha: string) => send({ type: 'reviewChanges', sha }),
-        [send]
-    );
+    const handleReviewChanges = useCallback((sha: string, path?: string) => {
+        setReviewPath(path ?? null);
+        setActiveReviewSha(sha);
+        setSurfaceTab(window.matchMedia('(min-width: 860px)').matches ? 'conversation' : 'changes');
+    }, []);
     // "Open diff in editor" on an edit step: the host resolves the exact
     // before/after (edit-time snapshot, else the tool args) and opens the
     // native VS Code diff editor.
@@ -1096,7 +1081,6 @@ export function App() {
 
     // The chip toggles a dropdown panel listing the tasks in place (no
     // scroll-to-anchor). Dismiss on any click outside the chip + panel.
-    const [taskChipOpen, setTaskChipOpen] = useState(false);
     useEffect(() => {
         if (!taskChipOpen) return;
         const close = (e: MouseEvent) => {
@@ -1123,7 +1107,40 @@ export function App() {
     // unmounting and rebuilding it was the entire cost of coming back from
     // Settings - measured at ~4.2k DOM nodes ≈ 91ms, scaling with the size of
     // the mounted transcript.
+    const refreshAgents = useCallback(() => send({ type: 'agentsGetState' }), [send]);
+    const newestCheckpoint = [...chat.messages].reverse().find((message) => message.role === 'user' && message.cp)?.cp;
+    useEffect(() => { setActiveReviewSha(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
+    useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId]);
+    useEffect(() => {
+        const wide = window.matchMedia('(min-width: 860px)');
+        const sync = () => { if (wide.matches) setSurfaceTab((tab) => tab === 'changes' ? 'conversation' : tab); };
+        sync();
+        wide.addEventListener('change', sync);
+        return () => wide.removeEventListener('change', sync);
+    }, []);
+
+    const checkpointSha = activeReviewSha ?? newestCheckpoint ?? null;
+    const activeSection: SettingsSection = screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : 'settings';
+    const openSection = (section: SettingsSection) => {
+        setSessionsOpen(false);
+        if (section === 'providers') {
+            setCredReturnTo('chat'); setScreen('credentials'); send({ type: 'openCredentials' });
+        } else if (section === 'mcp' || section === 'marketplace' || section === 'skills') {
+            setCapReturnTo('chat'); setCapabilityTab(section === 'mcp' ? 'servers' : section); setScreen('capabilities');
+        } else if (section === 'usage') {
+            setUsageReturnTo('chat'); setScreen('usage'); send({ type: 'usageGetState' });
+        } else if (section === 'proxy') {
+            setProxyReturnTo('chat'); setScreen('proxy'); send({ type: 'proxyGetState' }); send({ type: 'mcpGetState' });
+        } else setScreen(section);
+    };
+    const addReviewFeedback = (text: string) => {
+        setSurfaceTab('conversation'); setScreen('chat'); setInjectedText({ id: Date.now(), text, autoSend: false });
+    };
     let overlay: JSX.Element | null = null;
+
+    if (screen === 'agents') {
+        overlay = <AgentsPage profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
+    }
 
     if (screen === 'credentials') {
         overlay = (
@@ -1141,6 +1158,7 @@ export function App() {
                     onBenchmark={() => send({ type: 'benchmarkProvider' })}
                     onOpenGuide={(guide) => send({ type: 'openBundledGuide', guide })}
                     savedCredentials={savedCredentials}
+                    credentialsReady={credentialsReady}
                     localRuntimes={localRuntimes}
                     localModelsScanning={localModelsScanning}
                     localScanError={localScanError}
@@ -1172,6 +1190,8 @@ export function App() {
     if (screen === 'capabilities') {
         overlay = (
                 <CapabilitiesPage
+                    initialTab={capabilityTab}
+                    onTabChange={setCapabilityTab}
                     onBack={() => setScreen(capReturnTo)}
                     onOpenRawSettings={() => send({ type: 'openMcpSettings' })}
                     servers={mcpServers}
@@ -1327,6 +1347,39 @@ export function App() {
         );
     }
 
+    const taskControl = taskProgress && taskListView && (
+                <div className="task-list-chip-wrap">
+                    <button
+                        type="button"
+                        className={`task-list-chip${taskChipOpen ? ' open' : ''}`}
+                        aria-label={t('taskListChipAria')}
+                        aria-expanded={taskChipOpen}
+                        title={t('taskListChipAria')}
+                        onClick={() => setTaskChipOpen((o) => !o)}
+                    >
+                        <ListChecks size={13} />
+                        <span className="task-list-chip-bar" aria-hidden="true">
+                            <span style={{ width: `${taskProgress.pct}%` }} />
+                        </span>
+                        <span dir="ltr">
+                            {taskProgress.done}/{taskProgress.total}
+                        </span>
+                        <ChevronDown size={12} className="task-list-chip-caret" />
+                    </button>
+                    {taskChipOpen && (
+                        <div className="task-list-chip-menu">
+                            <div className="task-list-chip-menu-list">
+                                <TaskListEditor
+                                    tasks={taskListView.tasks}
+                                    editable={taskListView.editable && !chat.busy}
+                                    onChange={taskListView.onChange}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+
     const overlayOpen = overlay !== null;
 
     if (screen === 'boot') {
@@ -1369,12 +1422,13 @@ export function App() {
             scroll position and mounted page survive the trip - and it drops the
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
-        <div className={`app${overlayOpen ? ' behind' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <div className="app workbench" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             {offlineBanner}
             <Toolbar
                 conn={conn}
                 yolo={yolo}
                 plan={plan}
+                workspaceLabel={gitRoot}
                 sessionTitle={sessionTitle}
                 sessionsOpen={sessionsOpen}
                 sessions={sessions}
@@ -1431,43 +1485,31 @@ export function App() {
                     send({ type: 'openCredentials' });
                 }}
                 onOpenCapabilities={() => {
+                    setCapabilityTab('servers');
                     setCapReturnTo('chat');
                     setScreen('capabilities');
                 }}
                 onOpenSettings={() => setScreen('settings')}
             />
-            {taskProgress && taskListView && (
-                <div className="task-list-chip-wrap">
-                    <button
-                        type="button"
-                        className={`task-list-chip${taskChipOpen ? ' open' : ''}`}
-                        aria-label={t('taskListChipAria')}
-                        aria-expanded={taskChipOpen}
-                        title={t('taskListChipAria')}
-                        onClick={() => setTaskChipOpen((o) => !o)}
-                    >
-                        <ListChecks size={13} />
-                        <span className="task-list-chip-bar" aria-hidden="true">
-                            <span style={{ width: `${taskProgress.pct}%` }} />
-                        </span>
-                        <span dir="ltr">
-                            {taskProgress.done}/{taskProgress.total}
-                        </span>
-                        <ChevronDown size={12} className="task-list-chip-caret" />
-                    </button>
-                    {taskChipOpen && (
-                        <div className="task-list-chip-menu">
-                            <div className="task-list-chip-menu-list">
-                                <TaskListEditor
-                                    tasks={taskListView.tasks}
-                                    editable={taskListView.editable && !chat.busy}
-                                    onChange={taskListView.onChange}
-                                />
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
+            <div className="workbench-body">
+            <div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
+            <nav className="surface-tabs" role="tablist" aria-label={t('surfaceConversation')} onKeyDown={(event) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')].filter((tab) => tab.getClientRects().length);
+                const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
+                const forward = event.key === (locale === 'fa' ? 'ArrowLeft' : 'ArrowRight');
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (forward ? 1 : -1) + tabs.length) % tabs.length;
+                event.preventDefault(); tabs[next]?.click(); tabs[next]?.focus();
+            }}>
+                {(['conversation', 'changes', 'activity'] as const).map((tab) => {
+                    const Icon = tab === 'conversation' ? MessageSquare : tab === 'changes' ? CodeXml : List;
+                    return <button type="button" key={tab} id={`surface-tab-${tab}`} className={`surface-tab ${tab}${surfaceTab === tab ? ' active' : ''}`} role="tab" aria-selected={surfaceTab === tab} tabIndex={surfaceTab === tab ? 0 : -1} aria-controls={`surface-panel-${tab}`} onClick={() => setSurfaceTab(tab)}><Icon size={13} />{t(tab === 'conversation' ? 'surfaceConversation' : tab === 'changes' ? 'surfaceChanges' : 'surfaceActivity')}{tab === 'changes' && changeCount > 0 && <span className="tab-count" dir="ltr">{changeCount}</span>}</button>;
+                })}
+            </nav>
+            <main className={`work-surface show-${surfaceTab}`}>
+            <div className="chat-stage">
+            <div className={`transcript-pane${surfaceTab !== 'conversation' ? ' hidden-pane' : ''}`} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
+
             <div className="chat-area">
                 <MessageList
                     ref={containerRef}
@@ -1487,6 +1529,9 @@ export function App() {
                     onEditMessage={handleEditMessage}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     onReviewChanges={handleReviewChanges}
+                    onAskReview={addReviewFeedback}
+                    reviewSha={checkpointSha}
+                    reviewFiles={reviewFiles}
                     onOpenDiff={handleOpenDiff}
                     onBackgroundTerminal={handleBackgroundTerminal}
                     onKillBackground={handleKillBackground}
@@ -1507,6 +1552,11 @@ export function App() {
                     </button>
                 )}
             </div>
+            </div>
+            {surfaceTab === 'activity' && <div className="activity-pane" id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity"><h2>{t('surfaceActivity')}</h2><ActivityTimeline messages={chat.messages} busy={chat.busy} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} onOpenDiff={handleOpenDiff} onBackgroundTerminal={handleBackgroundTerminal} onKillBackground={handleKillBackground} taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} /></div>}
+            </div>
+            <div className="compose-dock">
+            <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}
             {byokError && (
@@ -1531,9 +1581,6 @@ export function App() {
                     </button>
                 </div>
             )}
-            {/* In-app banners sit above the composer card, same slot as the
-                byok-hint banner. */}
-            {!overlayOpen && banner}
             {/* Steers sent while busy wait for the current tool call to end.
                 A compact chip keeps each one visible until the host injects
                 it (then the real user bubble takes over). */}
@@ -1623,7 +1670,14 @@ export function App() {
                     )}
                 </div>
             )}
+            </div>
             <InputBar
+                yolo={yolo}
+                onTogglePlan={() => send({ type: 'togglePlanMode' })}
+                onToggleYolo={() => send({ type: 'toggleYolo' })}
+                statusSlot={<div className="dock-status-row"><span className={`dock-status${chat.busy ? ' working' : ''}${conn === 'error' || conn === 'disconnected' ? ' disconnected' : ''}`} title={t(conn === 'error' || conn === 'disconnected' ? 'surfaceDisconnected' : chat.busy ? 'working' : 'surfaceReady')}>
+                    {chat.busy ? <span className="step-status spinner" /> : <span className="dock-status-dot" />}<span>{t(chat.busy ? chat.messages.some((message) => message.approval && !message.approval.resolution || message.decisions?.some((decision) => !decision.answered)) ? 'surfaceNeedsInput' : 'working' : conn === 'error' || conn === 'disconnected' ? 'surfaceDisconnected' : 'surfaceReady')}</span>
+                </span>{taskControl}</div>}
                 busy={chat.busy}
                 usage={chat.lastUsage}
                 sessionCost={chat.sessionCost}
@@ -1710,15 +1764,14 @@ export function App() {
                     send({ type: 'gitBranchesGetState' });
                 }}
             />
+            </div>
+            <aside className="changes-pane" id="surface-panel-changes" aria-label={t('surfaceChanges')}><ChangesPanel sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></aside>
+            </main>
+            </div>
+            {overlayOpen && <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>}
         </div>
-        {/* The overlay renders as a SIBLING of the chat, so hiding the chat
-            cannot hide it. The banner rides along: a notification has to stay
-            readable above whatever screen is open. */}
-        <ScreenOverlay open={overlayOpen} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-            {offlineBanner}
-            {overlay}
-            {banner}
-        </ScreenOverlay>
+        {banner}
+        </div>
         </>
     );
 }

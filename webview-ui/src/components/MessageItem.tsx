@@ -1,3 +1,6 @@
+import { ToolImages } from './ToolImages';
+import { CompletedOutcome } from './CompletedOutcome';
+import { CompactSteps } from './CompactSteps';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
@@ -28,7 +31,7 @@ import {
     TriangleAlert,
     X,
 } from 'lucide-react';
-import type { ChatMessage, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
+import type { ChatMessage, ReviewChange, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { ApprovalCard } from './ApprovalCard';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { escapeHtml, extToLang } from '../diffText';
@@ -1143,32 +1146,6 @@ function GenericBody({ call, result }: { call: Step; result?: Step }) {
     );
 }
 
-/** Images a tool returned with its result (an MCP screenshot, mostly).
- *
- *  `dir="ltr"` on the wrapper regardless of locale: the caption may embed a URL
- *  or a path, and an RTL paragraph would reorder it. Capped at MAX_RENDERED so
- *  a server that returns twenty screenshots cannot flood the transcript; the
- *  remainder is stated rather than hidden. */
-const MAX_RENDERED_TOOL_IMAGES = 4;
-
-function ToolImages({ call, result }: { call: Step; result?: Step }) {
-    const images = result?.images ?? call.images;
-    if (!images?.length) return null;
-    const shown = images.slice(0, MAX_RENDERED_TOOL_IMAGES);
-    const hidden = images.length - shown.length;
-    return (
-        <div className="tool-images" dir="ltr">
-            {shown.map((img, i) => (
-                <figure key={`${img.mimeType}-${i}`} className="tool-image">
-                    <img src={img.dataUrl} alt={img.caption ?? t('toolImageAlt')} loading="lazy" />
-                    {img.caption && <figcaption dir="ltr">{img.caption}</figcaption>}
-                </figure>
-            ))}
-            {hidden > 0 && <span className="tool-images-more">{tf('toolImagesMore', { count: String(hidden) })}</span>}
-        </div>
-    );
-}
-
 function ToolBody({ call, result }: { call: Step; result?: Step }) {
     const body = (() => {
         switch (toolFamily(call.tool)) {
@@ -2156,7 +2133,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2169,7 +2146,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
 
-    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length), [steps, message.decisions]);
+    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length), [steps, message.decisions, activityOnly]);
 
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
@@ -2194,7 +2171,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 : lastRow.kind === 'tool' && !toolRowDone(lastRow)));
     const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
-    const showFooter = role === 'assistant' && status === 'done' && !!(renderedHtml || text);
+    const showFooter = !activityOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
     // Regenerate lives where the old global checkpoint-revert button was:
     // last completed assistant turn only, never while a run is in flight.
     const showRegenerate =
@@ -2235,20 +2212,21 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
         );
     }
 
+    const collapseSteps = !activityOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
+    const leadingText = collapseSteps && hasPills && rows[0]?.kind === 'text' && textRows.length > 1 ? textRows[0] : null;
+    const finalTextRows = collapseSteps ? textRows.filter((row) => row !== leadingText) : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
 
     return (
         <article
             className={`${bubbleClass}${approvalPending ? ' approval-paused' : ''}`}
-            /* Direction comes from the APP LOCALE (passed in), not dir="auto":
-               first-strong detection would flip a Persian message that begins
-               with Latin ("npm رو اجرا کن"). Code/paths/URLs force their own
-               direction. locale rides as a prop so the memo comparator below
-               re-renders existing bubbles when the language flips. */
-            dir={dir}
+            dir="auto"
             aria-busy={status === 'streaming' && !approvalPending}
         >
-            {!isSystem && hasPills && (
+            {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
+            {leadingText && <TextSegmentRow steps={leadingText.steps} streaming={false} />}
+            {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
+            {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
                     {rows.map((row) =>
                         row.kind === 'toolGroup' ? (
@@ -2304,7 +2282,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 </div>
             )}
 
-            {textRows.length > 0 ? (
+            {activityOnly ? null : finalTextRows.length > 0 ? <>{finalTextRows.map((row) => <TextSegmentRow key={row.key} steps={row.steps} streaming={false} />)}</> : textRows.length > 0 ? (
                 hasPills ? null : (
                     <>
                         {textRows.map((r) =>
@@ -2368,6 +2346,8 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                     <span>{t('approvalWaitingAi')}</span>
                 </div>
             )}
+
+            {!activityOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges} onAskReview={onAskReview} />}
 
             {showFooter && (
                 <div className="msg-footer">
@@ -2461,6 +2441,10 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
 }
 
 interface MessageItemProps {
+    activityOnly?: boolean;
+    reviewSha?: string;
+    reviewFiles?: ReviewChange[];
+    onAskReview?: (text: string) => void;
     message: ChatMessage;
     onApprovalDecision?: (approvalId: string, decisions: Record<string, boolean>, sessionApprove?: boolean) => void;
     /** Answer a decision card (pick / free text / dismiss). */
@@ -2476,7 +2460,7 @@ interface MessageItemProps {
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** Hunk-level review of everything changed since this turn's checkpoint
      *  (the host picks the file and the hunk, then opens the native diff). */
-    onReviewChanges?: (sha: string) => void;
+    onReviewChanges?: (sha: string, path?: string) => void;
     /** Open the native diff editor for a completed edit step (or group). */
     onOpenDiff?: OpenDiffHandler;
     /** Release the turn while a running terminal command keeps going. */
@@ -2507,6 +2491,10 @@ interface MessageItemProps {
  * each time, which is exactly when expansion feels like tearing.
  */
 export const MessageItem = memo(MessageItemImpl, (a, b) =>
+    a.activityOnly === b.activityOnly &&
+    a.reviewSha === b.reviewSha &&
+    a.reviewFiles === b.reviewFiles &&
+    a.onAskReview === b.onAskReview &&
     a.message === b.message &&
     a.onApprovalDecision === b.onApprovalDecision &&
     a.onDecisionResponse === b.onDecisionResponse &&
@@ -2525,3 +2513,11 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.dir === b.dir &&
     a.transcriptPrefs === b.transcriptPrefs
 );
+
+/** Full, inspectable activity keeps decisions and process controls available. */
+export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void }) {
+    const start = Math.max(0, Math.min(firstVisible, messages.length - 1));
+    const activity = messages.slice(start).filter((message) => message.role !== 'user' && (message.steps.some((step) => step.kind !== 'text') || message.approval || message.decisions?.length));
+    if (!activity.length) return <p className="activity-empty">{t('surfaceNoActivity')}</p>;
+    return <div className="activity-timeline">{start > 0 && <button type="button" className="show-earlier" onClick={onShowEarlier}>{t('historyShowEarlier')}</button>}{activity.map((message) => <MessageItem key={message.id} message={message} {...props} activityOnly />)}</div>;
+}

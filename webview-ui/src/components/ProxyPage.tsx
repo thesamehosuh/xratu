@@ -131,7 +131,7 @@ export function ProxyPage({
     }, [dirty]);
 
     return (
-        <div className="settings-page">
+        <div className="settings-page routing-page">
             <header className="settings-head">
                 <button
                     type="button"
@@ -158,6 +158,13 @@ export function ProxyPage({
             </header>
 
             <div className="settings-scroll">
+                {state && <div className="route-map" aria-label={t('miniRoute')}>
+                    <div className="route-node"><PlugZap size={14}/><span>{t('miniApp')}</span></div>
+                    <span className="route-wire"/>
+                    <div className="route-node route-current"><Globe size={14}/><strong dir="auto">{state.resolvedUrl ?? t('proxyStatusDirect')}</strong><span>{t(SOURCE_KEYS[state.resolvedSource])}</span></div>
+                    <span className="route-wire"/>
+                    <div className="route-node"><Server size={14}/><span>{t('miniProvider')}</span></div>
+                </div>}
                 {testResult && (
                     <div className={testResult.ok ? 'proxy-test ok' : 'proxy-test fail'} dir="auto" role="status">
                         {testResult.ok ? <Check size={13} /> : <X size={13} />}
@@ -197,6 +204,7 @@ export function ProxyPage({
                         </div>
                     </div>
 
+                    {mode === 'custom' && <>
                     <div className="proxy-field-row">
                         <div className="proxy-field">
                             <span className="proxy-field-label">{t('proxySchemeLabel')}</span>
@@ -237,11 +245,12 @@ export function ProxyPage({
                             />
                         </div>
                     </div>
+                    </>}
                     {socksWarn && (
                         <div className="proxy-hint warn" dir="auto">{t('proxySocksUnsupported')}</div>
                     )}
 
-                    <div className="proxy-field-row">
+                    <details className="bypass-details"><summary>{t('miniBypass')}<code dir="ltr">{noProxy}</code></summary><div className="proxy-field-row">
                         <div className="proxy-field grow">
                             <label htmlFor="proxy-noproxy">{t('proxyNoProxyLabel')}</label>
                             <input
@@ -255,7 +264,7 @@ export function ProxyPage({
                             />
                         </div>
                     </div>
-                    <div className="proxy-hint" dir="auto">{t('proxyNoProxyDesc')}</div>
+                    <div className="proxy-hint" dir="auto">{t('proxyNoProxyDesc')}</div></details>
 
                     <div className="proxy-save-row">
                         {state && (
@@ -395,10 +404,10 @@ export function ProxyPage({
                     ))}
                 </section>
 
-                <div className="mcp-hint foot" role="note">
-                    <Info size={12} aria-hidden="true" />
+                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+
                     <span dir="auto">{t('proxyFooterNote')}</span>
-                </div>
+                </div></details>
             </div>
         </div>
     );

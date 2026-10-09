@@ -473,6 +473,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     renderedHtml,
                     text: msg.persian ?? '',
                     status: 'done',
+                    completedAt: Date.now(),
                     usage: meaningfulUsage(msg.usage),
                     retryStatus: null,
                     ...(steps ? { steps } : {}),

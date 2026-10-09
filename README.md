@@ -27,6 +27,15 @@ runtime. Everything runs inside the extension host, on your machine.
 
 ## Features
 
+- **Work surface** - Conversation, Changes, and Activity share one compact
+  composer. Finished tool calls fold into optional steps; Activity keeps the
+  full outputs. Review checkpoint diffs inline, mark files reviewed, and add
+  feedback to your draft before sending. Wide panels show Changes alongside
+  the conversation.
+- **Sidebar pages** - providers, MCP servers, marketplace, skills, agent
+  files, usage, proxy, and settings stay one click away. Setup opens in a
+  focused side panel; Iranian providers remain visible. Drafts survive page
+  changes, and user bubbles stay on the right with automatic text direction.
 - **Agentic coding** - reads files, edits code, runs terminal commands,
   searches the web. Every edit and command needs your approval; per-tool
   auto-approve if you trust a workflow, YOLO mode if you don't want the gate.

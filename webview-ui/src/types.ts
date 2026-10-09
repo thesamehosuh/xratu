@@ -1,3 +1,5 @@
+import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
+export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
@@ -14,6 +16,12 @@ export interface OpenDiffEdit {
 }
 
 export type ToExtensionMessage =
+    | { type: 'changesGetState'; sha: string; requestId: string }
+    | { type: 'changeFileGet'; sha: string; path: string; requestId: string }
+    | { type: 'changeFileOpen'; sha: string; path: string }
+    | { type: 'agentsGetState' }
+    | { type: 'agentsManage' }
+    | { type: 'agentFileOpen'; name: string; source: AgentProfileView['source'] }
     | { type: 'webviewReady' }
     | { type: 'askQuestion'; value: string; attachments?: ComposerAttachment[] }
     /** Steer a LIVE run. `steerId` identifies the pending bubble the webview
@@ -315,6 +323,9 @@ export interface ProviderBenchmark {
 }
 
 export type FromExtensionMessage =
+    | { type: 'changesState'; sha: string; requestId: string; files: ReviewChange[]; errorKey?: string }
+    | { type: 'changeFileState'; sha: string; requestId: string; file?: ReviewFile; errorKey?: string }
+    | { type: 'agentsState'; profiles: AgentProfileView[]; errorKey?: string }
     | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
     | ({ type: 'localModelOperation' } & LocalModelOperation)
     | ({ type: 'providerBenchmark' } & ProviderBenchmark)
@@ -895,4 +906,5 @@ export interface ChatMessage {
      *  content (the reason must still be visible - red styling alone
      *  reads as a silent death). */
     errorText?: string;
+    completedAt?: number;
 }

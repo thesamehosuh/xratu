@@ -1,18 +1,15 @@
+import brandMark from '../../../assets/brand/logo-outline.svg';
 import { useEffect, useRef, useState } from 'react';
 import {
     Check,
     ChevronDown,
-    Link,
-    ListChecks,
     MessageSquarePlus,
-    MessagesSquare,
     Pencil,
     Blocks,
     Search,
     Settings,
     Trash2,
     X,
-    Zap,
 } from 'lucide-react';
 import type { ConnectionStatus as ConnStatus, SessionMeta } from '../types';
 import { t } from '../i18n';
@@ -22,6 +19,7 @@ export type SessionsScope = 'workspace' | 'all';
 
 interface ToolbarProps {
     conn: ConnStatus;
+    workspaceLabel?: string | null;
     yolo: boolean;
     plan: boolean;
     sessionTitle: string | null;
@@ -63,11 +61,11 @@ const GROUP_ORDER: Array<'today' | 'yesterday' | 'week' | 'older'> = ['today', '
 const GROUP_KEYS = { today: 'sessionsToday', yesterday: 'sessionsYesterday', week: 'sessionsLastWeek', older: 'sessionsOlder' } as const;
 
 export function Toolbar({
-    conn: _conn, yolo, plan,
+    conn: _conn, workspaceLabel,
     sessionTitle, sessionsOpen, sessions, sessionsLoading, currentSessionId, sessionsScope,
     sessionQuery, searchResults, onSessionQuery,
     onNewSession, onToggleSessions, onSessionsScope, onOpenSession, onRenameSession, onDeleteSession,
-    onToggleYolo, onTogglePlan, onEditCredentials, onOpenCapabilities, onOpenSettings,
+    onOpenCapabilities, onOpenSettings,
 }: ToolbarProps) {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editValue, setEditValue] = useState('');
@@ -189,37 +187,8 @@ export function Toolbar({
 
     return (
         <header className="toolbar" ref={rootRef}>
-            <div className="toolbar-group">
-                <button
-                    type="button"
-                    className={`ghost-btn${plan ? ' active' : ''}`}
-                    onClick={onTogglePlan}
-                    aria-pressed={plan}
-                    aria-label={t('planMode')}
-                    title={t('planHint')}
-                >
-                    <ListChecks size={15} />
-                </button>
-                <button
-                    type="button"
-                    className={`ghost-btn${yolo ? ' active' : ''}`}
-                    onClick={onToggleYolo}
-                    aria-pressed={yolo}
-                    aria-label={t('yoloMode')}
-                    title={t('yoloMode')}
-                >
-                    <Zap size={15} />
-                </button>
-                <button
-                    type="button"
-                    className="ghost-btn"
-                    onClick={onNewSession}
-                    aria-label={t('newSession')}
-                    title={t('newSession')}
-                >
-                    <MessageSquarePlus size={15} />
-                </button>
-            </div>
+            <span className="toolbar-brand" role="img" aria-label={t('miniApp')}><img src={brandMark} alt="" /></span>
+            <div className="toolbar-heading">
             <button
                 type="button"
                 className={`session-btn${sessionsOpen ? ' open' : ''}`}
@@ -229,22 +198,12 @@ export function Toolbar({
                 aria-label={t('sessionsTitle')}
                 title={sessionTitle || t('sessionsUntitled')}
             >
-                <MessagesSquare size={13} />
                 <span className="session-btn-title" dir="auto">{sessionTitle || t('sessionsUntitled')}</span>
                 <ChevronDown size={13} className="session-btn-chevron" />
             </button>
-            <div className="toolbar-group">
-                {onEditCredentials && (
-                    <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={onEditCredentials}
-                        aria-label={t('byokChipTitle')}
-                        title={t('byokChipTitle')}
-                    >
-                        <Link size={15} />
-                    </button>
-                )}
+            {workspaceLabel && <span className="workspace-breadcrumb" dir="ltr" title={workspaceLabel}>{workspaceLabel}</span>}
+            </div>
+            <div className="toolbar-group toolbar-tools">
                 {onOpenCapabilities && (
                     <button
                         type="button"
@@ -253,9 +212,10 @@ export function Toolbar({
                         aria-label={t('capTitle')}
                         title={t('capTitle')}
                     >
-                        <Blocks size={15} />
+                        <Blocks size={14} /><span className="toolbar-tools-label">{t('surfaceTools')}</span>
                     </button>
                 )}
+                <button type="button" className="ghost-btn" onClick={onNewSession} aria-label={t('newSession')} title={t('newSession')}><MessageSquarePlus size={15} /></button>
                 {onOpenSettings && (
                     <button
                         type="button"

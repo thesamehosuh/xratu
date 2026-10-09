@@ -1,3 +1,4 @@
+import { readReviewFile, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1147,6 +1148,57 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('error', 'notifRestoreFailed', {
                 error: e instanceof Error ? e.message : String(e)
             });
+        }
+    }
+
+    async _sendChangesState(sha: string, requestId: string): Promise<void> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+            validateReviewCheckpoint(sha);
+            if (!root) throw new Error('No workspace');
+            const files = await this._checkpoints.diffCheckpoint(root, sha);
+            this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files });
+        } catch {
+            this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files: [], errorKey: root ? 'surfaceChangesFailed' : 'notifNoFolder' });
+        }
+    }
+
+    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false): Promise<void> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+            if (!root) throw new Error('No workspace');
+            const file = await readReviewFile(this._checkpoints, root, sha, filePath);
+            if (open) {
+                if (file.kind === 'text') openEditDiff(this._virtualDocuments, file.path, file.before, file.after);
+                else await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
+            } else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, file });
+        } catch {
+            if (open) this.notifyBanner('error', 'surfaceChangesFailed');
+            else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, errorKey: 'surfaceChangesFailed' });
+        }
+    }
+
+    async _sendAgentsState(): Promise<void> {
+        try {
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const external = externalMcpInstance ? await externalMcpInstance.listTools().catch(() => []) : [];
+            const toolNames = this._agentToolNames(workspaceRoot, external);
+            const defs = discoverSubagents({ workspaceRoot, validation: { toolNames } });
+            this._logSubagentIssues(defs);
+            this._view?.webview.postMessage({ type: 'agentsState', profiles: defs.map(({ name, description, source, tools, model, reasoningEffort, maxRounds, error, warning, filePath }) => ({ name, description, source, tools, model, reasoningEffort, maxRounds, error, warning, editable: !!filePath })) });
+        } catch {
+            this._view?.webview.postMessage({ type: 'agentsState', profiles: [], errorKey: 'surfaceAgentsFailed' });
+        }
+    }
+
+    async _openAgentFile(name: string, source: string): Promise<void> {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const external = externalMcpInstance ? await externalMcpInstance.listTools().catch(() => []) : [];
+        const defs = discoverSubagents({ workspaceRoot, validation: { toolNames: this._agentToolNames(workspaceRoot, external) } });
+        const def = defs.find((item) => item.name === name && item.source === source);
+        if (def?.filePath) {
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.file(def.filePath));
+            await vscode.window.showTextDocument(document);
         }
     }
 

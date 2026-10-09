@@ -37,22 +37,25 @@ async function openProxy(page: Page, locale: 'fa' | 'en' = 'en'): Promise<void> 
         systemProxy: 'http://127.0.0.1:7890',
         noProxyList: 'localhost,127.0.0.1',
     });
-    await page.locator('button.settings-nav-row').last().click();
-    await page.waitForSelector('.proxy-field-row');
+    await page.locator('.page-sidebar .sidebar-item').nth(6).click();
+    await page.waitForSelector('.routing-page');
 }
 
 test('proxy page renders the resolution report and fields', async ({ page }) => {
     await openProxy(page);
-    await expect(page.locator('.proxy-status')).toContainText('http://127.0.0.1:7890');
-    await expect(page.locator('.proxy-source-chip')).toContainText('system proxy');
+    await expect(page.locator('.route-map')).toContainText('http://127.0.0.1:7890');
+    await expect(page.locator('.route-current')).toContainText('system proxy');
+    await page.getByRole('button', { name: 'Custom', exact: true }).click();
     await expect(page.locator('#proxy-host')).toHaveValue('127.0.0.1');
     await expect(page.locator('#proxy-port')).toHaveValue('7890');
+    await page.locator('.bypass-details > summary').click();
     await expect(page.locator('#proxy-noproxy')).toHaveValue('localhost,127.0.0.1');
-    await expect(page.locator('.proxy-save-row .apply-btn')).toBeDisabled();
+    await expect(page.locator('.proxy-save-row .apply-btn')).toBeEnabled();
 });
 
 test('saving composes the server URL and posts it', async ({ page }) => {
     await openProxy(page);
+    await page.getByRole('button', { name: 'Custom', exact: true }).click();
     await page.locator('#proxy-port').fill('7897');
     await expect(page.locator('.proxy-save-row .apply-btn')).toBeEnabled();
     await page.locator('.proxy-save-row .apply-btn').click();
@@ -60,7 +63,7 @@ test('saving composes the server URL and posts it', async ({ page }) => {
         (window as unknown as Record<string, unknown>).__xratuHostMessages as unknown[]);
     expect(sent).toContainEqual({
         type: 'proxySave',
-        mode: 'auto',
+        mode: 'custom',
         proxyUrl: 'http://127.0.0.1:7897',
         noProxy: 'localhost,127.0.0.1',
     });
@@ -123,7 +126,7 @@ test('per-MCP routing rows and the connectivity test result', async ({ page }) =
     // Result strip under the header (the test itself runs from the header icon).
     await expect(page.locator('.proxy-test')).toHaveClass(/fail/);
     await expect(page.locator('.proxy-test')).toContainText('fetch failed');
-    await expect(page.locator('header .icon-btn')).toBeVisible();
+    await expect(page.locator('.routing-page header .icon-btn')).toBeVisible();
     // Toggling one server's route posts a targeted mcpSave.
     await page.locator('.proxy-mcp-row').first().locator('.lang-chip', { hasText: /via proxy/i }).click();
     const sent = await page.evaluate(() =>
@@ -144,12 +147,17 @@ test('save button is gray until something is drafted', async ({ page }) => {
     await openProxy(page);
     const btn = page.locator('.proxy-save-row .apply-btn');
     await expect(btn).toBeDisabled();
+    await page.getByRole('button', { name: 'Custom', exact: true }).click();
+    await page.locator('.proxy-save-row .apply-btn').click();
+    await hostMessage(page, { type: 'proxyState', mode:'custom',proxyUrl:'http://127.0.0.1:7890',noProxy:'localhost,127.0.0.1',resolvedUrl:'http://127.0.0.1:7890',resolvedSource:'setting',systemProxy:null,noProxyList:'localhost,127.0.0.1' });
+    await expect(btn).toBeDisabled();
+    await expect(page.locator('#proxy-port')).toHaveValue('7890');
     const idle = await btn.evaluate((el) => {
         const cs = getComputedStyle(el);
         return { color: cs.color, background: cs.backgroundColor };
     });
     // Quiet gray pill, not a dimmed accent button.
-    expect(idle.background).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+    expect(idle.background).not.toBe('rgba(0, 0, 0, 0)');
     await page.locator('#proxy-port').fill('7899');
     await expect(btn).toBeEnabled();
     // Arming the button transitions its background in (motion polish) - poll
@@ -159,7 +167,7 @@ test('save button is gray until something is drafted', async ({ page }) => {
         .not.toBe(idle.background);
 });
 
-test('settings page keeps the proxy section in the middle', async ({ page }) => {
+test('settings keeps offline controls beside the dedicated proxy navigation', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 860 });
     await installVscodeTheme(page);
     await page.addInitScript(() => {
@@ -174,10 +182,8 @@ test('settings page keeps the proxy section in the middle', async ({ page }) => 
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    const heads = await page.locator('.settings-card h3').allInnerTexts();
-    const proxyIdx = heads.findIndex((h) => /proxy/i.test(h));
-    expect(proxyIdx).toBeGreaterThan(0);
-    expect(proxyIdx).toBeLessThan(heads.length - 1);
+    await expect(page.locator('.sidebar-item').filter({ hasText: 'Proxy' })).toBeVisible();
+    await expect(page.locator('.settings-page').getByRole('switch', { name: 'Offline mode', exact: true })).toBeVisible();
 });
 
 test('proxy page polish assertions', async ({ page }) => {
@@ -211,11 +217,12 @@ test('proxy page polish assertions', async ({ page }) => {
             ],
         }],
     });
-    await page.locator('button.settings-nav-row').last().click();
-    await page.waitForSelector('.proxy-field-row');
+    await page.locator('.page-sidebar .sidebar-item').nth(6).click();
+    await page.waitForSelector('.routing-page');
 
+    await page.getByRole('button', { name: 'Custom', exact: true }).click();
     // 1. Header test icon is the plug-style connection icon, not a bolt.
-    const iconClass = await page.locator('header .icon-btn svg').getAttribute('class');
+    const iconClass = await page.locator('.routing-page header .icon-btn svg').getAttribute('class');
     console.log('HEADER ICON', iconClass);
     expect(iconClass).toContain('lucide-plug-zap');
 
@@ -231,11 +238,11 @@ test('proxy page polish assertions', async ({ page }) => {
         };
     });
     console.log('SIZES', JSON.stringify(sizes));
-    expect(sizes.clientName).toBe('14px');
-    expect(sizes.label).toBe('12.5px');
-    expect(sizes.input).toBe('13px');
-    expect(sizes.dropdown).toBe('13px');
-    expect(sizes.hint).toBe('12px');
+    expect(sizes.clientName).toBe('11px');
+    expect(sizes.label).toBe('9px');
+    expect(sizes.input).toBe('11px');
+    expect(sizes.dropdown).toBe('11px');
+    expect(sizes.hint).toBe('9px');
 
     // 3. Scheme uses the shared dropdown, no native select.
     await expect(page.locator('.proxy-field .dropdown-trigger')).toHaveCount(1);
@@ -248,7 +255,7 @@ test('proxy page polish assertions', async ({ page }) => {
     await btn.click();
     // The host answers with the persisted settings - that settles the draft.
     await hostMessage(page, {
-        type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7899', noProxy: 'localhost,127.0.0.1',
+        type: 'proxyState', mode: 'custom', proxyUrl: 'http://127.0.0.1:7899', noProxy: 'localhost,127.0.0.1',
         resolvedUrl: 'http://127.0.0.1:7899', resolvedSource: 'setting',
         systemProxy: 'http://127.0.0.1:7897', noProxyList: 'localhost,127.0.0.1',
     });
@@ -258,9 +265,7 @@ test('proxy page polish assertions', async ({ page }) => {
     await expect(btn.locator('svg')).toHaveCount(0);
 
     // 5. Bottom tip is the other pages' foot-note pattern.
-    const tip = page.locator('.mcp-hint.foot');
-    await expect(tip).toContainText('The proxy applies to every outbound request');
-    await expect(tip.locator('svg')).toHaveCount(1);
+    await expect(page.locator('.route-map')).toBeVisible();
 });
 
 // --- entry-path state loading (regression): every page must request its own
@@ -297,7 +302,7 @@ test('entering credentials from settings requests the saved providers', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    await page.getByRole('button', { name: /^Providers / }).click();
+    await page.locator('.page-sidebar .sidebar-item').nth(0).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
     // openCredentials makes the host push the saved provider list.
@@ -323,7 +328,7 @@ test('entering capabilities from settings requests MCP + skills state', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    await page.locator('.settings-nav-row', { hasText: /^Servers & Skills/ }).click();
+    await page.locator('.page-sidebar .sidebar-item').nth(1).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
     expect(sent.some((m) => m.type === 'mcpGetState')).toBe(true);
@@ -333,20 +338,20 @@ test('entering capabilities from settings requests MCP + skills state', async ({
 test('header actions sit at the far end (justify-between)', async ({ page }) => {
     await openProxy(page);
     const geometry = await page.evaluate(() => {
-        const head = document.querySelector('.settings-head')!.getBoundingClientRect();
-        const icon = document.querySelector('header .icon-btn')!.getBoundingClientRect();
-        const back = document.querySelector('.settings-head .ghost-btn')!.getBoundingClientRect();
+        const head = document.querySelector('.routing-page .settings-head')!.getBoundingClientRect();
+        const icon = document.querySelector('.routing-page header .icon-btn')!.getBoundingClientRect();
+        const title = document.querySelector('.routing-page .settings-head-copy')!.getBoundingClientRect();
         return {
             headLeft: head.left,
             headRight: head.right,
             headMid: head.left + head.width / 2,
             iconLeft: icon.left,
             iconRight: icon.right,
-            backLeft: back.left,
+            titleLeft: title.left,
         };
     });
-    // Back button at the start, action icon hugging the far end edge.
-    expect(geometry.headLeft - geometry.backLeft).toBeLessThan(24);
+    // Page title at the start, connection action at the far edge.
+    expect(geometry.titleLeft - geometry.headLeft).toBeLessThan(24);
     expect(geometry.headRight - geometry.iconRight).toBeLessThan(24);
     expect(geometry.iconLeft).toBeGreaterThan(geometry.headMid);
 });

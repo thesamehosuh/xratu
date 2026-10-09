@@ -51,6 +51,7 @@ function render(messages: ChatMessage[], taskList?: { stepId: string; tasks: any
             key: m.id,
             message: m,
             busy: false,
+            activityOnly: true,
             taskList: taskList ?? undefined,
         }))
     ));

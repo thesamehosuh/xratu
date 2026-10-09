@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { installDetailsMotion } from './motion';
 import './styles/theme.css';
+import './styles/subpages.css';
+import './styles/workSurface.css';
 
 installDetailsMotion();
 

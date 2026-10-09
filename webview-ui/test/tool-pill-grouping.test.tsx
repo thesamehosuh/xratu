@@ -11,7 +11,7 @@
 
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { MessageList } from '../src/components/MessageList';
+import { ActivityTimeline } from '../src/components/MessageItem';
 import type { ChatMessage, Step } from '../src/types';
 
 let pass = 0;
@@ -33,10 +33,8 @@ function messageWith(steps: Step[], status: 'streaming' | 'done' = 'done'): Chat
 }
 
 function render(messages: ChatMessage[]): string {
-    return renderToString(createElement(MessageList, {
+    return renderToString(createElement(ActivityTimeline, {
         messages,
-        onScroll: () => {},
-        onPickSuggestion: () => {},
         firstVisible: 0,
     }));
 }

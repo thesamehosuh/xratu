@@ -4,11 +4,8 @@ import {
     BookOpen,
     ArrowLeft,
     ArrowRight,
-    ChevronLeft,
-    ChevronRight,
     Globe,
     Languages,
-    Link,
     MessageSquare,
     Trash2,
 } from 'lucide-react';
@@ -56,18 +53,13 @@ export function SettingsPage({
     onSetReplyLanguage,
     transcriptPrefs,
     onSetTranscriptPref,
-    onOpenCredentials,
-    onOpenCapabilities,
-    onOpenUsage,
-    onOpenProxy,
-    proxySummary = null,
     onClearHistory,
     offline = false, errorExplanations = true, onSetOffline, onSetErrorExplanations, onOfflineHelp,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
 
     return (
-        <div className="settings-page">
+        <div className="settings-page preferences-page">
             <header className="settings-head">
                 <button
                     type="button"
@@ -92,62 +84,10 @@ export function SettingsPage({
                 )}
 
                 <section className="settings-card">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Link size={15} />
-                        </div>
-                        <h3>{t('settingsConnections')}</h3>
-                    </div>
-
-                    <button type="button" className="settings-nav-row" onClick={onOpenCredentials}>
-                        <div className="settings-nav-main">
-                            <strong>{t('settingsCredentials')}</strong>
-                            <span>{t('settingsCredentialsDesc')}</span>
-                        </div>
-                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-                    </button>
-
-                    <button type="button" className="settings-nav-row" onClick={onOpenCapabilities}>
-                        <div className="settings-nav-main">
-                            <strong>{t('capTitle')}</strong>
-                            <span>{t('settingsCapabilitiesDesc')}</span>
-                        </div>
-                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-                    </button>
-
-                    <button type="button" className="settings-nav-row" onClick={onOpenUsage}>
-                        <div className="settings-nav-main">
-                            <strong>{t('settingsUsage')}</strong>
-                            <span>{t('settingsUsageDesc')}</span>
-                        </div>
-                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-                    </button>
-
-                </section>
-
-                <section className="settings-card">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Globe size={15} />
-                        </div>
-                        <h3>{t('proxyPageTitle')}</h3>
-                    </div>
-
-                    <button type="button" className="settings-nav-row" onClick={onOpenProxy}>
-                        <div className="settings-nav-main">
-                            <strong>{t('settingsProxy')}</strong>
-                            <span dir="auto">
-                                {proxySummary
-                                    ? `${t('proxyStatusTitle')}: ${proxySummary}`
-                                    : t('settingsProxyDesc')}
-                            </span>
-                        </div>
-                        {getLocale() === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-                    </button>
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('offlineMode')}</strong>
-                            <span>{t('offlineModeDesc')}</span>
+                            <span className="preference-help" title={t('offlineModeDesc')} aria-label={t('offlineModeDesc')}>?</span>
                         </div>
                         <button className="ghost-btn small" aria-label={t('offlineHelp')} title={t('offlineHelp')} onClick={onOfflineHelp}><BookOpen size={13} /></button>
                         <button type="button" className={`mcp-switch${offline ? ' on' : ''}`} role="switch"
@@ -160,17 +100,17 @@ export function SettingsPage({
                         <div className="settings-section-icon" aria-hidden="true">
                             <Activity size={15} />
                         </div>
-                        <h3>{t('settingsTranscript')}</h3>
+                        <h3>{t('miniExpansion')}</h3>
                     </div>
 
-                    {TRANSCRIPT_ROWS.map(({ id, labelKey, descKey }) => {
+                    {TRANSCRIPT_ROWS.map(({ id, descKey }) => {
                         const on = prefOn(transcriptPrefs, id);
-                        const label = t(labelKey);
+                        const label = t(id === 'edit' ? 'miniFiles' : id === 'terminal' ? 'miniCommands' : 'miniThinking');
                         return (
                             <div className="settings-nav-row" key={id}>
                                 <div className="settings-nav-main">
                                     <strong>{label}</strong>
-                                    <span>{t(descKey)}</span>
+                                    <span className="preference-help" title={t(descKey)} aria-label={t(descKey)}>?</span>
                                 </div>
                                 <button
                                     type="button"
@@ -193,13 +133,13 @@ export function SettingsPage({
                         <div className="settings-section-icon" aria-hidden="true">
                             <Languages size={15} />
                         </div>
-                        <h3>{t('settingsLocale')}</h3>
+                        <h3>{t('miniAppearance')}</h3>
                     </div>
 
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
-                            <strong>{t('settingsLanguage')}</strong>
-                            <span>{t('settingsLanguageDesc')}</span>
+                            <strong>{t('miniLanguage')}</strong>
+                            <span className="preference-help" title={t('settingsLanguageDesc')} aria-label={t('settingsLanguageDesc')}>?</span>
                         </div>
                         <div className="lang-choice">
                             <button
@@ -223,7 +163,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('settingsReplyLanguage')}</strong>
-                            <span>{t('settingsReplyLanguageDesc')}</span>
+                            <span className="preference-help" title={t('settingsReplyLanguageDesc')} aria-label={t('settingsReplyLanguageDesc')}>?</span>
                         </div>
                         <div className="lang-choice">
                             <button
@@ -253,7 +193,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('errorExplanations')}</strong>
-                            <span>{t('errorExplanationsDesc')}</span>
+                            <span className="preference-help" title={t('errorExplanationsDesc')} aria-label={t('errorExplanationsDesc')}>?</span>
                         </div>
                         <button type="button" className={`mcp-switch${errorExplanations ? ' on' : ''}`} role="switch"
                             aria-checked={errorExplanations} aria-label={t('errorExplanations')} onClick={() => onSetErrorExplanations?.(!errorExplanations)}><span className="mcp-switch-knob" /></button>
@@ -277,7 +217,7 @@ export function SettingsPage({
                         <div className="settings-confirm-row danger">
                             <div>
                                 <strong>{t('settingsClearConfirm')}</strong>
-                                <span>{t('settingsClearConfirmDesc')}</span>
+                                <span className="preference-help" title={t('settingsClearConfirmDesc')} aria-label={t('settingsClearConfirmDesc')}>?</span>
                             </div>
                             <div className="settings-confirm-actions">
                                 <button

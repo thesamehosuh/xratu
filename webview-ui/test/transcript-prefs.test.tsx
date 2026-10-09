@@ -16,7 +16,7 @@
 
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { MessageList } from '../src/components/MessageList';
+import { ActivityTimeline } from '../src/components/MessageItem';
 import {
     coerceTranscriptPrefs, prefOn, toolFamily, TRANSCRIPT_ROWS,
     EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs,
@@ -93,10 +93,8 @@ function render(prefs?: TranscriptPrefs): string {
         status: 'done',
         createdAt: 0,
     }];
-    return renderToString(createElement(MessageList, {
+    return renderToString(createElement(ActivityTimeline, {
         messages,
-        onScroll: () => {},
-        onPickSuggestion: () => {},
         firstVisible: 0,
         transcriptPrefs: prefs,
     }));
@@ -181,10 +179,8 @@ function renderStep(step: Step): string {
         status: 'done',
         createdAt: 0,
     }];
-    return renderToString(createElement(MessageList, {
+    return renderToString(createElement(ActivityTimeline, {
         messages,
-        onScroll: () => {},
-        onPickSuggestion: () => {},
         firstVisible: 0,
     }));
 }

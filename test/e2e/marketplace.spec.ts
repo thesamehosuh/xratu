@@ -98,7 +98,7 @@ async function openMarketplace(page: Page, locale: 'fa' | 'en' = 'fa'): Promise<
     await page.getByTitle(locale === 'fa' ? 'سرور ها و مهارت ها' : 'Servers & Skills').click();
     await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await hostMessage(page, { type: 'skillsState', skills: [] });
-    await page.getByRole('tab', { name: locale === 'fa' ? 'فروشگاه' : 'Marketplace' }).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: locale === 'fa' ? 'فروشگاه' : 'Marketplace', exact: true }).click();
     // The tab requests the catalog on first open.
     await expect.poll(async () => (await sentMessages(page)).some((m) => m.type === 'mcpMarketplaceGetState')).toBe(true);
     await hostMessage(page, MARKET_STATE);
@@ -136,6 +136,7 @@ test('marketplace rows stay LTR inside the RTL page', async ({ page }) => {
             rowDir: getComputedStyle(row).direction,
             inputDir: input.getAttribute('dir'),
             badgeBg: getComputedStyle(badge).backgroundColor,
+            rowBg: getComputedStyle(row).backgroundColor,
             overflow: page.scrollWidth - page.clientWidth,
         };
     });
@@ -145,7 +146,8 @@ test('marketplace rows stay LTR inside the RTL page', async ({ page }) => {
     // placeholder is Persian, so an LTR box rendered the ellipsis backwards.
     expect(probe.inputDir).toBe('rtl');
     // Transparent would mean the theme fixture failed to install.
-    expect(probe.badgeBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(probe.badgeBg).toBe('rgba(0, 0, 0, 0)');
+    expect(probe.rowBg).not.toBe('rgba(0, 0, 0, 0)');
     expect(probe.overflow).toBeLessThanOrEqual(1);
 });
 
@@ -258,6 +260,7 @@ test('a large catalog mounts only a window of rows and can reveal more', async (
 
     // Changing a filter starts a fresh window instead of inheriting the
     // expansion (client-side filter: no host round trip involved).
+    await page.locator('.catalog-filters > summary').click();
     await page.getByRole('button', { name: 'رسمی' }).click();
     await expect(page.locator('.mp-row')).toHaveCount(60);
 });
@@ -282,6 +285,7 @@ test('source and tag filters render as two separate groups', async ({ page }) =>
     await openMarketplace(page);
     // They answer different questions - WHICH catalog, and WHAT KIND of server -
     // so they must not share one undifferentiated chip line.
+    await page.locator('.catalog-filters > summary').click();
     const sources = page.getByRole('group', { name: 'منبع' });
     const tags = page.getByRole('group', { name: 'برچسب ها' });
     await expect(sources).toBeVisible();
@@ -304,10 +308,9 @@ test('source and tag filters render as two separate groups', async ({ page }) =>
     await expect(page.locator('.mp-row')).toHaveCount(1);
     await expect(page.locator('.mp-row')).toContainText('Airtable');
 
-    // Stacked, not sharing a line.
-    const a = await sources.boundingBox();
-    const b = await tags.boundingBox();
-    expect(b!.y).toBeGreaterThan(a!.y + a!.height - 1);
+    // Distinct groups remain reachable inside the optional filter controls.
+    await expect(sources).toBeVisible();
+    await expect(tags).toBeVisible();
 });
 
 // Cross-platform layout gate plus Linux pixel baselines. Every glyph uses the
