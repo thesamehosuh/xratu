@@ -355,7 +355,7 @@ async function chatScreen(page: Page, locale: Locale): Promise<Locator> {
     // Pin the transcript to its tail explicitly: the app follows the stream,
     // but a follow that loses a race would silently change every chat baseline.
     await page.locator('.activity-pane').evaluate((el) => { el.scrollTop = el.scrollHeight; });
-    await expect(page.locator('.session-cost')).toBeVisible();
+    await expect(page.locator('.session-cost')).toBeHidden();
     return diff;
 }
 
@@ -564,9 +564,9 @@ test.describe('background process UI', () => {
     };
     
     
-    /** The dock is folded by default - open it before shooting its rows. */
+    /** Tasks do not steal focus - open their tab before shooting the rows. */
     async function openDock(page: Page): Promise<void> {
-        await page.locator('.bg-jobs-toggle').click();
+        await page.locator('#surface-tab-background').click();
         await page.locator('.bg-job').first().waitFor();
     }
     

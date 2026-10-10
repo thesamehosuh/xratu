@@ -1,3 +1,4 @@
+import { readSubagentTrace, type SubagentApprovalSource } from './subagentObservation';
 import { readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
@@ -16,7 +17,7 @@ import {
     formatJobCompletion,
     getJobByCallId,
     getTerminalJob,
-    listTerminalJobs,
+    backgroundJobViews,
     onJobEvent,
     setJobChangeListener,
     type JobEvent,
@@ -3128,7 +3129,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  the suspended local agent generator would hang forever.
      *  Calls whose kind was allowed for this session resolve silently; only
      *  the remainder reach the approval card. */
-    private _requestLocalApproval(approvalId: string, approvals: Array<{ tool_call_id: string; tool_name: string; args: Record<string, unknown> }>): Promise<Record<string, boolean>> {
+    private _requestLocalApproval(approvalId: string, approvals: Array<{ tool_call_id: string; tool_name: string; args: Record<string, unknown> }>, source?: SubagentApprovalSource): Promise<Record<string, boolean>> {
         const preDecided: Record<string, boolean> = {};
         const pending = approvals.filter((a) => {
             if (isSessionApproved(a.tool_name, a.args, this._sessionApprovedKinds)) {
@@ -3157,6 +3158,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._approvalCardRelease.set(approvalId, release);
                 void this._processNeedsApproval({
                     approval_id: approvalId,
+                    source,
                     approvals: pending.map((a) => ({
                         tool_call_id: a.tool_call_id,
                         tool_name: a.tool_name,
@@ -3575,14 +3577,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _postBackgroundJobs(): void {
         this._view?.webview.postMessage({
             type: 'backgroundJobs',
-            jobs: listTerminalJobs()
-                .filter((j) => j.background)
-                .map((j) => ({
-                    jobId: j.id,
-                    command: j.command,
-                    running: j.status === 'running',
-                    uptimeSeconds: j.uptimeSeconds(),
-                })),
+            jobs: backgroundJobViews(),
         });
     }
 
@@ -3599,6 +3594,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * a dev server exiting spends their tokens without being asked.
      */
     private _handleJobEvent(event: JobEvent): void {
+        if (event.kind === 'output') {
+            this._view?.webview.postMessage({ type: 'backgroundJobOutput', jobId: event.jobId, output: event.output });
+            return;
+        }
         if (event.kind === 'started') {
             // Mark the row so it swaps its "run in background" button for a
             // stop control, and refresh the composer badge. Without this a
@@ -3610,9 +3609,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 byUser: event.byUser,
             });
             this._postBackgroundJobs();
+            const job = getTerminalJob(event.jobId);
+            if (job?.output) this._view?.webview.postMessage({ type: 'backgroundJobOutput', jobId: event.jobId, output: job.output.slice(-20_000) });
             return;
         }
         const notice = event.notice;
+        if (event.kind === 'finished') {
+            const job = getTerminalJob(notice.jobId);
+            const output = job
+                ? `${job.exitCode === null ? '' : `Exit code: ${job.exitCode}\n`}STDOUT:\n${job.stdout.slice(-23_000) || '(empty)'}\nSTDERR:\n${(job.stderr || job.error?.message || '').slice(-23_000) || '(empty)'}`
+                : notice.output.slice(-46_000);
+            this._view?.webview.postMessage({ type: 'backgroundJobFinished', jobId: notice.jobId,
+                output, status: notice.status, exitCode: notice.exitCode });
+            this._postBackgroundJobs();
+            return;
+        }
         const text = formatJobCompletion(notice);
         if (this._localRunActive) {
             this._localSteerQueue.push({ text, system: true });
@@ -3752,7 +3763,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // needs consent surfaces as the same webview approval card. YOLO is
         // consulted LIVE per call (mid-run toggles apply from the next call).
         const localApprovalGate: LocalApprovalGate = {
-            requestApproval: (id, calls) => {
+            requestApproval: (id, calls, source) => {
                 if (this._yoloMode && !runPlanMode) {
                     return Promise.resolve(
                         Object.fromEntries(calls.map((c) => [c.id, true]))
@@ -3760,7 +3771,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }
                 return this._requestLocalApproval(
                     id,
-                    calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments }))
+                    calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments })),
+                    source,
                 );
             },
         };
@@ -3856,6 +3868,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     { nested: true },
                 ),
                 approvalGate: localApprovalGate,
+                onObservation: (callId, trace) => {
+                    // Call identity survives parallel waves and steer-induced bubble splits.
+                    if ((this._sessionId ?? this._ephemeralSessionId) !== conversationId) return;
+                    const event = outcome.events.find(e => e?.type === 'tool_call' && e.id === callId)
+                        ?? this._history.flatMap(row => row.events ?? []).find(e => e?.type === 'tool_call' && e.id === callId);
+                    if (event) event.subagent = trace;
+                    this._view?.webview.postMessage({ type: 'subagentState', callId, trace: ['running', 'waiting'].includes(trace.status) ? trace : this._subagentDisplayTrace(trace) });
+                    this._scheduleLocalPartialPersist();
+                },
                 onUsage: (usage) => {
                     // Delegated rounds are real spend on the same account:
                     // fold them into the turn/session/global ledgers exactly
@@ -4145,6 +4166,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     type: 'toolResult',
                     tool: event.tool,
                     output: event.output,
+                    isError: event.isError,
                     callId: event.id,
                     timestamp,
                     // Images the tool returned (MCP screenshots etc). The
@@ -5301,12 +5323,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                                 args: JSON.stringify(parsed.args, null, 2),
                                 callId: parsed.id ?? undefined,
                                 timestamp: parsed.timestamp,
+                                subagent: this._subagentDisplayTrace(parsed.subagent, true),
                             });
                         } else if (parsed.type === 'tool_result') {
                             this._view.webview.postMessage({
                                 type: 'toolResult',
                                 tool: parsed.tool,
                                 output: parsed.output,
+                                isError: parsed.isError,
                                 callId: parsed.id ?? undefined,
                                 timestamp: parsed.timestamp,
                             });
@@ -5319,6 +5343,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }
             }
         }
+    }
+
+    private _subagentDisplayTrace(value: unknown, restored = false) {
+        const trace = readSubagentTrace(value, restored);
+        if (!trace) return undefined;
+        // Persist plain text; render finished child messages through the same
+        // sanitizer as parent messages, once at completion or session restore.
+        return { ...trace, entries: trace.entries.map(entry => entry.kind === 'text' && entry.endedAt
+            ? { ...entry, html: this._renderMarkdown(entry.text) } : entry) };
     }
 
     private _renderMarkdown(text: string, live = false): string {
@@ -6605,6 +6638,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             type: 'needsApproval',
             approval_id: parsed.approval_id,
             approvals: out,
+            source: parsed.source,
             preDenied
         });
     }

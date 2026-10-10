@@ -352,7 +352,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .cred-provider-option-hint { font-size:11px; }
 .cred-provider-menu { border-radius:6px; background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 7%); border-color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 23%); }
 /* Connection polish: inline sign-in, visible local choices, centered actions. */
-.connection-drawer .cred-oauth-row:not(.connected):not(.busy) { width:fit-content; max-width:100%; padding:0; border:0; background:transparent; }
+.connection-drawer .cred-oauth-row:not(.connected):not(.busy) { width:fit-content; max-width:100%; padding:0 10px; border:0; background:transparent; }
 .connection-drawer .cred-oauth-header { flex-direction:row; align-items:center; flex:0 1 auto; gap:8px; }
 .connection-drawer .cred-oauth-copy { flex:0 0 auto; }
 .connection-drawer .cred-oauth-header > .cred-oauth-actions { flex-wrap:nowrap; gap:5px; }

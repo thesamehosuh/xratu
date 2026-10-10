@@ -56,7 +56,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .compact-step { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:10px; min-width:0; }
 .compact-step > svg:first-child { color:var(--surface-accent); flex-shrink:0; }
 .compact-step-label { flex-shrink:0; }
-.compact-step > code { flex:1; min-width:0; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--vscode-descriptionForeground); font-size:9px; }
+.compact-step > code { flex:1; min-width:0; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--vscode-descriptionForeground); font-size:9px; background:transparent; padding:0; border:0; }
 .compact-step > .ok { color:var(--vscode-testing-iconPassed, #8bbaa6); margin-inline-start:auto; }
 .compact-step > .err { color:var(--vscode-errorForeground); }
 .compact-step-error { flex-basis:100%; white-space:pre-wrap; overflow-wrap:anywhere; max-height:160px; overflow:auto; font-size:10px; margin:4px 0; }
@@ -279,3 +279,10 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 
 .workbench .step-count { display:inline-flex; align-items:center; justify-content:center; height:20px; line-height:1; }
 .workbench .step-count > span { transform:translateY(1px); }
+
+/* Floating return control shares the composer surface and stays centered. */
+.jump-btn { inset-inline:0; margin-inline:auto; transform:none; background:var(--page-surface); border:1px solid var(--page-line); animation:none; }
+.jump-btn:hover { transform:translateY(-2px); }
+.jump-btn:active { transform:none; }
+/* Search fields retain a neutral focus indicator rather than teal framing. */
+:is(.model-search,.session-search,.cred-search-wrap,.mp-search) input:is(:focus,:focus-visible) { outline:1px solid var(--page-line); outline-offset:0; box-shadow:none; border-color:var(--page-line); }

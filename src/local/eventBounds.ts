@@ -1,3 +1,4 @@
+import { readSubagentTrace } from '../subagentObservation';
 /**
  * Bounds for the RUN-LIFETIME display event ledger (`outcome.events` in
  * extension.ts).
@@ -86,6 +87,7 @@ function clipDisplay(value: string, limit: number): string {
  *  what the display ledger, the pending-turn snapshot and the webview keep of
  *  an event. Applied at push time AND at turn-end transfer (idempotent). */
 export function trimDisplayEvent(event: any): any {
+    if (event?.subagent) event = { ...event, subagent: readSubagentTrace(event.subagent) };
     // Provider-native replay carriers are MODEL-ledger data: they must never
     // reach the display ledger, the pending-turn snapshot, or the webview.
     if (event?.type === 'assistant_message' && (event.providerBlocks || event.reasoningContent)) {

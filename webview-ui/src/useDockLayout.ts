@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { defaultDockLayout, movePanel, readDockLayout, type DockLocation, type SurfacePanel } from './dockLayout';
+import { SURFACE_PANELS, defaultDockLayout, movePanel, readDockLayout, type DockLocation, type SurfacePanel } from './dockLayout';
 import { getWebviewState, patchWebviewState } from './vscode';
 
-export function useDockLayout() {
+export function useDockLayout(agentsAvailable = false, backgroundAvailable = false) {
     const [layout, setLayout] = useState(() => readDockLayout(getWebviewState().surfaceLayout));
     const [wide, setWide] = useState(() => window.matchMedia('(min-width: 860px)').matches);
     const [narrowActive, setNarrowActive] = useState<SurfacePanel>('conversation');
@@ -36,8 +36,13 @@ export function useDockLayout() {
         setLayout(next); setNarrowActive('conversation'); setDragging(null);
         patchWebviewState({ surfaceLayout: next });
     };
-    const mainActive = wide ? layout.mainActive : narrowActive;
-    const sideActive = wide ? layout.sideActive : null;
+    const available = (panel: SurfacePanel) => panel === 'agents' ? agentsAvailable : panel === 'background' ? backgroundAvailable : true;
+    const mainPanels = layout.main.filter(available);
+    const sidePanels = layout.side.filter(available);
+    const allPanels = SURFACE_PANELS.filter(available);
+    const wanted = wide ? layout.mainActive : narrowActive;
+    const mainActive = available(wanted) ? wanted : 'conversation';
+    const sideActive = wide ? layout.sideActive && available(layout.sideActive) ? layout.sideActive : sidePanels[0] ?? null : null;
     const position = (panel: SurfacePanel) => `${wide && layout.side.includes(panel) ? 'panel-side' : 'panel-main'}${mainActive !== panel && sideActive !== panel ? ' panel-hidden' : ''}`;
-    return { layout, wide, mainActive, sideActive, dragging, setDragging, activate, move, reset, position };
+    return { layout, mainPanels, sidePanels, allPanels, wide, mainActive, sideActive, dragging, setDragging, activate, move, reset, position };
 }

@@ -295,6 +295,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         open: true,
                         callId: msg.callId,
                         startedAt: msg.timestamp ?? Date.now(),
+                        subagent: msg.subagent,
                     };
                     return { ...m, steps: [...m.steps, step] };
                 }),
@@ -310,7 +311,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // call - not orphan a row on the fresh bubble).
             const global = mapCallStep(state, msg.callId, (st) => ({
                 ...st,
-                result: tOrRaw(msg.output),
+                result: tOrRaw(msg.output), isError: msg.isError,
                 endedAt: msg.timestamp ?? Date.now(),
                 ...(images ? { images } : {}),
             }));
@@ -327,20 +328,20 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     let idx = -1;
                     if (msg.callId) {
                         idx = steps.findIndex(
-                            (st) => st.kind === 'toolCall' && !st.result && st.callId === msg.callId
+                            (st) => st.kind === 'toolCall' && st.result === undefined && st.callId === msg.callId
                         );
                     }
                     if (idx < 0) {
                         for (let i = steps.length - 1; i >= 0; i--) {
                             const st = steps[i];
-                            if (st.kind === 'toolCall' && !st.result) {
+                            if (st.kind === 'toolCall' && st.result === undefined) {
                                 idx = i;
                                 break;
                             }
                         }
                     }
                     if (idx >= 0) {
-                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), endedAt: msg.timestamp ?? Date.now(), ...(images ? { images } : {}) };
+                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), isError: msg.isError, endedAt: msg.timestamp ?? Date.now(), ...(images ? { images } : {}) };
                     } else {
                         // Orphan result - render as a completed standalone row,
                         // not a call-shaped row with an empty args section.
@@ -349,7 +350,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                             kind: 'toolResult',
                             tool: msg.tool,
                             text: '',
-                            result: tOrRaw(msg.output),
+                            result: tOrRaw(msg.output), isError: msg.isError,
                             startedAt: msg.timestamp ?? Date.now(),
                             ...(images ? { images } : {}),
                         });
@@ -359,13 +360,16 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             };
         }
 
+        case 'subagentState':
+            return mapCallStep(state, msg.callId, st => st.tool === 'task' ? { ...st, subagent: msg.trace } : st) ?? state;
+
         case 'toolOutput': {
             // Live terminal/subagent output: append to the open call row so
             // the user can watch a long command. Display-only - the final
             // toolResult still supplies the authoritative (capped) output.
             // Pair GLOBALLY by callId first: a steer splits the bubble mid-run
             // and the trace must keep flowing to the pill that owns the call.
-            const global = mapCallStep(state, msg.callId, (st) => ({
+            const global = mapCallStep(state, msg.callId, (st) => st.background ? st : ({
                 ...st,
                 live: ((st.live ?? '') + msg.value).slice(-LIVE_OUTPUT_MAX),
             }));
@@ -403,6 +407,22 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             return mapCallStep(state, msg.callId, marked) ?? state;
         }
 
+        case 'backgroundJobOutput':
+            return { ...state, backgroundJobs: state.backgroundJobs.map(job => job.jobId === msg.jobId ? { ...job, output: msg.output.slice(-LIVE_OUTPUT_MAX) } : job), messages: state.messages.map(message => message.steps.some(step => step.background?.jobId === msg.jobId) ? {
+                ...message, steps: message.steps.map(step => step.background?.jobId === msg.jobId ? { ...step, live: msg.output.slice(-LIVE_OUTPUT_MAX) } : step),
+            } : message) };
+
+        case 'backgroundJobFinished':
+            return {
+                ...state,
+                backgroundJobs: state.backgroundJobs.map(job => job.jobId === msg.jobId ? { ...job, running: false, status: msg.status, exitCode: msg.exitCode, finishedAt: Date.now(), output: msg.output.slice(-LIVE_OUTPUT_MAX) } : job),
+                messages: state.messages.map(message => message.steps.some(step => step.background?.jobId === msg.jobId) ? {
+                    ...message, steps: message.steps.map(step => step.background?.jobId === msg.jobId ? {
+                        ...step, background: undefined, backgroundOutcome: { output: msg.output, status: msg.status, exitCode: msg.exitCode },
+                    } : step),
+                } : message),
+            };
+
         case 'backgroundJobStopped':
             // Drop the marker so the row stops offering a stop for a job that
             // no longer exists. The job itself is the host's business.
@@ -418,8 +438,12 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     : m)),
             };
 
-        case 'backgroundJobs':
-            return { ...state, backgroundJobs: msg.jobs };
+        case 'backgroundJobs': {
+            const live = new Set(msg.jobs.filter(job => job.running).map(job => job.jobId));
+            return { ...state, backgroundJobs: msg.jobs.map(job => ({ ...job, output: job.output === undefined ? state.backgroundJobs.find(previous => previous.jobId === job.jobId)?.output : job.output.slice(-LIVE_OUTPUT_MAX) })), messages: state.messages.map(message => message.steps.some(step => step.background && !live.has(step.background.jobId)) ? {
+                ...message, steps: message.steps.map(step => step.background && !live.has(step.background.jobId) ? { ...step, background: undefined } : step),
+            } : message) };
+        }
 
         case 'sessionCost':
             // Host-owned cumulative spend. Kept OUT of the message list so a
@@ -468,13 +492,29 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         : st
                 );
                 renderedHtml = undefined;
-            } else if (streaming && textSteps.length > 0) {
-                steps = streaming.steps.filter((st) => st.kind !== 'text');
+            } else if (streaming) {
+                // Older replays may lack segment renders. Keep their progress
+                // entries and use the final streamed segment when available.
+                const tail = streaming.steps.at(-1);
+                const lastText = textSteps.at(-1);
+                if (tail?.kind === 'toolCall' || tail?.kind === 'toolResult') {
+                    if (msg.persian || msg.renderedHtml) steps = [...streaming.steps, {
+                        id: nextId(), kind: 'text', text: msg.persian ?? '', html: msg.renderedHtml ?? undefined,
+                    }];
+                } else if (lastText) {
+                    if (textSteps.length > 1) renderedHtml = undefined;
+                    else steps = streaming.steps.map(st => st === lastText ? {
+                        ...st, text: msg.persian ?? st.text,
+                        html: msg.renderedHtml ?? (msg.persian === undefined || msg.persian === st.text ? st.html : undefined),
+                    } : st);
+                }
             }
+            const finalStep = (steps ?? streaming?.steps ?? []).filter(st => st.kind === 'text').at(-1);
+            if (streaming && finalStep) steps = (steps ?? streaming.steps).map(st => st.id === finalStep.id ? { ...st, final: true } : st);
             return {
                 ...patch(state, id, {
                     renderedHtml,
-                    text: msg.persian ?? '',
+                    text: finalStep && (textSteps.length > 1 || !!segs?.length) ? finalStep.text : msg.persian ?? '',
                     status: 'done',
                     completedAt: Date.now(),
                     usage: meaningfulUsage(msg.usage),
@@ -550,7 +590,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                                   errorText: (m.text || m.renderedHtml || m.steps.length > 0) ? value : undefined,
                                   retryStatus: null,
                                   steps: m.steps.map((st) =>
-                                      st.kind === 'toolCall' && !st.result
+                                      st.kind === 'toolCall' && st.result === undefined
                                           ? { ...st, result: t('resultCancelled') }
                                           : st
                                   ),
@@ -582,6 +622,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 approval_id: msg.approval_id,
                 approvals: msg.approvals,
                 preDenied: msg.preDenied,
+                source: msg.source,
             };
             if (state.streamingId) {
                 const found = state.messages.some((m) => m.id === state.streamingId);
@@ -708,7 +749,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                                   errorText: (m.text || m.renderedHtml || m.steps.length > 0) ? value : undefined,
                                   retryStatus: null,
                                   steps: m.steps.map((st) =>
-                                      st.kind === 'toolCall' && !st.result
+                                      st.kind === 'toolCall' && st.result === undefined
                                           ? { ...st, result: t('resultCancelled') }
                                           : st
                                   ),

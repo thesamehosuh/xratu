@@ -41,7 +41,8 @@ s = reduceChat(s, M('toolCall', { tool: 'read_file', args: '{"path":"a"}' }));
 s = reduceChat(s, M('toolResult', { tool: 'read_file', output: 'content' }));
 s = reduceChat(s, M('fullResponse', { renderedHtml: '<p>ok</p>' }));
 const a = s.messages[s.messages.length - 1];
-ok(a.steps.length === 2, 'result pairs into call row (two steps)');
+ok(a.steps.filter(step => step.kind !== 'text').length === 2, 'result pairs into its call row beside thinking and the final answer');
+ok(a.steps.some(step => step.kind === 'text' && step.final && step.html === '<p>ok</p>'), 'final answer remains beside thinking and the tool call');
 ok(
     a.steps[0].kind === 'thinking' && a.steps[1].kind === 'toolCall',
     'step order'

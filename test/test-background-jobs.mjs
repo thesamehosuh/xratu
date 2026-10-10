@@ -25,6 +25,7 @@ import { join } from 'path';
 
 const require = createRequire(import.meta.url);
 const {
+    backgroundJobViews,
     DEFAULT_LOG_LINES,
     FINISHED_RETENTION_MS,
     MAX_BACKGROUND_JOBS,
@@ -583,6 +584,20 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 }
 
 {
+    const events = [];
+    const unsubscribe = onJobEvent(event => events.push(event));
+    const script = join(holdDir,'streaming-background.js');
+    writeFileSync(script,"console.log('server starting'); setTimeout(() => console.log('server ready'), 250); setTimeout(() => {}, 750);\n",'utf8');
+    const job = spawnTerminalJob({workspaceRoot:process.cwd(),command:sh(`${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,`node ${JSON.stringify(script)}`),background:true,callId:'live-background'});
+    await job.finished;
+    const updates = events.filter(event=>event.kind==='output' && event.jobId===job.id);
+    ok('background output reaches the UI without a live agent loop', updates.some(event=>event.output.includes('server ready')),JSON.stringify(updates));
+    ok('background output snapshots are bounded',updates.every(event=>event.output.length<=20000));
+    ok('completion follows live output',events.at(-2)?.kind==='finished' && events.at(-1)?.kind==='settled');
+    unsubscribe();
+}
+
+{
     // A job the model already read must not be announced again.
     const events = [];
     const unsubscribe = onJobEvent((e) => events.push(e));
@@ -604,6 +619,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     const before = events.filter((e) => e.kind === 'settled').length;
     markCompletionConsumed(late.id);
     await late.finished;
+    ok('a consumed job still settles in the UI', events.some(e => e.kind === 'finished' && e.notice.jobId === late.id));
     ok('a consumed job is not announced again',
         events.filter((e) => e.kind === 'settled').length === before,
         String(events.filter((e) => e.kind === 'settled').length - before));
@@ -740,6 +756,17 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // cover EBUSY.
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
+
+// Monitoring must keep live processes visible even after many short jobs finish.
+const monitorJob = (index, overrides = {}) => ({id:`monitor-${index}`,background:true,command:`cmd ${index}`,status:'exited',startedAt:index,finishedAt:index+1,exitCode:0,cwd:'C:\\project',pid:index,output:'z'.repeat(25_000),uptimeSeconds:()=>1,...overrides});
+const monitor = backgroundJobViews(Array.from({length:50},(_,i)=>monitorJob(i)).concat(monitorJob(-1,{status:'running',exitCode:null}),monitorJob(51,{background:false})));
+ok('monitor is bounded to 32 processes', monitor.length === 32);
+ok('monitor prioritizes live jobs with their actual status', monitor[0].jobId === 'monitor--1' && monitor[0].running && monitor[0].exitCode === null);
+ok('monitor retains the newest completion', monitor[1].jobId === 'monitor-49');
+const recentlyFinished = backgroundJobViews(Array.from({length:50},(_,i)=>monitorJob(i)).concat(monitorJob(-2,{finishedAt:100})));
+ok('monitor retains a long-running job that finished most recently', recentlyFinished[0].jobId === 'monitor--2');
+ok('monitor output is a bounded tail', monitor[0].output.length === 20_000);
+ok('monitor preserves spawn errors', backgroundJobViews([monitorJob(1,{status:'failed',output:'',error:new Error('spawn failed')})])[0].output === 'spawn failed');
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

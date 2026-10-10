@@ -1,3 +1,5 @@
+import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
+export type { SubagentTrace } from '../../src/subagentObservation';
 import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 // Message protocol shared between the VS Code extension host (extension.ts)
@@ -364,8 +366,9 @@ export type FromExtensionMessage =
     // pipeline identical to streamHtml). Patches the latest thinking step's
     // html so the thinking pill renders formatted reasoning while streaming.
     | { type: 'thinkingHtml'; value: string }
-    | { type: 'toolCall'; tool: string; args: string; callId?: string; timestamp?: number }
-    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[]; timestamp?: number }
+    | { type: 'toolCall'; tool: string; args: string; callId?: string; timestamp?: number; subagent?: SubagentTrace }
+    | { type: 'subagentState'; callId: string; trace: SubagentTrace }
+    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[]; timestamp?: number; isError?: boolean }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; callId?: string; value: string }
     /** A terminal call was moved to the background (model- or user-initiated).
@@ -374,6 +377,8 @@ export type FromExtensionMessage =
     /** A background job was stopped from the UI - clears the row's background
      *  marker so it cannot offer a stop for a job that no longer exists. */
     | { type: 'backgroundJobStopped'; jobId: string }
+    | { type: 'backgroundJobOutput'; jobId: string; output: string }
+    | { type: 'backgroundJobFinished'; jobId: string; output: string; status: 'exited' | 'killed' | 'failed'; exitCode: number | null }
     /** Live background jobs, for the composer badge. Refreshed on every
      *  background/kill/settle so the count cannot drift from reality. */
     | { type: 'backgroundJobs'; jobs: BackgroundJobView[] }
@@ -398,7 +403,7 @@ export type FromExtensionMessage =
           segmentsHtml?: string[];
       }
     | { type: 'error'; value?: string; valueKey?: string; params?: Record<string, string> }
-    | { type: 'needsApproval'; approval_id: string; approvals: ApprovalItem[]; preDenied?: Record<string, boolean> }
+    | { type: 'needsApproval'; approval_id: string; approvals: ApprovalItem[]; preDenied?: Record<string, boolean>; source?: SubagentApprovalSource }
     | { type: 'approvalResolved'; approval_id: string; resolution: ApprovalResolution }
     /** A pending decision card (the `ask_user_question` tool): the model asked
      *  the user to pick between options. Attaches to the live assistant
@@ -792,6 +797,7 @@ export interface ApprovalItem {
 }
 
 export interface ApprovalPayload {
+    source?: SubagentApprovalSource;
     approval_id: string;
     approvals: ApprovalItem[];
     preDenied?: Record<string, boolean>;
@@ -829,8 +835,12 @@ export interface BackgroundStep {
 }
 
 export interface Step {
+    /** Structured, bounded child activity; separate from the parent prompt. */
+    subagent?: SubagentTrace;
     id: string;
     kind: StepKind;
+    /** Final answer segment; later bookkeeping/reasoning cannot move it into Activity. */
+    final?: boolean;
     tool?: string;
     text: string;
     open?: boolean;
@@ -838,6 +848,9 @@ export interface Step {
     callId?: string;
     /** Filled when the matching tool_result arrives (Cline-style paired row). */
     result?: string;
+    isError?: boolean;
+    /** Child run ended before this tool returned an authoritative result. */
+    interrupted?: boolean;
     /** Images the tool returned with its result (MCP screenshots). */
     images?: ToolImageView[];
     /** Live output streamed WHILE a long tool (terminal command) runs, shown
@@ -848,6 +861,7 @@ export interface Step {
      *  stays interactive: it can still be stopped, and it no longer offers
      *  the background button. */
     background?: BackgroundStep;
+    backgroundOutcome?: { output: string; status: 'exited' | 'killed' | 'failed'; exitCode: number | null };
     /** Wall-clock span of an activity (webview-side timing). */
     startedAt?: number;
     endedAt?: number;
@@ -863,6 +877,14 @@ export interface BackgroundJobView {
     running: boolean;
     /** Whole seconds since it started. */
     uptimeSeconds: number;
+    status?: 'running' | 'exited' | 'killed' | 'failed';
+    exitCode?: number | null;
+    startedAt?: number;
+    finishedAt?: number;
+    cwd?: string;
+    pid?: number;
+    output?: string;
+    detached?: boolean;
 }
 
 export type MessageStatus = 'streaming' | 'done' | 'error';

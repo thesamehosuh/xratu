@@ -36,7 +36,7 @@ export function DockSidebar({ children, active, dragging }: { children: ReactNod
     const save = (next: number | null) => patchWebviewState({ reviewSidebarWidth: next });
 
     return <aside ref={pane} className={`dock-sidebar${active ? ' active' : ''}${dragging ? ' drag-target' : ''}${resizing ? ' resizing' : ''}`} aria-label={t('surfaceSidebarTabs')}>
-        <div className="review-resize" role="separator" tabIndex={0} aria-label={t('surfaceResizeReview')} aria-orientation="vertical" aria-controls="surface-panel-changes surface-panel-activity" aria-valuemin={MIN_WIDTH} aria-valuemax={maximum} aria-valuenow={width}
+        <div className="review-resize" role="separator" tabIndex={0} aria-label={t('surfaceResizeReview')} aria-orientation="vertical" aria-controls="surface-panel-changes surface-panel-activity surface-panel-agents surface-panel-background" aria-valuemin={MIN_WIDTH} aria-valuemax={maximum} aria-valuenow={width}
             onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault(); event.currentTarget.focus();

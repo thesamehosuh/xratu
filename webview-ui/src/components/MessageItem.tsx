@@ -1,7 +1,9 @@
+import { ToolDetails, toolArgs } from './ToolDetails';
+import { AgentNavigation } from './AgentNavigation';
 import { ToolImages } from './ToolImages';
 import { CompletedOutcome } from './CompletedOutcome';
 import { CompactSteps } from './CompactSteps';
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -209,7 +211,7 @@ export function decisionPayloadFromStep(step: Step): import('../types').Decision
 
 /** Is this tool row finished (has a paired result)? */
 function toolRowDone(r: ToolRow): boolean {
-    return !!(r.call.result || (r.result && r.result.kind === 'toolCall'));
+    return r.call.backgroundOutcome !== undefined || r.call.result !== undefined || !!r.call.interrupted || !!r.result;
 }
 
 /** A run of identical calls collapses into ONE pill ("Read file ×8") - EXCEPT
@@ -363,16 +365,15 @@ function truncateArg(v: string): string {
  *  pseudo-call step whose text is blanked by buildRows - the payload sits
  *  on its `result` field there. */
 function resultTextOf(call: Step, result?: Step): string {
-    const raw = result ? result.text || result.result || '' : call.result ?? '';
+    const raw = call.backgroundOutcome?.output ?? (result ? result.text || result.result || '' : call.result ?? '');
     return stripReplayMarkers(raw);
 }
 
-/** Tool payloads carry no structured error flag, so failure is detected
- *  from the result text ("Error: …", "Error from VS Code: …"). */
+/** Preserve real error flags and recognize older text-only results. */
 const ERROR_RESULT_RE = /^error\b/i;
 
 function toolRowFailed(call: Step, result?: Step): boolean {
-    return ERROR_RESULT_RE.test(resultTextOf(call, result).trim());
+    return call.backgroundOutcome?.status === 'failed' || (call.backgroundOutcome?.exitCode != null && call.backgroundOutcome.exitCode !== 0) || !!(call.isError || result?.isError) || ERROR_RESULT_RE.test(resultTextOf(call, result).trim());
 }
 
 /** Did THIS call step come back as an error? The result text is attached to
@@ -779,7 +780,7 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
     const rawPatch = !patch && !content && call.text.includes('<<<<<<<') ? call.text : undefined;
     const effective = patch ?? rawPatch;
     const stats = useMemo(() => (effective ? editStatsOf(effective) : null), [effective]);
-    const done = !!call.result || !!result;
+    const done = call.result !== undefined || !!result;
     const failed = toolRowFailed(call, result);
     return (
         <div className="edit-file">
@@ -794,8 +795,8 @@ function EditFileSection({ call, result }: { call: Step; result?: Step }) {
                 )
             ) : (
                 <div className="tool-loading">
-                    <span className="spinner" aria-hidden="true" />
-                    <span>{t('toolRunning')}</span>
+                    {!call.interrupted && <span className="spinner" aria-hidden="true" />}
+                    <span>{t(call.interrupted ? 'toolInterrupted' : 'toolRunning')}</span>
                 </div>
             )}
             {failed && <ResultLine text={resultTextOf(call, result)} />}
@@ -816,24 +817,6 @@ function ResultLine({ text }: { text: string }) {
 }
 
 /** Remaining scalar args as muted key/value hint lines. */
-function ScalarHints({ args, skip }: { args: Record<string, unknown> | null; skip: string[] }) {
-    if (!args) return null;
-    const entries = Object.entries(args).filter(
-        ([k, v]) => !skip.includes(k) && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-    );
-    if (entries.length === 0) return null;
-    return (
-        <div className="tool-hints" dir="ltr">
-            {entries.map(([k, v]) => (
-                <div key={k} className="tool-hint">
-                    <span className="step-io-tag">{k}</span>
-                    <span className="tool-hint-val">{String(v)}</span>
-                </div>
-            ))}
-        </div>
-    );
-}
-
 /** Labeled key/value args - the generic body (fallback, git, ops, mcp). */
 function ArgView({ call }: { call: Step }) {
     const args = useMemo(() => parseArgs(call.text), [call.text]);
@@ -874,7 +857,7 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
     // Edit bodies NEVER stream: the patch/content grows per chunk while the
     // tool runs, so the dropdown shows a loading row and renders the full
     // (shiki-highlighted) diff only when the write has finished.
-    const done = !!call.result || !!result;
+    const done = call.result !== undefined || !!result;
     const failed = toolRowFailed(call, result);
     return (
         <>
@@ -906,8 +889,8 @@ function EditBody({ call, result }: { call: Step; result?: Step }) {
                         ? <EditFileHead path={path} stats={null} />
                         : path && <PathLine path={path} />}
                     <div className="tool-loading">
-                        <span className="spinner" aria-hidden="true" />
-                        <span>{t('toolRunning')}</span>
+                        {!call.interrupted && <span className="spinner" aria-hidden="true" />}
+                        <span>{t(call.interrupted ? 'toolInterrupted' : 'toolRunning')}</span>
                     </div>
                 </>
             )}
@@ -959,214 +942,32 @@ function parseTerminalOutput(text: string): TerminalOutput | null {
     return res;
 }
 
-function TerminalBody({ call, result }: { call: Step; result?: Step }) {
-    const args = useMemo(() => parseArgs(call.text), [call.text]);
-    const cmd = argString(args, 'command');
-    const text = resultTextOf(call, result);
-    // Gate on DONE, not on text: a command that succeeds with EMPTY output
-    // must not spin forever.
-    const done = !!call.result || !!result;
-    const parsed = useMemo(() => (done ? parseTerminalOutput(text) : null), [done, text]);
-    // Live output follows the newest lines while the command runs - but only
-    // while the reader is pinned to the bottom of that output; a manual
-    // scroll-up inside the pill is never yanked back (mirrors the thinking
-    // pill's follow behavior). Without this the output sat at line 1 while the
-    // command streamed, and its own default scrollbar was never repositioned.
-    const liveRef = useRef<HTMLPreElement | null>(null);
-    const livePinned = useRef(true);
-    const live = call.live ?? '';
-    useEffect(() => {
-        const el = liveRef.current;
-        if (!done && el && livePinned.current) el.scrollTop = el.scrollHeight;
-    }, [live, done]);
-    const onLiveScroll = () => {
-        const el = liveRef.current;
-        if (el) livePinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    };
-    return (
-        <>
-            {cmd ? <pre className="tool-cmd" dir="ltr">{cmd}</pre> : <ArgView call={call} />}
-            {done ? (
-                parsed ? (
-                    <div className="term-out" dir="ltr">
-                        {parsed.stdout && (
-                            <>
-                                <span className="step-io-tag">{t('termStdout')}</span>
-                                <pre className="result-tall">{parsed.stdout}</pre>
-                            </>
-                        )}
-                        {parsed.stderr && (
-                            <>
-                                <span className="step-io-tag err">{t('termStderr')}</span>
-                                <pre className="result-tall term-err">{parsed.stderr}</pre>
-                            </>
-                        )}
-                        {parsed.error && <div className="tool-note err">{parsed.error}</div>}
-                    </div>
-                ) : (
-                    <pre className="result-tall" dir="ltr">{text}</pre>
-                )
-            ) : (
-                <>
-                    <div className="tool-loading">
-                        <span className="spinner" aria-hidden="true" />
-                        <span>{t('toolRunning')}</span>
-                    </div>
-                    {/* Live output while the command runs (display only; the
-                        final result replaces it). Tail-capped so a chatty
-                        command cannot grow the DOM without bound. */}
-                    {call.live && (
-                        <pre
-                            ref={liveRef}
-                            onScroll={onLiveScroll}
-                            className="term-out term-live result-tall"
-                            dir="ltr"
-                        >{call.live.slice(-20000)}</pre>
-                    )}
-                </>
-            )}
-        </>
-    );
-}
-
-function ReadBody({ call, result }: { call: Step; result?: Step }) {
-    const args = useMemo(() => parseArgs(call.text), [call.text]);
-    const path = argString(args, 'path');
-    const paths = args && Array.isArray(args.paths)
-        ? (args.paths as unknown[]).filter((p): p is string => typeof p === 'string' && !!p)
-        : [];
-    const text = resultTextOf(call, result);
-    return (
-        <>
-            {path && <PathLine path={path} />}
-            {paths.map((p) => <PathLine key={p} path={p} />)}
-            {!path && paths.length === 0 && <ArgView call={call} />}
-            {text && <pre dir="ltr">{truncateArg(text)}</pre>}
-        </>
-    );
-}
-
-function SearchBody({ call, result }: { call: Step; result?: Step }) {
-    const args = useMemo(() => parseArgs(call.text), [call.text]);
-    const pattern = argString(args, 'pattern') ?? argString(args, 'query') ?? argString(args, 'name') ?? argString(args, 'symbol');
-    const skip = ['pattern', 'query', 'name', 'symbol'];
-    const text = resultTextOf(call, result);
-    return (
-        <>
-            {pattern ? (
-                <>
-                    <pre className="tool-cmd" dir="ltr">{pattern}</pre>
-                    <ScalarHints args={args} skip={skip} />
-                </>
-            ) : (
-                <ArgView call={call} />
-            )}
-            {text && <pre dir="ltr">{truncateArg(text)}</pre>}
-        </>
-    );
-}
-
-function WebBody({ call, result }: { call: Step; result?: Step }) {
-    const args = useMemo(() => parseArgs(call.text), [call.text]);
-    const target = argString(args, 'url') ?? argString(args, 'query');
-    const text = resultTextOf(call, result);
-    return (
-        <>
-            {target ? <PathLine path={target} /> : <ArgView call={call} />}
-            {text && <pre className="result-tall" dir="ltr">{truncateArg(text)}</pre>}
-        </>
-    );
-}
-
 function SubagentBody({ call, result }: { call: Step; result?: Step }) {
-    // The task pill IS the subagent's window: args (type/description/prompt),
-    // a live tool trace while it runs, and the final report when it settles.
+    const openAgent = useContext(AgentNavigation);
+    const args = useMemo(() => toolArgs(call.text), [call.text]);
+    const trace = call.subagent;
     const text = resultTextOf(call, result);
-    const done = !!call.result || !!result;
-    // The trace follows the newest line while pinned (mirrors TerminalBody).
-    // Deliberately NOT the `term-out`/`term-live` classes: `term-out` styles a
-    // WRAPPER div (its display:flex mangles a raw pre) and `term-live`'s
-    // `overscroll-behavior: contain` exists for the terminal's pinned tail -
-    // here it would block the wheel from chaining into the chat scroll, which
-    // is exactly the "scrolling is broken while the pill is open" bug.
-    const liveRef = useRef<HTMLPreElement | null>(null);
-    const livePinned = useRef(true);
-    const live = call.live ?? '';
-    useEffect(() => {
-        const el = liveRef.current;
-        if (!done && el && livePinned.current) el.scrollTop = el.scrollHeight;
-    }, [live, done]);
-    const onLiveScroll = () => {
-        const el = liveRef.current;
-        if (el) livePinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    };
-    return (
-        <>
-            <ArgView call={call} />
-            {done ? (
-                text && (
-                    <>
-                        <span className="step-io-tag">{t('resultTag')}</span>
-                        <pre className="result-tall" dir="auto">{text}</pre>
-                    </>
-                )
-            ) : (
-                <>
-                    <div className="tool-loading">
-                        <span className="spinner" aria-hidden="true" />
-                        <span>{t('subagentDelegating')}</span>
-                    </div>
-                    {call.live && (
-                        <pre
-                            ref={liveRef}
-                            onScroll={onLiveScroll}
-                            className="result-tall"
-                            dir="ltr"
-                        >{call.live.slice(-20000)}</pre>
-                    )}
-                </>
-            )}
-        </>
-    );
-}
-
-function GenericBody({ call, result }: { call: Step; result?: Step }) {
-    const text = resultTextOf(call, result);
-    return (
-        <>
-            <ArgView call={call} />
-            {text && (
-                <>
-                    <span className="step-io-tag">{t('resultTag')}</span>
-                    <pre dir="ltr">{truncateArg(text)}</pre>
-                </>
-            )}
-        </>
-    );
+    const done = call.result !== undefined || !!result;
+    const current = trace?.entries.filter(entry => entry.kind === 'tool').at(-1);
+    return <div className="subagent-preview">
+        <div className="subagent-preview-head"><span className="subagent-profile" dir="auto">{trace?.profile ?? String(args.subagent_type ?? '')}</span>
+            {trace?.model && <code dir="ltr">{trace.model}</code>}
+            {openAgent && <button type="button" className="subagent-open" onClick={() => openAgent(call.id)}><ExternalLink size={12} />{t('agentObserve')}</button>}
+        </div>
+        {trace?.description && <p dir="auto">{trace.description}</p>}
+        {!done && <div className="subagent-preview-live"><span className="spinner" aria-hidden="true" /><code dir="ltr">{current?.tool ?? t('subagentDelegating')}</code><span>{tf('subagentToolCalls', { count: String(trace?.toolCalls ?? 0) })}</span></div>}
+        {done && <div className="subagent-preview-report" dir="auto">{trace?.report ?? text}</div>}
+        {!trace && !done && call.live && <pre className="subagent-legacy-live" dir="ltr">{call.live.slice(-20_000)}</pre>}
+        <details className="detail-arguments"><summary><ChevronDown size={11} />{t('agentTask')}</summary><p dir="auto">{trace?.prompt ?? String(args.prompt ?? '')}</p></details>
+    </div>;
 }
 
 function ToolBody({ call, result }: { call: Step; result?: Step }) {
-    const body = (() => {
-        switch (toolFamily(call.tool)) {
-            case 'edit': return <EditBody call={call} result={result} />;
-            case 'terminal': return <TerminalBody call={call} result={result} />;
-            case 'read': return <ReadBody call={call} result={result} />;
-            case 'search': return <SearchBody call={call} result={result} />;
-            case 'web': return <WebBody call={call} result={result} />;
-            case 'subagent': return <SubagentBody call={call} result={result} />;
-            default: return <GenericBody call={call} result={result} />;
-        }
-    })();
-    // Images render for EVERY family, not just the generic one: the tool that
-    // returns them today is an MCP screenshot (family 'mcp'), but a built-in
-    // browser tool must render them too, and picking the family as the switch
-    // is exactly how that silently breaks later.
-    return (
-        <>
-            {body}
-            <ToolImages call={call} result={result} />
-        </>
-    );
+    return <>
+        {toolFamily(call.tool) === 'subagent' ? <SubagentBody call={call} result={result} />
+            : <ToolDetails call={call} result={result}>{toolFamily(call.tool) === 'edit' ? <EditBody call={call} result={result} /> : undefined}</ToolDetails>}
+        <ToolImages call={call} result={result} />
+    </>;
 }
 
 /**
@@ -1233,7 +1034,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
                         <span className="step-status spinner" aria-hidden="true" />
                     ) : null}
                     {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr"><span>×{row.calls.length}</span></span>}
-                    {isEdit && (
+                    {isEdit && onOpenDiff && (
                         <button
                             type="button"
                             className="icon-btn-mini"
@@ -1259,7 +1060,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
             {isEdit ? (
                 <div className="step-body">
                     {row.calls.map((c) => (
-                        <EditFileSection key={c.key} call={c.call} result={c.result} />
+                        <ToolDetails key={c.key} call={c.call} result={c.result}><EditFileSection call={c.call} result={c.result} /></ToolDetails>
                     ))}
                 </div>
             ) : (
@@ -1471,7 +1272,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                             {t('termExitCode')} {termExit}
                         </span>
                     )}
-                    {family === 'edit' && (
+                    {family === 'edit' && onOpenDiff && (
                         <button
                             type="button"
                             className="icon-btn-mini"
@@ -2140,7 +1941,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, observation = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2152,14 +1953,23 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
 
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
+    const readOnly = activityOnly || observation;
 
-    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length).filter((row) => !activityOnly || row.kind !== 'text'), [steps, message.decisions, activityOnly]);
+    const rows = useMemo(() => {
+        const timeline = buildRows(steps, !!message.decisions?.length);
+        const trailing = timeline.find(row => row.kind === 'text' && row.steps.some(step => step.final)) ?? timeline.at(-1);
+        // Prose before the next action belongs to Activity. The current/final
+        // trailing response belongs to Conversation, never both surfaces.
+        if (activityOnly) return timeline.filter(row => row !== trailing || row.kind !== 'text');
+        if (observation) return timeline;
+        return timeline.filter(row => row.kind !== 'text' || row === trailing);
+    }, [steps, message.decisions, activityOnly, observation]);
     const [activityNow, setActivityNow] = useState(Date.now);
     useEffect(() => {
-        if (!activityOnly) return;
+        if (!readOnly) return;
         const timer = window.setInterval(() => setActivityNow(Date.now()), 30_000);
         return () => window.clearInterval(timer);
-    }, [activityOnly]);
+    }, [readOnly]);
 
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
@@ -2184,7 +1994,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                 : lastRow.kind === 'tool' && !toolRowDone(lastRow)));
     const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
-    const showFooter = !activityOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
+    const showFooter = !readOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
     // User bubbles carry their own footer from the moment they appear; the
     // pencil is the ONLY part that hides while a run is in flight.
     const showUserFooter = role === 'user' && status === 'done';
@@ -2200,7 +2010,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
         }
     };
 
-    if (activityOnly && isSystem) return null;
+    if (readOnly && isSystem) return null;
 
     if (isSystem && (message.approval || message.decisions?.length)) {
         // The card IS the surface. A decision-only row drops the system-bubble
@@ -2210,14 +2020,13 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
         return (
             <article className={bare ? 'decision-holder' : bubbleClass} dir="auto">
                 {message.approval && <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />}
-                {!activityOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
+                {!readOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
             </article>
         );
     }
 
-    const collapseSteps = !activityOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
-    const leadingText = collapseSteps && hasPills && rows[0]?.kind === 'text' && textRows.length > 1 ? textRows[0] : null;
-    const finalTextRows = collapseSteps ? textRows.filter((row) => row !== leadingText) : [];
+    const collapseSteps = !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
+    const finalTextRows = collapseSteps ? textRows : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
 
     return (
@@ -2227,25 +2036,24 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
             aria-busy={status === 'streaming' && !approvalPending}
         >
             {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
-            {leadingText && <TextSegmentRow steps={leadingText.steps} streaming={false} />}
             {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
             {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
                     {rows.map((row) => {
                         const timestamp = (row.kind === 'toolGroup' ? row.calls[0]?.call : row.kind === 'tool' ? row.call : row.kind === 'thinking' || row.kind === 'taskList' ? row.step : row.steps[0])?.startedAt ?? message.createdAt;
-                        const age = activityOnly ? { timestamp, now: activityNow } : undefined;
+                        const age = readOnly ? { timestamp, now: activityNow } : undefined;
                         const content = row.kind === 'toolGroup' ? (
-                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} age={age} activityNow={activityOnly ? activityNow : undefined} />
+                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} age={age} activityNow={readOnly ? activityNow : undefined} />
                         ) : row.kind === 'text' ? (
-                            <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
+                            <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent && !observation} />
                         ) : row.kind === 'taskList' ? (
-                            <TaskListRow key={row.key} row={row} view={activityOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={transcriptPrefs} age={age} />
+                            <TaskListRow key={row.key} row={row} view={readOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={transcriptPrefs} age={age} />
                         ) : row.kind === 'decision' ? (
                             <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={activityOnly ? undefined : onBackgroundTerminal} onKillBackground={activityOnly ? undefined : onKillBackground} prefs={transcriptPrefs} age={age} />
+                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={readOnly ? undefined : onBackgroundTerminal} onKillBackground={readOnly ? undefined : onKillBackground} prefs={transcriptPrefs} age={age} />
                         );
-                        if (!activityOnly) return content;
+                        if (!readOnly) return content;
                         return <div className="activity-entry" key={row.key}>{content}{row.kind === 'decision' && age && <ActivityAge {...age} />}</div>;
                     })}
                     {showWorking && (
@@ -2312,7 +2120,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                         )}
                     </>
                 )
-            ) : renderedHtml ? (
+            ) : steps.some(step => step.kind === 'text') ? null : renderedHtml ? (
                 <RenderedMarkdown html={renderedHtml} streaming={streamingContent} live={streamingContent} />
             ) : isTyping ? (
                 <div className={`msg-content typing${message.retryStatus ? ' retrying' : ''}`} aria-label={t('typingAria')}>
@@ -2341,11 +2149,11 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                 </div>
             )}
 
-            {!activityOnly && message.approval && (
+            {!readOnly && message.approval && (
                 <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />
             )}
 
-            {!activityOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
+            {!readOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
 
             {approvalPending && (
                 <div className="approval-waiting-row" aria-live="polite">
@@ -2354,7 +2162,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                 </div>
             )}
 
-            {!activityOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges} onAskReview={onAskReview} />}
+            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges} onAskReview={onAskReview} />}
 
             {showFooter && (
                 <div className="msg-footer">
@@ -2416,6 +2224,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
 
 interface MessageItemProps {
     activityOnly?: boolean;
+    observation?: boolean;
     reviewSha?: string;
     reviewFiles?: ReviewChange[];
     onAskReview?: (text: string) => void;
@@ -2466,6 +2275,7 @@ interface MessageItemProps {
  */
 export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.activityOnly === b.activityOnly &&
+    a.observation === b.observation &&
     a.reviewSha === b.reviewSha &&
     a.reviewFiles === b.reviewFiles &&
     a.onAskReview === b.onAskReview &&

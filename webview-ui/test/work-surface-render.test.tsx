@@ -17,14 +17,14 @@ const done = render();
 assert.match(done, /class="completed-steps"/);
 assert.doesNotMatch(done, /<details[^>]*open=""/);
 assert.doesNotMatch(done, /SEARCH|class="pill-diff"/);
-assert.ok(done.indexOf('Before tools') < done.indexOf('completed-steps'));
+assert.doesNotMatch(done, /Before tools/);
 assert.ok(done.indexOf('Final answer') > done.indexOf('completed-steps'));
 assert.match(done, /compact-step failed/);
 assert.match(done, /Exit 1/);
 assert.doesNotMatch(done, /lucide-check/);
 const activity = renderToString(createElement(ActivityTimeline, {messages:[message]}));
 assert.match(activity, /class="pill-diff"/);
-assert.doesNotMatch(activity, /Before tools/);
+assert.match(activity, /Before tools/);
 assert.doesNotMatch(activity, /Final answer/);
 assert.match(activity, /class="activity-age"/);
 assert.doesNotMatch(activity, /completed-steps/);
@@ -57,7 +57,7 @@ for (const saved of [null, {}, {version: 2}, {version: 1, main: ['activity'], si
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
-assert.deepEqual(layout.main, ['conversation']);
+assert.deepEqual(layout.main, ['conversation', 'agents', 'background']);
 assert.deepEqual(layout.side, ['changes', 'activity']);
 assert.equal(layout.sideActive, 'activity');
 layout = movePanel(layout, 'changes', 'main');
@@ -75,3 +75,7 @@ const observation = renderToString(createElement(ActivityTimeline, {messages:[wi
 assert.doesNotMatch(observation, /approval-card|Send to background|Stop background/);
 assert.doesNotMatch(observation, /Final answer/);
 assert.doesNotMatch(renderToString(createElement(ReviewDiff, {file:{path:'a.ts',kind:'text',before:'old',after:'new',hunks:[{oldStart:1,oldCount:1,newStart:1,newCount:1,removedLines:['old'],addedLines:['new']}]}})), /@@/);
+
+const lateThinking = { ...message, steps: [...message.steps.map(step => step.id === 'final' ? { ...step, final: true } : step), { id:'late-reasoning', kind:'thinking' as const, text:'Final reasoning bookkeeping' }] };
+assert.match(render(lateThinking), /Final answer/);
+assert.doesNotMatch(renderToString(createElement(ActivityTimeline, {messages:[lateThinking]})), /Final answer/);

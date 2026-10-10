@@ -119,7 +119,7 @@ eq(pillOpenFor(html, 'src/a.ts'), true, 'defaults: the diff pill starts expanded
 eq(pillOpenFor(html, 'npm-test-marker'), false, 'defaults: the command pill starts collapsed');
 eq(pillOpenFor(html, 'reasoning-marker'), false, 'defaults: the reasoning pill starts collapsed');
 ok(html.includes('pill-diff-line'), 'defaults: the diff body renders');
-ok(html.includes('term-out'), 'defaults: the command output body renders');
+ok(html.includes('detail-terminal') && html.includes('all good'), 'defaults: the command output body renders');
 
 // Switching a family off closes the already-rendered pill (the switch is not a
 // mount-time-only seed).

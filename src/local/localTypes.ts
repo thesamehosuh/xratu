@@ -1,3 +1,4 @@
+import type { SubagentApprovalSource } from '../subagentObservation';
 import type { TaskListItem } from '../taskList';
 
 export type XratuRuntimeMode = 'cloud' | 'local';
@@ -348,6 +349,7 @@ export interface LocalApprovalGate {
     requestApproval(
         approvalId: string,
         calls: LocalToolCall[],
+        source?: SubagentApprovalSource,
     ): Promise<Record<string, boolean>>;
 }
 
