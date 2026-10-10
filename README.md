@@ -33,8 +33,10 @@ runtime. Everything runs inside the extension host, on your machine.
 
 - **Work surface** - Conversation, Changes, and Activity share one compact
   composer. Finished tool calls fold into optional steps; Activity keeps the
-  full outputs. Review checkpoint diffs inline, mark files reviewed, and add
-  feedback to your draft before sending. Wide panels show Changes alongside
+  full outputs in a read-only view, with timestamps in expanded footers and
+  on hover. Approvals and questions stay in Conversation. Review checkpoint
+  diffs inline, mark files reviewed, and add feedback to your draft before
+  sending. Wide panels show Changes alongside
   the conversation by default. Drag Activity or Changes between the main
   tabs and sidebar, or use the tab menu. Placement and sidebar width are
   remembered; narrow windows keep every view in the main tabs. Drag the

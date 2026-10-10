@@ -5,7 +5,7 @@ import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
 import { SURFACE_PANELS } from './dockLayout';
 import { useDockLayout } from './useDockLayout';
-import { ActivityTimeline } from './components/MessageItem';
+import { ActivityPanel } from './components/ActivityPanel';
 import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
@@ -1118,7 +1118,13 @@ export function App() {
     // Settings - measured at ~4.2k DOM nodes ≈ 91ms, scaling with the size of
     // the mounted transcript.
     const refreshAgents = useCallback(() => send({ type: 'agentsGetState' }), [send]);
-    const newestCheckpoint = [...chat.messages].reverse().find((message) => message.role === 'user' && message.cp)?.cp;
+    const newestCheckpoint = useMemo(() => {
+        for (let index = chat.messages.length - 1; index >= 0; index--) {
+            const message = chat.messages[index];
+            if (message.role === 'user' && message.cp) return message.cp;
+        }
+        return undefined;
+    }, [chat.messages]);
     useEffect(() => { setActiveReviewSha(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
     useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId, setSurfaceTab]);
 
@@ -1557,9 +1563,7 @@ export function App() {
             </div>
             </div>
             </div>
-            {(activityVisible || activityOpened) && <div className={`activity-pane ${dock.position('activity')}`} id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity" aria-hidden={dock.mainActive !== 'activity' && dock.sideActive !== 'activity' || undefined}>
-                <ActivityTimeline messages={chat.messages} busy={chat.busy} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} onOpenDiff={handleOpenDiff} onBackgroundTerminal={handleBackgroundTerminal} onKillBackground={handleKillBackground} taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />
-            </div>}
+            {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             <div className="compose-dock">
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint

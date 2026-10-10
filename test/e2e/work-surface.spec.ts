@@ -19,7 +19,7 @@ const changes = [
 const replyFile = async (page: Page, after = 'new', afterRequestId?: unknown) => {
     const request = await latest(page, 'changeFileGet', afterRequestId);
     await post(page, { ...request, file: { path: request.path, kind: 'text', before: 'old', after,
-        hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: [after] }] }, type: 'changeFileState' });
+        hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: after.split('\n').length, removedLines: ['old'], addedLines: after.split('\n') }] }, type: 'changeFileState' });
 };
 const openReview = async (page: Page) => {
     await post(page, { type: 'restoreUser', value: 'Fix this', cp: sha });
@@ -237,9 +237,11 @@ test('Activity keeps tool output, omits answer prose and updates persisted event
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
     await expect(page.locator('.activity-timeline')).not.toContainText('Answer introduction');
     await expect(page.locator('.activity-timeline')).not.toContainText('Answer conclusion');
-    await expect(page.locator('.activity-age')).toContainText('2 minutes ago');
+    await expect(page.locator('.activity-timeline details.step')).toHaveAttribute('title', /2 minutes ago/);
     const detail = page.locator('.activity-timeline details.step');
     if (!await detail.evaluate((el) => (el as HTMLDetailsElement).open)) await detail.locator('summary').click();
+    await expect(detail.locator('.activity-age')).toBeVisible();
+    await expect(detail.locator('summary .activity-age')).toHaveCount(0);
     await expect(page.locator('.activity-timeline')).toContainText('Retained tool output');
     await page.clock.fastForward(60_000);
     await expect(page.locator('.activity-age')).toContainText('3 minutes ago');
@@ -251,8 +253,8 @@ test('agent loading stays compact while profile discovery is pending', async ({ 
     const loading = page.locator('.agent-loading');
     await expect(loading).toBeVisible();
     const dimensions = await loading.locator('svg').boundingBox();
-    expect(dimensions?.width).toBe(12);
-    expect(dimensions?.height).toBe(12);
+    expect(dimensions?.width).toBe(14);
+    expect(dimensions?.height).toBe(14);
     await post(page, { type: 'agentsState', profiles: [] });
     await expect(loading).toHaveCount(0);
 });
@@ -432,8 +434,11 @@ for (const locale of ['en', 'fa']) {
     test(`panel placement is keyboard accessible, resettable and keeps hidden controls unfocusable (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 1080, height: 900 });
         await post(page, { type: 'locale', locale });
+        await expect(page.locator('.dock-tabs.main .dock-layout-button')).toBeVisible();
+        await expect(page.locator('.app')).toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
         await page.locator('#surface-tab-activity').focus();
-        await page.keyboard.press('Shift+F10');
+        await expect(page.locator('#surface-tab-activity')).toBeFocused();
+        await page.locator('#surface-tab-activity').press('Shift+F10');
         await expect(page.locator('.dock-layout-menu')).toBeVisible();
         await page.keyboard.press('Enter');
         await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toBeFocused();
@@ -476,4 +481,71 @@ test('side-by-side Activity keeps live task controls unique and review opens the
     await page.locator('.outcome-review').click();
     await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
     await expect(page.locator('#surface-tab-changes')).toHaveAttribute('aria-selected', 'true');
+});
+
+for (const locale of ['en', 'fa']) {
+    test(`Activity observes live tools without approval, question or execution controls (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'toolCall', tool: 'run_terminal_command', args: '{"command":"npm test"}', callId: 'cmd' });
+        await post(page, { type: 'needsApproval', approval_id: 'approval', approvals: [{ tool_call_id: 'cmd', tool_name: 'run_terminal_command', args: { command: 'npm test' } }] });
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await expect(page.locator('.activity-pane details.step')).toBeVisible();
+        await expect(page.locator('.activity-pane .approval-card')).toHaveCount(0);
+        await expect(page.locator('.transcript-pane .approval-card')).toBeVisible();
+        await expect(page.locator('.activity-pane .icon-btn-mini')).toHaveCount(0);
+        await post(page, { type: 'approvalResolved', approval_id: 'approval' });
+        await post(page, { type: 'terminalBackgrounded', callId: 'cmd', jobId: 'job', byUser: true });
+        await expect(page.locator('.activity-pane .icon-btn-mini')).toHaveCount(0);
+    });
+
+    test(`Activity follows new rows, preserves manual scroll and resumes at the bottom (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 640 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'startResponse' });
+        const add = async (i: number) => {
+            const tool = i % 2 ? 'read_file' : 'grep_search';
+            await post(page, { type: 'toolCall', tool, args: JSON.stringify({path: `file-${i}.ts`, pattern: 'test'}), callId: `call-${i}`, timestamp: Date.now() - 120_000 });
+            await post(page, { type: 'toolResult', tool, output: `Result ${i}`, callId: `call-${i}` });
+        };
+        for (let i = 0; i < 24; i++) await add(i);
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        const pane = page.locator('.activity-pane');
+        const bottom = () => pane.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+        await expect.poll(bottom).toBeLessThan(2);
+        await add(24);
+        await expect.poll(bottom).toBeLessThan(2);
+        await pane.hover();
+        await page.mouse.wheel(0, -300);
+        await expect.poll(bottom).toBeGreaterThan(100);
+        const top = await pane.evaluate((el) => el.scrollTop);
+        await add(25);
+        await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeCloseTo(top, 0);
+        await page.mouse.wheel(0, 10_000);
+        await expect.poll(bottom).toBeLessThan(2);
+        await add(26);
+        await expect.poll(bottom).toBeLessThan(2);
+        // Moving the same mounted view keeps its follow behavior.
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.main'));
+        await expect.poll(bottom).toBeLessThan(2);
+        await add(27);
+        await expect.poll(bottom).toBeLessThan(2);
+    });
+}
+
+test('review diffs omit patch metadata, grow taller and stay bounded in the main tab', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openReview(page);
+    const list = await latest(page, 'changesGetState');
+    const file = await latest(page, 'changeFileGet');
+    await page.locator('.review-head button').click();
+    const request = await latest(page, 'changesGetState', list.requestId);
+    await post(page, { ...request, type: 'changesState', files: changes });
+    await replyFile(page, 'Long source line\n'.repeat(100), file.requestId);
+    await expect.poll(() => page.locator('.review-diff').evaluate((el) => el.clientHeight)).toBeGreaterThan(500);
+    await expect(page.locator('.review-diff')).not.toContainText('@@');
+    await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+    const review = await page.locator('.changes-review').boundingBox();
+    expect(review!.width).toBeLessThanOrEqual(980);
 });

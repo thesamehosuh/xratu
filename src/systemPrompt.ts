@@ -24,7 +24,11 @@ export const REPLY_LANGUAGE_EN = "Language: reply to the user in English.";
  *  reach it too, and a bare commit rule was not enough. Still no language is
  *  PINNED here - the user's message language decides, as `auto` promises. */
 export const REPLY_LANGUAGE_AUTO =
-    "Language: match the language the user writes in - every message, not just the first.";
+    "Language: match the language of the user's latest request, including short follow-ups, for every message. " +
+    "Keep that language throughout the turn unless the user asks to change it. UI locale, file contents, " +
+    "tool results, earlier assistant replies, and loaded skills do not choose the reply language. " +
+    "A writing skill applies only when writing in that language; loading natural-farsi does not switch an " +
+    "English conversation to Persian. This rule also applies to notes between tool calls.";
 
 /**
  * Narration between tool calls is user-visible text. Needed in EVERY mode,

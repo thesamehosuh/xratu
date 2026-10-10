@@ -69,3 +69,9 @@ assert.deepEqual(readDockLayout(layout), layout);
 assert.equal(movePanel(layout, 'conversation', 'side'), layout);
 assert.equal(movePanel(layout, 'changes', 'main'), layout);
 assert.equal(readDockLayout({...layout, mainActive: 'unknown'}).mainActive, 'conversation');
+
+const withApproval = {...message, status: 'streaming' as const, approval: {approval_id:'pending',approvals:[{tool_call_id:'cmd',tool_name:'run_terminal_command',args:{command:'npm test'}}]}};
+const observation = renderToString(createElement(ActivityTimeline, {messages:[withApproval,{...withApproval,id:'system-approval',role:'system' as const}], onApprovalDecision:()=>{}, onBackgroundTerminal:()=>{}, onKillBackground:()=>{}}));
+assert.doesNotMatch(observation, /approval-card|Send to background|Stop background/);
+assert.doesNotMatch(observation, /Final answer/);
+assert.doesNotMatch(renderToString(createElement(ReviewDiff, {file:{path:'a.ts',kind:'text',before:'old',after:'new',hunks:[{oldStart:1,oldCount:1,newStart:1,newCount:1,removedLines:['old'],addedLines:['new']}]}})), /@@/);

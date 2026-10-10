@@ -252,11 +252,11 @@ test('proxy page polish assertions', async ({ page }) => {
         };
     });
     console.log('SIZES', JSON.stringify(sizes));
-    expect(sizes.clientName).toBe('11px');
-    expect(sizes.label).toBe('9px');
-    expect(sizes.input).toBe('11px');
-    expect(sizes.dropdown).toBe('11px');
-    expect(sizes.hint).toBe('9px');
+    expect(sizes.clientName).toBe('13px');
+    expect(sizes.label).toBe('11px');
+    expect(sizes.input).toBe('13px');
+    expect(sizes.dropdown).toBe('13px');
+    expect(sizes.hint).toBe('11px');
 
     // 3. Scheme uses the shared dropdown, no native select.
     await expect(page.locator('.proxy-field .dropdown-trigger')).toHaveCount(1);

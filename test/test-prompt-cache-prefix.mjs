@@ -237,6 +237,8 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('omitted replyLanguage == auto', autoPrompt === legacyPrompt);
     ok('auto still enforces English commit messages', autoPrompt.includes(REPLY_COMMIT_MESSAGES));
     ok('auto now states the language rule', autoPrompt.includes(REPLY_LANGUAGE_AUTO));
+    ok('auto follows latest user language through tools', autoPrompt.includes("user's latest request") && autoPrompt.includes('notes between tool calls'));
+    ok('loaded language skills cannot switch Auto replies', autoPrompt.includes('loading natural-farsi does not switch an') && autoPrompt.includes('English conversation to Persian'));
     ok('auto pins no specific language',
         !autoPrompt.includes(REPLY_LANGUAGE_FA) && !autoPrompt.includes(REPLY_LANGUAGE_EN));
 

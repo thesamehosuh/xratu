@@ -138,8 +138,9 @@ shared styles and VS Code theme tokens. Keep the composer and transcript
 mounted across page changes so drafts and scroll positions survive.
 
 - Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
-  detailed outputs. Approvals, questions, and running background jobs must
-  remain actionable. Outcome exit codes come from actual terminal results.
+  detailed outputs as a read-only view. Keep approvals, questions, and
+  background-process controls actionable in Conversation and the composer.
+  Outcome exit codes come from actual terminal results.
 - `ChangesPanel` uses shadow checkpoints. Requests carry IDs and checkpoint
   SHAs; reject stale replies after a session/checkpoint switch. The host's
   `src/workSurface.ts` guards membership, paths, and bounded file reads.
