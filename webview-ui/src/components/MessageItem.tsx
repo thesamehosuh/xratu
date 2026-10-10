@@ -16,17 +16,14 @@ import {
     Copy,
     CornerDownRight,
     ExternalLink,
-    FileDiff,
     GripVertical,
     HelpCircle,
-    History,
     Image as ImageIcon,
     ListChecks,
     Minimize2,
     Paperclip,
     PencilLine,
     Plus,
-    RefreshCw,
     Trash2,
     TriangleAlert,
     X,
@@ -2133,7 +2130,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2172,23 +2169,11 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
     const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
     const showFooter = !activityOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
-    // Regenerate lives where the old global checkpoint-revert button was:
-    // last completed assistant turn only, never while a run is in flight.
-    const showRegenerate =
-        role === 'assistant' && isLastAssistant && status === 'done' && !busy && !!onRegenerate;
-
     // User bubbles carry their own footer from the moment they appear; the
     // pencil is the ONLY part that hides while a run is in flight.
     const showUserFooter = role === 'user' && status === 'done';
     const showEditBtn =
         showUserFooter && !busy && userIndex !== undefined && !!onEditMessage;
-    // Restore is offered when this turn has a shadow checkpoint (old or
-    // restored sessions may not) and nothing is running.
-    const showRestoreBtn =
-        showUserFooter && !busy && userIndex !== undefined && !!message.cp && !!onRestoreCheckpoint;
-    const showReviewBtn =
-        showUserFooter && !busy && !!message.cp && !!onReviewChanges;
-
     const copyAnswer = async () => {
         try {
             await navigator.clipboard.writeText(text);
@@ -2360,17 +2345,6 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
-                    {showRegenerate && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={onRegenerate}
-                            aria-label={t('regenerateAria')}
-                            title={t('regenerateAria')}
-                        >
-                            <RefreshCw size={13} />
-                        </button>
-                    )}
                     {message.usage && (
                         <span className="msg-meta" dir="ltr" title={t('tokensTitle')}>
                             ↑ {fmtTok(message.usage.input_tokens)} ↓ {fmtTok(message.usage.output_tokens)}
@@ -2407,28 +2381,6 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                             title={t('editRewindHint')}
                         >
                             <PencilLine size={13} />
-                        </button>
-                    )}
-                    {showRestoreBtn && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => onRestoreCheckpoint?.(userIndex ?? -1, message.cp!)}
-                            aria-label={t('restoreCheckpoint')}
-                            title={t('restoreCheckpointHint')}
-                        >
-                            <History size={13} />
-                        </button>
-                    )}
-                    {showReviewBtn && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => onReviewChanges?.(message.cp!)}
-                            aria-label={t('reviewChanges')}
-                            title={t('reviewChangesHint')}
-                        >
-                            <FileDiff size={13} />
                         </button>
                     )}
                     <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>

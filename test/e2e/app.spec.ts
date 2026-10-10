@@ -310,14 +310,18 @@ test('the edit pill open-diff button posts the call to the host', async ({ page 
     });
 });
 
-test('the review button posts the row checkpoint to the host', async ({ page }) => {
+test('the outcome reviews the turn checkpoint without extra message-footer actions', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'Changes complete.', renderedHtml: '<p>Changes complete.</p>' });
     const review = page.locator('button[aria-label="Review changes"]');
     await expect(review).toBeVisible();
-    await expect(page.locator('button[aria-label="Restore files"]')).toBeVisible();
+    await expect(page.locator('.msg-footer button[aria-label="Review changes"]')).toHaveCount(0);
+    await expect(page.locator('button[aria-label="Restore files"]')).toHaveCount(0);
+    await expect(page.locator('button[aria-label="Regenerate response"]')).toHaveCount(0);
     await review.click();
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
     expect(sent.some((message) => message.type === 'changesGetState' && message.sha === 'abc1234')).toBe(true);
