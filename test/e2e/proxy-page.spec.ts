@@ -74,7 +74,7 @@ test('a saved SOCKS URL does not prevent turning proxy routing off', async ({ pa
     await hostMessage(page, { type: 'proxyState', mode: 'custom', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost', resolvedSource: 'none' });
     await expect(page.locator('#proxy-port')).toHaveValue('1080');
     await expect(page.locator('.proxy-hint.warn')).toBeVisible();
-    await page.getByRole('button', { name: 'Auto', exact: true }).click();
+    await page.locator('.routing-page .settings-card').first().getByRole('button', { name: 'Auto', exact: true }).click();
     await expect(page.locator('.proxy-save-row .apply-btn')).toBeDisabled();
     await page.getByRole('button', { name: 'Off', exact: true }).click();
     await expect(page.locator('.proxy-hint.warn')).toHaveCount(0);
