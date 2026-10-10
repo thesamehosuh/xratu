@@ -372,7 +372,9 @@ export function listTerminalJobs(): TerminalJob[] {
 /** Bounded monitor state: running jobs first, then the most recent results. */
 export function backgroundJobViews(entries = listTerminalJobs()) {
     return [...entries].filter(job => job.background)
-        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt)
+        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running')
+            || (b.status === 'running' ? b.startedAt : b.finishedAt ?? b.startedAt)
+            - (a.status === 'running' ? a.startedAt : a.finishedAt ?? a.startedAt))
         .slice(0, 32)
         .map(job => ({
             jobId: job.id, command: job.command, running: job.status === 'running',

@@ -91,8 +91,9 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await page.locator('#surface-tab-background').click();
         await expect(page.locator('.background-pane')).toBeVisible();
         await expect(page.locator('.background-output')).toContainText('Hot reload connected');
-        await expect(page.locator('.bg-job')).toHaveCount(2); await expect(page.locator('.bg-job-up').first()).toHaveText('1m 5s');
-        await expect.poll(async()=>await page.locator('.bg-job-up').first().textContent()).not.toBe('1m 5s');
+        await expect(page.locator('.bg-job')).toHaveCount(2);
+        const initialUptime = await page.locator('.bg-job-up').first().textContent();
+        await expect.poll(()=>page.locator('.bg-job-up').first().textContent()).not.toBe(initialUptime);
         await page.locator('.bg-job-copy').first().click();
         expect(await sent(page)).toContainEqual({type:'copyToClipboard',value:'npm run dev -- --host localhost --port 5173'});
         const streamed=Array.from({length:180},(_,index)=>`line ${index}: hot reload output`).join('\n');

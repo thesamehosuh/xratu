@@ -763,6 +763,8 @@ const monitor = backgroundJobViews(Array.from({length:50},(_,i)=>monitorJob(i)).
 ok('monitor is bounded to 32 processes', monitor.length === 32);
 ok('monitor prioritizes live jobs with their actual status', monitor[0].jobId === 'monitor--1' && monitor[0].running && monitor[0].exitCode === null);
 ok('monitor retains the newest completion', monitor[1].jobId === 'monitor-49');
+const recentlyFinished = backgroundJobViews(Array.from({length:50},(_,i)=>monitorJob(i)).concat(monitorJob(-2,{finishedAt:100})));
+ok('monitor retains a long-running job that finished most recently', recentlyFinished[0].jobId === 'monitor--2');
 ok('monitor output is a bounded tail', monitor[0].output.length === 20_000);
 ok('monitor preserves spawn errors', backgroundJobViews([monitorJob(1,{status:'failed',output:'',error:new Error('spawn failed')})])[0].output === 'spawn failed');
 
