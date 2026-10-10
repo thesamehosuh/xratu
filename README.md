@@ -45,10 +45,10 @@ runtime. Everything runs inside the extension host, on your machine.
   back. Point it at a scratch workspace, not a repo you care about.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
-- **Checkpoints** - shadow-git snapshots before sends and edits, restorable
-  anytime, with hunk-level review: pick a checkpoint, pick a file, pick a
-  hunk, and the native side-by-side diff opens right on it. Your real git
-  repo is never touched.
+- **Checkpoints** - shadow-git snapshots before sends and edits. Use a turn's
+  **Review changes** button or **Changes** to inspect files inline and open
+  the full native diff. Restore a snapshot from the Command Palette with
+  **Xratu: Restore Checkpoint…**. Your real git repo is never touched.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
   Cline-compatible files-based config.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)
@@ -110,7 +110,7 @@ the API key; the rest hand each service its own URL at signup.
 
 ### Sign in with a ChatGPT subscription
 
-Open **Settings -> Connections** and choose **Continue with ChatGPT**. Xratu
+Open **Providers**, choose **Add connection**, then **Continue with ChatGPT**. Xratu
 uses OpenAI's [documented open-source sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
 registers Xratu for your account and workspace, and validates the signed ID
 token before saving the connection. ChatGPT plan access must be granted during
