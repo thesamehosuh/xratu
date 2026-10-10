@@ -15,7 +15,7 @@ export function LocalModelManager({ runtime, operation, offline, onManage }: {
         ? Math.min(100, Math.max(0, Math.round(100 * (current.completed ?? 0) / current.total))) : null;
     return <details className="runtime-guide local-model-manager" open>
         <summary>{t('localModelManage')}</summary>
-        <span className="model-download-help" title={t('localModelPullHint')}>?</span>
+        <span className="model-download-help" role="img" tabIndex={0} title={t('localModelPullHint')} aria-label={t('localModelPullHint')}>?</span>
         <div className="runtime-actions">
             <input dir="ltr" aria-label={t('localModelName')} placeholder={t('localModelName')} value={model}
                 onChange={(event) => setModel(event.target.value)} disabled={busy} />

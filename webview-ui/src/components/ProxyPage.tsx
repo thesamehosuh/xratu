@@ -122,7 +122,7 @@ export function ProxyPage({
         || composedUrl !== (state.proxyUrl ?? '').trim()
         || noProxy.trim() !== (state.noProxy ?? '').trim()
     );
-    const socksWarn = serverDraft.scheme === 'socks5';
+    const socksWarn = mode !== 'off' && serverDraft.scheme === 'socks5';
     /** The save check marks a click, not the idle state - it drops again as
      *  soon as something new is drafted. */
     const [justSaved, setJustSaved] = useState(false);

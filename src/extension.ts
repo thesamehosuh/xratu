@@ -1172,8 +1172,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (!root) throw new Error('No workspace');
             const file = await readReviewFile(this._checkpoints, root, sha, filePath);
             if (open) {
-                if (file.kind === 'text') openEditDiff(this._virtualDocuments, file.path, file.before, file.after);
-                else await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
+                if (file.kind !== 'text' || !openEditDiff(this._virtualDocuments, file.path, file.before, file.after)) {
+                    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
+                }
             } else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, file });
         } catch {
             if (open) this.notifyBanner('error', 'surfaceChangesFailed');

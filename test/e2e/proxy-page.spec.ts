@@ -69,6 +69,20 @@ test('saving composes the server URL and posts it', async ({ page }) => {
     });
 });
 
+test('a saved SOCKS URL does not prevent turning proxy routing off', async ({ page }) => {
+    await openProxy(page);
+    await hostMessage(page, { type: 'proxyState', mode: 'custom', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost', resolvedSource: 'none' });
+    await expect(page.locator('#proxy-port')).toHaveValue('1080');
+    await expect(page.locator('.proxy-hint.warn')).toBeVisible();
+    await page.getByRole('button', { name: 'Auto', exact: true }).click();
+    await expect(page.locator('.proxy-save-row .apply-btn')).toBeDisabled();
+    await page.getByRole('button', { name: 'Off', exact: true }).click();
+    await expect(page.locator('.proxy-hint.warn')).toHaveCount(0);
+    await page.locator('.proxy-save-row .apply-btn').click();
+    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
+    expect(messages).toContainEqual({ type: 'proxySave', mode: 'off', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost' });
+});
+
 test('detected clients group their ports under one family row', async ({ page }) => {
     await openProxy(page);
     await hostMessage(page, {

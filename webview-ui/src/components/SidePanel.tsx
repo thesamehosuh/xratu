@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 
 /** A setup panel owns focus and Escape without interrupting the live run. */
 export function SidePanel({ label, className, onClose, children }: {
@@ -9,7 +9,7 @@ export function SidePanel({ label, className, onClose, children }: {
 }) {
     const ref = useRef<HTMLDivElement>(null);
     const close = useRef(onClose);
-    close.current = onClose;
+    useLayoutEffect(() => { close.current = onClose; });
     useEffect(() => {
         const panel = ref.current;
         if (!panel) return;

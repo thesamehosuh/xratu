@@ -43,6 +43,10 @@ interface SettingsPageProps {
     onClearHistory?: () => void;
 }
 
+function PreferenceHelp({ text }: { text: string }) {
+    return <span className="preference-help" role="img" tabIndex={0} title={text} aria-label={text}>?</span>;
+}
+
 export function SettingsPage({
     onBack,
     version,
@@ -87,7 +91,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('offlineMode')}</strong>
-                            <span className="preference-help" title={t('offlineModeDesc')} aria-label={t('offlineModeDesc')}>?</span>
+                            <PreferenceHelp text={t('offlineModeDesc')} />
                         </div>
                         <button className="ghost-btn small" aria-label={t('offlineHelp')} title={t('offlineHelp')} onClick={onOfflineHelp}><BookOpen size={13} /></button>
                         <button type="button" className={`mcp-switch${offline ? ' on' : ''}`} role="switch"
@@ -110,7 +114,7 @@ export function SettingsPage({
                             <div className="settings-nav-row" key={id}>
                                 <div className="settings-nav-main">
                                     <strong>{label}</strong>
-                                    <span className="preference-help" title={t(descKey)} aria-label={t(descKey)}>?</span>
+                                    <PreferenceHelp text={t(descKey)} />
                                 </div>
                                 <button
                                     type="button"
@@ -139,7 +143,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('miniLanguage')}</strong>
-                            <span className="preference-help" title={t('settingsLanguageDesc')} aria-label={t('settingsLanguageDesc')}>?</span>
+                            <PreferenceHelp text={t('settingsLanguageDesc')} />
                         </div>
                         <div className="lang-choice">
                             <button
@@ -163,7 +167,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('settingsReplyLanguage')}</strong>
-                            <span className="preference-help" title={t('settingsReplyLanguageDesc')} aria-label={t('settingsReplyLanguageDesc')}>?</span>
+                            <PreferenceHelp text={t('settingsReplyLanguageDesc')} />
                         </div>
                         <div className="lang-choice">
                             <button
@@ -193,7 +197,7 @@ export function SettingsPage({
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
                             <strong>{t('errorExplanations')}</strong>
-                            <span className="preference-help" title={t('errorExplanationsDesc')} aria-label={t('errorExplanationsDesc')}>?</span>
+                            <PreferenceHelp text={t('errorExplanationsDesc')} />
                         </div>
                         <button type="button" className={`mcp-switch${errorExplanations ? ' on' : ''}`} role="switch"
                             aria-checked={errorExplanations} aria-label={t('errorExplanations')} onClick={() => onSetErrorExplanations?.(!errorExplanations)}><span className="mcp-switch-knob" /></button>
@@ -217,7 +221,7 @@ export function SettingsPage({
                         <div className="settings-confirm-row danger">
                             <div>
                                 <strong>{t('settingsClearConfirm')}</strong>
-                                <span className="preference-help" title={t('settingsClearConfirmDesc')} aria-label={t('settingsClearConfirmDesc')}>?</span>
+                                <PreferenceHelp text={t('settingsClearConfirmDesc')} />
                             </div>
                             <div className="settings-confirm-actions">
                                 <button

@@ -87,6 +87,24 @@ test('a saved account response does not flash open an empty setup drawer', async
     await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('preference help and usage details remain reachable without API history', async ({ page }) => {
+    await post(page, { type: 'openSettings' });
+    const help = page.locator('.preference-help').first();
+    await help.focus();
+    await expect(help).toBeFocused();
+    await expect(help).toHaveAccessibleName(/.+/);
+    await page.locator('.sidebar-item').nth(5).click();
+    const totals = { input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
+    await post(page, { type: 'usageState', providers: [], rates: [], history: [], allTime: totals, chatgpt: { totals, models: [], hasHistory: true } });
+    await expect(page.locator('.usage-plan')).toBeVisible();
+    await expect(page.locator('.usage-api')).not.toHaveAttribute('open');
+    const details = page.locator('.usage-page .page-help > summary');
+    await expect(details).toBeVisible();
+    await details.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.usage-page .page-help-body')).toBeVisible();
+});
+
 test('mode controls wait for the host echo and closing their menu does not cancel a run', async ({ page }) => {
     await post(page, { type: 'startResponse' });
     await page.locator('[data-policy="mode"]').click();
@@ -98,7 +116,7 @@ test('mode controls wait for the host echo and closing their menu does not cance
     await page.locator('[data-policy="approval"]').click();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toHaveCount(0);
-    expect((await sent(page)).some((m) => m.type === 'cancel')).toBe(false);
+    expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
 });
 
 test('review responses reject old checkpoints and settled requests do not time out later', async ({ page }) => {
@@ -129,7 +147,7 @@ test('review comments belong to their file and feedback preserves unsent text wi
     await expect(page.locator('.review-input')).toHaveValue('First file feedback');
     await page.getByRole('button', { name: 'Send feedback', exact: true }).click();
     await expect(page.locator('.composer-input')).toHaveValue('My existing draft\n\nsrc/first.ts\nFirst file feedback');
-    expect((await sent(page)).some((m) => m.type === 'sendMessage')).toBe(false);
+    expect((await sent(page)).some((m) => m.type === 'askQuestion')).toBe(false);
 });
 
 test('reviewed status expires when file content changes; the native diff gets the guarded checkpoint and path', async ({ page }) => {

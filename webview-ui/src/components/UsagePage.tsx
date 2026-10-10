@@ -925,12 +925,12 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                     </div>
                 </details>
 
+                </details>
                 {/* Fine print lives at the footer, like the MCP/Skills page. */}
                 <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
 
                     <span>{t('pricingDesc')}</span>
                 </div></details>
-                </details>
             </div>
         </div>
     );
