@@ -1,0 +1,56 @@
+.background-pane { min-width:0; min-height:0; container-type:inline-size; background:var(--page-canvas); }
+.background-layout { display:flex; flex-direction:column; height:100%; min-height:0; }
+.background-task-list { flex:0 0 auto; min-width:0; padding:10px 12px; border-block-end:1px solid var(--page-line); }
+.background-task-list > header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:24px; margin-block-end:5px; }
+.bg-jobs-title { font-size:11px; color:var(--vscode-descriptionForeground); }
+.bg-jobs-stopall { display:flex; align-items:center; gap:5px; font:inherit; font-size:10px; padding:3px 5px; border:0; background:transparent; border-radius:4px; color:var(--vscode-descriptionForeground); white-space:nowrap; }
+.bg-jobs-stopall:hover { color:var(--vscode-errorForeground); background:var(--xratu-error-faint); }
+.background-task-items { max-height:134px; overflow:auto; scrollbar-width:thin; }
+.background-task { display:flex; align-items:center; gap:5px; min-width:0; border:1px solid transparent; border-radius:6px; margin-block:2px; padding:0 3px; }
+.background-task.selected { background:var(--xratu-accent-faint); border-color:color-mix(in srgb,var(--surface-accent) 16%,var(--page-line)); }
+.background-task:not(.selected):hover { background:var(--vscode-list-hoverBackground); }
+.background-task-select { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:8px 5px; border:0; background:transparent; text-align:start; color:var(--vscode-foreground); }
+.bg-job-cmd { flex:1; min-width:0; padding:0; background:transparent; color:inherit; font:11px/1.5 var(--vscode-editor-font-family,monospace); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.bg-job-up { font-size:10px; color:var(--vscode-descriptionForeground); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.background-pane :is(.bg-job-copy,.bg-job-stop,.background-follow) { display:inline-flex; width:25px; height:25px; padding:0; border:0; background:transparent; border-radius:5px; align-items:center; justify-content:center; opacity:.7; flex-shrink:0; color:var(--vscode-descriptionForeground); }
+.background-pane :is(.bg-job-copy,.bg-job-stop,.background-follow):is(:hover,:focus-visible) { opacity:1; background:var(--vscode-list-hoverBackground); color:var(--vscode-foreground); }
+.background-pane .bg-job-stop:hover { color:var(--vscode-errorForeground); }
+.background-pane .bg-job-copy:disabled { opacity:.3; }
+.background-status { display:inline-flex; justify-content:center; align-items:center; width:12px; height:14px; flex-shrink:0; color:var(--vscode-descriptionForeground); }
+.background-status.running,.background-status.done { color:var(--surface-accent); }
+.background-status.failed { color:var(--vscode-errorForeground); }
+.background-pulse { width:5px; height:5px; border-radius:50%; background:currentColor; animation:background-pulse 1.8s ease-in-out infinite; }
+.background-task-view { flex:1; min-width:0; min-height:0; position:relative; }
+.background-task-detail { display:flex; flex-direction:column; height:100%; min-height:0; }
+.background-task-detail.panel-hidden { display:none; }
+.background-task-head { flex:0 0 auto; padding:16px 18px 10px; max-height:45%; overflow:auto; }
+.background-task-heading { display:flex; align-items:flex-start; gap:8px; }
+.background-task-heading > svg { flex-shrink:0; margin-block-start:4px; color:var(--surface-accent); }
+.background-command { flex:1; min-width:0; font:12px/1.8 var(--vscode-editor-font-family,monospace); overflow-wrap:anywhere; max-height:65px; overflow:auto; }
+.background-task-meta { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--vscode-descriptionForeground); margin-block:8px 5px; }
+.background-task-meta > .bg-job-up { margin-inline-start:auto; }
+.background-exit { font-size:10px; }
+.background-exit.failed { color:var(--vscode-errorForeground); }
+.background-task-info { font-size:10px; color:var(--vscode-descriptionForeground); }
+.background-task-info > summary { display:flex; align-items:center; gap:5px; list-style:none; cursor:pointer; width:fit-content; }
+.background-task-info > summary::-webkit-details-marker { display:none; }
+.background-task-info[open] > summary svg { transform:rotate(180deg); }
+.background-task-info > div { display:flex; align-items:center; gap:7px; margin-block-start:6px; }
+.background-task-info code { min-width:0; padding:0; background:transparent; overflow-wrap:anywhere; }
+.background-task-info svg { flex-shrink:0; }
+.background-log-bar { display:flex; align-items:center; gap:6px; flex:0 0 auto; min-height:32px; margin-inline:18px; border-block-end:1px solid var(--page-line); color:var(--vscode-descriptionForeground); font-size:10px; }
+.background-log-bar > span { flex:1; }
+.background-log-bar .background-follow.active { color:var(--surface-accent); opacity:1; }
+.background-output { flex:1; min-height:0; padding:12px 18px 20px; margin:0; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.8 var(--vscode-editor-font-family,monospace); color:var(--vscode-foreground); background:transparent; scrollbar-width:thin; }
+.background-output-empty { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:15px; min-height:0; font-size:12px; color:var(--vscode-descriptionForeground); text-align:center; }
+.background-output-empty > svg { opacity:.3; }
+.background-output-note { margin:6px 18px; font-size:11px; color:var(--vscode-descriptionForeground); }
+@container(min-width:640px) { .background-layout { flex-direction:row; } .background-task-list { width:220px; display:flex; flex-direction:column; border-block-end:0; border-inline-end:1px solid var(--page-line); } .background-task-items { max-height:none; flex:1; min-height:0; } .background-task-view { min-width:0; } .background-task-select { flex-wrap:wrap; } .bg-job-cmd { flex-basis:calc(100% - 19px); } .background-task-select > .bg-job-up { margin-inline-start:19px; } }
+@media(max-height:500px) { .background-task-items { max-height:74px; } .background-task-list { padding-block:4px; } .background-task-list > header { display:none; } .background-task-items { max-height:42px; } .background-layout { overflow:auto; } .background-task-view { min-height:150px; flex-shrink:0; } .background-task-head { padding-block:8px 4px; } }
+@keyframes background-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@media(prefers-reduced-motion:reduce) { .background-pulse { animation:none; } }
+
+/* Extra live panels must remain discoverable at sidebar widths. */
+.dock-tab-list { overflow-x:auto; scrollbar-width:none; }
+.dock-tab-list::-webkit-scrollbar { display:none; }
+.dock-tabs .surface-tab { flex-shrink:0; }

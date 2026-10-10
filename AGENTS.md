@@ -132,14 +132,22 @@ relevant heuristics (e.g. `endpointGuard.ts`) ALWAYS get a regression test.
 
 ## Work surface
 
-`App.tsx` owns Conversation, Changes, Activity, and the persistent page
+`App.tsx` owns Conversation, Changes, Activity, dynamic Agents and Background, and the persistent page
 sidebar. `workSurface.css` holds the compact layout; `theme.css` supplies
 shared styles and VS Code theme tokens. Keep the composer and transcript
 mounted across page changes so drafts and scroll positions survive.
 
+- Subagent observations (`src/subagentObservation.ts`) are bounded display
+  traces attached to the parent's task call, never model-ledger messages.
+  Keep approval source attribution, call identity across steers/parallel waves,
+  immutable snapshots, and interrupted states on restore. Agents uses the same
+  docking registry and remains read-only. Run `test:subagent-observation` and
+  the loader/runner suites for this pipeline.
 - Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
   detailed outputs as a read-only view. Keep approvals, questions, and
-  background-process controls actionable in Conversation and the composer.
+  background-process controls actionable in Conversation and Background.
+  Background uses the shared docking registry, bounds recent process/log state,
+  and keeps streaming after the parent turn ends; scrolling up pauses following.
   Outcome exit codes come from actual terminal results.
 - `ChangesPanel` uses shadow checkpoints. Requests carry IDs and checkpoint
   SHAs; reject stale replies after a session/checkpoint switch. The host's

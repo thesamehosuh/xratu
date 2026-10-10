@@ -1319,7 +1319,7 @@ async function dispatchTool(
         if (!parsed.ok) {
             return { content: [{ type: 'text', text: parsed.error }], isError: true };
         }
-        const result = await subagentRunner.run({ ...parsed.value, ...(onOutput ? { onOutput } : {}) });
+        const result = await subagentRunner.run({ ...parsed.value, parentCallId: callId, ...(onOutput ? { onOutput } : {}) });
         return { content: [{ type: 'text', text: result.output }], isError: result.isError };
     } else if (name === USER_QUESTION_TOOL_NAME) {
         const parsed = parseUserQuestionArgs(args ?? {});

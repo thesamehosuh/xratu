@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { CodeXml, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, RotateCcw } from 'lucide-react';
+import { Bot, CodeXml, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, RotateCcw, SquareTerminal } from 'lucide-react';
 import { SURFACE_PANELS, type DockLocation, type SurfacePanel } from '../dockLayout';
 import { getLocale, t } from '../i18n';
 
 export const PANEL_DRAG_TYPE = 'application/x-xratu-panel';
-const labels = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity' } as const;
+const labels = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity', agents: 'surfaceAgentRuns', background: 'surfaceBackground' } as const;
 interface Props {
     location: DockLocation;
     panels: SurfacePanel[];
     active: SurfacePanel | null;
     wide: boolean;
     count: number;
+    agentCount?: number;
+    backgroundCount?: number;
     dragging: SurfacePanel | null;
     onDrag: (panel: SurfacePanel | null) => void;
     onActivate: (panel: SurfacePanel) => void;
@@ -18,7 +20,7 @@ interface Props {
     onReset: () => void;
 }
 
-export function SurfaceTabs({ location, panels, active, wide, count, dragging, onDrag, onActivate, onMove, onReset }: Props) {
+export function SurfaceTabs({ location, panels, active, wide, count, agentCount = 0, backgroundCount = 0, dragging, onDrag, onActivate, onMove, onReset }: Props) {
     const [menu, setMenu] = useState<SurfacePanel | null>(null);
     const root = useRef<HTMLElement>(null);
     const trigger = useRef<HTMLButtonElement>(null);
@@ -70,12 +72,12 @@ export function SurfaceTabs({ location, panels, active, wide, count, dragging, o
         }}>
         <div className="dock-tab-list" role="tablist">
             {panels.map((panel) => {
-                const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : List;
+                const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : panel === 'agents' ? Bot : panel === 'background' ? SquareTerminal : List;
                 return <button type="button" key={panel} data-panel={panel} id={`surface-tab-${panel}`} className={`surface-tab ${panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide && panel !== 'conversation'}
                     onDragStart={(event) => { event.dataTransfer.setData(PANEL_DRAG_TYPE, panel); event.dataTransfer.effectAllowed = 'move'; onDrag(panel); }}
                     onDragEnd={() => onDrag(null)} onClick={() => onActivate(panel)}
                     onContextMenu={(event) => { if (wide) { event.preventDefault(); setMenu(panel); } }}>
-                    <Icon size={13} /><span>{t(labels[panel])}</span>{panel === 'changes' && count > 0 && <span className="tab-count" dir="ltr">{count}</span>}
+                    <Icon size={13} /><span>{t(labels[panel])}</span>{panel === 'background' && backgroundCount > 0 && <span className="tab-count" dir="ltr">{backgroundCount}</span>}{panel === 'agents' && agentCount > 0 && <span className="tab-count" dir="ltr">{agentCount}</span>}{panel === 'changes' && count > 0 && <span className="tab-count" dir="ltr">{count}</span>}
                 </button>;
             })}
         </div>

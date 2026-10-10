@@ -1,3 +1,4 @@
+import { boundSubagentEvents, readSubagentTrace } from '../subagentObservation';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
@@ -273,8 +274,9 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
             ? clipHistoryContent(message.content, cap)
             : message.content,
     }));
-    const uiHistory = uiRows.map((message: any) => ({
+    const uiHistory = uiRows.map(message => ({
         ...message,
+        ...(Array.isArray(message?.events) ? { events: message.events.map((event: { subagent?: unknown }) => event?.subagent ? { ...event, subagent: readSubagentTrace(event.subagent) } : event) } : {}),
         // Display rows carry their text on `content` (host push shape) or
         // `text` (legacy) - clip whichever is present so the on-disk policy
         // matches the in-memory one.
@@ -286,7 +288,12 @@ function sanitizeSnapshot(snapshot: LocalSessionSnapshot, contentCap: number = M
             : {}),
     }));
     const pendingTurn = snapshot.pendingTurn ? sanitizePendingTurn(snapshot.pendingTurn, cap) : null;
-    return { ...snapshot, localHistory, uiHistory, pendingTurn };
+    const traceGroups = boundSubagentEvents([
+        ...uiHistory.map(message => Array.isArray(message?.events) ? message.events : []),
+        pendingTurn?.events ?? [],
+    ]);
+    const boundedUi = uiHistory.map((message, index) => Array.isArray(message?.events) ? { ...message, events: traceGroups[index] } : message);
+    return { ...snapshot, localHistory, uiHistory: boundedUi, pendingTurn: pendingTurn ? { ...pendingTurn, events: traceGroups.at(-1)! } : null };
 }
 
 /**
@@ -357,6 +364,7 @@ function alignPendingTurnEvents(events: any[]): any[] {
 
 function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
     const events = Array.isArray(pt.events) ? alignPendingTurnEvents(pt.events.slice(-PENDING_TURN_EVENT_LIMIT)).map((event: any) => {
+        if (event?.subagent) event = { ...event, subagent: readSubagentTrace(event.subagent) };
         if (event?.type === 'thinking' && typeof event.content === 'string') {
             // A reasoning block can still be growing when a mid-run persist
             // fires; hold it to the SAME ceiling the in-memory ledger uses so

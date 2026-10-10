@@ -57,7 +57,7 @@ for (const saved of [null, {}, {version: 2}, {version: 1, main: ['activity'], si
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
-assert.deepEqual(layout.main, ['conversation']);
+assert.deepEqual(layout.main, ['conversation', 'agents', 'background']);
 assert.deepEqual(layout.side, ['changes', 'activity']);
 assert.equal(layout.sideActive, 'activity');
 layout = movePanel(layout, 'changes', 'main');

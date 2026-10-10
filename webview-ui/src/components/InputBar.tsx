@@ -976,13 +976,13 @@ export function InputBar({
                         event.preventDefault(); items[next]?.focus();
                     }
                 }}>
-                    <button type="button" className="composer-policy" data-policy="mode" aria-haspopup="menu" aria-expanded={policyOpen === 'mode'} onClick={() => setPolicyOpen(policyOpen === 'mode' ? null : 'mode')} title={t('planHint')}>
+                    <button type="button" className="composer-policy" data-policy="mode" aria-haspopup="menu" aria-expanded={policyOpen === 'mode'} onClick={() => setPolicyOpen(policyOpen === 'mode' ? null : 'mode')} title={t(planMode ? 'planControlHint' : 'buildControlHint')}>
                         {planMode ? <ListChecks size={12} /> : <Wrench size={12} />}{t(planMode ? 'surfacePlan' : 'surfaceBuild')}<ChevronDown size={10} />
                     </button>
-                    <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t('yoloMode')}>
+                    <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t(yolo ? 'autoControlHint' : 'askControlHint')}>
                         <ShieldCheck size={12} />{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}<ChevronDown size={10} />
                     </button>
-                    {policyOpen && <div className="composer-policy-menu" role="menu" aria-label={t(policyOpen === 'mode' ? 'planMode' : 'yoloMode')}>
+                    {policyOpen && <div className="composer-policy-menu" role="menu" aria-label={t(policyOpen === 'mode' ? 'surfaceModeControl' : 'surfacePermissionControl')}>
                         {[false, true].map((enabled) => <button type="button" key={String(enabled)} role="menuitemradio" aria-checked={(policyOpen === 'mode' ? planMode : yolo) === enabled} onClick={() => {
                             const current = policyOpen === 'mode' ? planMode : yolo;
                             if (current !== enabled) (policyOpen === 'mode' ? onTogglePlan : onToggleYolo)?.();

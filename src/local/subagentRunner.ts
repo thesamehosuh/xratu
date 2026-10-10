@@ -1,3 +1,4 @@
+import { SubagentTraceCollector, type SubagentTrace } from '../subagentObservation';
 /**
  * Nested-run orchestration for the `task` tool: drive a child runLocalAgent
  * loop on behalf of a tool call and collapse it to a single final report.
@@ -64,6 +65,7 @@ export interface SubagentHostContext {
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
     onUsage?(usage: LocalUsage): void;
+    onObservation?(parentCallId: string, trace: SubagentTrace): void;
 }
 
 /** Reject tool calls outside the child's toolset. The agent loop executes
@@ -248,6 +250,11 @@ export async function runSubagentTask(
     onOutput?.(`▶ ${def.name}${resumed ? ' (resume)' : ''}\n`);
 
     const base = ctx.baseRequest(def);
+    const observation = new SubagentTraceCollector({
+        taskId, profile: def.name, description: req.description, prompt: req.prompt, model: base.model,
+        effort: base.reasoningEffort, tools: tools.map(tool => tool.name), resumed,
+        status: 'running', startedAt: Date.now(), updatedAt: Date.now(), entries: [], toolCalls: 0, inputTokens: 0, outputTokens: 0,
+    }, trace => { if (req.parentCallId) ctx.onObservation?.(req.parentCallId, trace); });
     const request: LocalAgentRequest = {
         ...base,
         systemPrompt: ctx.systemPrompt(def),
@@ -283,8 +290,9 @@ export async function runSubagentTask(
         for await (const event of runLocalAgent(
             request,
             wrapRestrictedExecutor(ctx.executor, allowed),
-            ctx.approvalGate,
+            { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined) },
         )) {
+            observation.receive(event);
             switch (event.type) {
                 case 'assistantMessage':
                     if (!event.toolCalls.length) finalText = event.text;
@@ -324,20 +332,26 @@ export async function runSubagentTask(
         // task_id note stays so the model can HEAL the run by continuing it.
         if (base.signal?.aborted
             || (err instanceof Error && (err.name === 'AbortError' || err.name === 'ResponseAborted'))) {
+            observation.finish('cancelled');
             return { output: withTaskIdNote('Subagent run cancelled.', taskId, toolCallCount), isError: true };
         }
         const msg = err instanceof Error ? err.message : String(err);
+        observation.trace.error = msg;
+        observation.finish('error');
         return { output: withTaskIdNote(`Subagent failed: ${msg}`, taskId, toolCallCount), isError: true };
     } finally {
         record.running = false;
     }
     commitTurn();
     if (finalText.trim()) {
+        observation.finish('done', finalText.trim());
         return { output: withTaskIdNote(finalText.trim(), taskId, toolCallCount) };
     }
     if (lastError) {
+        observation.finish('error');
         return { output: withTaskIdNote(`Subagent failed: ${lastError}`, taskId, toolCallCount), isError: true };
     }
+    observation.finish('error');
     return { output: withTaskIdNote('(the subagent finished without a final report)', taskId, toolCallCount), isError: true };
 }
 

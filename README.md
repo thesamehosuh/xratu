@@ -19,7 +19,7 @@ Open-source AI coding agent for VS Code. Bring your own key or use a local
 runtime. Everything runs inside the extension host, on your machine.
 
 <p align="center">
-  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, approvals, change review, MCP, skills, usage, and connections" />
+  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, tool details, approvals, subagents, movable tabs, change review, and settings" />
 </p>
 
 ## Your keys. Your models. Your machine.
@@ -37,7 +37,7 @@ runtime. Everything runs inside the extension host, on your machine.
   on hover. Approvals and questions stay in Conversation. Review checkpoint
   diffs inline, mark files reviewed, and add feedback to your draft before
   sending. Wide panels show Changes alongside
-  the conversation by default. Drag Activity or Changes between the main
+  the conversation by default. Drag Activity, Changes, Agents, or Background between the main
   tabs and sidebar, or use the tab menu. Placement and sidebar width are
   remembered; narrow windows keep every view in the main tabs. Drag the
   divider or use its arrow keys to resize.
@@ -266,6 +266,28 @@ When the model needs several delegations in one message they run
 concurrently - `xratu.maxParallelSubagents` (default 4) caps how many at
 once, because each one is a whole agent loop with its own context and budget.
 Exceeding the cap is not an error: the rest start in order as slots free up.
+
+### Watching delegated work
+
+The **Agents** tab appears when a task is delegated. Pick a run to see its
+Conversation or tool-only Activity, actual model and effort, elapsed time,
+and reported token usage. Expand tools for file content with line numbers,
+search matches, terminal output, diffs, and complete arguments. The task pill's
+**Observe run** button opens that same run. Agents can move to the sidebar
+alongside the parent conversation; switching runs preserves opened details.
+
+Child approvals identify their profile and task in Conversation. The child
+view stays read-only and links back to the real approval card. Queued tasks,
+waiting approvals, failures, and interruptions have distinct states. Saved
+sessions retain bounded text traces (120 entries / 48,000 characters per run);
+older run detail is reclaimed when the session trace budget fills. Unfinished
+restored runs show as interrupted. Older sessions keep their
+original reports. Only the final report enters the parent's model context.
+
+Background processes have a movable **Background** tab with live output,
+per-process stop controls, elapsed time, and recent exit results. Log following
+pauses when you scroll up. Output keeps streaming after the agent finishes;
+processes recovered after a VS Code reload show when their output pipe is gone.
 
 ### Writing an agent file
 

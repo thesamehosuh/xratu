@@ -1,14 +1,17 @@
+import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
+import { collectAgentRuns } from './subagentView';
+import { SubagentsPanel } from './components/SubagentsPanel';
+import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AgentsPage } from './components/AgentsPage';
 import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
-import { SURFACE_PANELS } from './dockLayout';
 import { useDockLayout } from './useDockLayout';
 import { ActivityPanel } from './components/ActivityPanel';
 import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
+import { BookOpen, WifiOff, ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
@@ -68,16 +71,6 @@ function toAttachmentMeta(attachments: ComposerAttachment[]) {
             ? `data:${a.mimeType};base64,${a.dataBase64}`
             : undefined,
     }));
-}
-
-/** Live-job uptime, compact. Deliberately unit-suffixed and left-to-right:
- *  a dev server that has been up four hours should not read as `14400s`, and
- *  the numbers must not reorder in an RTL layout. */
-function formatUptime(seconds: number) {
-    const s = Math.max(0, Math.floor(seconds));
-    if (s < 60) return `${s}s`;
-    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
 /** Trailing bubbles mounted by default. The live session keeps its full
@@ -201,8 +194,19 @@ export function App() {
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
     const [taskChipOpen, setTaskChipOpen] = useState(false);
-    const dock = useDockLayout();
+    const agentRuns = useMemo(() => collectAgentRuns(chat.messages), [chat.messages]);
+    const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0);
+    const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
+    const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
+    const agentRunsRef = useRef(agentRuns);
+    agentRunsRef.current = agentRuns;
+    const observeAgent = useCallback((id: string) => {
+        const run = agentRunsRef.current.find(run => run.id === id || run.call.callId === id);
+        setSelectedAgentId(run?.id ?? id); setSurfaceTab('agents');
+    }, [setSurfaceTab]);
+    const showConversation = useCallback(() => setSurfaceTab('conversation'), [setSurfaceTab]);
     const surfaceTab = dock.mainActive;
     const activityVisible = dock.mainActive === 'activity' || dock.sideActive === 'activity';
     const [activityOpened, setActivityOpened] = useState(false);
@@ -1025,12 +1029,6 @@ export function App() {
         [chat.backgroundJobs],
     );
 
-    // Folded by default: a dev server left running all day must not hold composer
-    // space, and the folded line still names the single job or counts the rest.
-    // It never auto-opens - the count and the caret are the whole affordance,
-    // and a strip that re-expands itself is a strip you cannot get rid of.
-    const [bgJobsOpen, setBgJobsOpen] = useState(false);
-
     // Task-list edit: optimistic local update + host persistence (the host
     // stores the per-session override and echoes taskListState back).
     const handleTaskListEdit = useCallback(
@@ -1502,8 +1500,8 @@ export function App() {
                 onOpenSettings={() => setScreen('settings')}
             />
             <div className="workbench-body">
-            <div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
-            <main className={`work-surface show-${surfaceTab}${dock.wide && dock.layout.side.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
+            <AgentNavigation.Provider value={observeAgent}><div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
+            <main className={`work-surface show-${surfaceTab}${dock.wide && dock.sidePanels.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
                 onDragOver={(event) => {
                     if (dock.wide && dock.dragging && event.dataTransfer.types.includes(PANEL_DRAG_TYPE) && (event.target as Element).closest('.panel-side,.dock-sidebar')) {
                         event.preventDefault(); event.dataTransfer.dropEffect = 'move';
@@ -1515,7 +1513,7 @@ export function App() {
                     if (panel !== dock.dragging) return;
                     event.preventDefault(); dock.move(dock.dragging, 'side');
                 }}>
-            <SurfaceTabs location="main" panels={dock.wide ? dock.layout.main : [...SURFACE_PANELS]} active={surfaceTab} wide={dock.wide} count={changeCount} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             <div className="chat-stage">
             <div className={`transcript-pane${surfaceTab !== 'conversation' ? ' hidden-pane' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
 
@@ -1564,6 +1562,8 @@ export function App() {
             </div>
             </div>
             {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
+            {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
+            {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
             <div className="compose-dock">
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
@@ -1602,81 +1602,6 @@ export function App() {
                             <span className="queued-steer-text" dir="auto">{s.label}</span>
                         </span>
                     ))}
-                </div>
-            )}
-            {/* Live background jobs. A backgrounded process outlives its turn
-                and, once the chat scrolls, its transcript row - this is the only
-                place the user can still see it and stop it. A card, not a chip
-                per job: the commands are long, so each row owns the width and
-                truncates instead of the strip overflowing the panel. */}
-            {/* Live background jobs, docked UNDER the composer card and inset from its
-                sides: it reads as part of the input box rather than as a
-                floating panel, and it folds away to a one-line summary so a
-                dev server left running all day never holds composer space.
-                A backgrounded process outlives its turn and, once the chat
-                scrolls, its transcript row - this is the only place the user
-                can still see it and stop it. */}
-            {liveJobs.length > 0 && (
-                <div className={`bg-jobs${bgJobsOpen ? ' open' : ''}`} aria-label={tf('bgJobBadge', { count: String(liveJobs.length) })}>
-                    <div className="bg-jobs-head">
-                        <button
-                            type="button"
-                            className="bg-jobs-toggle"
-                            aria-expanded={bgJobsOpen}
-                            onClick={() => setBgJobsOpen((o) => !o)}
-                        >
-                            <span className="bg-job-dot" aria-hidden="true" />
-                            {/* Folded, the dock counts rather than names: one
-                                line can hold exactly one honest label, and
-                                "what is running" is the question a lid
-                                invites. The commands are one click away. */}
-                            <span className="bg-jobs-title">
-                                {liveJobs.length === 1
-                                    ? t('bgJobsRunningOne')
-                                    : tf('bgJobsRunning', { count: String(liveJobs.length) })}
-                            </span>
-                            <ChevronDown size={12} className="bg-jobs-caret" aria-hidden="true" />
-                        </button>
-                        {bgJobsOpen && liveJobs.length > 1 && (
-                            <button
-                                type="button"
-                                className="bg-jobs-stopall"
-                                title={t('bgStopAllTitle')}
-                                onClick={() => liveJobs.forEach((j) => handleKillBackground(j.jobId))}
-                            >
-                                {t('bgStopAll')}
-                            </button>
-                        )}
-                    </div>
-                    {bgJobsOpen && (
-                        <ul className="bg-jobs-list">
-                            {liveJobs.map((j) => (
-                                <li className="bg-job" key={j.jobId}>
-                                    <span className="bg-job-dot" aria-hidden="true" />
-                                    <span className="bg-job-cmd" title={j.command} dir="ltr">{j.command}</span>
-                                    <button
-                                        type="button"
-                                        className="bg-job-copy"
-                                        title={t('bgCopyCmd')}
-                                        aria-label={t('bgCopyCmd')}
-                                        onClick={() => send({ type: 'copyToClipboard', value: j.command })}
-                                    >
-                                        <Copy size={11} aria-hidden="true" />
-                                    </button>
-                                    <span className="bg-job-up" dir="ltr">{formatUptime(j.uptimeSeconds)}</span>
-                                    <button
-                                        type="button"
-                                        className="bg-job-stop"
-                                        title={t('bgStopTitle')}
-                                        aria-label={t('bgStop')}
-                                        onClick={() => handleKillBackground(j.jobId)}
-                                    >
-                                        <X size={11} aria-hidden="true" />
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
                 </div>
             )}
             </div>
@@ -1774,12 +1699,13 @@ export function App() {
                 }}
             />
             </div>
-            <DockSidebar active={dock.wide && dock.layout.side.length > 0} dragging={!!dock.dragging}>
-                <SurfaceTabs location="side" panels={dock.wide ? dock.layout.side : []} active={dock.sideActive} wide={dock.wide} count={changeCount} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+            <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
+                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             </DockSidebar>
             <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
             </main>
             </div>
+            </AgentNavigation.Provider>
             {overlayOpen && <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>}
         </div>
         {banner}

@@ -369,6 +369,20 @@ export function listTerminalJobs(): TerminalJob[] {
     return [...jobs.values()];
 }
 
+/** Bounded monitor state: running jobs first, then the most recent results. */
+export function backgroundJobViews(entries = listTerminalJobs()) {
+    return [...entries].filter(job => job.background)
+        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt)
+        .slice(0, 32)
+        .map(job => ({
+            jobId: job.id, command: job.command, running: job.status === 'running',
+            uptimeSeconds: job.uptimeSeconds(), detached: !!job.detached,
+            status: job.status, exitCode: job.exitCode, startedAt: job.startedAt,
+            finishedAt: job.finishedAt, cwd: job.cwd, pid: job.pid,
+            output: (job.output || job.error?.message || '').slice(-20_000),
+        }));
+}
+
 export function getTerminalJob(id: string | undefined): TerminalJob | undefined {
     if (!id) return undefined;
     pruneFinished();
@@ -508,6 +522,7 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
 
     // A background job has no deadline: the user asked for something that
     // keeps running, so the foreground idle/hard timers must not apply.
+    let outputTimer: NodeJS.Timeout | undefined;
     let killFallback: NodeJS.Timeout | undefined;
     let idleTimer: NodeJS.Timeout | undefined;
     let hardTimer: NodeJS.Timeout | undefined;
@@ -573,6 +588,7 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         clearTimeout(idleTimer);
         clearTimeout(hardTimer);
         clearTimeout(killFallback);
+        clearTimeout(outputTimer);
         child.stdout.removeAllListeners();
         child.stderr.removeAllListeners();
         // A background job stays readable after it ends, so the model can poll
@@ -614,6 +630,12 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         // Stream to the UI as it arrives (the model still gets the capped
         // result at exit; this is for the human watching).
         onOutput?.(chunk);
+        if (isBackground && !outputTimer) {
+            outputTimer = setTimeout(() => {
+                outputTimer = undefined;
+                if (!settled) emit({ kind: 'output', jobId: id, output: merged.slice(-20_000) });
+            }, 80);
+        }
         resetIdle();
     };
 
@@ -826,6 +848,8 @@ export type JobEvent =
         /** True when the USER released the turn rather than the model asking. */
         byUser: boolean;
     }
+    | { kind: 'output'; jobId: string; output: string }
+    | { kind: 'finished'; notice: JobCompletionNotice }
     | { kind: 'settled'; notice: JobCompletionNotice };
 
 type JobEventListener = (event: JobEvent) => void;
@@ -922,6 +946,8 @@ export function formatJobCompletion(notice: JobCompletionNotice): string {
 }
 
 function emitCompletion(notice: JobCompletionNotice): void {
+    // The UI must settle even when the model already read this job's log.
+    emit({ kind: 'finished', notice });
     if (completionConsumed.has(notice.jobId)) return;
     emit({ kind: 'settled', notice });
 }

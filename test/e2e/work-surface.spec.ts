@@ -239,7 +239,7 @@ test('Activity keeps tool output, omits answer prose and updates persisted event
     await expect(page.locator('.activity-timeline')).not.toContainText('Answer conclusion');
     await expect(page.locator('.activity-timeline details.step')).toHaveAttribute('title', /2 minutes ago/);
     const detail = page.locator('.activity-timeline details.step');
-    if (!await detail.evaluate((el) => (el as HTMLDetailsElement).open)) await detail.locator('summary').click();
+    if (!await detail.evaluate((el) => (el as HTMLDetailsElement).open)) await detail.locator(':scope > summary').click();
     await expect(detail.locator('.activity-age')).toBeVisible();
     await expect(detail.locator('summary .activity-age')).toHaveCount(0);
     await expect(page.locator('.activity-timeline')).toContainText('Retained tool output');
@@ -293,13 +293,13 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
     });
 }
 
-test('background jobs stay controllable from all three surfaces', async ({ page }) => {
+test('background jobs remain available when switching work surfaces', async ({ page }) => {
     await post(page, { type: 'backgroundJobs', jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }] });
-    await page.locator('.bg-jobs-toggle').click();
     for (const name of ['Changes', 'Activity', 'Conversation']) {
         await page.getByRole('tab', { name, exact: true }).click();
-        await expect(page.locator('.bg-job-stop')).toBeVisible();
+        await expect(page.locator('#surface-tab-background')).toBeVisible();
     }
+    await page.locator('#surface-tab-background').click();
     await page.locator('.bg-job-stop').click();
     expect(await sent(page)).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
 });

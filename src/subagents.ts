@@ -109,6 +109,8 @@ export interface SubagentRunRequest {
     prompt: string;
     taskId?: string;
     onOutput?: (chunk: string) => void;
+    /** Host identity of the parent task call, never a model argument. */
+    parentCallId?: string;
 }
 
 /** Host-injected nested-run capability. Present only in the local runtime's

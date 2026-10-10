@@ -6,7 +6,7 @@ import { t, tf } from '../i18n';
 export function completedCommands(steps: Step[]): Array<{ id: string; command: string; exit: string }> {
     return steps.flatMap((step) => {
         if (step.kind !== 'toolCall' || step.tool !== 'run_terminal_command' || step.background) return [];
-        const exit = step.result?.match(/(?:^|\n)Exit code: (-?\d+)(?:\r?\n|$)/)?.[1];
+        const exit = (step.backgroundOutcome?.output ?? step.result)?.match(/(?:^|\n)Exit code: (-?\d+)(?:\r?\n|$)/)?.[1];
         if (exit === undefined) return [];
         try {
             const args = JSON.parse(step.text) as { command?: unknown };

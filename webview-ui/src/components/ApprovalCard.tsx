@@ -25,8 +25,9 @@
  * buttons, `submitting` still blocks a double submit and clears when the
  * resolution lands, and the terminal/non-terminal copy split is preserved.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Clock, ShieldCheck, X } from 'lucide-react';
+import { AgentNavigation } from './AgentNavigation';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, Check, ChevronDown, Clock, ShieldCheck, X } from 'lucide-react';
 import type { ApprovalItem, ApprovalPayload } from '../types';
 import { t, tf } from '../i18n';
 import { toolIcon, toolLabel } from '../toolMeta';
@@ -123,6 +124,7 @@ export function ApprovalCard({
     payload: ApprovalPayload;
     onDecide?: (id: string, d: Record<string, boolean>, sessionApprove?: boolean) => void;
 }) {
+    const openAgent = useContext(AgentNavigation);
     const preDenied = payload.preDenied ?? {};
     const approvable = payload.approvals.filter((a) => preDenied[a.tool_call_id] !== false);
     const resolution = payload.resolution;
@@ -199,6 +201,7 @@ export function ApprovalCard({
 
     return (
         <section className={`approval-card${isResolved ? ' resolved' : ' pending'}`} aria-label={title}>
+            {payload.source && <div className="approval-source"><Bot size={12} /><strong dir="auto">{payload.source.profile}</strong><span dir="auto" title={payload.source.description}>{payload.source.description}</span>{openAgent && <button type="button" onClick={() => openAgent(payload.source!.parentCallId)}>{t('agentObserve')}</button>}</div>}
             <div className="approval-head">
                 <span className={`approval-state-icon ${resolution ?? ''}`}>
                     {resolution === 'approved' ? <Check size={13} />

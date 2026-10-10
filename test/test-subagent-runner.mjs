@@ -216,12 +216,15 @@ function childContext(extra = {}) {
 {
     const { ctx, usageEvents } = childContext();
     const trace = [];
+    const observations = [];
+    ctx.onObservation = (id, trace) => observations.push({id,trace});
     const handlers = [
         () => toolReply('read_file', { path: 'src/x.ts' }),
         () => textReply('ANSWER: found foo at src/x.ts:10'),
     ];
     const { result, seen } = await withMockFetch(handlers, () => runSubagentTask(ctx, DEFS, {
         subagentType: 'explore',
+        parentCallId: 'parent-task-call',
         description: 'find foo',
         prompt: 'Find where foo is defined. Self-contained task.',
         onOutput: (chunk) => trace.push(chunk),
@@ -231,6 +234,13 @@ function childContext(extra = {}) {
         /\[task_id: [0-9a-f]{10} · 1 tool calls · resumable while this chat stays open\]/.test(result.output), result.output);
     check('result is not an error', result.isError, undefined);
     check('child made exactly two rounds', seen.length, 2);
+    ok('observations preserve parent call identity', observations.length > 2 && observations.every(item => item.id === 'parent-task-call'));
+    check('child trace ends done', observations.at(-1)?.trace.status, 'done');
+    check('child trace names its actual model', observations.at(-1)?.trace.model, 'test-model');
+    ok('child trace retains real tool output', observations.at(-1)?.trace.entries.some(entry => entry.output === 'contents of src/x.ts'));
+    ok('child trace retains final narration', observations.at(-1)?.trace.entries.some(entry => entry.text.includes('ANSWER: found foo')));
+    ok('initial observation is immutable', observations[0]?.trace.entries.length === 0);
+    ok('child trace is absent from model payload', !seen.some(request => JSON.stringify(request.body).includes('onObservation')));
     ok('trace announces the subagent', trace.join('').includes('▶ explore'));
     ok('trace shows the child tool call as a readable line (tool + subject, no args JSON)',
         trace.join('').includes('↳ read_file src/x.ts'), trace.join(''));
@@ -251,6 +261,23 @@ function childContext(extra = {}) {
     ok('child user message is the task prompt (plus the volatile tail note)',
         String(messages[1].content).startsWith('Find where foo is defined. Self-contained task.'),
         JSON.stringify(messages[1].content));
+}
+
+// The shared gate keeps child approvals real and attributes them to the parent task.
+{
+    const {ctx} = childContext();
+    const observations = [];
+    const approvals = [];
+    let executed = false;
+    ctx.onObservation = (id,trace) => observations.push({id,trace});
+    ctx.approvalGate = {requestApproval:async (id,calls,source) => { approvals.push({id,calls,source}); return Object.fromEntries(calls.map(call => [call.id,false])); }};
+    ctx.executor = {execute:async()=>{executed=true;return {output:'should not execute'};}};
+    const {result} = await withMockFetch([()=>toolReply('edit_file',{path:'a.ts',patch:'old to new'}),()=>textReply('Edit was denied; reporting findings instead.')],()=>runSubagentTask(ctx,DEFS,{subagentType:'general',description:'Fix auth',prompt:'Fix expiry',parentCallId:'parent-approval'},new Map()));
+    ok('child approval identifies its parent/profile/task', approvals.length === 1 && approvals[0].source.parentCallId === 'parent-approval' && approvals[0].source.profile === 'general' && approvals[0].source.description === 'Fix auth');
+    ok('child never bypasses a denied tool', !executed);
+    ok('trace exposes approval wait', observations.some(item=>item.trace.status==='waiting'));
+    ok('trace retains denied tool error', observations.at(-1).trace.entries.some(entry=>entry.kind==='tool' && entry.isError));
+    ok('parent receives only final child report', result.output.startsWith('Edit was denied; reporting findings instead.'));
 }
 
 // ---------------------------------------------------------------------------
@@ -283,14 +310,17 @@ function childContext(extra = {}) {
     const controller = new AbortController();
     controller.abort();
     const { ctx } = childContext({ baseRequest: { signal: controller.signal } });
+    const observations = []; ctx.onObservation = (id,trace) => observations.push(trace);
     const { result, seen } = await withMockFetch([], () => runSubagentTask(ctx, DEFS, {
         subagentType: 'explore',
+        parentCallId: 'cancelled-parent',
         description: 'cancelled',
         prompt: 'Find foo.',
     }, new Map()));
     ok('cancelled run reports cancellation', result.isError === true
         && result.output.includes('cancelled'), result.output);
     check('cancelled run never dials out', seen.length, 0);
+    check('cancelled observation ends without a live spinner',observations.at(-1)?.status,'cancelled');
 }
 {
     const { ctx, requestCount } = childContext();

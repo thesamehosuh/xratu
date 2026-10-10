@@ -253,6 +253,7 @@
     "test:session-approval": "node test/test-session-approval.mjs",
     "test:skills": "node test/test-skills.mjs",
     "test:subagents": "node test/test-subagents.mjs",
+    "test:subagent-observation": "node test/test-subagent-observation.mjs",
     "test:subagent-runner": "node test/test-subagent-runner.mjs",
     "test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",
     "test:session-store": "node test/test-session-store.mjs",
