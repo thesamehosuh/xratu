@@ -67,7 +67,7 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
         expect(await panel.evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
         await panel.locator('.agent-view-tabs button').nth(1).click();
-        await expect(panel.locator('.agent-run-view:not(.panel-hidden)')).not.toContainText('Checking expiry before editing.');
+        await expect(panel.locator('.agent-run-view:not(.panel-hidden)')).toContainText('Checking expiry before editing.');
         if (process.env.XRATU_SCREENSHOTS) await page.screenshot({path:`/tmp/xratu-agents-${locale}-${width}.png`});
     });
 }
@@ -99,7 +99,12 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await post(page,{type:'backgroundJobOutput',jobId:'job',output:streamed});
         const log=page.locator('.background-task-detail:not(.panel-hidden) .background-output');
         await expect.poll(()=>log.evaluate(el=>el.scrollHeight-el.scrollTop-el.clientHeight)).toBeLessThanOrEqual(1);
-        await log.evaluate(el=>{el.scrollTop=0;el.dispatchEvent(new Event('scroll',{bubbles:true}));});
+        // A real wheel gesture, not a dispatched `scroll` event: the follow
+        // state is driven by the browser's own scrolling, and waiting for the
+        // scroll to actually land keeps the assertion off a pane that never
+        // moved (which reads as "still following" on a loaded runner).
+        await log.hover(); await page.mouse.wheel(0,-20_000);
+        await expect.poll(()=>log.evaluate(el=>el.scrollTop)).toBe(0);
         const follow=page.locator('.background-task-detail:not(.panel-hidden) .background-follow');
         await expect(follow).toHaveAttribute('aria-pressed','false');
         const newer=streamed+'\nnew output while reading history';

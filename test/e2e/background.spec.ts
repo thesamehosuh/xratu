@@ -146,18 +146,19 @@ test('the background tab respects English direction', async ({ page }) => {
     await expect(page.locator('.bg-job-stop')).toHaveAttribute('aria-label', 'Stop');
 });
 
-test('a short panel keeps tasks accessible above the composer', async ({page}) => {
+test('a short Background panel uses its height without the composer', async ({page}) => {
     await page.setViewportSize({width:420,height:300});
     await page.goto('/'); await hostMessage(page,{type:'showChat'});
     await hostMessage(page,{type:'backgroundJobs',jobs:[{jobId:'job-1',command:'npm run dev',running:true,uptimeSeconds:3}]});
     await page.locator('#surface-tab-background').click();
     await expect(page.locator('.bg-job-stop')).toBeVisible();
+    await expect(page.locator('.composer-input')).toBeHidden();
     const bounds=await page.evaluate(()=>{
-        const pane=document.querySelector('.background-pane')!.getBoundingClientRect(), row=document.querySelector('.bg-job')!.getBoundingClientRect(), composer=document.querySelector('.composer')!.getBoundingClientRect();
+        const pane=document.querySelector('.background-pane')!.getBoundingClientRect(), row=document.querySelector('.bg-job')!.getBoundingClientRect();
         const atRow=document.elementFromPoint(row.right-15,row.top+row.height/2);
-        return {inside:row.top>=pane.top&&row.bottom<=pane.bottom, overlap:pane.bottom>composer.top,hit:!!atRow?.closest('.background-pane')};
+        return {inside:row.top>=pane.top&&row.bottom<=pane.bottom, insideViewport:pane.bottom<=innerHeight,hit:!!atRow?.closest('.background-pane')};
     });
-    expect(bounds.inside).toBe(true); expect(bounds.overlap).toBe(false); expect(bounds.hit).toBe(true);
+    expect(bounds.inside).toBe(true); expect(bounds.insideViewport).toBe(true); expect(bounds.hit).toBe(true);
     await page.locator('.bg-job-stop').click();
     expect(await sentMessages(page)).toContainEqual({type:'killBackgroundJob',jobId:'job-1'});
 });

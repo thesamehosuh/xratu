@@ -43,7 +43,7 @@ for (const locale of ['en','fa'] as const) {
     assert.match(html,/detail-interrupted/);
     assert.match(html,/before cancellation/);
     const activity = renderToString(createElement(MessageItem,{message,observation:true,activityOnly:true}));
-    assert.doesNotMatch(activity,/Actual child narration/);
+    assert.match(activity,/Actual child narration/);
 }
 setLocale('en');
 assert.deepEqual(parseCommandOutput('Exit code: 2\nSTDOUT:\n(empty)\nSTDERR:\nactual error\n'),{exit:'2',stdout:'',stderr:'actual error'});

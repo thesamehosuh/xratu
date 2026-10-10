@@ -492,13 +492,29 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         : st
                 );
                 renderedHtml = undefined;
-            } else if (streaming && textSteps.length > 0) {
-                steps = streaming.steps.filter((st) => st.kind !== 'text');
+            } else if (streaming) {
+                // Older replays may lack segment renders. Keep their progress
+                // entries and use the final streamed segment when available.
+                const tail = streaming.steps.at(-1);
+                const lastText = textSteps.at(-1);
+                if (tail?.kind === 'toolCall' || tail?.kind === 'toolResult') {
+                    if (msg.persian || msg.renderedHtml) steps = [...streaming.steps, {
+                        id: nextId(), kind: 'text', text: msg.persian ?? '', html: msg.renderedHtml ?? undefined,
+                    }];
+                } else if (lastText) {
+                    if (textSteps.length > 1) renderedHtml = undefined;
+                    else steps = streaming.steps.map(st => st === lastText ? {
+                        ...st, text: msg.persian ?? st.text,
+                        html: msg.renderedHtml ?? (msg.persian === undefined || msg.persian === st.text ? st.html : undefined),
+                    } : st);
+                }
             }
+            const finalStep = (steps ?? streaming?.steps ?? []).filter(st => st.kind === 'text').at(-1);
+            if (streaming && finalStep) steps = (steps ?? streaming.steps).map(st => st.id === finalStep.id ? { ...st, final: true } : st);
             return {
                 ...patch(state, id, {
                     renderedHtml,
-                    text: msg.persian ?? '',
+                    text: finalStep && (textSteps.length > 1 || !!segs?.length) ? finalStep.text : msg.persian ?? '',
                     status: 'done',
                     completedAt: Date.now(),
                     usage: meaningfulUsage(msg.usage),

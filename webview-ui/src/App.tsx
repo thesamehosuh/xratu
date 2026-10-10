@@ -345,13 +345,10 @@ export function App() {
     // Content height at the previous scroll event - distinguishes a real scroll
     // from a content change that clamps scrollTop (see onScroll).
     const lastScrollHeight = useRef(0);
-    // A chevron-triggered smooth scroll is in flight - instant pins (stream
-    // follow, resize observer) must not compete with it or the animation
-    // snaps mid-flight. Cleared on arrival at the bottom or by timeout.
-    const smoothJumpInFlight = useRef(false);
     // Timestamp of the last real scroll gesture (wheel / touch / key) over the
     // transcript - used to tell a user scroll-up from a content-driven one.
     const userIntentAt = useRef(0);
+    const userScrollDirection = useRef(0);
     // Paged message window: number of trailing bubbles mounted. Declared here
     // (before the scroll handlers below) because they read it.
     const [visibleBudget, setVisibleBudget] = useState(HISTORY_PAGE_SIZE);
@@ -413,11 +410,12 @@ export function App() {
             // Captured BEFORE the branch below latches it: only a genuine
             // return from away-from-tail may collapse a reveal window.
             const wasAtBottom = atBottom.current;
-            if (nearBottom) {
+            if (movedUp && (userIntent || !heightChanged)) {
+                atBottom.current = false;
+            } else if (nearBottom && !(userIntent && userScrollDirection.current < 0)) {
                 // Reached, or still sitting at, the bottom - follow stays armed.
                 // This is how a reader who scrolled up re-arms it.
                 atBottom.current = true;
-                smoothJumpInFlight.current = false;
                 // Collapse an expanded reveal window once the reader is back at
                 // the tail: the paging budget only ever GREW (show-earlier
                 // pages + append-while-scrolled-up anchor growth) and never
@@ -442,8 +440,6 @@ export function App() {
                     && Date.now() - userIntentAt.current > 500) {
                     setVisibleBudget(HISTORY_PAGE_SIZE);
                 }
-            } else if (movedUp && (userIntent || !heightChanged)) {
-                atBottom.current = false;
             }
             // Otherwise leave `atBottom` exactly as it was: neither content
             // growth nor a programmatic scroll is a statement of intent.
@@ -452,10 +448,10 @@ export function App() {
             setShowJump(!atBottom.current);
         }
     };
-    const stickToBottom = useCallback((smooth = false) => {
+    const stickToBottom = useCallback(() => {
         const el = containerRef.current;
         if (!el || !atBottom.current) return;
-        el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
         syncScrollBookkeeping();
     }, [syncScrollBookkeeping]);
 
@@ -472,32 +468,52 @@ export function App() {
         const el = containerRef.current;
         if (!el) return;
         if (!atBottom.current) return;
-        // Never override an in-flight smooth jump with an instant snap.
-        if (smoothJumpInFlight.current) return;
         el.scrollTo({ top: el.scrollHeight });
         syncScrollBookkeeping();
     }, [syncScrollBookkeeping]);
 
     // Follow stream output: instant (no animation) so it never fights itself.
     useEffect(() => {
-        stickToBottom(false);
+        stickToBottom();
     }, [chat.messages, stickToBottom]);
 
     // Record real scroll gestures over the transcript. onScroll only disarms
     // auto-follow when one of these produced the scroll - see the comment
     // there. Capture phase so it fires before the container's own handler.
     useEffect(() => {
+        let touchY = 0;
         const markIfInside = (e: Event) => {
             const el = containerRef.current;
-            if (el && e.target instanceof Node && el.contains(e.target)) {
-                userIntentAt.current = Date.now();
+            if (!el || !(e.target instanceof Node) || !el.contains(e.target)) return;
+            let direction = 0;
+            if (e instanceof WheelEvent) direction = Math.sign(e.deltaY);
+            if (e instanceof TouchEvent) {
+                const y = e.touches[0]?.clientY ?? touchY;
+                direction = e.type === 'touchstart' ? 0 : Math.sign(touchY - y);
+                touchY = y;
+            }
+            if (e instanceof KeyboardEvent) {
+                if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) || (e.key === ' ' && e.shiftKey)) direction = -1;
+                if (['ArrowDown', 'PageDown', 'End'].includes(e.key) || (e.key === ' ' && !e.shiftKey)) direction = 1;
+                if ((e.target as Element).closest('input,textarea,[contenteditable=true]')) return;
+            }
+            if (!direction) return;
+            userIntentAt.current = Date.now();
+            userScrollDirection.current = direction;
+            // Disarm BEFORE the browser scrolls. A streamed React update or
+            // ResizeObserver can otherwise pin the tail before onScroll runs.
+            if (direction < 0) {
+                atBottom.current = false;
+                setShowJump(true);
             }
         };
         window.addEventListener('wheel', markIfInside, true);
+        window.addEventListener('touchstart', markIfInside, true);
         window.addEventListener('touchmove', markIfInside, true);
         window.addEventListener('keydown', markIfInside, true);
         return () => {
             window.removeEventListener('wheel', markIfInside, true);
+            window.removeEventListener('touchstart', markIfInside, true);
             window.removeEventListener('touchmove', markIfInside, true);
             window.removeEventListener('keydown', markIfInside, true);
         };
@@ -531,22 +547,15 @@ export function App() {
 
     const jumpToBottom = useCallback(() => {
         const el = containerRef.current;
-        if (el) {
-            smoothJumpInFlight.current = true;
-            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-            atBottom.current = true;
-            setShowJump(false);
-            // An explicit return to the tail collapses an expanded reveal
-            // window (the scroll handler cannot: atBottom is already latched).
-            if (visibleBudget > HISTORY_PAGE_SIZE) setVisibleBudget(HISTORY_PAGE_SIZE);
-            // Fallback: if the animation is interrupted (interrupting user
-            // scroll, content reflow past the target) the near-bottom scroll
-            // handler may never fire - don't leave the flag latched.
-            window.setTimeout(() => {
-                smoothJumpInFlight.current = false;
-            }, 800);
-        }
-    }, [visibleBudget]);
+        if (!el) return;
+        userScrollDirection.current = 1;
+        userIntentAt.current = 0;
+        atBottom.current = true;
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+        syncScrollBookkeeping();
+        setShowJump(false);
+        if (visibleBudget > HISTORY_PAGE_SIZE) setVisibleBudget(HISTORY_PAGE_SIZE);
+    }, [visibleBudget, syncScrollBookkeeping]);
 
     // --- Paged message window -------------------------------------------------
     // The transcript itself stays complete (see the host's model-ledger
@@ -1564,7 +1573,7 @@ export function App() {
             {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
-            <div className="compose-dock">
+            <div className={`compose-dock${surfaceTab !== 'conversation' ? ' panel-hidden' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined}>
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}

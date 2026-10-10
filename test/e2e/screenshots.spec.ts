@@ -355,7 +355,7 @@ async function chatScreen(page: Page, locale: Locale): Promise<Locator> {
     // Pin the transcript to its tail explicitly: the app follows the stream,
     // but a follow that loses a race would silently change every chat baseline.
     await page.locator('.activity-pane').evaluate((el) => { el.scrollTop = el.scrollHeight; });
-    await expect(page.locator('.session-cost')).toBeVisible();
+    await expect(page.locator('.session-cost')).toBeHidden();
     return diff;
 }
 

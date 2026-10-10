@@ -1955,7 +1955,15 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
     const isSystem = role === 'system';
     const readOnly = activityOnly || observation;
 
-    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length).filter((row) => !activityOnly || row.kind !== 'text'), [steps, message.decisions, activityOnly]);
+    const rows = useMemo(() => {
+        const timeline = buildRows(steps, !!message.decisions?.length);
+        const trailing = timeline.find(row => row.kind === 'text' && row.steps.some(step => step.final)) ?? timeline.at(-1);
+        // Prose before the next action belongs to Activity. The current/final
+        // trailing response belongs to Conversation, never both surfaces.
+        if (activityOnly) return timeline.filter(row => row !== trailing || row.kind !== 'text');
+        if (observation) return timeline;
+        return timeline.filter(row => row.kind !== 'text' || row === trailing);
+    }, [steps, message.decisions, activityOnly, observation]);
     const [activityNow, setActivityNow] = useState(Date.now);
     useEffect(() => {
         if (!readOnly) return;
@@ -2018,8 +2026,7 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
     }
 
     const collapseSteps = !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
-    const leadingText = collapseSteps && hasPills && rows[0]?.kind === 'text' && textRows.length > 1 ? textRows[0] : null;
-    const finalTextRows = collapseSteps ? textRows.filter((row) => row !== leadingText) : [];
+    const finalTextRows = collapseSteps ? textRows : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
 
     return (
@@ -2029,7 +2036,6 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
             aria-busy={status === 'streaming' && !approvalPending}
         >
             {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
-            {leadingText && <TextSegmentRow steps={leadingText.steps} streaming={false} />}
             {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
             {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
@@ -2114,7 +2120,7 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
                         )}
                     </>
                 )
-            ) : renderedHtml ? (
+            ) : steps.some(step => step.kind === 'text') ? null : renderedHtml ? (
                 <RenderedMarkdown html={renderedHtml} streaming={streamingContent} live={streamingContent} />
             ) : isTyping ? (
                 <div className={`msg-content typing${message.retryStatus ? ' retrying' : ''}`} aria-label={t('typingAria')}>

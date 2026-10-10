@@ -235,7 +235,7 @@ test('Activity keeps tool output, omits answer prose and updates persisted event
     await post(page, { type: 'chunk', value: 'Answer conclusion' });
     await post(page, { type: 'fullResponse', persian: 'Answer conclusion' });
     await page.getByRole('tab', { name: 'Activity', exact: true }).click();
-    await expect(page.locator('.activity-timeline')).not.toContainText('Answer introduction');
+    await expect(page.locator('.activity-timeline')).toContainText('Answer introduction');
     await expect(page.locator('.activity-timeline')).not.toContainText('Answer conclusion');
     await expect(page.locator('.activity-timeline details.step')).toHaveAttribute('title', /2 minutes ago/);
     const detail = page.locator('.activity-timeline details.step');
@@ -549,3 +549,37 @@ test('review diffs omit patch metadata, grow taller and stay bounded in the main
     const review = await page.locator('.changes-review').boundingBox();
     expect(review!.width).toBeLessThanOrEqual(980);
 });
+
+for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
+    test(`progress prose stays in Activity and the answer stays in chat (${locale}, segments=${segments})`, async ({ page }) => {
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'restoreUser', value: 'Check authentication' });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'chunk', value: 'I will inspect the validation path.' });
+        await post(page, { type: 'toolCall', tool: 'read_file', args: '{"path":"src/auth.ts"}', callId: 'read' });
+        await post(page, { type: 'toolResult', tool: 'read_file', output: 'source', callId: 'read' });
+        await post(page, { type: 'chunk', value: 'The expiry guard needs a regression test.' });
+        await post(page, { type: 'toolCall', tool: 'run_terminal_command', args: '{"command":"npm test"}', callId: 'test' });
+        await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'Exit code: 0\nSTDOUT:\npassed\nSTDERR:\n(empty)', callId: 'test' });
+        await post(page, { type: 'chunk', value: 'Expired tokens are now rejected.' });
+        if (segments) await post(page, { type: 'thinking', value: 'Final reasoning bookkeeping' });
+        await post(page, { type: 'fullResponse', persian: 'I will inspect the validation path.The expiry guard needs a regression test.Expired tokens are now rejected.', renderedHtml: '<p>I will inspect the validation path.</p><p>The expiry guard needs a regression test.</p><p>Expired tokens are now rejected.</p>', ...(segments ? { segmentsHtml: ['<p>I will inspect the validation path.</p>', '<p>The expiry guard needs a regression test.</p>', '<p>Expired tokens are now rejected.</p>'] } : {}) });
+        const chat = page.locator('.transcript-pane');
+        await expect(chat).toContainText('Expired tokens are now rejected.');
+        await expect(chat).not.toContainText('I will inspect the validation path.');
+        await expect(chat).not.toContainText('The expiry guard needs a regression test.');
+        await page.locator('.completed-steps summary').click();
+        await expect(page.locator('.compact-step > code').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await page.locator('#surface-tab-activity').click();
+        await expect(page.locator('.composer-input')).toBeHidden();
+        const activity = page.locator('.activity-pane');
+        await expect(activity).toContainText('I will inspect the validation path.');
+        await expect(activity).toContainText('The expiry guard needs a regression test.');
+        await expect(activity).not.toContainText('Expired tokens are now rejected.');
+        await page.locator('#surface-tab-changes').click();
+        await expect(page.locator('.composer-input')).toBeHidden();
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.composer-input')).toBeVisible();
+    });
+}

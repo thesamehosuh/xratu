@@ -839,6 +839,8 @@ export interface Step {
     subagent?: SubagentTrace;
     id: string;
     kind: StepKind;
+    /** Final answer segment; later bookkeeping/reasoning cannot move it into Activity. */
+    final?: boolean;
     tool?: string;
     text: string;
     open?: boolean;
