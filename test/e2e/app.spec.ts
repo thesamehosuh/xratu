@@ -317,7 +317,7 @@ test('the outcome reviews the turn checkpoint without extra message-footer actio
     await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'fullResponse', persian: 'Changes complete.', renderedHtml: '<p>Changes complete.</p>' });
-    const review = page.locator('button[aria-label="Review changes"]');
+    const review = page.locator('.outcome-review');
     await expect(review).toBeVisible();
     await expect(page.locator('.msg-footer button[aria-label="Review changes"]')).toHaveCount(0);
     await expect(page.locator('button[aria-label="Restore files"]')).toHaveCount(0);
