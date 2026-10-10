@@ -18,6 +18,10 @@
 Open-source AI coding agent for VS Code. Bring your own key or use a local
 runtime. Everything runs inside the extension host, on your machine.
 
+<p align="center">
+  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, approvals, change review, MCP, skills, usage, and connections" />
+</p>
+
 ## Your keys. Your models. Your machine.
 
 - API keys live in VS Code secrets storage and go only to the endpoint you
