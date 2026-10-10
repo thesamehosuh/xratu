@@ -137,8 +137,8 @@ function rememberRun(registry: SubagentRunRegistry, id: string, record: Subagent
 
 function withTaskIdNote(output: string, taskId: string, toolCalls: number): string {
     // The count rides the note so the UI can show "how many tool calls did
-    // this run make" even after a session restore (the live trace is
-    // display-only and not persisted). The lifetime clause is load-bearing:
+    // this run make" even when restoring older sessions without a saved
+    // display trace. The lifetime clause is load-bearing:
     // runs live in an in-memory per-chat registry, and the note itself IS
     // persisted in the tool result - without it the model would resume a
     // task_id that no longer exists after a reload.
