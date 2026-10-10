@@ -20,6 +20,7 @@ import { join, dirname } from 'path';
 
 const require = createRequire(import.meta.url);
 const { ShadowCheckpointStore, EmptySeedError } = require('../out/shadowGit.js');
+const { readReviewFile } = require('../out/workSurface.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -232,6 +233,28 @@ try {
     ok('diffCheckpoint finds nothing right after a snapshot',
         (await store.diffCheckpoint(work, cleanBase)).length === 0,
         JSON.stringify(await store.diffCheckpoint(work, cleanBase)));
+
+    // Git quotes tabs/newlines/quotes even with core.quotePath=false.
+    const reviewNames = process.platform === 'win32'
+        ? ['جلسه spaced.txt']
+        : ['جلسه spaced.txt', 'quoted "draft".txt', 'tab\tname.txt', 'line\nname.txt'];
+    for (const name of reviewNames) writeFileSync(join(work, name), 'before\n');
+    const pathBase = await store.createCheckpoint(work, 'review literal paths');
+    for (const name of reviewNames) {
+        writeFileSync(join(work, name), 'after\n');
+        writeFileSync(join(work, `new ${name}`), 'new\n');
+    }
+    const literalChanges = await store.diffCheckpoint(work, pathBase);
+    for (const name of reviewNames) {
+        ok(`tracked review path stays literal: ${JSON.stringify(name)}`,
+            literalChanges.some((file) => file.path === name && file.added === 1 && file.removed === 1));
+        ok(`untracked review path stays literal: ${JSON.stringify(name)}`,
+            literalChanges.some((file) => file.path === `new ${name}` && file.untracked));
+        try {
+            const file = await readReviewFile(store, work, pathBase, name);
+            ok(`review reads literal path: ${JSON.stringify(name)}`, file.before === 'before\n' && file.after === 'after\n');
+        } catch (error) { ok(`review reads literal path: ${JSON.stringify(name)}`, false, String(error)); }
+    }
 
     // --- empty seed refused ---
     const seedWork = mkdtempSync(join(tmpdir(), 'xratu-cp-seed-'));

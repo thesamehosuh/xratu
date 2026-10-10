@@ -1,3 +1,5 @@
+import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
+export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
@@ -14,6 +16,12 @@ export interface OpenDiffEdit {
 }
 
 export type ToExtensionMessage =
+    | { type: 'changesGetState'; sha: string; requestId: string }
+    | { type: 'changeFileGet'; sha: string; path: string; requestId: string }
+    | { type: 'changeFileOpen'; sha: string; path: string }
+    | { type: 'agentsGetState' }
+    | { type: 'agentsManage' }
+    | { type: 'agentFileOpen'; name: string; source: AgentProfileView['source'] }
     | { type: 'webviewReady' }
     | { type: 'askQuestion'; value: string; attachments?: ComposerAttachment[] }
     /** Steer a LIVE run. `steerId` identifies the pending bubble the webview
@@ -315,6 +323,9 @@ export interface ProviderBenchmark {
 }
 
 export type FromExtensionMessage =
+    | { type: 'changesState'; sha: string; requestId: string; files: ReviewChange[]; errorKey?: string }
+    | { type: 'changeFileState'; sha: string; requestId: string; file?: ReviewFile; errorKey?: string }
+    | { type: 'agentsState'; profiles: AgentProfileView[]; errorKey?: string }
     | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
     | ({ type: 'localModelOperation' } & LocalModelOperation)
     | ({ type: 'providerBenchmark' } & ProviderBenchmark)
@@ -348,13 +359,13 @@ export type FromExtensionMessage =
     // render, streaming uses escaped plain code blocks). Patches the LAST
     // text step so formatting appears between pills while streaming.
     | { type: 'streamHtml'; value: string }
-    | { type: 'thinking'; value: string }
+    | { type: 'thinking'; value: string; timestamp?: number }
     // Throttled LIVE markdown render of the CUMULATIVE thinking block (host
     // pipeline identical to streamHtml). Patches the latest thinking step's
     // html so the thinking pill renders formatted reasoning while streaming.
     | { type: 'thinkingHtml'; value: string }
-    | { type: 'toolCall'; tool: string; args: string; callId?: string }
-    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[] }
+    | { type: 'toolCall'; tool: string; args: string; callId?: string; timestamp?: number }
+    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[]; timestamp?: number }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; callId?: string; value: string }
     /** A terminal call was moved to the background (model- or user-initiated).
@@ -837,7 +848,7 @@ export interface Step {
      *  stays interactive: it can still be stopped, and it no longer offers
      *  the background button. */
     background?: BackgroundStep;
-    /** Wall-clock span of a thinking segment (webview-side timing). */
+    /** Wall-clock span of an activity (webview-side timing). */
     startedAt?: number;
     endedAt?: number;
     /** Final host-rendered markdown for a 'text' segment (applied by
@@ -895,4 +906,5 @@ export interface ChatMessage {
      *  content (the reason must still be visible - red styling alone
      *  reads as a silent death). */
     errorText?: string;
+    completedAt?: number;
 }

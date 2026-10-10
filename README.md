@@ -18,6 +18,10 @@
 Open-source AI coding agent for VS Code. Bring your own key or use a local
 runtime. Everything runs inside the extension host, on your machine.
 
+<p align="center">
+  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, approvals, change review, MCP, skills, usage, and connections" />
+</p>
+
 ## Your keys. Your models. Your machine.
 
 - API keys live in VS Code secrets storage and go only to the endpoint you
@@ -27,6 +31,20 @@ runtime. Everything runs inside the extension host, on your machine.
 
 ## Features
 
+- **Work surface** - Conversation, Changes, and Activity share one compact
+  composer. Finished tool calls fold into optional steps; Activity keeps the
+  full outputs in a read-only view, with timestamps in expanded footers and
+  on hover. Approvals and questions stay in Conversation. Review checkpoint
+  diffs inline, mark files reviewed, and add feedback to your draft before
+  sending. Wide panels show Changes alongside
+  the conversation by default. Drag Activity or Changes between the main
+  tabs and sidebar, or use the tab menu. Placement and sidebar width are
+  remembered; narrow windows keep every view in the main tabs. Drag the
+  divider or use its arrow keys to resize.
+- **Sidebar pages** - providers, MCP servers, marketplace, skills, agent
+  files, usage, proxy, and settings stay one click away. Setup opens in a
+  focused side panel; Iranian providers remain visible. Drafts survive page
+  changes, and user bubbles stay on the right with automatic text direction.
 - **Agentic coding** - reads files, edits code, runs terminal commands,
   searches the web. Every edit and command needs your approval; per-tool
   auto-approve if you trust a workflow, YOLO mode if you don't want the gate.
@@ -36,10 +54,10 @@ runtime. Everything runs inside the extension host, on your machine.
   back. Point it at a scratch workspace, not a repo you care about.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
-- **Checkpoints** - shadow-git snapshots before sends and edits, restorable
-  anytime, with hunk-level review: pick a checkpoint, pick a file, pick a
-  hunk, and the native side-by-side diff opens right on it. Your real git
-  repo is never touched.
+- **Checkpoints** - shadow-git snapshots before sends and edits. Use a turn's
+  **Review changes** button or **Changes** to inspect files inline and open
+  the full native diff. Restore a snapshot from the Command Palette with
+  **Xratu: Restore Checkpoint…**. Your real git repo is never touched.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
   Cline-compatible files-based config.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)
@@ -101,7 +119,7 @@ the API key; the rest hand each service its own URL at signup.
 
 ### Sign in with a ChatGPT subscription
 
-Open **Settings -> Connections** and choose **Continue with ChatGPT**. Xratu
+Open **Providers**, choose **Add connection**, then **Continue with ChatGPT**. Xratu
 uses OpenAI's [documented open-source sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
 registers Xratu for your account and workspace, and validates the signed ID
 token before saving the connection. ChatGPT plan access must be granted during

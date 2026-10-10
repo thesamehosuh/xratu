@@ -607,6 +607,11 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
             </header>
 
             <div className="settings-scroll">
+                {allTime && <div className="usage-metrics" aria-label={t('miniTotal')}>
+                    <div><span>{t('usageCost')}</span><strong dir="ltr">{formatCost({amount:allTime.USD,currency:'USD'}) ?? '$0'}{allTime.IRT > 0 && <small>{formatCost({amount:allTime.IRT,currency:'IRT'})}</small>}</strong></div>
+                    <div><span>{t('usageTokens')}</span><strong dir="ltr">{formatTokens(totalTokens(allTime))}</strong></div>
+                    <div><span>{t('providersTitle')}</span><strong dir="ltr">{providers.length}</strong></div>
+                </div>}
                 {showPlan && (
                     <section className="settings-card usage-plan">
                         <div className="settings-section-head">
@@ -885,7 +890,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                     </div>
                 </section>
 
-                <section className="settings-card">
+                <details className="settings-card rate-disclosure"><summary>{t('miniPricing')}<ChevronDown size={12}/></summary>
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Tag size={15} />
@@ -918,14 +923,14 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                             </button>
                         )}
                     </div>
-                </section>
-
-                {/* Fine print lives at the footer, like the MCP/Skills page. */}
-                <div className="mcp-hint foot" role="note">
-                    <Info size={12} aria-hidden="true" />
-                    <span>{t('pricingDesc')}</span>
-                </div>
                 </details>
+
+                </details>
+                {/* Fine print lives at the footer, like the MCP/Skills page. */}
+                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+
+                    <span>{t('pricingDesc')}</span>
+                </div></details>
             </div>
         </div>
     );

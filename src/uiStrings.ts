@@ -20,6 +20,8 @@ export function getUiLocale(): UiLocale {
 }
 
 const STRINGS: Record<string, { fa: string; en: string }> = {
+    surfaceChangesFailed: { fa: "تغییرات بارگذاری نشد. دوباره تازه سازی کن.", en: "Could not load changes. Try refreshing." },
+    surfaceAgentsFailed: { fa: "فایل های ایجنت بارگذاری نشد. دوباره تازه سازی کن.", en: "Could not load agent files. Try refreshing." },
     offlineRemoteBlocked: { fa: 'حالت آفلاین دسترسی به سرویس های ابری رو بسته', en: 'Offline mode blocks cloud services' },
     localModelBusy: { fa: 'اول عملیات فعلی یا گفتگو رو تموم کن', en: 'Finish the current operation or chat first' },
     localModelEndpoint: { fa: 'مدیریت مدل فقط برای Ollama روی همین سیستم فعاله', en: 'Model management is available only for Ollama on this machine' },

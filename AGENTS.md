@@ -130,6 +130,36 @@ testable modules with node test suites — precedent: `test/test-endpoint-guard.
 (run after `npx tsc -p . --outDir out`; npm script per suite). Security-
 relevant heuristics (e.g. `endpointGuard.ts`) ALWAYS get a regression test.
 
+## Work surface
+
+`App.tsx` owns Conversation, Changes, Activity, and the persistent page
+sidebar. `workSurface.css` holds the compact layout; `theme.css` supplies
+shared styles and VS Code theme tokens. Keep the composer and transcript
+mounted across page changes so drafts and scroll positions survive.
+
+- Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
+  detailed outputs as a read-only view. Keep approvals, questions, and
+  background-process controls actionable in Conversation and the composer.
+  Outcome exit codes come from actual terminal results.
+- `ChangesPanel` uses shadow checkpoints. Requests carry IDs and checkpoint
+  SHAs; reject stale replies after a session/checkpoint switch. The host's
+  `src/workSurface.ts` guards membership, paths, and bounded file reads.
+  File notes and reviewed marks belong to their file/checkpoint.
+- `dockLayout.ts` owns panel placement; `SurfaceTabs` supplies drag/drop and
+  keyboard movement. Keep opened panel nodes mounted when moving them.
+  Conversation stays in the main area; narrow windows expose every panel as
+  a main tab. Saved placement must not bypass checkpoint/session guards.
+- User bubbles stay on the physical right in both locales; their text keeps
+  `dir="auto"`. The composer keeps the git footer and context-window ring.
+- Providers owns credential editing through `CredentialsPage` and
+  `SidePanel`. Keep Iranian presets visible and the drawer keyboard-accessible.
+- Native page commands wait for webview startup through `StartupPageIntent`
+  so the initial welcome/chat screen cannot overwrite the requested page.
+
+For work-surface changes, run `npm run test:work-surface`, the webview suites,
+and the relevant `test/e2e/app.spec.ts` and `work-surface.spec.ts` checks.
+Inspect the actual UI in both locales at narrow and wide widths as above.
+
 ## Releasing
 
 Pushing a `v*` tag is the whole release. `.github/workflows/release.yml` builds
@@ -259,7 +289,7 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
   `getLocale() === 'fa' ? <ArrowRight/> : <ArrowLeft/>`.
 - CSS is RTL-safe (logical props / flex auto-flip); don't introduce
   `margin-left`/`padding-right`/`left:` in shared components.
-- New agent tools need BOTH a `TOOL_LABELS` entry (MessageItem.tsx) and a
+- New agent tools need BOTH a `TOOL_LABELS` entry (`toolMeta.ts`) and a
   `TOOL_ICONS` entry, with their fa/en strings in `i18n.ts`.
 
 ## Extension build gotchas

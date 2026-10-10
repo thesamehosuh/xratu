@@ -1,4 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ToolImages } from './ToolImages';
+import { CompletedOutcome } from './CompletedOutcome';
+import { CompactSteps } from './CompactSteps';
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -13,22 +16,19 @@ import {
     Copy,
     CornerDownRight,
     ExternalLink,
-    FileDiff,
     GripVertical,
     HelpCircle,
-    History,
     Image as ImageIcon,
     ListChecks,
     Minimize2,
     Paperclip,
     PencilLine,
     Plus,
-    RefreshCw,
     Trash2,
     TriangleAlert,
     X,
 } from 'lucide-react';
-import type { ChatMessage, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
+import type { ChatMessage, ReviewChange, ConnectionStatus, DecisionPayload, OpenDiffEdit, Step, TaskListItem, TaskListStatus } from '../types';
 import { ApprovalCard } from './ApprovalCard';
 import { RenderedMarkdown } from './RenderedMarkdown';
 import { escapeHtml, extToLang } from '../diffText';
@@ -36,7 +36,7 @@ import { useHighlightedCode } from '../highlight';
 import { toolIcon, toolLabel } from '../toolMeta';
 import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
-import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
+import { formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
 import { formatCost } from '../cost';
 import { prefOn, toolFamily, type TranscriptPrefs } from '../transcriptPrefs';
 
@@ -60,6 +60,8 @@ function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage[
         </div>
     );
 }
+
+type ActivityTime = { timestamp: number; now: number };
 
 type ToolRow = { key: string; call: Step; result?: Step };
 type Row =
@@ -1143,32 +1145,6 @@ function GenericBody({ call, result }: { call: Step; result?: Step }) {
     );
 }
 
-/** Images a tool returned with its result (an MCP screenshot, mostly).
- *
- *  `dir="ltr"` on the wrapper regardless of locale: the caption may embed a URL
- *  or a path, and an RTL paragraph would reorder it. Capped at MAX_RENDERED so
- *  a server that returns twenty screenshots cannot flood the transcript; the
- *  remainder is stated rather than hidden. */
-const MAX_RENDERED_TOOL_IMAGES = 4;
-
-function ToolImages({ call, result }: { call: Step; result?: Step }) {
-    const images = result?.images ?? call.images;
-    if (!images?.length) return null;
-    const shown = images.slice(0, MAX_RENDERED_TOOL_IMAGES);
-    const hidden = images.length - shown.length;
-    return (
-        <div className="tool-images" dir="ltr">
-            {shown.map((img, i) => (
-                <figure key={`${img.mimeType}-${i}`} className="tool-image">
-                    <img src={img.dataUrl} alt={img.caption ?? t('toolImageAlt')} loading="lazy" />
-                    {img.caption && <figcaption dir="ltr">{img.caption}</figcaption>}
-                </figure>
-            ))}
-            {hidden > 0 && <span className="tool-images-more">{tf('toolImagesMore', { count: String(hidden) })}</span>}
-        </div>
-    );
-}
-
 function ToolBody({ call, result }: { call: Step; result?: Step }) {
     const body = (() => {
         switch (toolFamily(call.tool)) {
@@ -1216,7 +1192,7 @@ function useAutoOpen(auto: boolean): [boolean, (open: boolean) => void] {
 
 /** A run of identical consecutive tool calls: one summary pill with an
  *  "×N" badge; expanding reveals each call as its own pill. */
-function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 'toolGroup' }>; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs }) {
+function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: ActivityTime; activityNow?: number; row: Extract<Row, { kind: 'toolGroup' }>; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs }) {
     const tool = row.calls[0].call.tool;
     const Icon = toolIcon(tool);
     const { fa } = toolLabel(tool);
@@ -1234,6 +1210,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 't
     const stats = useMemo(() => (isEdit ? sumEditStats(row.calls) : null), [isEdit, row.calls]);
     return (
         <details
+            title={age ? `${formatRelativeTime(age.timestamp, age.now)} · ${formatFullTimestamp(age.timestamp)}` : undefined}
             className={`step${allDone ? '' : ' running'}${anyFailed ? ' group-fail' : ''}`}
             open={open}
             onToggle={(e) => setOpen(e.currentTarget.open)}
@@ -1255,7 +1232,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 't
                     ) : !allDone ? (
                         <span className="step-status spinner" aria-hidden="true" />
                     ) : null}
-                    {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr">×{row.calls.length}</span>}
+                    {stats ? <EditStatsText stats={stats} /> : <span className="step-count" dir="ltr"><span>×{row.calls.length}</span></span>}
                     {isEdit && (
                         <button
                             type="button"
@@ -1288,15 +1265,16 @@ function ToolGroupRow({ row, onOpenDiff, prefs }: { row: Extract<Row, { kind: 't
             ) : (
                 <div className="step-group-body">
                     {row.calls.map((c) => (
-                        <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} prefs={prefs} />
+                        <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} prefs={prefs} age={activityNow === undefined ? undefined : { timestamp: c.call.startedAt ?? age?.timestamp ?? activityNow, now: activityNow }} />
                     ))}
                 </div>
             )}
+            {age && <ActivityAge {...age} />}
         </details>
     );
 }
 
-function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, onKillBackground, prefs }: { row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; onBackgroundTerminal?: (callId: string) => void; onKillBackground?: (jobId: string) => void; prefs?: TranscriptPrefs }) {
+function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, onKillBackground, prefs, age }: { age?: ActivityTime; row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; onBackgroundTerminal?: (callId: string) => void; onKillBackground?: (jobId: string) => void; prefs?: TranscriptPrefs }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
@@ -1377,6 +1355,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
         const dur = fmtDur((row.step.endedAt ?? 0) - (row.step.startedAt ?? 0));
         return (
             <details
+                title={age ? `${formatRelativeTime(age.timestamp, age.now)} · ${formatFullTimestamp(age.timestamp)}` : undefined}
                 className="step step-think"
                 open={thinkOpen}
                 onToggle={(e) => setThinkOpen(e.currentTarget.open)}
@@ -1411,6 +1390,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                         dir="ltr"
                     >{row.step.text}</pre>
                 )}
+                {age && <ActivityAge {...age} />}
             </details>
         );
     }
@@ -1423,6 +1403,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
     const done = toolRowDone(row);
     return (
         <details
+            title={age ? `${formatRelativeTime(age.timestamp, age.now)} · ${formatFullTimestamp(age.timestamp)}` : undefined}
             className={`step${done ? '' : ' running'}${failed ? ' fail' : ''}`}
             open={open}
             onToggle={(e) => setOpen(e.currentTarget.open)}
@@ -1451,7 +1432,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                         * Offered exactly while it is running and NOT already
                         * backgrounded - after that the stop control replaces it,
                         * so the same call can never be handed off twice. */}
-                    {row.call.background ? (
+                    {row.call.background && onKillBackground ? (
                         <button
                             type="button"
                             className="icon-btn-mini"
@@ -1465,7 +1446,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                         >
                             <X size={12} />
                         </button>
-                    ) : family === 'terminal' && !done ? (
+                    ) : family === 'terminal' && !done && !row.call.background && onBackgroundTerminal ? (
                         <button
                             type="button"
                             className="icon-btn-mini"
@@ -1522,6 +1503,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
             <div className="step-body">
                 <ToolBody call={row.call} result={row.result} />
             </div>
+            {age && <ActivityAge {...age} />}
         </details>
     );
 }
@@ -1819,12 +1801,13 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
     );
 }
 
-function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind: 'taskList' }>; view?: TaskListView; streaming: boolean; prefs?: TranscriptPrefs }) {
+function TaskListRow({ row, view, streaming, prefs, age }: { age?: ActivityTime; row: Extract<Row, { kind: 'taskList' }>; view?: TaskListView; streaming: boolean; prefs?: TranscriptPrefs }) {
+    const instanceId = useId();
     const isCurrent = !!view && view.stepId === row.step.id;
     const tasks = isCurrent ? view!.tasks : parseTaskListStep(row.step.text);
 
     if (!tasks) {
-        return <ActivityRow row={{ key: row.key, kind: 'tool', call: row.step }} running={false} isLast={false} prefs={prefs} />;
+        return <ActivityRow row={{ key: row.key, kind: 'tool', call: row.step }} running={false} isLast={false} prefs={prefs} age={age} />;
     }
 
     // Null-safe: rows that are NOT the bound step render read-only from
@@ -1836,7 +1819,7 @@ function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind
     // icon + progress + spinner head, then the editor, directly on the
     // bubble background. No expand/collapse at all.
     return (
-        <div className="task-list-inline" id={isCurrent ? 'xratu-task-list' : undefined}>
+        <div className="task-list-inline" id={isCurrent ? `xratu-task-list-${instanceId}` : undefined}>
             <div className="task-list-inline-head">
                 <ListChecks size={13} className="step-icon" />
                 {/* No success tick here either, for the same reason as the
@@ -1847,6 +1830,7 @@ function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind
                 </span>
             </div>
             <TaskListEditor tasks={tasks} editable={editable} onChange={view?.onChange} />
+            {age && <ActivityAge {...age} />}
         </div>
     );
 }
@@ -2156,7 +2140,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, isLastAssistant, busy, conn, taskList, dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2169,7 +2153,13 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
 
-    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length), [steps, message.decisions]);
+    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length).filter((row) => !activityOnly || row.kind !== 'text'), [steps, message.decisions, activityOnly]);
+    const [activityNow, setActivityNow] = useState(Date.now);
+    useEffect(() => {
+        if (!activityOnly) return;
+        const timer = window.setInterval(() => setActivityNow(Date.now()), 30_000);
+        return () => window.clearInterval(timer);
+    }, [activityOnly]);
 
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
@@ -2194,24 +2184,12 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 : lastRow.kind === 'tool' && !toolRowDone(lastRow)));
     const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
-    const showFooter = role === 'assistant' && status === 'done' && !!(renderedHtml || text);
-    // Regenerate lives where the old global checkpoint-revert button was:
-    // last completed assistant turn only, never while a run is in flight.
-    const showRegenerate =
-        role === 'assistant' && isLastAssistant && status === 'done' && !busy && !!onRegenerate;
-
+    const showFooter = !activityOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
     // User bubbles carry their own footer from the moment they appear; the
     // pencil is the ONLY part that hides while a run is in flight.
     const showUserFooter = role === 'user' && status === 'done';
     const showEditBtn =
         showUserFooter && !busy && userIndex !== undefined && !!onEditMessage;
-    // Restore is offered when this turn has a shadow checkpoint (old or
-    // restored sessions may not) and nothing is running.
-    const showRestoreBtn =
-        showUserFooter && !busy && userIndex !== undefined && !!message.cp && !!onRestoreCheckpoint;
-    const showReviewBtn =
-        showUserFooter && !busy && !!message.cp && !!onReviewChanges;
-
     const copyAnswer = async () => {
         try {
             await navigator.clipboard.writeText(text);
@@ -2222,6 +2200,8 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
         }
     };
 
+    if (activityOnly && isSystem) return null;
+
     if (isSystem && (message.approval || message.decisions?.length)) {
         // The card IS the surface. A decision-only row drops the system-bubble
         // box - dashed border + padding around the card reads as a big empty
@@ -2230,39 +2210,44 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
         return (
             <article className={bare ? 'decision-holder' : bubbleClass} dir="auto">
                 {message.approval && <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />}
-                <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />
+                {!activityOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
             </article>
         );
     }
 
+    const collapseSteps = !activityOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
+    const leadingText = collapseSteps && hasPills && rows[0]?.kind === 'text' && textRows.length > 1 ? textRows[0] : null;
+    const finalTextRows = collapseSteps ? textRows.filter((row) => row !== leadingText) : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
 
     return (
         <article
             className={`${bubbleClass}${approvalPending ? ' approval-paused' : ''}`}
-            /* Direction comes from the APP LOCALE (passed in), not dir="auto":
-               first-strong detection would flip a Persian message that begins
-               with Latin ("npm رو اجرا کن"). Code/paths/URLs force their own
-               direction. locale rides as a prop so the memo comparator below
-               re-renders existing bubbles when the language flips. */
-            dir={dir}
+            dir="auto"
             aria-busy={status === 'streaming' && !approvalPending}
         >
-            {!isSystem && hasPills && (
+            {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
+            {leadingText && <TextSegmentRow steps={leadingText.steps} streaming={false} />}
+            {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
+            {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
-                    {rows.map((row) =>
-                        row.kind === 'toolGroup' ? (
-                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} />
+                    {rows.map((row) => {
+                        const timestamp = (row.kind === 'toolGroup' ? row.calls[0]?.call : row.kind === 'tool' ? row.call : row.kind === 'thinking' || row.kind === 'taskList' ? row.step : row.steps[0])?.startedAt ?? message.createdAt;
+                        const age = activityOnly ? { timestamp, now: activityNow } : undefined;
+                        const content = row.kind === 'toolGroup' ? (
+                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} age={age} activityNow={activityOnly ? activityNow : undefined} />
                         ) : row.kind === 'text' ? (
                             <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
                         ) : row.kind === 'taskList' ? (
-                            <TaskListRow key={row.key} row={row} view={taskList} streaming={streamingContent} prefs={transcriptPrefs} />
+                            <TaskListRow key={row.key} row={row} view={activityOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={transcriptPrefs} age={age} />
                         ) : row.kind === 'decision' ? (
                             <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={onBackgroundTerminal} onKillBackground={onKillBackground} prefs={transcriptPrefs} />
-                        )
-                    )}
+                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={activityOnly ? undefined : onBackgroundTerminal} onKillBackground={activityOnly ? undefined : onKillBackground} prefs={transcriptPrefs} age={age} />
+                        );
+                        if (!activityOnly) return content;
+                        return <div className="activity-entry" key={row.key}>{content}{row.kind === 'decision' && age && <ActivityAge {...age} />}</div>;
+                    })}
                     {showWorking && (
                         <div className="working-row" aria-label={t('working')}>
                             <span className="step-status spinner" aria-hidden="true" />
@@ -2304,7 +2289,7 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 </div>
             )}
 
-            {textRows.length > 0 ? (
+            {activityOnly ? null : finalTextRows.length > 0 ? <>{finalTextRows.map((row) => <TextSegmentRow key={row.key} steps={row.steps} streaming={false} />)}</> : textRows.length > 0 ? (
                 hasPills ? null : (
                     <>
                         {textRows.map((r) =>
@@ -2356,11 +2341,11 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                 </div>
             )}
 
-            {message.approval && (
+            {!activityOnly && message.approval && (
                 <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />
             )}
 
-            <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />
+            {!activityOnly && <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />}
 
             {approvalPending && (
                 <div className="approval-waiting-row" aria-live="polite">
@@ -2368,6 +2353,8 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                     <span>{t('approvalWaitingAi')}</span>
                 </div>
             )}
+
+            {!activityOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges} onAskReview={onAskReview} />}
 
             {showFooter && (
                 <div className="msg-footer">
@@ -2380,17 +2367,6 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
-                    {showRegenerate && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={onRegenerate}
-                            aria-label={t('regenerateAria')}
-                            title={t('regenerateAria')}
-                        >
-                            <RefreshCw size={13} />
-                        </button>
-                    )}
                     {message.usage && (
                         <span className="msg-meta" dir="ltr" title={t('tokensTitle')}>
                             ↑ {fmtTok(message.usage.input_tokens)} ↓ {fmtTok(message.usage.output_tokens)}
@@ -2429,28 +2405,6 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
                             <PencilLine size={13} />
                         </button>
                     )}
-                    {showRestoreBtn && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => onRestoreCheckpoint?.(userIndex ?? -1, message.cp!)}
-                            aria-label={t('restoreCheckpoint')}
-                            title={t('restoreCheckpointHint')}
-                        >
-                            <History size={13} />
-                        </button>
-                    )}
-                    {showReviewBtn && (
-                        <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => onReviewChanges?.(message.cp!)}
-                            aria-label={t('reviewChanges')}
-                            title={t('reviewChangesHint')}
-                        >
-                            <FileDiff size={13} />
-                        </button>
-                    )}
                     <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>
                         {formatMessageTimestamp(message.createdAt)}
                     </span>
@@ -2461,6 +2415,10 @@ function MessageItemImpl({ message, onApprovalDecision, onDecisionResponse, onRe
 }
 
 interface MessageItemProps {
+    activityOnly?: boolean;
+    reviewSha?: string;
+    reviewFiles?: ReviewChange[];
+    onAskReview?: (text: string) => void;
     message: ChatMessage;
     onApprovalDecision?: (approvalId: string, decisions: Record<string, boolean>, sessionApprove?: boolean) => void;
     /** Answer a decision card (pick / free text / dismiss). */
@@ -2476,7 +2434,7 @@ interface MessageItemProps {
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** Hunk-level review of everything changed since this turn's checkpoint
      *  (the host picks the file and the hunk, then opens the native diff). */
-    onReviewChanges?: (sha: string) => void;
+    onReviewChanges?: (sha: string, path?: string) => void;
     /** Open the native diff editor for a completed edit step (or group). */
     onOpenDiff?: OpenDiffHandler;
     /** Release the turn while a running terminal command keeps going. */
@@ -2507,6 +2465,10 @@ interface MessageItemProps {
  * each time, which is exactly when expansion feels like tearing.
  */
 export const MessageItem = memo(MessageItemImpl, (a, b) =>
+    a.activityOnly === b.activityOnly &&
+    a.reviewSha === b.reviewSha &&
+    a.reviewFiles === b.reviewFiles &&
+    a.onAskReview === b.onAskReview &&
     a.message === b.message &&
     a.onApprovalDecision === b.onApprovalDecision &&
     a.onDecisionResponse === b.onDecisionResponse &&
@@ -2525,3 +2487,15 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.dir === b.dir &&
     a.transcriptPrefs === b.transcriptPrefs
 );
+
+function ActivityAge({ timestamp, now }: { timestamp: number; now: number }) {
+    return <time className="activity-age" dateTime={new Date(timestamp).toISOString()} title={formatFullTimestamp(timestamp)} dir="auto">{formatRelativeTime(timestamp, now)}</time>;
+}
+
+/** Activity is an observation surface; approvals and execution stay in chat. */
+export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void }) {
+    const start = Math.max(0, Math.min(firstVisible, messages.length - 1));
+    const activity = messages.slice(start).filter((message) => message.role === 'assistant' && message.steps.some((step) => step.kind !== 'text'));
+    if (!activity.length) return <p className="activity-empty">{t('surfaceNoActivity')}</p>;
+    return <div className="activity-timeline">{start > 0 && <button type="button" className="show-earlier" onClick={onShowEarlier}>{t('historyShowEarlier')}</button>}{activity.map((message) => <MessageItem key={message.id} message={message} {...props} activityOnly />)}</div>;
+}

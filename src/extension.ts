@@ -1,3 +1,4 @@
+import { readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -482,7 +483,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  to MAX_CONTENT_CAP as it streams); `_localThinkingBlockRaw` keeps the
      *  full cumulative value the extends are matched against - a clipped
      *  string is never a prefix of the next delta. */
-    private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
+    private _localThinkingBlockEvent: { type: 'thinking'; content: string; timestamp: number } | null = null;
     private _localThinkingBlockRaw: string | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
     /** Sum of every non-estimated round's usage across the CURRENT turn (a
@@ -614,6 +615,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  reconstruction in editDiff.ts. */
     private readonly _editSnapshots = new Map<string, { path: string; before: string; after: string }>();
     private _webviewSubscriptions: vscode.Disposable[] = [];
+    private readonly _startupPage = new StartupPageIntent();
+
+    _completeWebviewStartup(): void { this._startupPage.complete(); }
 
     public provideTextDocumentContent(uri: vscode.Uri): string {
         return this._virtualDocuments.get(uri.toString()) || '';
@@ -1147,6 +1151,58 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('error', 'notifRestoreFailed', {
                 error: e instanceof Error ? e.message : String(e)
             });
+        }
+    }
+
+    async _sendChangesState(sha: string, requestId: string): Promise<void> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+            validateReviewCheckpoint(sha);
+            if (!root) throw new Error('No workspace');
+            const files = await this._checkpoints.diffCheckpoint(root, sha);
+            this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files });
+        } catch {
+            this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files: [], errorKey: root ? 'surfaceChangesFailed' : 'notifNoFolder' });
+        }
+    }
+
+    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false): Promise<void> {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+            if (!root) throw new Error('No workspace');
+            const file = await readReviewFile(this._checkpoints, root, sha, filePath);
+            if (open) {
+                if (file.kind !== 'text' || !openEditDiff(this._virtualDocuments, file.path, file.before, file.after)) {
+                    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
+                }
+            } else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, file });
+        } catch {
+            if (open) this.notifyBanner('error', 'surfaceChangesFailed');
+            else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, errorKey: 'surfaceChangesFailed' });
+        }
+    }
+
+    async _sendAgentsState(): Promise<void> {
+        try {
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const external = externalMcpInstance ? await externalMcpInstance.listTools().catch(() => []) : [];
+            const toolNames = this._agentToolNames(workspaceRoot, external);
+            const defs = discoverSubagents({ workspaceRoot, validation: { toolNames } });
+            this._logSubagentIssues(defs);
+            this._view?.webview.postMessage({ type: 'agentsState', profiles: defs.map(({ name, description, source, tools, model, reasoningEffort, maxRounds, error, warning, filePath }) => ({ name, description, source, tools, model, reasoningEffort, maxRounds, error, warning, editable: !!filePath })) });
+        } catch {
+            this._view?.webview.postMessage({ type: 'agentsState', profiles: [], errorKey: 'surfaceAgentsFailed' });
+        }
+    }
+
+    async _openAgentFile(name: string, source: string): Promise<void> {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const external = externalMcpInstance ? await externalMcpInstance.listTools().catch(() => []) : [];
+        const defs = discoverSubagents({ workspaceRoot, validation: { toolNames: this._agentToolNames(workspaceRoot, external) } });
+        const def = defs.find((item) => item.name === name && item.source === source);
+        if (def?.filePath) {
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.file(def.filePath));
+            await vscode.window.showTextDocument(document);
         }
     }
 
@@ -4043,12 +4099,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._localThinkingBlockEvent.content = clipHistoryContent(event.value, MAX_CONTENT_CAP);
                 } else {
                     this._localThinkingBlockRaw = event.value;
-                    this._localThinkingBlockEvent = { type: 'thinking', content: clipHistoryContent(event.value, MAX_CONTENT_CAP) };
+                    this._localThinkingBlockEvent = { type: 'thinking', content: clipHistoryContent(event.value, MAX_CONTENT_CAP), timestamp: Date.now() };
                     outcome.events.push(this._localThinkingBlockEvent);
                 }
                 this._scheduleLocalPartialPersist();
                 break;
-            case 'toolCall':
+            case 'toolCall': {
+                const timestamp = Date.now();
                 this._flushLiveSegment();
                 // A tool call closes the current reasoning block - reasoning
                 // after it belongs to a fresh block and needs its own pill.
@@ -4059,7 +4116,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // whole written file never rides the run-lifetime array - the
                 // turn-end transfer produced these exact bytes anyway.
                 // `update_task_list` stays whole (the checklist re-parses it).
-                outcome.events.push(trimDisplayEvent({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args }));
+                outcome.events.push(trimDisplayEvent({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args, timestamp }));
                 this._scheduleLocalPartialPersist();
                 if (event.tool === TASK_LIST_TOOL_NAME) {
                     this._noteTaskListWrite();
@@ -4069,14 +4126,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     tool: event.tool,
                     args: JSON.stringify(event.args, null, 2),
                     callId: event.id,
+                    timestamp,
                 });
                 break;
+            }
             case 'toolResult': {
+                const timestamp = Date.now();
                 this._flushLiveSegment();
                 this._localThinkingBlockEvent = null;
                 this._localThinkingBlockRaw = null;
                 const persisted = persistedEventFromAgentEvent(event);
-                if (persisted) outcome.events.push(persisted);
+                if (persisted) outcome.events.push({ ...persisted, timestamp });
                 // Re-enforce the run-lifetime bounds (output budget, thinking
                 // ceiling, carrier budget) after every payload-bearing push.
                 boundOutcomeEvents(outcome.events);
@@ -4086,6 +4146,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     tool: event.tool,
                     output: event.output,
                     callId: event.id,
+                    timestamp,
                     // Images the tool returned (MCP screenshots etc). The
                     // webview renders them but never sends them back; the
                     // persisted row keeps metadata only (historyRows).
@@ -4431,13 +4492,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Command-palette entry point (keeps _setLlmCredentials private-adjacent). */
     public async setLlmCredentialsPublic(): Promise<void> {
         await this.ensureView();
-        void this._setLlmCredentials();
+        this._startupPage.open(() => { void this._setLlmCredentials(); });
     }
 
     /** Command-palette entry point: focus the webview and route to Settings. */
     public async openSettingsPublic(): Promise<void> {
         await this.ensureView();
-        this._view?.webview.postMessage({ type: 'openSettings' });
+        this._startupPage.open(() => { this._view?.webview.postMessage({ type: 'openSettings' }); });
     }
 
     /**
@@ -4571,6 +4632,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
+        this._startupPage.reset();
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
         // Dispose old subscriptions before creating new ones (prevents listener leak on re-init)
@@ -5230,21 +5292,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._view.webview.postMessage({ type: 'startResponse' });
                     for (const parsed of msg.events) {
                         if (parsed.type === 'thinking') {
-                            this._view.webview.postMessage({ type: 'thinking', value: parsed.content });
+                            this._view.webview.postMessage({ type: 'thinking', value: parsed.content, timestamp: parsed.timestamp });
                             this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.content, true) });
                         } else if (parsed.type === 'tool_call') {
                             this._view.webview.postMessage({
                                 type: 'toolCall',
                                 tool: parsed.tool,
                                 args: JSON.stringify(parsed.args, null, 2),
-                                callId: parsed.id ?? undefined
+                                callId: parsed.id ?? undefined,
+                                timestamp: parsed.timestamp,
                             });
                         } else if (parsed.type === 'tool_result') {
                             this._view.webview.postMessage({
                                 type: 'toolResult',
                                 tool: parsed.tool,
                                 output: parsed.output,
-                                callId: parsed.id ?? undefined
+                                callId: parsed.id ?? undefined,
+                                timestamp: parsed.timestamp,
                             });
                         } else if (parsed.type === 'result') {
                             this._displayAssistantResponse(parsed);
@@ -5349,6 +5413,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // handler runs _showStartScreen() exactly once - never call it here
         // too: both calls replay the chat history and every message renders
         // TWICE on the fresh page (hello, response, hello, response).
+        this._startupPage.reset();
         this._view.webview.html = this._getHtmlForWebview(this._view.webview);
     }
 

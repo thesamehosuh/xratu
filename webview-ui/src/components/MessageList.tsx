@@ -1,7 +1,7 @@
 import { forwardRef, type Ref } from 'react';
 import { Bug, ChevronUp, ClipboardList, FolderInput, FolderTree, FlaskConical, FolderSearch, Laptop, Link, Sparkles, Unlink, Wrench, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { ChatMessage, ConnectionStatus, OpenDiffEdit } from '../types';
+import type { ChatMessage, ReviewChange, ConnectionStatus, OpenDiffEdit } from '../types';
 import { MessageItem, type TaskListView } from './MessageItem';
 import type { TranscriptPrefs } from '../transcriptPrefs';
 import { getLocale, t } from '../i18n';
@@ -24,7 +24,10 @@ interface MessageListProps {
     onEditMessage?: (userIndex: number, value: string) => void;
     /** Restore workspace files to a turn's shadow checkpoint. */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
-    onReviewChanges?: (sha: string) => void;
+    onReviewChanges?: (sha: string, path?: string) => void;
+    onAskReview?: (text: string) => void;
+    reviewSha?: string | null;
+    reviewFiles?: ReviewChange[];
     /** Open the native diff editor for a completed edit step. */
     onOpenDiff?: (edits: OpenDiffEdit[]) => void;
     /** Release the turn while a running terminal command keeps going. */
@@ -86,7 +89,7 @@ const SUGGESTIONS_FRESH: Suggestion[] = [
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onAskReview, reviewSha, reviewFiles, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -95,7 +98,11 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
     // window is mounted.
     let userCount = 0;
     const userIndexOf = new Map<string, number>();
+    let checkpoint: string | undefined;
+    const checkpoints = new Map<string, string | undefined>();
     for (const m of messages) {
+        if (m.role === 'user') checkpoint = m.cp;
+        checkpoints.set(m.id, checkpoint);
         if (m.role === 'user') userIndexOf.set(m.id, userCount++);
     }
     const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
@@ -195,6 +202,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
                     onReviewChanges={onReviewChanges}
+                    onAskReview={onAskReview}
+                    reviewSha={checkpoints.get(m.id)}
+                    reviewFiles={checkpoints.get(m.id) === reviewSha ? reviewFiles : undefined}
                     onOpenDiff={onOpenDiff}
                     onBackgroundTerminal={onBackgroundTerminal}
                     onKillBackground={onKillBackground}

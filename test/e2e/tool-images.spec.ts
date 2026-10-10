@@ -45,7 +45,8 @@ async function toolResultWithImages(page: Page, images: Array<{ mimeType: string
         callId: 'call1',
         images,
     });
-    await hostMessage(page, { type: 'fullResponse', text: 'The page shows a checkout form.' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'The page shows a checkout form.' });
+    await page.locator('.completed-steps > summary').click();
 }
 
 for (const [localeName, locale] of [['fa', 'fa'], ['en', 'en']] as const) {
@@ -57,7 +58,7 @@ for (const [localeName, locale] of [['fa', 'fa'], ['en', 'en']] as const) {
             await installVscodeTheme(page);
             await page.setViewportSize(viewport);
             await page.goto('/');
-            await hostMessage(page, { type: 'setLocale', locale });
+            await hostMessage(page, { type: 'locale', locale });
             await hostMessage(page, { type: 'showChat' });
 
             await toolResultWithImages(page, [
@@ -75,7 +76,8 @@ for (const [localeName, locale] of [['fa', 'fa'], ['en', 'en']] as const) {
             await expect(page.locator('.tool-image figcaption')).toHaveAttribute('dir', 'ltr');
 
             // The tool row is still a completed row, not a spinner.
-            await expect(page.locator('.step')).toHaveClass(/step/);
+            await expect(page.locator('.compact-step .step-complete')).toBeVisible();
+            await expect(page.locator('.compact-step .spinner')).toHaveCount(0);
         });
     }
 }
@@ -84,7 +86,7 @@ test('rendered images are capped and the remainder is stated', async ({ page }) 
     await installVscodeTheme(page);
     await page.setViewportSize({ width: 1100, height: 900 });
     await page.goto('/');
-    await hostMessage(page, { type: 'setLocale', locale: 'en' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
 
     await toolResultWithImages(page, Array.from({ length: 7 }, (_, i) => ({
@@ -100,7 +102,7 @@ test('rendered images are capped and the remainder is stated', async ({ page }) 
 test('a captionless image still renders with an alt text', async ({ page }) => {
     await installVscodeTheme(page);
     await page.goto('/');
-    await hostMessage(page, { type: 'setLocale', locale: 'fa' });
+    await hostMessage(page, { type: 'locale', locale: 'fa' });
     await hostMessage(page, { type: 'showChat' });
 
     await toolResultWithImages(page, [
@@ -116,7 +118,7 @@ test('a captionless image still renders with an alt text', async ({ page }) => {
 test('a text-only tool result renders no image block', async ({ page }) => {
     await installVscodeTheme(page);
     await page.goto('/');
-    await hostMessage(page, { type: 'setLocale', locale: 'en' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
 
     await hostMessage(page, { type: 'startResponse' });
@@ -127,8 +129,9 @@ test('a text-only tool result renders no image block', async ({ page }) => {
         callId: 'call1',
     });
     await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: 'file body', callId: 'call1' });
-    await hostMessage(page, { type: 'fullResponse', text: 'Read it.' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'Read it.' });
 
     await expect(page.locator('.tool-images')).toHaveCount(0);
+    await page.locator('#surface-tab-activity').click();
     await expect(page.locator('.step')).toContainText('file body');
 });

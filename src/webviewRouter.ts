@@ -38,6 +38,12 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _completeWebviewStartup(): void;
+    _sendChangesState(sha: string, requestId: string): Promise<void>;
+    _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean): Promise<void>;
+    _sendAgentsState(): Promise<void>;
+    _openAgentFile(name: string, source: string): Promise<void>;
+    manageAgentFiles(): Promise<void>;
     _backgroundTerminalCall(callId: string | undefined): void;
     _cancelActiveRequests(): void;
     _clearAllSessions(): Promise<void>;
@@ -134,6 +140,25 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
     (async () => {
         try {
             switch (data.type) {
+                case 'changesGetState':
+                    if (typeof data.sha === 'string' && typeof data.requestId === 'string') await host._sendChangesState(data.sha, data.requestId);
+                    break;
+                case 'changeFileGet':
+                    if (typeof data.sha === 'string' && typeof data.path === 'string' && typeof data.requestId === 'string') await host._sendChangeFile(data.sha, data.path, data.requestId);
+                    break;
+                case 'changeFileOpen':
+                    if (typeof data.sha === 'string' && typeof data.path === 'string') await host._sendChangeFile(data.sha, data.path, '', true);
+                    break;
+                case 'agentsGetState':
+                    await host._sendAgentsState();
+                    break;
+                case 'agentsManage':
+                    await host.manageAgentFiles();
+                    await host._sendAgentsState();
+                    break;
+                case 'agentFileOpen':
+                    if (typeof data.name === 'string' && typeof data.source === 'string') await host._openAgentFile(data.name, data.source);
+                    break;
                 case 'webviewReady':
                     // Locale FIRST, before any await: the boot chain
                     // below (_showStartScreen) must never outrun this
@@ -179,11 +204,13 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // the transition queue keeps a boot racing
                     // openSession/clearHistory from restoring a stale
                     // session id over the newer transition's state.
-                    await host._serializeSessionTransition(async () => {
-                        await host._localSessionStore.reconcile(host._localWorkspaceKey()).catch((e) =>
-                            console.error('xratu: local session reconcile failed', e));
-                        await host._showStartScreen();
-                    });
+                    try {
+                        await host._serializeSessionTransition(async () => {
+                            await host._localSessionStore.reconcile(host._localWorkspaceKey()).catch((e) =>
+                                console.error('xratu: local session reconcile failed', e));
+                            await host._showStartScreen();
+                        });
+                    } finally { host._completeWebviewStartup(); }
                     host._pushEditorContext();
                     break;
                 case 'setLocale':

@@ -212,10 +212,14 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('rules ride the system prompt', s.includes('Project Rules (from AGENTS.md):\nRULES'));
     ok('summary rides the system prompt', s.includes('Conversation summary:\nSUMMARY'));
     ok('plan guidance is omitted when not in plan mode', !s.includes('PLAN MODE'));
+    ok('fresh build turns explicitly permit edits and commands', s.includes('BUILD MODE: this turn permits workspace edits and command execution'));
+    ok('build permissions still defer to the host approval gate', s.includes('request the tool call and wait for approval when required'));
+    ok('build permissions respect current project rules', s.includes('unless the current project rules or a tool'));
     ok('eviction note is omitted when nothing was evicted', !s.includes('older turn(s) were dropped'));
 
     const plan = buildLocalSystemPrompt({ ...inputs, planMode: true, evictedUserTurns: 2 });
     ok('plan guidance appears in plan mode', plan.includes('PLAN MODE (READ-ONLY)'));
+    ok('plan turns never receive build permission', !plan.includes('BUILD MODE:'));
     ok('eviction note appears when turns were evicted', plan.includes('2 older turn(s) were dropped'));
     ok('rules still come before the summary', plan.indexOf('RULES') < plan.indexOf('SUMMARY'));
 }
@@ -233,6 +237,8 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     ok('omitted replyLanguage == auto', autoPrompt === legacyPrompt);
     ok('auto still enforces English commit messages', autoPrompt.includes(REPLY_COMMIT_MESSAGES));
     ok('auto now states the language rule', autoPrompt.includes(REPLY_LANGUAGE_AUTO));
+    ok('auto follows latest user language through tools', autoPrompt.includes("user's latest request") && autoPrompt.includes('notes between tool calls'));
+    ok('loaded language skills cannot switch Auto replies', autoPrompt.includes('loading natural-farsi does not switch an') && autoPrompt.includes('English conversation to Persian'));
     ok('auto pins no specific language',
         !autoPrompt.includes(REPLY_LANGUAGE_FA) && !autoPrompt.includes(REPLY_LANGUAGE_EN));
 

@@ -23,3 +23,13 @@ try {
 export function postMessage(message: ToExtensionMessage): void {
     api?.postMessage(message);
 }
+
+/** UI preferences survive a webview reload without replacing other saved state. */
+export function getWebviewState(): Record<string, unknown> {
+    const state = api?.getState();
+    return state && typeof state === 'object' && !Array.isArray(state) ? state as Record<string, unknown> : {};
+}
+
+export function patchWebviewState(patch: Record<string, unknown>): void {
+    api?.setState({ ...getWebviewState(), ...patch });
+}

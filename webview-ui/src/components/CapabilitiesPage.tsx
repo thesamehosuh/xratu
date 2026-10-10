@@ -1,3 +1,4 @@
+import { SidePanel } from './SidePanel';
 import { useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft,
@@ -40,7 +41,11 @@ import type {
 } from '../types';
 import { getLocale, t, tOrRaw, tf, type StringKey } from '../i18n';
 
+export type CapabilityTab = 'servers' | 'marketplace' | 'skills';
+
 interface CapabilitiesPageProps {
+    initialTab?: CapabilityTab;
+    onTabChange?: (tab: CapabilityTab) => void;
     onBack: () => void;
     onOpenRawSettings: () => void;
     servers: McpServerView[];
@@ -353,8 +358,11 @@ export function CapabilitiesPage({
     onOpenSkill,
     onNewSkill,
     onDeleteSkill,
+    initialTab = 'servers', onTabChange,
 }: CapabilitiesPageProps) {
-    const [tab, setTab] = useState<'servers' | 'marketplace' | 'skills'>('servers');
+    const [tab, updateTab] = useState<CapabilityTab>(initialTab);
+    const setTab = (next: CapabilityTab) => { updateTab(next); onTabChange?.(next); };
+    useEffect(() => { updateTab(initialTab); }, [initialTab]);
     const [newServerTarget, setNewServerTarget] = useState<McpSaveTarget>('global');
     // Marketplace tab: query input, the query the last request carried, the
     // source/tag filters, and the row awaiting its confirm step.
@@ -772,17 +780,17 @@ export function CapabilitiesPage({
                             <input dir="ltr" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} placeholder={draft.type === 'websocket' ? 'wss://example.com/mcp' : 'https://example.com/mcp'} />)
                     )}
                 </div>
-                <div className="mcp-form-group">
-                    <span className="mcp-form-group-label">{t('mcpGroupSecurity')}</span>
+                <details className="mcp-form-group advanced-group">
+                    <summary>{t('mcpGroupSecurity')}</summary>
                     {draft.type !== 'stdio' && field(t('mcpHeadersJson'),
                         <textarea dir="ltr" rows={3} value={draft.headersText} onChange={(e) => setDraft({ ...draft, headersText: e.target.value })} placeholder='{"Authorization": "Bearer …"}' />,
                         jsonError(draft.headersText) ?? (draft.headersText.trim() ? t('mcpHeaderSecretWarn') : undefined))}
                     {field(t('mcpAutoApproveList'),
                         <textarea dir="ltr" rows={3} value={draft.autoApproveText} onChange={(e) => setDraft({ ...draft, autoApproveText: e.target.value })} />,
                         t('mcpAutoApproveHint'))}
-                </div>
-                <div className="mcp-form-group">
-                    <span className="mcp-form-group-label">{t('mcpGroupAdvanced')}</span>
+                </details>
+                <details className="mcp-form-group advanced-group">
+                    <summary>{t('mcpGroupAdvanced')}</summary>
                     {draft.type === 'stdio' && field(t('mcpEnvJson'),
                         <textarea dir="ltr" rows={3} value={draft.envText} onChange={(e) => setDraft({ ...draft, envText: e.target.value })} />,
                         jsonError(draft.envText) ?? undefined)}
@@ -790,7 +798,7 @@ export function CapabilitiesPage({
                         <input dir="ltr" value={draft.cwd} onChange={(e) => setDraft({ ...draft, cwd: e.target.value })} />)}
                     {field(t('mcpTimeoutMs'),
                         <input dir="ltr" inputMode="numeric" value={draft.timeoutText} onChange={(e) => setDraft({ ...draft, timeoutText: e.target.value.replace(/[^\d]/g, '') })} />)}
-                </div>
+                </details>
                 {draft.original ? (
                     <p className="mcp-hint-text" dir="auto">
                         {tf('mcpStoredIn', { target: sourceLabel(draft.originalSource ?? 'global') })}
@@ -922,7 +930,7 @@ export function CapabilitiesPage({
                     <div className={`mcp-row mp-row ${armed ? 'armed' : ''}`} dir="ltr">
                         <div className="mcp-row-main">
                             <span className="mcp-row-title">
-                                <strong dir="auto">{entryName(entry)}</strong>
+                                <span className="catalog-icon" aria-hidden="true">{entry.tags?.includes('files') ? <FolderOpen size={14}/> : entry.tags?.includes('web') ? <Globe size={14}/> : entry.tags?.includes('knowledge') ? <BookOpen size={14}/> : <FileJson size={14}/>}</span><strong dir="auto">{entryName(entry)}</strong>
                                 <span
                                     className={`mcp-badge src-${entry.source}`}
                                     title={marketSourceHint(entry.source)}
@@ -1067,7 +1075,7 @@ export function CapabilitiesPage({
                         chip set is self-evident, and the divider keeps them
                         apart. The aria-labels carry the meaning for screen
                         readers, which the captions never did. */}
-                    <div className="mp-filters">
+                    <details className="catalog-filters"><summary>{t('miniFilters')}{(marketSource !== 'all' || marketTag) && <span className="filter-active-dot"/>}</summary><div className="mp-filters">
                         <div className="mp-filter-group" role="group" aria-label={t('mcpMarketFilterSource')}>
                             <button
                                 type="button"
@@ -1107,7 +1115,7 @@ export function CapabilitiesPage({
                         )}
                     </div>
 
-                    <div className="mcp-target-row">
+                    </details>                    <div className="mcp-target-row">
                         <span className="mcp-field-label">{t('mcpSaveTarget')}</span>
                         <div className="lang-choice">
                             <button type="button" className={newServerTarget === 'global' ? 'lang-chip active' : 'lang-chip'} onClick={() => setNewServerTarget('global')}>
@@ -1157,7 +1165,7 @@ export function CapabilitiesPage({
                             <strong>{t('mcpMarketEmpty')}</strong>
                         </div>
                     )}
-                    {rows.map(renderRow)}
+                    <div className="catalog-grid">{rows.map(renderRow)}</div>
 
                     {hiddenRows > 0 && (
                         <button
@@ -1169,10 +1177,6 @@ export function CapabilitiesPage({
                         </button>
                     )}
 
-                    <div className="mcp-hint foot" role="note">
-                        <Info size={12} aria-hidden="true" />
-                        <span>{t('mcpMarketSecurityNote')}</span>
-                    </div>
                 </div>
             </section>
         );
@@ -1206,9 +1210,9 @@ export function CapabilitiesPage({
                         </div>
                     )}
 
-                    {renderDraftForm()}
+                    {draft && <SidePanel className="server-drawer" label={draft.original ? t('mcpEditServer') : t('mcpAddServer')} onClose={closeEditor}>{renderDraftForm()}</SidePanel>}
 
-                    {servers.map(renderServerRow)}
+                    <div className="inventory-status"><span><i className="health-dot"/>{servers.filter(s => s.state === 'connected' && !s.disabled).length} {t('mcpStatusConnected')}</span>{servers.some(s => s.state === 'error' && !s.disabled) && <span className="health-warning"><i className="health-dot"/>{servers.filter(s => s.state === 'error' && !s.disabled).length} {t('mcpStatusError')}</span>}</div>{servers.map(renderServerRow)}
                 </div>
 
                 <button type="button" className="settings-nav-row" onClick={onOpenRawSettings}>
@@ -1311,7 +1315,7 @@ export function CapabilitiesPage({
                         <BookOpen size={15} />
                     </div>
                     <div>
-                        <h3>{t('skillsTitle')}</h3>
+                        <h3>{skills.length} {t('skillsTitle')}</h3>
                         <p>{t('skillsSectionDesc')}</p>
                     </div>
                     <button type="button" className="cred-local-connect" onClick={onNewSkill}>
@@ -1357,7 +1361,7 @@ export function CapabilitiesPage({
     };
 
     return (
-        <div className="settings-page">
+        <div className={`settings-page capability-page ${tab}-page`}>
             <header className="settings-head">
                 <button
                     type="button"
@@ -1372,7 +1376,7 @@ export function CapabilitiesPage({
                     {getLocale() === 'fa' ? <ArrowRight size={14} /> : <ArrowLeft size={14} />}
                 </button>
                 <div className="settings-head-copy">
-                    <h2>{t('capTitle')}</h2>
+                    <h2>{tab === 'servers' ? t('mcpServersTab') : tab === 'skills' ? t('skillsTitle') : t('mcpMarketTab')}</h2>
                 </div>
                 <button
                     type="button"
@@ -1428,10 +1432,11 @@ export function CapabilitiesPage({
                 {tab === 'skills' && renderSkillsTab()}
 
                 {/* Apply-on-new-session semantics are fine print - footer, not header. */}
-                <div className="mcp-hint foot" role="note">
-                    <Info size={12} aria-hidden="true" />
+                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+
+                    {tab === 'marketplace' && <span>{t('mcpMarketSecurityNote')}</span>}
                     <span>{tab === 'skills' ? t('skillsHint') : t('mcpApplyHint')}</span>
-                </div>
+                </div></details>
             </div>
         </div>
     );

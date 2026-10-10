@@ -3,7 +3,8 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const PORT = 4173;
+const PORT = Number(process.env.XRATU_E2E_PORT ?? 4173);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error('Invalid XRATU_E2E_PORT');
 const WEBVIEW_DIST = join(__dirname, '..', '..', 'dist', 'webview-ui');
 
 /**

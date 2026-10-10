@@ -1,3 +1,4 @@
+import { SidePanel } from './SidePanel';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -43,6 +44,7 @@ interface CredentialsPageProps {
      *  'byok' → remote provider, 'local' → Ollama). */
     initialOpenCard?: 'byok' | 'local' | null;
     savedCredentials: SavedCredential[];
+    credentialsReady?: boolean;
     localRuntimes: DiscoveredLocalRuntime[];
     localModelsScanning: boolean;
     /** Host-reported discovery failure - distinct from "nothing found". */
@@ -178,7 +180,7 @@ export function CredentialsPage({
     currentUrl,
     activeCredentialId,
     initialOpenCard = null,
-    savedCredentials,
+    savedCredentials, credentialsReady = true,
     localRuntimes,
     localModelsScanning,
     localScanError = null,
@@ -211,6 +213,13 @@ export function CredentialsPage({
         : detected ?? PRESETS.find((p) => p.id === 'openai')!;
     const [presetId, setPresetId] = useState<string>(initialPreset.id);
     const [url, setUrl] = useState<string>(detected?.baseUrl ?? currentUrl ?? initialPreset.baseUrl);
+    const [addOpen, setAddOpen] = useState(() => !!reason || !!error || !!initialOpenCard || (credentialsReady && savedCredentials.length === 0));
+    const offeredSetup = useRef(credentialsReady);
+    useEffect(() => {
+        if (!credentialsReady || offeredSetup.current) return;
+        offeredSetup.current = true;
+        if (savedCredentials.length === 0) setAddOpen(true);
+    }, [credentialsReady, savedCredentials.length]);
     const [apiKey, setApiKey] = useState('');
     const [showApiKey, setShowApiKey] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -233,6 +242,10 @@ export function CredentialsPage({
      *  host echoes the new active credential or errors). */
     const [selectingId, setSelectingId] = useState<string | null>(null);
     const providerBoxRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (reason || error || initialOpenCard) setAddOpen(true);
+    }, [reason, error, initialOpenCard]);
 
     useEffect(() => {
         const preset = requestedPresetId
@@ -388,19 +401,21 @@ export function CredentialsPage({
                                             <button
                                                 type="button"
                                                 className="primary-btn cred-oauth-action"
+                                                aria-label={t('credOAuthSignIn')} title={t('credOAuthSignIn')}
                                                 onClick={() => onOAuthSignIn(provider.providerId, 'browser')}
                                                 disabled={!!inProgress}
                                             >
                                                 <Link size={13} />
-                                                {t('credOAuthSignIn')}
+                                                {t('miniSignIn')}
                                             </button>
                                             {provider.methods?.includes('device') && <button
                                                 type="button"
                                                 className="ghost-btn cred-oauth-action"
+                                                aria-label={t('credOAuthSignInDevice')} title={t('credOAuthSignInDevice')}
                                                 onClick={() => onOAuthSignIn(provider.providerId, 'device')}
                                                 disabled={!!inProgress}
                                             >
-                                                {t('credOAuthSignInDevice')}
+                                                {t('miniDeviceCode')}
                                             </button>}
                                         </>
                                     )}
@@ -603,7 +618,7 @@ export function CredentialsPage({
                     }}
                     onFocus={() => setProviderOpen(true)}
                     onKeyDown={(e) => {
-                        if (e.key === 'Escape') setProviderOpen(false);
+                        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setProviderOpen(false); }
                         if (e.key === 'Enter') {
                             e.preventDefault();
                             const first = filteredProviderOptions[0];
@@ -682,13 +697,13 @@ export function CredentialsPage({
 
             {/* Both texts (label + hint) sit ABOVE the chips: the group must
                 not be sandwiched between them. */}
-            <div className="cred-provider-section">
+            <div className="cred-provider-section iranian-providers">
                 <div className="runtime-heading">
                     <span className="cred-provider-section-label">{t('credIranian')}</span>
                     <button className="ghost-btn small" aria-label={t('providerGuide')} title={t('providerGuide')}
                         onClick={() => onOpenGuide?.('providers')}><BookOpen size={13} /></button>
                 </div>
-                <span className="cred-provider-section-hint">{t('credIranianHint')}</span>
+                <span className="cred-provider-section-hint" title={t('credIranianHint')}>{t('miniIranianPayment')}</span>
                 <div className="cred-providers-inline" role="radiogroup" aria-label={t('credIranian')}>
                     {IRANIAN.map((p) => (
                         <button
@@ -868,8 +883,8 @@ export function CredentialsPage({
                                                     host-generated English fallback only. */}
                                                 {presetLabel(preset) || credential.label}
                                             </span>
-                                            <span className="saved-credential-meta" dir="ltr">
-                                                {credential.baseUrl} · {credential.maskedKey}
+                                            <span className="saved-credential-meta" dir="ltr" title={credential.baseUrl}>
+                                                {credential.baseUrl}{credential.maskedKey && ` · ${credential.maskedKey}`}
                                             </span>
                                         </span>
                                         {isActive ? (
@@ -954,6 +969,7 @@ export function CredentialsPage({
                 <div className="cred-head-copy">
                     <h2>{t('credHeading')}</h2>
                 </div>
+                <button type="button" className="page-add" onClick={() => setAddOpen(true)}><Plus size={12}/><span>{t('miniAdd')}</span></button>
             </header>
 
             {(reason || error) && (
@@ -979,20 +995,14 @@ export function CredentialsPage({
                 </div>
             )}
 
-            {renderOauthSection()}
-
-            {renderSection(
-                <Link size={15} />,
-                t('credAddProviderTitle'),
-                t('credAddProviderDesc'),
-                renderProviderForm()
-            )}
+            {renderSavedList()}
+            {!addOpen && (oauthState?.accounts?.length || oauthState?.registrations?.length) ? renderOauthSection() : null}
 
             <section className={`cred-card${localRuntimes.length > 0 ? ' open' : ''}`}>
                 <div className="cred-card-head static">
                     <span className="cred-card-icon" aria-hidden="true"><Laptop size={15} /></span>
                     <span className="cred-card-copy">
-                        <strong>{t('credLocalDiscovered')}</strong>
+                        <strong>{t('miniLibrary')}</strong>
                         <span>{localRuntimes.length > 0 ? tf('credDetectedCount', { count: String(localRuntimes.length) }) : t('credLocalDiscoveredDesc')}</span>
                     </span>
                     <span className="cred-card-side">
@@ -1015,7 +1025,23 @@ export function CredentialsPage({
                 <div className="cred-card-body">{renderDiscoveredList()}</div>
             </section>
 
-            {renderSavedList()}
+
+            {addOpen && <SidePanel className="connection-drawer" label={t('miniAdd')} onClose={() => setAddOpen(false)}>
+                <header className="drawer-head">
+                    <h3>{t('miniAdd')}</h3>
+                    <button type="button" className="icon-btn" aria-label={t('editCancel')} onClick={() => setAddOpen(false)}><X size={13} /></button>
+                </header>
+                <div className="drawer-scroll">
+                    {renderOauthSection()}
+                    {renderSection(
+                        <Link size={15} />,
+                        t('credAddProviderTitle'),
+                        t('credAddProviderDesc'),
+                        renderProviderForm()
+                    )}
+                </div>
+            </SidePanel>}
+
             <ProviderComparison results={benchmarks} credentials={savedCredentials} offline={offline}
                 onRun={() => onBenchmark?.()} onGuide={() => onOpenGuide?.('providers')} />
         </div>

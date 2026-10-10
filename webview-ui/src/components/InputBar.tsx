@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
+    ChevronDown,
+    ShieldCheck,
+    ListChecks,
     Check,
     ChevronUp,
     Cpu,
@@ -267,7 +270,7 @@ interface InputBarProps {
     onCancel: () => void;
     /** Suggestion-chip payload: typed into the composer char-by-char, then
      *  auto-sent. `id` re-triggers the effect for repeated picks. */
-    injectedText?: { id: number; text: string } | null;
+    injectedText?: { id: number; text: string; autoSend?: boolean } | null;
     onInjectedApplied?: () => void;
     models?: string[];
     modelDisplayNames?: Record<string, string>;
@@ -301,6 +304,10 @@ interface InputBarProps {
      *  conversation already occupies. */
     defaultContextWindow?: number | null;
     planMode?: boolean;
+    yolo?: boolean;
+    onTogglePlan?: () => void;
+    onToggleYolo?: () => void;
+    statusSlot?: ReactNode;
     /** Slot for the git branch drop-up: rendered in the composer's popup layer
      *  so `.model-pop` anchors it above the card like the @-mention picker. */
     branchPicker?: ReactNode;
@@ -352,7 +359,11 @@ export function InputBar({
     onOpenUsage,
     contextWindow,
     defaultContextWindow,
-    planMode: _planMode,
+    planMode = false,
+    yolo = false,
+    onTogglePlan,
+    onToggleYolo,
+    statusSlot,
     modelVisionCapable,
     restoreDraft,
     onRestoreApplied,
@@ -402,6 +413,16 @@ export function InputBar({
     const attachBtnRef = useRef<HTMLButtonElement | null>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const composerRef = useRef<HTMLDivElement | null>(null);
+    const policyRef = useRef<HTMLDivElement>(null);
+    const [policyOpen, setPolicyOpen] = useState<'mode' | 'approval' | null>(null);
+    useEffect(() => {
+        if (!policyOpen) return;
+        policyRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')?.focus();
+        const close = (event: MouseEvent) => { if (!policyRef.current?.contains(event.target as Node)) setPolicyOpen(null); };
+        document.addEventListener('mousedown', close);
+        return () => document.removeEventListener('mousedown', close);
+    }, [policyOpen]);
+
 
     // The context window comes from the model probe's authoritative table -
     // no client-side copy that can drift. The meter shows the conversation's
@@ -473,6 +494,11 @@ export function InputBar({
     useEffect(() => {
         if (!injectedText) return;
         const full = injectedText.text;
+        if (injectedText.autoSend === false) {
+            clearInjectionTimers();
+            setValue((current) => current.trim() ? `${current}\n\n${full}` : full);
+            setMention(null); ref.current?.focus(); injectedAppliedRef.current?.(); return;
+        }
         clearInjectionTimers();
         setValue('');
         // The typewriter rewrites the text - any live @-mention token is dead.
@@ -552,7 +578,7 @@ export function InputBar({
             setPickerOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setPickerOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setPickerOpen(false); pickerRef.current?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);
@@ -573,7 +599,7 @@ export function InputBar({
             setAttachMenuOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setAttachMenuOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setAttachMenuOpen(false); attachBtnRef.current?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);
@@ -762,6 +788,15 @@ export function InputBar({
     };
 
     const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Escape' && (pickerOpen || ctxOpen || attachMenuOpen || policyOpen)) {
+            e.preventDefault();
+            if (pickerOpen) { setPickerOpen(false); pickerRef.current?.focus(); }
+            if (ctxOpen) { setCtxOpen(false); ctxWrapRef.current?.querySelector('button')?.focus(); }
+            if (attachMenuOpen) { setAttachMenuOpen(false); attachBtnRef.current?.focus(); }
+            if (policyOpen) { setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus(); }
+            return;
+        }
+        if (e.key === 'Escape' && (branchPicker || document.querySelector('.task-list-chip-menu'))) return;
         // Mention popup owns navigation keys while open - Enter/Tab pick,
         // arrows move, Escape closes; everything else keeps typing.
         if (mention && mentionFiles.length > 0) {
@@ -835,7 +870,7 @@ export function InputBar({
             setCtxOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setCtxOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setCtxOpen(false); ctxWrapRef.current?.querySelector('button')?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);
@@ -930,6 +965,33 @@ export function InputBar({
 
     return (
         <div className="input-bar">
+            <div className="composer-prelude">
+                <div className="composer-status">{statusSlot}</div>
+                {(onTogglePlan || onToggleYolo) && <div className="composer-policies" ref={policyRef} onKeyDown={(event) => {
+                    if (event.key === 'Escape' && policyOpen) { event.preventDefault(); event.stopPropagation(); setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus(); }
+                    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && policyOpen) {
+                        const items = [...(policyRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? [])];
+                        const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                        event.preventDefault(); items[next]?.focus();
+                    }
+                }}>
+                    <button type="button" className="composer-policy" data-policy="mode" aria-haspopup="menu" aria-expanded={policyOpen === 'mode'} onClick={() => setPolicyOpen(policyOpen === 'mode' ? null : 'mode')} title={t('planHint')}>
+                        {planMode ? <ListChecks size={12} /> : <Wrench size={12} />}{t(planMode ? 'surfacePlan' : 'surfaceBuild')}<ChevronDown size={10} />
+                    </button>
+                    <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t('yoloMode')}>
+                        <ShieldCheck size={12} />{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}<ChevronDown size={10} />
+                    </button>
+                    {policyOpen && <div className="composer-policy-menu" role="menu" aria-label={t(policyOpen === 'mode' ? 'planMode' : 'yoloMode')}>
+                        {[false, true].map((enabled) => <button type="button" key={String(enabled)} role="menuitemradio" aria-checked={(policyOpen === 'mode' ? planMode : yolo) === enabled} onClick={() => {
+                            const current = policyOpen === 'mode' ? planMode : yolo;
+                            if (current !== enabled) (policyOpen === 'mode' ? onTogglePlan : onToggleYolo)?.();
+                            setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus();
+                        }}>{t(policyOpen === 'mode' ? enabled ? 'surfacePlan' : 'surfaceBuild' : enabled ? 'surfaceAutoApprove' : 'surfaceAskFirst')}{(policyOpen === 'mode' ? planMode : yolo) === enabled && <Check size={12} />}</button>)}
+                    </div>}
+                </div>}
+            </div>
+
             <div
                 className={`composer${typing ? ' is-typing' : ''}${editDraft ? ' is-editing' : ''}${attachments.length > 0 ? ' has-attachments' : ''}${value.trim() ? ' has-draft' : ''}`}
                 ref={composerRef}
@@ -952,7 +1014,73 @@ export function InputBar({
                 <label htmlFor="xratu-input" className="sr-only">
                     {t('inputSrLabel')}
                 </label>
-                <div className="composer-top-row">
+                {attachments.length > 0 && (
+                    <div className="attach-chips">
+                        {attachments.map((a) => {
+                            const visionDoubt = modelVisionCapable === false && isImageMime(a.mimeType);
+                            return (
+                                <span key={a.id} className={`attach-chip${a.path ? ' attach-chip-ref' : ''}`}>
+                                    {a.path ? (
+                                        <span className="attach-chip-icon" title={t('refChipTitle')}>
+                                            <Link size={13} />
+                                        </span>
+                                    ) : a.mimeType.startsWith('image/') ? (
+                                        <img
+                                            className="attach-chip-thumb"
+                                            src={`data:${a.mimeType};base64,${a.dataBase64}`}
+                                            alt={a.name}
+                                        />
+                                    ) : (
+                                        <span className="attach-chip-icon">
+                                            <File size={14} />
+                                        </span>
+                                    )}
+                                    <span className="attach-chip-name" dir="ltr">{a.path ?? a.name}</span>
+                                    {visionDoubt && (
+                                        <span
+                                            className="attach-chip-warn"
+                                            title={t('attachVisionWarn')}
+                                            aria-label={t('attachVisionWarn')}
+                                        >
+                                            <TriangleAlert size={11} />
+                                        </span>
+                                    )}
+                                    {a.size > 0 && (
+                                        <span className="attach-chip-size" dir="ltr">{fmtCompact(a.size)}</span>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="attach-chip-remove"
+                                        onClick={() => removeAttachment(a.id)}
+                                        aria-label={t('removeAttachment')}
+                                        title={t('removeAttachment')}
+                                    >
+                                        <X size={11} />
+                                    </button>
+                                </span>
+                            );
+                        })}
+                    </div>
+                )}
+                {attachError && (
+                    <p className="attach-error" role="alert">{attachError}</p>
+                )}
+                <textarea
+                    id="xratu-input"
+                    ref={ref}
+                    className="composer-input"
+                    rows={1}
+                    dir={value ? 'auto' : getLocale() === 'fa' ? 'rtl' : 'ltr'}
+                    placeholder={busy ? t('inputPlaceholderBusy') : t('inputPlaceholder')}
+                    value={value}
+                    autoFocus
+                    onChange={onValueChange}
+                    onKeyDown={onKeyDown}
+                    onPaste={onPaste}
+                    aria-label={t('inputSrLabel')}
+                />
+                <div className="composer-actions">
+                <div className="composer-attach">
                     <button
                         type="button"
                         className="attach-btn"
@@ -1021,72 +1149,7 @@ export function InputBar({
                         aria-label={t('attachFiles')}
                     />
                 </div>
-                {attachments.length > 0 && (
-                    <div className="attach-chips">
-                        {attachments.map((a) => {
-                            const visionDoubt = modelVisionCapable === false && isImageMime(a.mimeType);
-                            return (
-                                <span key={a.id} className={`attach-chip${a.path ? ' attach-chip-ref' : ''}`}>
-                                    {a.path ? (
-                                        <span className="attach-chip-icon" title={t('refChipTitle')}>
-                                            <Link size={13} />
-                                        </span>
-                                    ) : a.mimeType.startsWith('image/') ? (
-                                        <img
-                                            className="attach-chip-thumb"
-                                            src={`data:${a.mimeType};base64,${a.dataBase64}`}
-                                            alt={a.name}
-                                        />
-                                    ) : (
-                                        <span className="attach-chip-icon">
-                                            <File size={14} />
-                                        </span>
-                                    )}
-                                    <span className="attach-chip-name" dir="ltr">{a.path ?? a.name}</span>
-                                    {visionDoubt && (
-                                        <span
-                                            className="attach-chip-warn"
-                                            title={t('attachVisionWarn')}
-                                            aria-label={t('attachVisionWarn')}
-                                        >
-                                            <TriangleAlert size={11} />
-                                        </span>
-                                    )}
-                                    {a.size > 0 && (
-                                        <span className="attach-chip-size" dir="ltr">{fmtCompact(a.size)}</span>
-                                    )}
-                                    <button
-                                        type="button"
-                                        className="attach-chip-remove"
-                                        onClick={() => removeAttachment(a.id)}
-                                        aria-label={t('removeAttachment')}
-                                        title={t('removeAttachment')}
-                                    >
-                                        <X size={11} />
-                                    </button>
-                                </span>
-                            );
-                        })}
-                    </div>
-                )}
-                {attachError && (
-                    <p className="attach-error" role="alert">{attachError}</p>
-                )}
-                <textarea
-                    id="xratu-input"
-                    ref={ref}
-                    className="composer-input"
-                    rows={1}
-                    dir={value ? 'auto' : getLocale() === 'fa' ? 'rtl' : 'ltr'}
-                    placeholder={busy ? t('inputPlaceholderBusy') : t('inputPlaceholder')}
-                    value={value}
-                    autoFocus
-                    onChange={onValueChange}
-                    onKeyDown={onKeyDown}
-                    onPaste={onPaste}
-                    aria-label={t('inputSrLabel')}
-                />
-                <div className="composer-actions">
+
                 <div className="composer-chips">
                     <button
                         type="button"

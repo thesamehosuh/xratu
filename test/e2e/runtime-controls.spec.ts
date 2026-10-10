@@ -30,13 +30,13 @@ for (const locale of ['fa', 'en'] as const) for (const width of [420, 900]) {
         await expect(offline).toHaveAttribute('aria-checked', 'false');
         await host(page, { type: 'runtimePreferences', offline: true, errorExplanations: false });
         await expect(offline).toHaveAttribute('aria-checked', 'true');
-        await expect(page.locator('.screen-overlay .offline-banner')).toBeVisible();
+        await expect(page.locator('.app .offline-banner')).toBeVisible();
         await expect(page.getByRole('switch', { name: locale === 'fa' ? 'توضیح خطا ها' : 'Explain errors' })).toHaveAttribute('aria-checked', 'false');
-        await page.locator('.screen-overlay .offline-banner button').click();
+        await page.locator('.app .offline-banner button').click();
         expect((await sent(page)).some((m) => m.type === 'openBundledGuide' && m.guide === 'offline')).toBe(true);
         const overflow = await page.locator('.settings-page').evaluate((el) => el.scrollWidth - el.clientWidth);
         expect(overflow).toBeLessThanOrEqual(1);
-        await page.getByRole('button', { name: locale === 'fa' ? 'بازگشت' : 'Back', exact: true }).click();
+        await page.locator('.sidebar-back').click();
         await expect(page.locator('.app .offline-banner')).toBeVisible();
     });
 }
@@ -46,9 +46,12 @@ test('Ollama download progress, cancellation and confirmed deletion', async ({ p
     await page.goto('/');
     await host(page, { type: 'locale', locale: 'en' });
     await host(page, { type: 'showChat' });
+    await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
     await host(page, { type: 'localModelsDiscovered', runtimes: [runtime] });
-    await page.getByText('Manage Ollama models', { exact: true }).click();
+    await page.locator('.drawer-head .icon-btn').click();
+    const management = page.getByText('Manage Ollama models', { exact: true });
+    if (!await management.evaluate((el) => el.parentElement?.hasAttribute('open'))) await management.click();
     await page.getByRole('textbox', { name: 'Model name to download' }).fill('qwen2.5-coder:7b');
     await page.getByRole('button', { name: 'Download model', exact: true }).click();
     expect((await sent(page)).find((m) => m.type === 'manageLocalModel')).toMatchObject({ action: 'pull', baseUrl: runtime.baseUrl, model: 'qwen2.5-coder:7b' });
@@ -69,9 +72,11 @@ test('provider onboarding and measured latency retain errors and unknown prices'
     await page.goto('/');
     await host(page, { type: 'locale', locale: 'en' });
     await host(page, { type: 'showChat' });
+    await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
     await page.getByRole('radio', { name: 'Avalai', exact: true }).click();
     await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');
+    await page.locator('.drawer-head .icon-btn').click();
     await page.getByText('Compare connection latency', { exact: true }).click();
     await page.getByRole('button', { name: 'Test active model' }).click();
     expect((await sent(page)).some((m) => m.type === 'benchmarkProvider')).toBe(true);
@@ -87,8 +92,10 @@ test('offline benchmarks allow only the active loopback connection', async ({ pa
     await page.goto('/');
     await host(page, { type: 'locale', locale: 'en' });
     await host(page, { type: 'showChat' });
+    await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
     await host(page, { type: 'runtimePreferences', offline: true, errorExplanations: true });
+    await page.locator('.drawer-head .icon-btn').click();
     await page.getByText('Compare connection latency', { exact: true }).click();
     const button = page.getByRole('button', { name: 'Test active model' });
     const connection = { id: 'test', providerId: 'custom', maskedKey: '', label: 'Test', active: true };

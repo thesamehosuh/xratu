@@ -77,20 +77,7 @@ const BASELINE_HEIGHT = 900;
  * A renamed key makes the locator match nothing and the test FAIL - it can
  * never quietly screenshot the wrong page.
  */
-const SETTINGS_ROW: Record<Locale, Record<'credentials' | 'capabilities' | 'usage' | 'proxy', string>> = {
-    fa: {
-        credentials: 'سرویس دهنده ها',
-        capabilities: 'سرور ها و مهارت ها',
-        usage: 'مصرف',
-        proxy: 'تنظیمات پروکسی',
-    },
-    en: {
-        credentials: 'Providers',
-        capabilities: 'Servers & Skills',
-        usage: 'Usage',
-        proxy: 'Proxy settings',
-    },
-};
+
 
 /* --- fixtures -------------------------------------------------------------
  * Every value here is FIXED. Anything derived from the wall clock (a relative
@@ -361,12 +348,13 @@ async function chatScreen(page: Page, locale: Locale): Promise<Locator> {
         contextWindow: 128000,
     });
     await host(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
+    await page.locator('.surface-tabs').getByRole('tab', { name: locale === 'fa' ? 'فعالیت' : 'Activity', exact: true }).click();
     const diff = page.locator('.pill-diff').first();
     await expect(diff).toBeVisible();
     await expectHighlighted(page, '.pill-diff-code');
     // Pin the transcript to its tail explicitly: the app follows the stream,
     // but a follow that loses a race would silently change every chat baseline.
-    await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await page.locator('.activity-pane').evaluate((el) => { el.scrollTop = el.scrollHeight; });
     await expect(page.locator('.session-cost')).toBeVisible();
     return diff;
 }
@@ -408,7 +396,7 @@ async function credentialsScreen(page: Page, locale: Locale): Promise<Locator> {
     await expect(view).toBeVisible();
     await settleLocalScan(page);
     await expect(page.locator('.cred-local-runtime')).toHaveCount(LOCAL_RUNTIMES.length);
-    return page.locator('.screen-overlay');
+    return page.locator('.page-layout');
 }
 
 async function settingsScreen(page: Page, locale: Locale): Promise<Locator> {
@@ -421,7 +409,7 @@ async function settingsScreen(page: Page, locale: Locale): Promise<Locator> {
     // Three transcript switches = the page really mounted its cards (the same
     // signal app.spec.ts uses), not just an empty scroll shell.
     const activity = page.locator('.settings-card').filter({ has: page.getByRole('heading', {
-        name: locale === 'fa' ? 'نمایش فعالیت ها' : 'Activity view', exact: true,
+        name: locale === 'fa' ? 'باز شدن خودکار' : 'Auto-expand', exact: true,
     }) });
     await expect(activity.getByRole('switch')).toHaveCount(3);
     return view;
@@ -435,8 +423,7 @@ async function openSettingsSubpage(page: Page, locale: Locale, row: 'capabilitie
     await expect(page.locator('.composer-input')).toBeVisible();
     await host(page, { type: 'openSettings' });
     await expect(page.locator('.settings-page').first()).toBeVisible();
-    const label = SETTINGS_ROW[locale][row];
-    const target = page.locator(`.settings-nav-row strong:text-is("${label}")`);
+    const target = page.locator('.page-sidebar .sidebar-item').nth(row === 'capabilities' ? 1 : row === 'usage' ? 5 : 6);
     await expect(target).toHaveCount(1);
     await target.click();
 }
@@ -473,6 +460,8 @@ async function proxyScreen(page: Page, locale: Locale): Promise<Locator> {
     await openSettingsSubpage(page, locale, 'proxy');
     const view = page.locator('.settings-page').first();
     await expect(view).toBeVisible();
+    await expect(page.locator('.route-map')).toBeVisible();
+    await page.getByRole('button', { name: locale === 'fa' ? 'سفارشی' : 'Custom', exact: true }).click();
     await expect(page.locator('.proxy-field-row').first()).toBeVisible();
     return view;
 }

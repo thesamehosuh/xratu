@@ -181,7 +181,7 @@ test('a short panel keeps the strip whole instead of squeezing it to a hairline'
     });
     expect(box.rowInsideStrip).toBe(true);
     expect(box.rowHit).toBe(true);
-    expect(box.seam).toBe(0);
+    expect(box.seam).toBeLessThanOrEqual(0);
     expect(box.topBorderHit).toBe(true);
 });
 

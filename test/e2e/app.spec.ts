@@ -76,7 +76,7 @@ test('the composer cost pill opens the usage page and goes back to chat', async 
     });
     await expect(page.locator('.settings-section-head', { hasText: 'روند هزینه' })).toBeVisible();
     // Back returns to the chat composer, not to Settings.
-    await page.getByLabel('بازگشت').click();
+    await page.locator('.sidebar-back').click();
     await expect(page.locator('.composer-input')).toBeVisible();
 });
 
@@ -95,7 +95,7 @@ test('composer draft survives leaving and returning to the chat screen', async (
     // has nothing left to lose it to.
     await expect(input).toHaveCount(1);
     await expect(input).toBeHidden();
-    await page.getByLabel('بازگشت').click();
+    await page.locator('.sidebar-back').click();
     await expect(input).toHaveValue('half-written message');
 
     // Sending still clears it: the store mirrors the composer's state, it does
@@ -104,7 +104,7 @@ test('composer draft survives leaving and returning to the chat screen', async (
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(sent).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'half-written message' }));
     await page.locator('.session-cost').click();
-    await page.getByLabel('بازگشت').click();
+    await page.locator('.sidebar-back').click();
     await expect(input).toHaveValue('');
 });
 
@@ -197,16 +197,19 @@ test('locale message flips direction rtl -> ltr', async ({ page }) => {
     await expect(page.locator('.app')).toHaveAttribute('dir', 'ltr');
 });
 
-test('locale flip re-renders EXISTING chat bubbles (memo boundary)', async ({ page }) => {
+test('locale flip preserves content direction and translates existing bubble controls', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
     const bubble = page.locator('article.msg.user').first();
-    await expect(bubble).toHaveAttribute('dir', 'rtl');
+    await expect(bubble).toHaveAttribute('dir', 'auto');
+    await expect(bubble).toHaveCSS('direction', 'rtl');
     // The message prop is unchanged here - only the locale changes, so only the
     // item's comparator can drive the re-render.
     await hostMessage(page, { type: 'locale', locale: 'en' });
-    await expect(bubble).toHaveAttribute('dir', 'ltr');
+    await expect(bubble).toHaveAttribute('dir', 'auto');
+    await expect(bubble).toHaveCSS('direction', 'rtl');
+    await expect(bubble.getByRole('button', { name: 'Edit message', exact: true })).toBeVisible();
 });
 
 test('long history pages: only the tail mounts, show-earlier reveals the rest', async ({ page }) => {
@@ -307,17 +310,26 @@ test('the edit pill open-diff button posts the call to the host', async ({ page 
     });
 });
 
-test('the review button posts the row checkpoint to the host', async ({ page }) => {
+test('the outcome reviews the turn checkpoint without extra message-footer actions', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
-    const review = page.locator('button[aria-label="Review changes"]');
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'Changes complete.', renderedHtml: '<p>Changes complete.</p>' });
+    const review = page.locator('.outcome-review');
     await expect(review).toBeVisible();
-    await expect(page.locator('button[aria-label="Restore files"]')).toBeVisible();
+    await expect(page.locator('.msg-footer button[aria-label="Review changes"]')).toHaveCount(0);
+    await expect(page.locator('button[aria-label="Restore files"]')).toHaveCount(0);
+    await expect(page.locator('button[aria-label="Regenerate response"]')).toHaveCount(0);
     await review.click();
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
-    expect(sent).toContainEqual({ type: 'reviewChanges', sha: 'abc1234' });
+    expect(sent.some((message) => message.type === 'changesGetState' && message.sha === 'abc1234')).toBe(true);
+    await expect(page.locator('.changes-pane')).toBeVisible();
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(review).toBeHidden();
+    await expect(page.locator('.changes-pane')).toBeVisible();
 });
 
 test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
@@ -420,7 +432,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
 
     // Settings → Usage
     await page.getByTitle('تنظیمات').first().click();
-    await page.locator('.settings-nav-row', { hasText: 'مصرف' }).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: 'مصرف', exact: true }).click();
 
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'usageGetState' });
@@ -529,7 +541,8 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(providerRows.first().locator('.prov-bar > span')).toHaveCount(2);
     // Metis has cached input too, so its bar carries the third segment.
     await expect(providerRows.nth(1).locator('.prov-bar > span')).toHaveCount(3);
-    await expect(page.locator('.usage-alltime')).toBeVisible();
+    await expect(page.locator('.usage-metrics')).toBeVisible();
+    await page.locator('.rate-disclosure > summary').click();
 
     // Rate sheet: the effective rate per model with its origin, edited inline.
     const rateRows = page.locator('.rate-row');
@@ -587,7 +600,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(unknownRow.locator('.settings-primary-action')).toBeDisabled();
     await page.keyboard.press('Escape');
 
-    await expect(page.locator('.mcp-hint.foot')).toBeVisible();
+    await expect(page.locator('.rate-disclosure[open]')).toBeVisible();
 
     // The add form is collapsed until asked for, and requires BOTH rates
     // (a blank field must not become 0).
@@ -688,7 +701,7 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
         .toEqual([false, true]);
 
     await hostMessage(page, { type: 'openSettings' });
-    const switches = page.locator('.settings-card').filter({ has: page.getByRole('heading', { name: 'Activity view', exact: true }) }).getByRole('switch');
+    const switches = page.locator('.settings-card').filter({ has: page.getByRole('heading', { name: 'Auto-expand', exact: true }) }).getByRole('switch');
     // The card mounts on a later commit than the message that requested it, so
     // read the switches only once they exist. A bare `evaluateAll` here got `[]`
     // on the slower macOS leg - an empty result that reads like "no switches
