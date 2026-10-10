@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, isSameLocalDay, localDayKey, localDayTimestamp, shiftLocalDay } from '../src/datetime';
+import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, formatRelativeTime, isSameLocalDay, localDayKey, localDayTimestamp, shiftLocalDay } from '../src/datetime';
 import { setLocale } from '../src/i18n';
 
 // A LOCAL 13:05 - deliberately past noon so a 12-hour clock would render a
@@ -21,6 +21,9 @@ assert.equal(fa, faExpected, `fa should be fa-IR 24-hour, got ${fa}`);
 assert.ok(/[\u06F0-\u06F9]/.test(fa), `fa should use Persian digits, got ${fa}`);
 
 setLocale('en');
+assert.equal(formatRelativeTime(ts, ts + 120_000), '2 minutes ago');
+assert.equal(formatRelativeTime(ts, ts + 7200_000), '2 hours ago');
+assert.equal(formatRelativeTime(ts, ts - 1000), 'now');
 const en = formatClockTime(ts);
 // The English branch delegates to the runtime locale - assert delegation, not
 // a digit script, so a non-Latin host locale doesn't fail the suite.

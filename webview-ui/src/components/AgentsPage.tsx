@@ -20,7 +20,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
             </header>
             <div className="settings-scroll agents-content">
                 {errorKey && <p role="alert">{t(errorKey as Parameters<typeof t>[0])}</p>}
-                {!profiles && <span className="step-status spinner" aria-label={t('working')} />}
+                {!profiles && !errorKey && <div className="agent-loading" role="status"><RefreshCw size={12} className="spinning" /><span>{t('working')}</span></div>}
                 {profiles && ['builtin', 'custom'].map((group) => {
                     const list = profiles.filter((profile) => (profile.source === 'builtin') === (group === 'builtin'));
                     if (!list.length) return null;

@@ -75,18 +75,16 @@ function cacheKey(theme: string, lang: string, code: string): string {
 
 export function useHighlightedCode(code: string, lang: string): string[] {
     const theme = useShikiTheme();
-    const [highlighted, setHighlighted] = useState<string[]>(() =>
-        (code && lang !== 'text' ? HIGHLIGHT_CACHE.get(cacheKey(theme, lang, code)) : undefined) ?? [],
-    );
+    const key = cacheKey(theme, lang, code);
+    const [highlighted, setHighlighted] = useState(() => ({ key, lines: HIGHLIGHT_CACHE.get(key) ?? [] }));
     useEffect(() => {
         if (!code || lang === 'text' || code.length > HIGHLIGHT_MAX_CHARS) {
-            setHighlighted([]);
+            setHighlighted({ key, lines: [] });
             return;
         }
-        const key = cacheKey(theme, lang, code);
         const hit = HIGHLIGHT_CACHE.get(key);
         if (hit) {
-            setHighlighted(hit);
+            setHighlighted({ key, lines: hit });
             return;
         }
         let cancelled = false;
@@ -99,7 +97,7 @@ export function useHighlightedCode(code: string, lang: string): string[] {
             const html = h.codeToHtml(code, { lang, theme });
             const match = html.match(/<code>([\s\S]*?)<\/code>/);
             if (!match) {
-                setHighlighted([]);
+                setHighlighted({ key, lines: [] });
                 return;
             }
             const inner = match[1]
@@ -112,11 +110,11 @@ export function useHighlightedCode(code: string, lang: string): string[] {
                 for (const k of keys.slice(0, Math.floor(keys.length / 2))) HIGHLIGHT_CACHE.delete(k);
             }
             HIGHLIGHT_CACHE.set(key, lines);
-            setHighlighted(lines);
+            setHighlighted({ key, lines });
         }).catch(() => {
-            if (!cancelled) setHighlighted([]);
+            if (!cancelled) setHighlighted({ key, lines: [] });
         });
         return () => { cancelled = true; };
-    }, [code, lang, theme]);
-    return highlighted;
+    }, [code, lang, theme, key]);
+    return highlighted.key === key ? highlighted.lines : HIGHLIGHT_CACHE.get(key) ?? [];
 }

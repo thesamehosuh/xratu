@@ -138,8 +138,8 @@ test('per-MCP routing rows and the connectivity test result', async ({ page }) =
     await expect(page.locator('.proxy-mcp-row')).toHaveCount(2);
     await expect(page.locator('.proxy-mcp-row').nth(1).locator('.lang-chip.active')).toHaveText(/direct/i);
     // Result strip under the header (the test itself runs from the header icon).
-    await expect(page.locator('.proxy-test')).toHaveClass(/fail/);
-    await expect(page.locator('.proxy-test')).toContainText('fetch failed');
+    await expect(page.locator('.route-test-result')).toHaveClass(/fail/);
+    await expect(page.locator('.route-test-result')).toContainText('fetch failed');
     await expect(page.locator('.routing-page header .icon-btn')).toBeVisible();
     // Toggling one server's route posts a targeted mcpSave.
     await page.locator('.proxy-mcp-row').first().locator('.lang-chip', { hasText: /via proxy/i }).click();

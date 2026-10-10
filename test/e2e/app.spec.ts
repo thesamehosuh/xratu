@@ -311,6 +311,7 @@ test('the edit pill open-diff button posts the call to the host', async ({ page 
 });
 
 test('the outcome reviews the turn checkpoint without extra message-footer actions', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
@@ -325,6 +326,9 @@ test('the outcome reviews the turn checkpoint without extra message-footer actio
     await review.click();
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
     expect(sent.some((message) => message.type === 'changesGetState' && message.sha === 'abc1234')).toBe(true);
+    await expect(page.locator('.changes-pane')).toBeVisible();
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(review).toBeHidden();
     await expect(page.locator('.changes-pane')).toBeVisible();
 });
 

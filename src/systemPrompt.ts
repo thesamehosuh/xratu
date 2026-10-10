@@ -131,6 +131,15 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
             "finalizing the plan - never ask a multiple-choice question in prose - then fold the answer " +
             "into the plan.",
         );
+    } else {
+        parts.push(
+            "",
+            "BUILD MODE: this turn permits workspace edits and command execution through the available tools. " +
+            "Carry out the user's requested implementation and verify it. Tool approvals are handled by the host; " +
+            "request the tool call and wait for approval when required. Do not assume a read-only sandbox or " +
+            "claim edits are unavailable unless the current project rules or a tool actually impose that restriction. " +
+            "Any read-only instruction from an earlier plan turn does not apply to this turn.",
+        );
     }
     if (inputs.rulesContext) {
         parts.push("", "Project Rules (from AGENTS.md):", inputs.rulesContext);

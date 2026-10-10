@@ -35,7 +35,10 @@ runtime. Everything runs inside the extension host, on your machine.
   composer. Finished tool calls fold into optional steps; Activity keeps the
   full outputs. Review checkpoint diffs inline, mark files reviewed, and add
   feedback to your draft before sending. Wide panels show Changes alongside
-  the conversation.
+  the conversation by default. Drag Activity or Changes between the main
+  tabs and sidebar, or use the tab menu. Placement and sidebar width are
+  remembered; narrow windows keep every view in the main tabs. Drag the
+  divider or use its arrow keys to resize.
 - **Sidebar pages** - providers, MCP servers, marketplace, skills, agent
   files, usage, proxy, and settings stay one click away. Setup opens in a
   focused side panel; Iranian providers remain visible. Drafts survive page

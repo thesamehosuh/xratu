@@ -144,6 +144,10 @@ mounted across page changes so drafts and scroll positions survive.
   SHAs; reject stale replies after a session/checkpoint switch. The host's
   `src/workSurface.ts` guards membership, paths, and bounded file reads.
   File notes and reviewed marks belong to their file/checkpoint.
+- `dockLayout.ts` owns panel placement; `SurfaceTabs` supplies drag/drop and
+  keyboard movement. Keep opened panel nodes mounted when moving them.
+  Conversation stays in the main area; narrow windows expose every panel as
+  a main tab. Saved placement must not bypass checkpoint/session guards.
 - User bubbles stay on the physical right in both locales; their text keeps
   `dir="auto"`. The composer keeps the git footer and context-window ring.
 - Providers owns credential editing through `CredentialsPage` and

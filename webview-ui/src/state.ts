@@ -217,7 +217,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 ...s,
                 messages: s.messages.map((m) => {
                     if (m.id !== id) return m;
-                    const now = Date.now();
+                    const now = msg.timestamp ?? Date.now();
                     const steps = [...m.steps];
                     // Thinking events are cumulative WITHIN one reasoning block
                     // and RESET when the model starts a fresh block. Extend the
@@ -294,6 +294,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         text: msg.args,
                         open: true,
                         callId: msg.callId,
+                        startedAt: msg.timestamp ?? Date.now(),
                     };
                     return { ...m, steps: [...m.steps, step] };
                 }),
@@ -310,6 +311,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             const global = mapCallStep(state, msg.callId, (st) => ({
                 ...st,
                 result: tOrRaw(msg.output),
+                endedAt: msg.timestamp ?? Date.now(),
                 ...(images ? { images } : {}),
             }));
             if (global) return global;
@@ -338,7 +340,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         }
                     }
                     if (idx >= 0) {
-                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), ...(images ? { images } : {}) };
+                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), endedAt: msg.timestamp ?? Date.now(), ...(images ? { images } : {}) };
                     } else {
                         // Orphan result - render as a completed standalone row,
                         // not a call-shaped row with an empty args section.
@@ -348,6 +350,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                             tool: msg.tool,
                             text: '',
                             result: tOrRaw(msg.output),
+                            startedAt: msg.timestamp ?? Date.now(),
                             ...(images ? { images } : {}),
                         });
                     }

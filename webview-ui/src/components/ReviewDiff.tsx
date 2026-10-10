@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import type { ReviewFile } from '../types';
 import { t } from '../i18n';
+import { escapeHtml, extToLang } from '../diffText';
+import { useHighlightedCode } from '../highlight';
 
 const INLINE_LINES = 400;
 
@@ -39,7 +41,9 @@ export function reviewLines(file: ReviewFile): { rows: Array<{ kind: 'context' |
 
 export function ReviewDiff({ file }: { file: ReviewFile }) {
     const { rows, truncated } = useMemo(() => reviewLines(file), [file]);
-    return <><div className="review-diff" dir="ltr"><div className="review-hunk">{rows.map((row, index) => row.kind === 'hunk' ? <div className="diff-hunk" key={index}>{row.text}</div> : <div className={`diff-line ${row.kind}`} key={index}>
-        <span className="diff-line-no">{row.number}</span><span className="diff-sign">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '}</span><code>{row.text || ' '}</code>
+    const before = useHighlightedCode(file.before, extToLang(file.path));
+    const after = useHighlightedCode(file.after, extToLang(file.path));
+    return <><div className="review-diff pill-diff" dir="ltr"><div className="pill-diff-block">{rows.map((row, index) => row.kind === 'hunk' ? <div className="diff-hunk" key={index}>{row.text}</div> : <div className={`pill-diff-line${row.kind === 'context' ? '' : ` ${row.kind}`}`} key={index}>
+        <span className="pill-diff-mark" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}</span><span className="pill-diff-code" dangerouslySetInnerHTML={{ __html: (row.number ? (row.kind === 'add' ? after : before)[row.number - 1] : '') || escapeHtml(row.text) || '&nbsp;' }} />
     </div>)}</div></div>{truncated && <p className="review-truncated">{t('surfaceDiffTruncated')}</p>}</>;
 }

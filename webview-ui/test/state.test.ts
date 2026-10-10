@@ -52,6 +52,14 @@ ok(
 );
 ok(a.renderedHtml === '<p>ok</p>', 'renderedHtml set');
 
+// Persisted activity timestamps survive replay, rather than restarting at now.
+const replayedAt = 1_700_000_000_000;
+s = createInitialChatState();
+s = reduceChat(s, M('toolCall', { tool: 'read_file', args: '{}', callId: 'dated', timestamp: replayedAt }));
+s = reduceChat(s, M('toolResult', { tool: 'read_file', output: 'done', callId: 'dated', timestamp: replayedAt + 4000 }));
+ok(s.messages[0].steps[0].startedAt === replayedAt, 'activity keeps its persisted start timestamp');
+ok(s.messages[0].steps[0].endedAt === replayedAt + 4000, 'activity keeps its persisted result timestamp');
+
 // 4. Error without streaming
 s = createInitialChatState();
 s = reduceChat(s, M('error', { value: 'boom' }));

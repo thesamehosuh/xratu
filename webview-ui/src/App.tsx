@@ -1,10 +1,14 @@
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AgentsPage } from './components/AgentsPage';
 import { ChangesPanel } from './components/ChangesPanel';
+import { DockSidebar } from './components/DockSidebar';
+import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
+import { SURFACE_PANELS } from './dockLayout';
+import { useDockLayout } from './useDockLayout';
 import { ActivityTimeline } from './components/MessageItem';
 import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { CodeXml, List, MessageSquare, BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
+import { BookOpen, WifiOff, ChevronDown, Copy, CornerDownRight, Link, ListChecks, X } from 'lucide-react';
 import { postMessage } from './vscode';
 import type {
     ConnectionStatus as ConnStatus,
@@ -197,7 +201,12 @@ export function App() {
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
     const [taskChipOpen, setTaskChipOpen] = useState(false);
-    const [surfaceTab, setSurfaceTab] = useState<'conversation' | 'changes' | 'activity'>('conversation');
+    const dock = useDockLayout();
+    const { activate: setSurfaceTab } = dock;
+    const surfaceTab = dock.mainActive;
+    const activityVisible = dock.mainActive === 'activity' || dock.sideActive === 'activity';
+    const [activityOpened, setActivityOpened] = useState(false);
+    useEffect(() => { if (activityVisible) setActivityOpened(true); }, [activityVisible]);
     const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
     const [reviewPath, setReviewPath] = useState<string | null>(null);
     const [changeCount, setChangeCount] = useState(0);
@@ -643,6 +652,7 @@ export function App() {
             if (e.key !== 'Escape' || e.defaultPrevented) return;
             if (document.querySelector('[role="dialog"]')) return;
             if (taskChipOpen) { e.preventDefault(); setTaskChipOpen(false); return; }
+            if (gitPickerOpen) { e.preventDefault(); setGitPickerOpen(false); return; }
             const target = e.target as HTMLElement | null;
             if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
             if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop, .composer-policy-menu')) return;
@@ -658,7 +668,7 @@ export function App() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [send, backFromOverlay, taskChipOpen]);
+    }, [send, backFromOverlay, taskChipOpen, gitPickerOpen]);
 
     useEffect(() => {
         send({ type: 'webviewReady' });
@@ -986,8 +996,8 @@ export function App() {
     const handleReviewChanges = useCallback((sha: string, path?: string) => {
         setReviewPath(path ?? null);
         setActiveReviewSha(sha);
-        setSurfaceTab(window.matchMedia('(min-width: 860px)').matches ? 'conversation' : 'changes');
-    }, []);
+        setSurfaceTab('changes');
+    }, [setSurfaceTab]);
     // "Open diff in editor" on an edit step: the host resolves the exact
     // before/after (edit-time snapshot, else the tool args) and opens the
     // native VS Code diff editor.
@@ -1110,14 +1120,8 @@ export function App() {
     const refreshAgents = useCallback(() => send({ type: 'agentsGetState' }), [send]);
     const newestCheckpoint = [...chat.messages].reverse().find((message) => message.role === 'user' && message.cp)?.cp;
     useEffect(() => { setActiveReviewSha(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
-    useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId]);
-    useEffect(() => {
-        const wide = window.matchMedia('(min-width: 860px)');
-        const sync = () => { if (wide.matches) setSurfaceTab((tab) => tab === 'changes' ? 'conversation' : tab); };
-        sync();
-        wide.addEventListener('change', sync);
-        return () => wide.removeEventListener('change', sync);
-    }, []);
+    useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId, setSurfaceTab]);
+
 
     const checkpointSha = activeReviewSha ?? newestCheckpoint ?? null;
     const activeSection: SettingsSection = screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : 'settings';
@@ -1493,22 +1497,21 @@ export function App() {
             />
             <div className="workbench-body">
             <div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
-            <nav className="surface-tabs" role="tablist" aria-label={t('surfaceConversation')} onKeyDown={(event) => {
-                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-                const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')].filter((tab) => tab.getClientRects().length);
-                const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
-                const forward = event.key === (locale === 'fa' ? 'ArrowLeft' : 'ArrowRight');
-                const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (forward ? 1 : -1) + tabs.length) % tabs.length;
-                event.preventDefault(); tabs[next]?.click(); tabs[next]?.focus();
-            }}>
-                {(['conversation', 'changes', 'activity'] as const).map((tab) => {
-                    const Icon = tab === 'conversation' ? MessageSquare : tab === 'changes' ? CodeXml : List;
-                    return <button type="button" key={tab} id={`surface-tab-${tab}`} className={`surface-tab ${tab}${surfaceTab === tab ? ' active' : ''}`} role="tab" aria-selected={surfaceTab === tab} tabIndex={surfaceTab === tab ? 0 : -1} aria-controls={`surface-panel-${tab}`} onClick={() => setSurfaceTab(tab)}><Icon size={13} />{t(tab === 'conversation' ? 'surfaceConversation' : tab === 'changes' ? 'surfaceChanges' : 'surfaceActivity')}{tab === 'changes' && changeCount > 0 && <span className="tab-count" dir="ltr">{changeCount}</span>}</button>;
-                })}
-            </nav>
-            <main className={`work-surface show-${surfaceTab}`}>
+            <main className={`work-surface show-${surfaceTab}${dock.wide && dock.layout.side.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
+                onDragOver={(event) => {
+                    if (dock.wide && dock.dragging && event.dataTransfer.types.includes(PANEL_DRAG_TYPE) && (event.target as Element).closest('.panel-side,.dock-sidebar')) {
+                        event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+                    }
+                }}
+                onDrop={(event) => {
+                    if (!dock.wide || !dock.dragging || !(event.target as Element).closest('.panel-side,.dock-sidebar')) return;
+                    const panel = event.dataTransfer.getData(PANEL_DRAG_TYPE);
+                    if (panel !== dock.dragging) return;
+                    event.preventDefault(); dock.move(dock.dragging, 'side');
+                }}>
+            <SurfaceTabs location="main" panels={dock.wide ? dock.layout.main : [...SURFACE_PANELS]} active={surfaceTab} wide={dock.wide} count={changeCount} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             <div className="chat-stage">
-            <div className={`transcript-pane${surfaceTab !== 'conversation' ? ' hidden-pane' : ''}`} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
+            <div className={`transcript-pane${surfaceTab !== 'conversation' ? ' hidden-pane' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
 
             <div className="chat-area">
                 <MessageList
@@ -1553,8 +1556,10 @@ export function App() {
                 )}
             </div>
             </div>
-            {surfaceTab === 'activity' && <div className="activity-pane" id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity"><h2>{t('surfaceActivity')}</h2><ActivityTimeline messages={chat.messages} busy={chat.busy} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} onOpenDiff={handleOpenDiff} onBackgroundTerminal={handleBackgroundTerminal} onKillBackground={handleKillBackground} taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} /></div>}
             </div>
+            {(activityVisible || activityOpened) && <div className={`activity-pane ${dock.position('activity')}`} id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity" aria-hidden={dock.mainActive !== 'activity' && dock.sideActive !== 'activity' || undefined}>
+                <ActivityTimeline messages={chat.messages} busy={chat.busy} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} onOpenDiff={handleOpenDiff} onBackgroundTerminal={handleBackgroundTerminal} onKillBackground={handleKillBackground} taskList={taskListView ? { ...taskListView, editable: taskListView.editable && !chat.busy } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />
+            </div>}
             <div className="compose-dock">
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
@@ -1765,7 +1770,10 @@ export function App() {
                 }}
             />
             </div>
-            <aside className="changes-pane" id="surface-panel-changes" aria-label={t('surfaceChanges')}><ChangesPanel sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></aside>
+            <DockSidebar active={dock.wide && dock.layout.side.length > 0} dragging={!!dock.dragging}>
+                <SurfaceTabs location="side" panels={dock.wide ? dock.layout.side : []} active={dock.sideActive} wide={dock.wide} count={changeCount} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+            </DockSidebar>
+            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
             </main>
             </div>
             {overlayOpen && <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>}

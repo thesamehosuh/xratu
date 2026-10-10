@@ -114,7 +114,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .cred-divider { font-size:10px; color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 76%); text-transform:none; letter-spacing:0; gap:8px; margin:0; }
 .cred-divider::before,.cred-divider::after { display:none; }
 .cred-page > .cred-divider { margin-block-end:-11px; }
-.cred-saved-list { gap:0; }
+.cred-saved-list { gap:8px; }
 .saved-credential,.saved-credential.active { border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 17%); background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 4%); border-radius:6px; }
 .saved-credential.active { border-color:#40564b; }
 .saved-credential-main { padding:10px; gap:9px; }
@@ -137,7 +137,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .cred-form-provider { font-size:10px; }
 .cred-field > span { font-size:10px; }
 .cred-oauth-row { background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 7%); border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 18%); border-radius:6px; padding:10px; }
-.cred-oauth-name { font-size:11px; }
+.cred-oauth-name { display:inline-flex; align-items:center; min-height:25px; font:550 11px/1.4 'Vazirmatn',var(--vscode-font-family,system-ui); }
 .cred-oauth-action { font-size:10px; min-height:25px; }
 .cred-oauth-action.primary-btn { background:#2a4038; color:#bedfce; border:1px solid #426456; border-radius:5px; }
 .provider-comparison summary { font-size:10px; }
@@ -189,6 +189,11 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .rate-row,.rates-form,.rate-pop { font-size:10px; }
 .rate-id { font-size:10px; }
 .route-map { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:15px 0 19px; border-block-end:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 13%); }
+.route-test-result { display:flex; align-items:center; gap:8px; padding:9px 11px; border:1px solid var(--page-line); border-radius:6px; background:var(--page-surface); color:var(--vscode-descriptionForeground); font-size:10px; line-height:1.5; }
+.route-test-result > svg { flex:none; }
+.route-test-result.ok > svg { color:var(--surface-accent); }
+.route-test-result.fail { border-color:var(--vscode-inputValidation-errorBorder,var(--vscode-errorForeground)); }
+.route-test-result.fail > svg { color:var(--vscode-errorForeground); }
 .route-node { display:flex; flex-direction:column; align-items:center; gap:6px; color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 71%); font-size:9px; max-width:40%; text-align:center; }
 .route-node svg { width:15px; height:15px; color:#a4c8b6; }
 .route-node strong { font-size:10px; font-weight:500; color:#c7d9ce; overflow-wrap:anywhere; }

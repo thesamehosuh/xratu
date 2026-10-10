@@ -166,7 +166,7 @@ export function ProxyPage({
                     <div className="route-node"><Server size={14}/><span>{t('miniProvider')}</span></div>
                 </div>}
                 {testResult && (
-                    <div className={testResult.ok ? 'proxy-test ok' : 'proxy-test fail'} dir="auto" role="status">
+                    <div className={`route-test-result${testResult.ok ? ' ok' : ' fail'}`} dir="auto" role="status">
                         {testResult.ok ? <Check size={13} /> : <X size={13} />}
                         <span>
                             {testResult.ok ? t('proxyTestOk') : t('proxyTestFail')}

@@ -4,8 +4,9 @@ import { strict as assert } from 'node:assert';
 import { MessageItem, ActivityTimeline } from '../src/components/MessageItem';
 import { MessageList } from '../src/components/MessageList';
 import { completedCommands } from '../src/components/CompletedOutcome';
-import { reviewLines } from '../src/components/ReviewDiff';
+import { ReviewDiff, reviewLines } from '../src/components/ReviewDiff';
 import { setLocale } from '../src/i18n';
+import { defaultDockLayout, movePanel, readDockLayout } from '../src/dockLayout';
 import type { ChatMessage, Step } from '../src/types';
 setLocale('en');
 const call: Step = { id: 'edit', kind: 'toolCall', tool: 'apply_patch', text: JSON.stringify({path:'src/a.ts',patch:'<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE'}), result: 'Patch applied', callId: 'edit' };
@@ -23,8 +24,9 @@ assert.match(done, /Exit 1/);
 assert.doesNotMatch(done, /lucide-check/);
 const activity = renderToString(createElement(ActivityTimeline, {messages:[message]}));
 assert.match(activity, /class="pill-diff"/);
-assert.match(activity, /Before tools/);
-assert.match(activity, /Final answer/);
+assert.doesNotMatch(activity, /Before tools/);
+assert.doesNotMatch(activity, /Final answer/);
+assert.match(activity, /class="activity-age"/);
 assert.doesNotMatch(activity, /completed-steps/);
 assert.doesNotMatch(render({...message,status:'streaming'}), /completed-steps/);
 assert.doesNotMatch(render({...message,approval:{approval_id:'ap',approvals:[{tool_call_id:'call',tool_name:'write_file',args:{path:'a',content:'b'}}]}}), /completed-steps/);
@@ -44,4 +46,26 @@ const contexts=reviewLines({path:'a',kind:'text',before:'a\nb\nc\nd\ne\nf',after
 assert.equal(contexts.rows.filter(row=>row.text==='c').length,1);
 assert.equal(contexts.rows.filter(row=>row.text==='d').length,1);
 assert.equal(contexts.truncated,false);
+const unsafeCode = '<img src=x onerror="alert(1)">';
+const safeDiff = renderToString(createElement(ReviewDiff, {file: {path:'unsafe.txt',kind:'text',before:'',after:unsafeCode,hunks:[{oldStart:1,oldCount:0,newStart:1,newCount:1,removedLines:[],addedLines:[unsafeCode]}]}}));
+assert.doesNotMatch(safeDiff, /<img/);
+assert.match(safeDiff, /&lt;img/);
 console.log('work-surface render: completed logs, retained activity, approvals, jobs, real exits, checkpoint ownership, and bounded diffs passed');
+
+// Corrupt saved layouts cannot hide a panel or move the pinned conversation.
+for (const saved of [null, {}, {version: 2}, {version: 1, main: ['activity'], side: ['conversation', 'changes']}, {version: 1, main: ['conversation', 'activity'], side: ['activity']}, {version: 1, main: ['conversation', 'unknown'], side: ['changes']}]) {
+    assert.deepEqual(readDockLayout(saved), defaultDockLayout());
+}
+let layout = movePanel(defaultDockLayout(), 'activity', 'side');
+assert.deepEqual(layout.main, ['conversation']);
+assert.deepEqual(layout.side, ['changes', 'activity']);
+assert.equal(layout.sideActive, 'activity');
+layout = movePanel(layout, 'changes', 'main');
+assert.equal(layout.mainActive, 'changes');
+layout = movePanel(layout, 'activity', 'main');
+assert.equal(layout.sideActive, null);
+assert.deepEqual(layout.side, []);
+assert.deepEqual(readDockLayout(layout), layout);
+assert.equal(movePanel(layout, 'conversation', 'side'), layout);
+assert.equal(movePanel(layout, 'changes', 'main'), layout);
+assert.equal(readDockLayout({...layout, mainActive: 'unknown'}).mainActive, 'conversation');

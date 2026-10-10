@@ -25,7 +25,7 @@ const openReview = async (page: Page) => {
     await post(page, { type: 'restoreUser', value: 'Fix this', cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
-    await page.locator('#surface-tab-changes').click();
+    if (await page.locator('#surface-tab-changes').isVisible()) await page.locator('#surface-tab-changes').click();
     await replyFile(page);
     await expect(page.locator('.review-diff')).toBeVisible();
 };
@@ -35,13 +35,48 @@ test.beforeEach(async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
         const messages: unknown[] = [];
-        Object.assign(window, { __xratuHostMessages: messages, acquireVsCodeApi: () => ({ postMessage: (m: unknown) => messages.push(m), getState: () => undefined, setState: (s: unknown) => s }) });
+        const state = window as unknown as { __xratuUiState?: unknown };
+        Object.assign(window, { __xratuHostMessages: messages, acquireVsCodeApi: () => ({ postMessage: (m: unknown) => messages.push(m), getState: () => state.__xratuUiState, setState: (s: unknown) => { state.__xratuUiState = s; return s; } }) });
     });
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
 });
+
+for (const locale of ['en', 'fa']) {
+    test(`review sidebar resizes by pointer and keyboard, preserves other state and survives reload (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 900, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await page.locator('.composer-input').fill('Keep my draft');
+        await page.evaluate(() => Object.assign(window, { __xratuUiState: { anotherPreference: 'preserved' } }));
+        const handle = page.locator('.review-resize');
+        const box = await handle.boundingBox();
+        expect(box).not.toBeNull();
+        const x = box!.x + box!.width / 2;
+        await page.mouse.move(x, box!.y + 80);
+        await page.mouse.down();
+        await page.mouse.move(x + (locale === 'fa' ? 120 : -120), box!.y + 80, { steps: 8 });
+        await page.mouse.up();
+        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+        const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: Record<string, unknown> }).__xratuUiState);
+        expect(saved).toEqual({ anotherPreference: 'preserved', reviewSidebarWidth: 470 });
+        await handle.focus();
+        await page.keyboard.press('Home');
+        await expect(handle).toHaveAttribute('aria-valuenow', '260');
+        await page.keyboard.press('End');
+        await expect(handle).toHaveAttribute('aria-valuenow', '540');
+        await page.setViewportSize({ width: 420, height: 900 });
+        await expect(handle).toBeHidden();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await expect(handle).toHaveAttribute('aria-valuenow', '540');
+        await page.addInitScript((state) => Object.assign(window, { __xratuUiState: state }), saved);
+        await page.reload();
+        await post(page, { type: 'showChat' });
+        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+    });
+}
 
 for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
     test(`user bubbles remain on the right with independent text direction (${locale}, ${width})`, async ({ page }) => {
@@ -161,9 +196,100 @@ test('reviewed status expires when file content changes; the native diff gets th
     await page.locator('.review-head').getByRole('button', { name: 'Refresh' }).click();
     const request = await latest(page, 'changesGetState', previousList.requestId);
     await post(page, { ...request, type: 'changesState', files: changes });
+    await latest(page, 'changeFileGet', previousFile.requestId);
+    await expect(page.locator('.review-diff')).toBeVisible();
+    await expect(page.locator('.review-diff')).toContainText('new');
     await replyFile(page, 'changed again', previousFile.requestId);
+    await expect(page.locator('.review-diff')).toContainText('changed again');
     await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toBeVisible();
 });
+
+for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
+    test(`review code wraps long tokens without horizontal scrolling (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        const previousList = await latest(page, 'changesGetState');
+        const previousFile = await latest(page, 'changeFileGet');
+        await page.locator('.review-head button').click();
+        const request = await latest(page, 'changesGetState', previousList.requestId);
+        await post(page, { ...request, type: 'changesState', files: changes });
+        const longCode = `const url = "https://example.com/${'segment'.repeat(150)}";`;
+        await replyFile(page, longCode, previousFile.requestId);
+        const added = page.locator('.review-diff .pill-diff-line.add');
+        await expect(added).toContainText(longCode);
+        await expect.poll(() => added.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(40);
+        const overflow = await page.locator('.review-diff').evaluate((el) => ({ extra: el.scrollWidth - el.clientWidth, x: getComputedStyle(el).overflowX }));
+        expect(overflow.extra).toBeLessThanOrEqual(1);
+        expect(overflow.x).toBe('hidden');
+    });
+}
+
+test('Activity keeps tool output, omits answer prose and updates persisted event ages', async ({ page }) => {
+    const now = new Date('2026-10-10T12:00:00Z');
+    await page.clock.install({ time: now });
+    await post(page, { type: 'startResponse' });
+    await post(page, { type: 'chunk', value: 'Answer introduction' });
+    await post(page, { type: 'toolCall', tool: 'read_file', args: '{"path":"src/a.ts"}', callId: 'age', timestamp: now.getTime() - 120_000 });
+    await post(page, { type: 'toolResult', tool: 'read_file', output: 'Retained tool output', callId: 'age', timestamp: now.getTime() - 119_000 });
+    await post(page, { type: 'chunk', value: 'Answer conclusion' });
+    await post(page, { type: 'fullResponse', persian: 'Answer conclusion' });
+    await page.getByRole('tab', { name: 'Activity', exact: true }).click();
+    await expect(page.locator('.activity-timeline')).not.toContainText('Answer introduction');
+    await expect(page.locator('.activity-timeline')).not.toContainText('Answer conclusion');
+    await expect(page.locator('.activity-age')).toContainText('2 minutes ago');
+    const detail = page.locator('.activity-timeline details.step');
+    if (!await detail.evaluate((el) => (el as HTMLDetailsElement).open)) await detail.locator('summary').click();
+    await expect(page.locator('.activity-timeline')).toContainText('Retained tool output');
+    await page.clock.fastForward(60_000);
+    await expect(page.locator('.activity-age')).toContainText('3 minutes ago');
+});
+
+test('agent loading stays compact while profile discovery is pending', async ({ page }) => {
+    await post(page, { type: 'openSettings' });
+    await page.locator('.sidebar-item').nth(4).click();
+    const loading = page.locator('.agent-loading');
+    await expect(loading).toBeVisible();
+    const dimensions = await loading.locator('svg').boundingBox();
+    expect(dimensions?.width).toBe(12);
+    expect(dimensions?.height).toBe(12);
+    await post(page, { type: 'agentsState', profiles: [] });
+    await expect(loading).toHaveCount(0);
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
+    test(`composer menus stay inside the viewport and Escape preserves a running turn (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 640 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'modelInfo', defaultModel: 'coder', selectedModel: 'coder', models: ['coder', 'another-coder'], contextWindows: { coder: 32768 } });
+        await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+        await post(page, { type: 'gitBranchesState', branches: ['main', `feat/${'long-branch-name'.repeat(20)}`] });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'toolCall', tool: 'update_task_list', args: '{"tasks":[{"id":"one","label":"Current task","status":"in_progress"}]}', callId: 'tasks' });
+        await post(page, { type: 'toolResult', tool: 'update_task_list', output: 'Task list updated', callId: 'tasks' });
+        await post(page, { type: 'taskListState', tasks: [{ id: 'one', label: 'Current task', status: 'in_progress' }] });
+        for (const [trigger, selector] of [
+            ['.picker-chip', '.model-pop'], ['.tok-meter', '.ctx-menu'], ['[data-policy=mode]', '.composer-policy-menu'],
+            ['[data-policy=approval]', '.composer-policy-menu'], ['.attach-btn', '.attach-menu'], ['.task-list-chip', '.task-list-chip-menu'], ['.git-status', '.branch-pop'],
+        ]) {
+            await page.locator(trigger).click();
+            const menu = page.locator(selector);
+            await expect(menu).toBeVisible();
+            const box = await menu.boundingBox();
+            expect(box!.x).toBeGreaterThanOrEqual(0);
+            expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+            expect(box!.y).toBeGreaterThanOrEqual(0);
+            expect(box!.y + box!.height).toBeLessThanOrEqual(641);
+            expect(await menu.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+            await page.locator('.composer-input').focus();
+            await page.keyboard.press('Escape');
+            await expect(menu).toHaveCount(0);
+            expect((await sent(page)).some((m) => m.type === 'cancelRequest'), `Escape from ${selector} must only close the menu`).toBe(false);
+        }
+        expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
+        await expect(page.locator('.send-btn.is-stop')).toBeVisible();
+    });
+}
 
 test('background jobs stay controllable from all three surfaces', async ({ page }) => {
     await post(page, { type: 'backgroundJobs', jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }] });
@@ -251,3 +377,103 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.composer-input')).toBeVisible();
     });
 }
+
+for (const locale of ['en', 'fa']) {
+    test(`panels dock by drag, retain review state and drafts, and restore their placement (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        await page.locator('.composer-input').fill('A draft that survives docking');
+        await page.locator('.review-input').fill('Keep this review note');
+        await page.locator('.review-footer button').last().click();
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('.dock-tabs.main #surface-tab-activity')).toHaveCount(0);
+        await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
+        await page.locator('.dock-tabs.side #surface-tab-changes').click();
+        await expect(page.locator('.review-input')).toHaveValue('Keep this review note');
+        await expect(page.locator('.review-footer button').last()).toHaveClass(/reviewed/);
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+        await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.review-input')).toHaveValue('Keep this review note');
+        await expect(page.locator('.review-footer button').last()).toHaveClass(/reviewed/);
+        await expect(page.locator('.composer-input')).toHaveValue('A draft that survives docking');
+        // Moving the last sidebar panel removes its column.
+        await page.locator('.dock-tabs.side #surface-tab-activity').dragTo(page.locator('.dock-tabs.main'));
+        await expect(page.locator('.work-surface')).not.toHaveClass(/has-sidebar/);
+        await page.locator('#surface-tab-conversation').click();
+        const stage = await page.locator('.chat-stage').boundingBox();
+        expect(stage!.width).toBeGreaterThan(1000);
+        // An empty sidebar is still a drop destination during the next drag.
+        const source = await page.locator('#surface-tab-activity').boundingBox();
+        await page.mouse.move(source!.x + source!.width / 2, source!.y + 20);
+        await page.mouse.down();
+        await page.mouse.move(source!.x + source!.width / 2 + 15, source!.y + 20, { steps: 3 });
+        await expect(page.locator('.dock-sidebar.drag-target')).toBeVisible();
+        const destination = await page.locator('.dock-sidebar.drag-target').boundingBox();
+        await page.mouse.move(destination!.x + 80, destination!.y + 120, { steps: 8 });
+        await page.mouse.up();
+        await expect(page.locator('.work-surface')).toHaveClass(/has-sidebar/);
+        const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
+        await page.addInitScript((value) => Object.assign(window, { __xratuUiState: value }), saved);
+        await page.reload();
+        await post(page, { type: 'showChat' });
+        await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toBeVisible();
+        await expect(page.locator('.dock-tabs.main #surface-tab-changes')).toBeVisible();
+        await page.setViewportSize({ width: 420, height: 900 });
+        await expect(page.locator('.dock-sidebar')).toBeHidden();
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(3);
+        await page.locator('#surface-tab-activity').click();
+        await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
+    });
+
+    test(`panel placement is keyboard accessible, resettable and keeps hidden controls unfocusable (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await page.locator('#surface-tab-activity').focus();
+        await page.keyboard.press('Shift+F10');
+        await expect(page.locator('.dock-layout-menu')).toBeVisible();
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toBeFocused();
+        await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
+        await page.locator('.dock-tabs.side .dock-layout-button').click();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.dock-layout-menu')).toHaveCount(0);
+        await expect(page.locator('.dock-tabs.side .dock-layout-button')).toBeFocused();
+        await page.locator('.dock-tabs.side .dock-layout-button').click();
+        await page.keyboard.press('End');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.dock-tabs.main #surface-tab-activity')).toBeVisible();
+        await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toBeVisible();
+        await expect(page.locator('#surface-tab-conversation')).toBeFocused();
+        await expect(page.locator('.activity-pane')).toBeHidden();
+        await expect(page.locator('.work-surface')).toHaveClass(/review-visible/);
+    });
+}
+
+test('side-by-side Activity keeps live task controls unique and review opens the current dock', async ({ page }) => {
+    await page.setViewportSize({ width: 1080, height: 900 });
+    await post(page, { type: 'restoreUser', value: 'Implement this', cp: sha });
+    await post(page, { type: 'startResponse' });
+    await post(page, { type: 'toolCall', tool: 'update_task_list', args: '{"tasks":[{"id":"one","label":"Current task","status":"in_progress"}]}', callId: 'tasks' });
+    await post(page, { type: 'toolResult', tool: 'update_task_list', output: 'Task list updated', callId: 'tasks' });
+    await post(page, { type: 'taskListState', tasks: [{ id: 'one', label: 'Current task', status: 'in_progress' }] });
+    await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+    await expect(page.locator('.task-list-inline')).toHaveCount(2);
+    expect(await page.locator('[id]').evaluateAll((nodes) => {
+        const ids = nodes.map((node) => node.id);
+        return ids.filter((id, index) => ids.indexOf(id) !== index);
+    })).toEqual([]);
+    await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+    await expect(page.locator('.outcome-review')).toBeVisible();
+    await page.locator('.outcome-review').click();
+    await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.outcome-review')).toBeHidden();
+    await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+    await page.locator('#surface-tab-conversation').click();
+    await page.locator('.outcome-review').click();
+    await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
+    await expect(page.locator('#surface-tab-changes')).toHaveAttribute('aria-selected', 'true');
+});

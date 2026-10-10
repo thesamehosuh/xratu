@@ -22,11 +22,11 @@ export function PageSidebar({ current, onSelect, onBack }: {
     const Back = getLocale() === 'fa' ? ArrowRight : ArrowLeft;
     return (
         <nav className="page-sidebar" aria-label={t('settingsTitle')}>
-            <button type="button" className="sidebar-back" onClick={onBack}><Back size={12} />{t('surfaceBack')}</button>
+            <button type="button" className="sidebar-back" onClick={onBack}><Back size={15} />{t('surfaceBack')}</button>
             {SECTIONS.map(({ id, label, icon: Icon }) => (
                 <button type="button" key={id} className={`sidebar-item${current === id ? ' active' : ''}`}
                     aria-current={current === id ? 'page' : undefined} onClick={() => onSelect(id)}>
-                    <Icon size={12} /><span>{t(label)}</span>
+                    <Icon size={15} /><span>{t(label)}</span>
                 </button>
             ))}
         </nav>

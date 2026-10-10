@@ -578,7 +578,7 @@ export function InputBar({
             setPickerOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setPickerOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setPickerOpen(false); pickerRef.current?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);
@@ -599,7 +599,7 @@ export function InputBar({
             setAttachMenuOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setAttachMenuOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setAttachMenuOpen(false); attachBtnRef.current?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);
@@ -788,6 +788,15 @@ export function InputBar({
     };
 
     const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Escape' && (pickerOpen || ctxOpen || attachMenuOpen || policyOpen)) {
+            e.preventDefault();
+            if (pickerOpen) { setPickerOpen(false); pickerRef.current?.focus(); }
+            if (ctxOpen) { setCtxOpen(false); ctxWrapRef.current?.querySelector('button')?.focus(); }
+            if (attachMenuOpen) { setAttachMenuOpen(false); attachBtnRef.current?.focus(); }
+            if (policyOpen) { setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus(); }
+            return;
+        }
+        if (e.key === 'Escape' && (branchPicker || document.querySelector('.task-list-chip-menu'))) return;
         // Mention popup owns navigation keys while open - Enter/Tab pick,
         // arrows move, Escape closes; everything else keeps typing.
         if (mention && mentionFiles.length > 0) {
@@ -861,7 +870,7 @@ export function InputBar({
             setCtxOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setCtxOpen(false);
+            if (e.key === 'Escape') { e.preventDefault(); setCtxOpen(false); ctxWrapRef.current?.querySelector('button')?.focus(); }
         };
         document.addEventListener('mousedown', onDocClick);
         document.addEventListener('keydown', onKey);

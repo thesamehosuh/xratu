@@ -20,6 +20,7 @@ export function ChangesPanel({ sha, initialPath, busy, sessionKey, onFeedback, o
     const fileTimer = useRef<number>();
     const listRequest = useRef('');
     const fileRequest = useRef('');
+    const loadedFile = useRef<ReviewFile | null>(null);
     const [files, setFiles] = useState<ReviewChange[]>([]);
     const [selected, setSelected] = useState<string | null>(null);
     const [file, setFile] = useState<ReviewFile | null>(null);
@@ -49,6 +50,7 @@ export function ChangesPanel({ sha, initialPath, busy, sessionKey, onFeedback, o
             } else if (message.type === 'changeFileState' && message.requestId === fileRequest.current) {
                 window.clearTimeout(fileTimer.current);
                 setFileLoading(false);
+                loadedFile.current = message.file ?? null;
                 setFile(message.file ?? null);
                 setFileError(message.errorKey ?? null);
             }
@@ -59,6 +61,7 @@ export function ChangesPanel({ sha, initialPath, busy, sessionKey, onFeedback, o
 
     useEffect(() => {
         setReviewed(new Map()); setComments(new Map()); setFiles([]); setSelected(null); setFile(null);
+        loadedFile.current = null;
         listRequest.current = ''; fileRequest.current = '';
         setVisibleFiles(80);
         onCount(0); onFiles([]);
@@ -77,9 +80,10 @@ export function ChangesPanel({ sha, initialPath, busy, sessionKey, onFeedback, o
 
     useEffect(() => {
         fileRequest.current = `${id}-file-${++sequence.current}`;
-        setFile(null); setFileError(null);
+        const retained = loadedFile.current?.path === selected ? loadedFile.current : null;
+        setFile(retained); setFileError(null);
         if (!sha || !selected) { setFileLoading(false); return; }
-        setFileLoading(true);
+        setFileLoading(!retained);
         postMessage({ type: 'changeFileGet', sha, path: selected, requestId: fileRequest.current });
         fileTimer.current = window.setTimeout(() => { setFileLoading(false); setFileError('surfaceChangesFailed'); }, 45_000);
         return () => window.clearTimeout(fileTimer.current);

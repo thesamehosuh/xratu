@@ -1,7 +1,7 @@
 import { ToolImages } from './ToolImages';
 import { CompletedOutcome } from './CompletedOutcome';
 import { CompactSteps } from './CompactSteps';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** useLayoutEffect, but SSR-safe (the render test server-renders components;
  *  the real webview is client-only). */
@@ -36,7 +36,7 @@ import { useHighlightedCode } from '../highlight';
 import { toolIcon, toolLabel } from '../toolMeta';
 import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
-import { formatFullTimestamp, formatMessageTimestamp } from '../datetime';
+import { formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
 import { formatCost } from '../cost';
 import { prefOn, toolFamily, type TranscriptPrefs } from '../transcriptPrefs';
 
@@ -1794,6 +1794,7 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
 }
 
 function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind: 'taskList' }>; view?: TaskListView; streaming: boolean; prefs?: TranscriptPrefs }) {
+    const instanceId = useId();
     const isCurrent = !!view && view.stepId === row.step.id;
     const tasks = isCurrent ? view!.tasks : parseTaskListStep(row.step.text);
 
@@ -1810,7 +1811,7 @@ function TaskListRow({ row, view, streaming, prefs }: { row: Extract<Row, { kind
     // icon + progress + spinner head, then the editor, directly on the
     // bubble background. No expand/collapse at all.
     return (
-        <div className="task-list-inline" id={isCurrent ? 'xratu-task-list' : undefined}>
+        <div className="task-list-inline" id={isCurrent ? `xratu-task-list-${instanceId}` : undefined}>
             <div className="task-list-inline-head">
                 <ListChecks size={13} className="step-icon" />
                 {/* No success tick here either, for the same reason as the
@@ -2143,7 +2144,13 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
 
-    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length), [steps, message.decisions, activityOnly]);
+    const rows = useMemo(() => buildRows(steps, !!message.decisions?.length).filter((row) => !activityOnly || row.kind !== 'text'), [steps, message.decisions, activityOnly]);
+    const [activityNow, setActivityNow] = useState(Date.now);
+    useEffect(() => {
+        if (!activityOnly) return;
+        const timer = window.setInterval(() => setActivityNow(Date.now()), 30_000);
+        return () => window.clearInterval(timer);
+    }, [activityOnly]);
 
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
@@ -2191,6 +2198,7 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
         const bare = !!message.decisions?.length && !message.approval;
         return (
             <article className={bare ? 'decision-holder' : bubbleClass} dir="auto">
+                {activityOnly && <time className="activity-age" dateTime={new Date(message.createdAt).toISOString()} title={formatFullTimestamp(message.createdAt)} dir="auto">{formatRelativeTime(message.createdAt, activityNow)}</time>}
                 {message.approval && <ApprovalCard payload={message.approval} onDecide={onApprovalDecision} />}
                 <DecisionStack decisions={message.decisions ?? []} onDecide={onDecisionResponse} />
             </article>
@@ -2213,8 +2221,8 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
             {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
             {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
-                    {rows.map((row) =>
-                        row.kind === 'toolGroup' ? (
+                    {rows.map((row) => {
+                        const content = row.kind === 'toolGroup' ? (
                             <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} />
                         ) : row.kind === 'text' ? (
                             <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent} />
@@ -2224,8 +2232,11 @@ function MessageItemImpl({ activityOnly = false, reviewSha, reviewFiles, onAskRe
                             <DecisionRecords key={row.key} steps={row.steps} />
                         ) : (
                             <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={onBackgroundTerminal} onKillBackground={onKillBackground} prefs={transcriptPrefs} />
-                        )
-                    )}
+                        );
+                        if (!activityOnly) return content;
+                        const timestamp = (row.kind === 'toolGroup' ? row.calls[0]?.call : row.kind === 'tool' ? row.call : row.kind === 'thinking' || row.kind === 'taskList' ? row.step : row.kind === 'decision' || row.kind === 'text' ? row.steps[0] : undefined)?.startedAt ?? message.createdAt;
+                        return <div className="activity-entry" key={row.key}><time className="activity-age" dateTime={new Date(timestamp).toISOString()} title={formatFullTimestamp(timestamp)} dir="auto">{formatRelativeTime(timestamp, activityNow)}</time>{content}</div>;
+                    })}
                     {showWorking && (
                         <div className="working-row" aria-label={t('working')}>
                             <span className="step-status spinner" aria-hidden="true" />

@@ -45,6 +45,14 @@ export function formatFullTimestamp(ts: number): string {
     return `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
 }
 
+/** Relative activity age; the exact timestamp remains in the tooltip. */
+export function formatRelativeTime(ts: number, now = Date.now()): string {
+    const seconds = Math.max(0, Math.floor((now - ts) / 1000));
+    const unit = seconds < 60 ? 'second' : seconds < 3600 ? 'minute' : seconds < 86400 ? 'hour' : 'day';
+    const value = unit === 'second' ? 0 : Math.floor(seconds / (unit === 'minute' ? 60 : unit === 'hour' ? 3600 : 86400));
+    return new Intl.RelativeTimeFormat(getLocale() === 'fa' ? 'fa-IR' : 'en', { numeric: 'auto' }).format(-value, unit);
+}
+
 /** True when two instants fall on the same LOCAL calendar day. */
 export function isSameLocalDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear()

@@ -483,7 +483,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  to MAX_CONTENT_CAP as it streams); `_localThinkingBlockRaw` keeps the
      *  full cumulative value the extends are matched against - a clipped
      *  string is never a prefix of the next delta. */
-    private _localThinkingBlockEvent: { type: 'thinking'; content: string } | null = null;
+    private _localThinkingBlockEvent: { type: 'thinking'; content: string; timestamp: number } | null = null;
     private _localThinkingBlockRaw: string | null = null;
     private _localCurrentUsage: LocalUsage | null = null;
     /** Sum of every non-estimated round's usage across the CURRENT turn (a
@@ -4099,12 +4099,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._localThinkingBlockEvent.content = clipHistoryContent(event.value, MAX_CONTENT_CAP);
                 } else {
                     this._localThinkingBlockRaw = event.value;
-                    this._localThinkingBlockEvent = { type: 'thinking', content: clipHistoryContent(event.value, MAX_CONTENT_CAP) };
+                    this._localThinkingBlockEvent = { type: 'thinking', content: clipHistoryContent(event.value, MAX_CONTENT_CAP), timestamp: Date.now() };
                     outcome.events.push(this._localThinkingBlockEvent);
                 }
                 this._scheduleLocalPartialPersist();
                 break;
-            case 'toolCall':
+            case 'toolCall': {
+                const timestamp = Date.now();
                 this._flushLiveSegment();
                 // A tool call closes the current reasoning block - reasoning
                 // after it belongs to a fresh block and needs its own pill.
@@ -4115,7 +4116,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // whole written file never rides the run-lifetime array - the
                 // turn-end transfer produced these exact bytes anyway.
                 // `update_task_list` stays whole (the checklist re-parses it).
-                outcome.events.push(trimDisplayEvent({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args }));
+                outcome.events.push(trimDisplayEvent({ type: 'tool_call', id: event.id, tool: event.tool, args: event.args, timestamp }));
                 this._scheduleLocalPartialPersist();
                 if (event.tool === TASK_LIST_TOOL_NAME) {
                     this._noteTaskListWrite();
@@ -4125,14 +4126,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     tool: event.tool,
                     args: JSON.stringify(event.args, null, 2),
                     callId: event.id,
+                    timestamp,
                 });
                 break;
+            }
             case 'toolResult': {
+                const timestamp = Date.now();
                 this._flushLiveSegment();
                 this._localThinkingBlockEvent = null;
                 this._localThinkingBlockRaw = null;
                 const persisted = persistedEventFromAgentEvent(event);
-                if (persisted) outcome.events.push(persisted);
+                if (persisted) outcome.events.push({ ...persisted, timestamp });
                 // Re-enforce the run-lifetime bounds (output budget, thinking
                 // ceiling, carrier budget) after every payload-bearing push.
                 boundOutcomeEvents(outcome.events);
@@ -4142,6 +4146,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     tool: event.tool,
                     output: event.output,
                     callId: event.id,
+                    timestamp,
                     // Images the tool returned (MCP screenshots etc). The
                     // webview renders them but never sends them back; the
                     // persisted row keeps metadata only (historyRows).
@@ -5287,21 +5292,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._view.webview.postMessage({ type: 'startResponse' });
                     for (const parsed of msg.events) {
                         if (parsed.type === 'thinking') {
-                            this._view.webview.postMessage({ type: 'thinking', value: parsed.content });
+                            this._view.webview.postMessage({ type: 'thinking', value: parsed.content, timestamp: parsed.timestamp });
                             this._view.webview.postMessage({ type: 'thinkingHtml', value: this._renderMarkdown(parsed.content, true) });
                         } else if (parsed.type === 'tool_call') {
                             this._view.webview.postMessage({
                                 type: 'toolCall',
                                 tool: parsed.tool,
                                 args: JSON.stringify(parsed.args, null, 2),
-                                callId: parsed.id ?? undefined
+                                callId: parsed.id ?? undefined,
+                                timestamp: parsed.timestamp,
                             });
                         } else if (parsed.type === 'tool_result') {
                             this._view.webview.postMessage({
                                 type: 'toolResult',
                                 tool: parsed.tool,
                                 output: parsed.output,
-                                callId: parsed.id ?? undefined
+                                callId: parsed.id ?? undefined,
+                                timestamp: parsed.timestamp,
                             });
                         } else if (parsed.type === 'result') {
                             this._displayAssistantResponse(parsed);
