@@ -188,7 +188,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .toolbar { padding-inline:18px; }
 .review-input { font-family:inherit; font-size:11px; background:var(--page-canvas); color:var(--vscode-input-foreground); border-radius:7px; outline:none; }
 .review-input:focus { border-color:var(--vscode-focusBorder,var(--vscode-widget-border)); }
-.review-footer .settings-ghost-action { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--page-line); border-radius:5px; padding:4px 7px; font:inherit; font-size:10px; background:var(--page-surface); color:var(--vscode-descriptionForeground); }
+.review-footer .settings-ghost-action { display:inline-flex; align-items:center; gap:5px; min-height:28px; border:1px solid var(--page-line); border-radius:5px; padding:4px 7px; font:10px/1.4 'Vazirmatn',var(--vscode-font-family,system-ui); background:var(--page-surface); color:var(--vscode-descriptionForeground); }
 .review-body > .settings-ghost-action { display:inline-flex; align-items:center; gap:5px; border:0; background:transparent; font:inherit; font-size:10px; padding:5px 0; color:var(--vscode-descriptionForeground); }
 .compact-step .step-complete { color:var(--vscode-descriptionForeground); fill:currentColor; margin-inline-start:auto; }
 .composer .send-btn > svg { width:15px; height:15px; }
