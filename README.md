@@ -89,8 +89,6 @@ runtime. Everything runs inside the extension host, on your machine.
   Liara AI, ArvanCloud AI, Navaan, and GapGPT sit in their own group in
   Settings → Providers, take rial payment, and need no VPN. Usage costs show
   in Toman on the Usage page.
-- **Fully local is fully offline** - a local runtime (Ollama, LM Studio,
-  vLLM, llama.cpp) makes the agent complete with zero network dependency.
 - **Proxy-native** - Iranian setups route through Clash/v2rayN "System
   Proxy" mode; Xratu picks it up (no TUN needed), scans for the local
   client and its ports, and routes MCP traffic per server.
@@ -119,43 +117,14 @@ the API key; the rest hand each service its own URL at signup.
 
 ### Sign in with a ChatGPT subscription
 
-Open **Providers**, choose **Add connection**, then **Continue with ChatGPT**. Xratu
-uses OpenAI's [documented open-source sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
-registers Xratu for your account and workspace, and validates the signed ID
-token before saving the connection. ChatGPT plan access must be granted during
-consent; identity sign-in alone does not enable inference.
+In **Providers**, choose **Add connection → Continue with ChatGPT** and approve
+plan access in the browser. If the callback cannot reach VS Code, paste the
+complete redirect URL from **Browser didn’t connect?**. Xratu stores the
+connection in VS Code SecretStorage. Older connections may need a fresh sign-in.
 
-Use **Copy link** to open sign-in in your preferred browser. Browser login
-starts a callback listener on `127.0.0.1`, trying another port when one is
-occupied. If the browser cannot reach the extension host (for example over SSH
-or in a container), expand **Browser didn’t connect?** and paste the
-**complete redirect URL**. It carries the state and issued client ID needed to validate a new
-registration. The documented integration currently uses browser sign-in.
-
-Each account/workspace registration has its own credentials in VS Code
-SecretStorage. Add or select accounts in Connections; signing in again reuses
-that registration's issued client ID and the host's persistent ID. Sign-out
-removes its access, refresh, and ID tokens while retaining the account/client
-mapping for a later sign-in.
-
-Model discovery and inference use the public `https://api.openai.com/v1`
-endpoints, with streaming Responses requests and `store: false`. Model names,
-ordering, context windows, and reasoning options come from the signed-in
-account's catalog. The legacy Codex public client and ChatGPT backend endpoints
-are no longer used; connections made by that earlier implementation need a
-fresh sign-in.
-
-**Usage** shows ChatGPT plan tokens recorded in Xratu over the last 30 days,
-with a per-model breakdown and **Manage usage** linking to ChatGPT settings for
-plan limits and credits. Plan requests are kept separate from API-key spend and
-are never assigned API prices, including after a rate edit.
-
-Tokens refresh five minutes early and on an authentication rejection. A
-temporary renewal failure can keep a still-valid token; a permanent rejection
-requires sign-in again. Requests and refresh waiting honor Stop and the
-configured proxy. Sign-out attempts server revocation before clearing locally;
-if revocation cannot be confirmed, Xratu reports it so you can disconnect the
-app in ChatGPT settings.
+Plan usage appears separately from API-key costs on the **Usage** page. See
+OpenAI's [sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+for details.
 
 
 ## Getting started
@@ -389,11 +358,16 @@ Ubuntu, Windows, and macOS. See [AGENTS.md](AGENTS.md) for details.
 Issues and PRs welcome. Open an issue before large changes. Conventional
 Commits, CI green, and code review required for every PR.
 
-### Local setup and connection comparison
+### Local runtimes and connection comparison
 
-Settings now includes **Offline mode** and **Explain errors**. Offline mode limits Xratu-managed HTTP requests to loopback, disables web/external MCP tools, and cancels active operations when enabled. Terminal subprocesses remain unrestricted. A persistent banner links to the bundled [offline setup and hardware guide](assets/guides/offline.en.md), which is also available from Providers and ships in the VSIX.
+Use Ollama, LM Studio, vLLM, or llama.cpp by selecting a discovered runtime in
+**Providers**. The bundled [offline and hardware guide](assets/guides/offline.en.md)
+covers setup and model sizing. **Offline mode** limits Xratu-managed requests
+to loopback services and disables web and external MCP tools. Terminal commands
+remain unrestricted.
 
-In **Providers**, expand **Manage Ollama models** for a discovered Ollama runtime on port 11434: download with progress/cancel, or delete after confirmation. Other runtimes manage weights in their own apps. The guide covers quantization, RAM/VRAM sizing and offline troubleshooting.
+For Ollama at `localhost:11434`, **Manage Ollama models** can download or
+remove models. Manage models for other runtimes in their own apps.
 
 Iranian presets link to official onboarding pages. The bundled [provider comparison](assets/guides/providers.en.md) separates verified pricing/payment information from unverified tariffs. **Compare connection latency** sends a small, opt-in request to the active model and shows first-text-token time, total time, and known rates/estimated cost. No project context is sent; requests may incur charges. Compare the same model across connections and repeat measurements instead of treating a single sample as a ranking.
 
