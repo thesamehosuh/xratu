@@ -395,6 +395,13 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
         await expect(page.locator('.composer-input')).toHaveAttribute('data-retained', 'yes');
         await expect(page.locator('.conversation-panel .msg.user')).toContainText('Keep this conversation');
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+        await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.conversation-panel .chat-stage')).toBeVisible();
+        await expect(page.locator('.conversation-panel .msg.user')).toBeVisible();
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('#surface-tab-browser').click();
         for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
         await expect(page.locator('.conversation-panel .msg.user')).toHaveCount(13);
         const transcript = page.locator('.messages');
@@ -435,6 +442,14 @@ for (const locale of ['en', 'fa']) {
         await page.keyboard.press('Escape');
         await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
         await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-browser').dragTo(page.locator('.dock-tabs.side'));
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(0);
+        await expect(page.locator('.dock-tabs.main .dock-drop-label')).toBeVisible();
+        await page.locator('#surface-tab-browser').press('Shift+F10');
+        await expect(page.locator('.dock-layout-menu [role=menuitem]').first()).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
     });
 }
 

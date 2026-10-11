@@ -157,7 +157,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .agent-paths { display:flex; flex-direction:column; gap:7px; margin-block-start:12px; font-size:12px; }
 .changes-pane { position:relative; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--page-canvas); }
 .review-resize { display:none; }
-.show-changes .chat-stage { visibility:hidden; }
 .changes-review { display:flex; flex-direction:column; min-height:0; width:100%; }
 .review-head { display:flex; align-items:center; gap:7px; min-height:44px; padding:0 18px; border-block-end:1px solid var(--page-line); flex-shrink:0; }
 .review-head > svg { color:var(--vscode-descriptionForeground); }

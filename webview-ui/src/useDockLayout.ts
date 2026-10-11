@@ -56,7 +56,7 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     const sidePanels = layout.side.filter(available);
     const allPanels = SURFACE_PANELS.filter(available);
     const wanted = wide ? layout.mainActive : narrowActive;
-    const mainActive = wide ? mainPanels.includes(wanted) ? wanted : mainPanels[0] ?? null : available(wanted) ? wanted : 'conversation';
+    const mainActive = wide ? wanted && mainPanels.includes(wanted) ? wanted : mainPanels[0] ?? null : available(narrowActive) ? narrowActive : 'conversation';
     const sideActive = wide ? layout.sideActive && available(layout.sideActive) ? layout.sideActive : sidePanels[0] ?? null : null;
     const position = (panel: SurfacePanel) => `${wide && layout.side.includes(panel) ? 'panel-side' : 'panel-main'}${mainActive !== panel && sideActive !== panel ? ' panel-hidden' : ''}`;
     return { layout, mainPanels, sidePanels, allPanels, wide, mainActive, sideActive, dragging, setDragging, activate, move, reset, position };

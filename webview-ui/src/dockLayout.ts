@@ -6,7 +6,7 @@ export interface DockLayout {
     version: 1;
     main: SurfacePanel[];
     side: SurfacePanel[];
-    mainActive: SurfacePanel;
+    mainActive: SurfacePanel | null;
     sideActive: SurfacePanel | null;
 }
 
@@ -24,7 +24,7 @@ export function readDockLayout(value: unknown): DockLayout {
     const main = [...candidate.main, ...SURFACE_PANELS.filter(panel => !all.includes(panel))];
     return {
         version: 1, main, side: [...candidate.side],
-        mainActive: main.includes(candidate.mainActive!) ? candidate.mainActive! : main[0] ?? 'conversation',
+        mainActive: main.includes(candidate.mainActive!) ? candidate.mainActive! : main[0] ?? null,
         sideActive: candidate.side.includes(candidate.sideActive!) ? candidate.sideActive! : candidate.side[0] ?? null,
     };
 }
@@ -36,7 +36,7 @@ export function movePanel(layout: DockLayout, panel: SurfacePanel, to: DockLocat
     (to === 'main' ? main : side).push(panel);
     return {
         version: 1, main, side,
-        mainActive: to === 'main' ? panel : main.includes(layout.mainActive) ? layout.mainActive : main[0] ?? 'conversation',
+        mainActive: to === 'main' ? panel : layout.mainActive && main.includes(layout.mainActive) ? layout.mainActive : main[0] ?? null,
         sideActive: to === 'side' ? panel : side.includes(layout.sideActive!) ? layout.sideActive : side[0] ?? null,
     };
 }

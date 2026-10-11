@@ -74,6 +74,7 @@ assert.equal(readDockLayout({...conversationDocked, mainActive: 'conversation'})
 let emptyMain = conversationDocked;
 for (const panel of [...emptyMain.main]) emptyMain = movePanel(emptyMain, panel, 'side');
 assert.deepEqual(emptyMain.main, []);
+assert.equal(emptyMain.mainActive, null);
 assert.deepEqual(readDockLayout(emptyMain), emptyMain);
 assert.equal(movePanel(emptyMain, 'browser', 'main').mainActive, 'browser');
 assert.equal(movePanel(layout, 'changes', 'main'), layout);
