@@ -19,6 +19,10 @@ Open-source AI coding agent for VS Code. Use free OpenCode models, bring your
 own key, or use a local runtime. Xratu's built-in agent runs inside the extension
 host; the OpenCode engine runs through its local CLI and SDK.
 
+<p align="center">
+  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, tool details, approvals, subagents, movable tabs, change review, and settings" />
+</p>
+
 ## Your keys. Your models. Your machine.
 
 - API keys live in VS Code secrets storage and go only to the endpoint you
