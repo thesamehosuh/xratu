@@ -284,8 +284,9 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
   and kill process TREES with `killTree()` (`taskkill /T /F`), never a bare
   `child.kill()`; tolerate UTF-8 BOM + CRLF when parsing user-editable files;
   no `~` expansion or POSIX-only paths.
-- **No secrets in the repo. Ever.** Model + provider credentials live in VS
-  Code secrets storage; `CredentialsPage.tsx` is the single editing surface.
+- **No secrets in the repo. Ever.** Xratu model/provider credentials live in
+  VS Code secrets storage; native credentials stay in the runtime's own
+  storage and use its SDK. `CredentialsPage.tsx` is the single editing surface.
 - **Never weaken security behaviors** without an explicit discussion in the
   PR description:
   - `webTools.ts` SSRF guards (`validatePublicUrl`), including the

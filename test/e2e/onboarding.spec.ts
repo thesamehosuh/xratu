@@ -164,6 +164,8 @@ test('native OAuth code submission ignores blank and busy input and trims the co
     await form.evaluate((element) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     expect((await messages(page)).some((message) => message.type === 'nativeOAuthCode')).toBe(false);
     await post(page, { type: 'nativeSetupState', state: nativeState });
+    await expect(input).toBeEnabled();
+    await input.fill('  test-code  ');
     await input.press('Enter');
     expect(await messages(page)).toContainEqual({ type: 'nativeOAuthCode', requestId: req.requestId, code: 'test-code' });
 });
