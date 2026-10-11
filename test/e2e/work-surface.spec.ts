@@ -396,7 +396,13 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.composer-input')).toHaveAttribute('data-retained', 'yes');
         await expect(page.locator('.conversation-panel .msg.user')).toContainText('Keep this conversation');
         for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
-        await page.locator('.messages').evaluate(el => { el.scrollTop = 150; });
+        await expect(page.locator('.conversation-panel .msg.user')).toHaveCount(13);
+        const transcript = page.locator('.messages');
+        const distanceFromTail = () => transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
+        await expect.poll(distanceFromTail).toBeLessThan(2);
+        await transcript.hover();
+        await page.mouse.wheel(0, -300);
+        await expect.poll(distanceFromTail).toBeGreaterThan(100);
         await expect(page.locator('.jump-btn')).toBeVisible();
         const scroll = await page.locator('.messages').evaluate(el => el.scrollTop);
         await page.locator('#surface-tab-changes').click();
