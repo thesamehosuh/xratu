@@ -72,11 +72,9 @@
     --xratu-bubble-user: var(--xratu-surface-inset);
     --xratu-input: var(--vscode-input-background);
 
-    /* Fenced-code surfaces - one inset step below the message. Tokenized so a
-       light theme inverts toward the FOREGROUND (a light gray inset) instead
-       of toward black. */
-    --xratu-code-bg: var(--vscode-editor-background);
-    --xratu-code-head-bg: var(--vscode-editor-background);
+    /* Code shares the suggestion cards' theme-derived inset tone. */
+    --xratu-code-bg: var(--xratu-surface-inset);
+    --xratu-code-head-bg: var(--xratu-surface-inset);
 
     /* Sub-page card tone - the composer card's exact color, kept from the
        sub-page redesign (settings/capabilities/credentials/welcome). */
@@ -191,8 +189,9 @@ body.vscode-light {
     --xratu-bubble: var(--vscode-editor-background);
     --xratu-surface-inset: var(--vscode-editor-background);
     --xratu-bubble-user: var(--xratu-surface-inset);
-    --xratu-code-bg: var(--vscode-editor-background);
-    --xratu-code-head-bg: var(--vscode-editor-background);
+
+    --xratu-code-bg: var(--xratu-surface-inset);
+    --xratu-code-head-bg: var(--xratu-surface-inset);
 
     /* Diff colours follow the light palette. Both values are the GitHub Light
        pair VS Code's own Light Modern ships for diffEditor.addedText /
@@ -229,15 +228,11 @@ body.vscode-high-contrast-light {
         --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
         --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
         --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
-        --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 72%, #000);
-        --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 84%, #000);
         --xratu-border: color-mix(in srgb, var(--vscode-widget-border) 60%, var(--xratu-accent));
     }
 
     body.vscode-light {
         --xratu-surface-inset: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
-        --xratu-code-bg: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground));
-        --xratu-code-head-bg: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground));
     }
 }
 
@@ -2547,7 +2542,7 @@ button {
     display: inline;
     padding: 1px 5px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--vscode-textBlockQuote-background, #1e1e1e) 90%, #000);
+    background: var(--xratu-code-bg);
     color: var(--vscode-foreground);
     white-space: break-spaces;
 }

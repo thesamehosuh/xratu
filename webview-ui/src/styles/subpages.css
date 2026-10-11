@@ -1,5 +1,6 @@
 /* Xratu compact workbench: inventories, direct controls, optional editors. */
-:root { --page-canvas:var(--vscode-sideBar-background); --page-surface:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 4%); --page-line:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 13%); --page-muted:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 68%); --page-ink:var(--vscode-foreground); }
+:root { --page-canvas:var(--vscode-sideBar-background); --page-surface:var(--xratu-surface-inset); --page-line:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 13%); --page-muted:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 68%); --page-ink:var(--vscode-foreground); }
+body { --page-surface:var(--xratu-surface-inset); }
 .settings-page,.cred-page { background:var(--page-canvas); color:var(--page-ink); font-size:13px; position:relative; }
 .settings-head,.cred-head { min-height:43px; height:43px; padding:0 18px; border-block-end:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 11%); gap:7px; background:var(--page-canvas); flex-shrink:0; }
 .settings-head h2,.cred-head h2 { font-size:15px; font-weight:550; letter-spacing:0; line-height:1.4; }
