@@ -76,7 +76,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             const box = JSON.parse((await controller.tool('browser-session', 'browser_evaluate', { expression: '(()=>{const r=document.querySelector("input").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()' })).output);
             const pixels = await page.locator('.browser-viewport img').boundingBox();
             await page.locator('.browser-viewport img').click({ position: { x: box.x * pixels!.width / 390, y: box.y * pixels!.width / 390 } });
-            await page.locator('.browser-keyboard').press('Control+A');
+            await page.locator('.browser-keyboard').press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
             await page.locator('.browser-keyboard').fill('Human');
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.querySelector("input").value' })).output).toBe('"Human"');
             await page.locator('.browser-keyboard').focus(); await page.locator('.browser-keyboard').press('Tab');
