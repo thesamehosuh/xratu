@@ -672,6 +672,8 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 question: msg.question,
                 options: msg.options,
                 multiSelect: msg.multiSelect,
+                minItems: msg.minItems,
+                maxItems: msg.maxItems,
                 allowCustomAnswer: msg.allowCustomAnswer,
             };
             if (state.streamingId) {

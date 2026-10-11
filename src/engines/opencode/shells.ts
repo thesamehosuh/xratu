@@ -100,7 +100,7 @@ export class NativeShellMonitor {
                 tracked.finishedRead = tracked.info.status !== 'running' && !output.truncated;
                 if (output.output) {
                     tracked.output = (tracked.output + output.output).slice(-20_000);
-                    this.emit({ jobs: this.views(), callId: tracked.callId, jobId: `opencode:${id}`, output: tracked.output, background: tracked.background, byUser: tracked.byUser });
+                    this.emit({ jobs: this.views(), callId: tracked.callId, jobId: `opencode:${id}`, output: tracked.background ? tracked.output : output.output, background: tracked.background, byUser: tracked.byUser });
                 }
             }
             this.bound();

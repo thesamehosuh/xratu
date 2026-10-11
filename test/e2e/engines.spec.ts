@@ -80,6 +80,7 @@ for (const locale of ['en', 'fa'] as const) {
             const composerBefore = (await page.locator('.composer-input').boundingBox())!;
             await post(page, { type: 'notification', id: 'compact', kind: 'warning', valueKey: 'notifBackgroundJobGone' });
             await expect(page.locator('.notif')).toBeVisible();
+            await expect(page.locator('.notif-copy')).toHaveCSS('color', 'rgb(204, 167, 0)');
             const toast = (await page.locator('.notif').boundingBox())!;
             const toolbar = (await page.locator('.toolbar').boundingBox())!;
             expect(toast.height).toBeLessThan(38);
@@ -171,11 +172,28 @@ test('OpenCode multiple-choice question returns both selections', async ({ page 
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
     await post(page, { type: 'startResponse' });
-    await post(page, { type: 'decisionRequest', decision_id: 'native-form', header: 'Options', question: 'Pick several', multiSelect: true, allowCustomAnswer: false, options: [{ label: 'First' }, { label: 'Second' }] });
+    await post(page, { type: 'decisionRequest', decision_id: 'native-form', header: 'Options', question: 'Pick several', multiSelect: true, minItems: 2, maxItems: 2, allowCustomAnswer: false, options: [{ label: 'First' }, { label: 'Second' }, { label: 'Third' }] });
     const card = page.locator('.decision-card.pending');
     await card.getByRole('button', { name: 'First', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
     await card.getByRole('button', { name: 'Second', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
+    await card.getByRole('button', { name: 'Third', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+    await card.getByRole('button', { name: 'Third', exact: true }).click();
     await expect(card.locator('.decision-other-btn')).toHaveCount(0);
     await card.getByRole('button', { name: 'Send', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'decisionResponse', decisionId: 'native-form', answer: '["First","Second"]', dismissed: undefined });
+});
+
+test('free-only selection stays explicit when the catalog only contains paid models', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    await post(page, { type: 'modelInfo', defaultModel: 'opencode/paid', selectedModel: 'opencode/paid', models: ['opencode/paid'], capabilities: { 'opencode/paid': { provider: 'opencode', free: false } } });
+    await page.locator('.picker-chip').click();
+    await expect(page.locator('.model-free-filter')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('option')).toHaveCount(0);
+    await page.locator('.model-free-filter').click();
+    await expect(page.getByRole('option')).toHaveCount(1);
+    expect((await sent(page)).some((message) => (message as { type: string }).type === 'pingFreeModel')).toBe(false);
 });

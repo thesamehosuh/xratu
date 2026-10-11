@@ -289,7 +289,7 @@ export class OpenCodeEngine implements AgentEngine {
             for (const field of form.fields) {
                 if (field.type === 'external' || field.hidden || field.when?.length) throw new EngineError('engineFormUnsupported');
                 const options = field.type === 'string' || field.type === 'multiselect' ? field.options ?? [] : [];
-                const outcome = await host.questions.ask({ header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) });
+                const outcome = await host.questions.ask({ header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', minItems: field.type === 'multiselect' ? field.minItems : undefined, maxItems: field.type === 'multiselect' ? field.maxItems : undefined, allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) });
                 signal.throwIfAborted();
                 if (outcome.kind === 'dismissed') { await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal }); return; }
                 const value = outcome.kind === 'selected' ? options.find((option) => option.label === outcome.label)?.value ?? outcome.label : outcome.text;

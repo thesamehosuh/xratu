@@ -1716,15 +1716,21 @@ function TextSegmentRow({ steps, streaming }: { steps: Step[]; streaming: boolea
  *  live card's expandable line and the reload record row. */
 export function DecisionResolvedBody({ payload }: { payload: DecisionPayload }) {
     const answer = payload.answer ?? null;
-    const pickedLabel =
-        answer !== null && payload.options.some((o) => o.label === answer) ? answer : null;
+    let answers = answer === null ? [] : [answer];
+    if (payload.multiSelect && answer !== null) {
+        try {
+            const parsed: unknown = JSON.parse(answer);
+            if (Array.isArray(parsed) && parsed.every((label) => typeof label === 'string')) answers = parsed;
+        } catch { /* preserve legacy plain-text answers */ }
+    }
+    const customAnswers = answers.filter((label) => !payload.options.some((option) => option.label === label));
     return (
         <section className="decision-card resolved" aria-label={t('decisionAnswered')}>
             <p className="decision-question" dir="auto">{payload.question}</p>
 
             <div className="decision-options" role="group" aria-label={t('decisionOptionsAria')}>
                 {payload.options.map((option) => {
-                    const selected = pickedLabel === option.label;
+                    const selected = answers.includes(option.label);
                     return (
                         <button
                             key={option.label}
@@ -1748,8 +1754,8 @@ export function DecisionResolvedBody({ payload }: { payload: DecisionPayload }) 
                 })}
             </div>
 
-            {answer !== null && !pickedLabel && (
-                <div className="decision-resolution custom" dir="auto">{answer}</div>
+            {customAnswers.length > 0 && (
+                <div className="decision-resolution custom" dir="auto">{customAnswers.join(', ')}</div>
             )}
             {answer === null && (
                 <div className="decision-resolution dismissed" dir="auto">{t('decisionDismissed')}</div>
@@ -1858,7 +1864,11 @@ function DecisionCard({
     };
 
     const title = payload.header || t('decisionHead');
-    const submitCustom = () => otherText.trim() && settle(payload.multiSelect ? JSON.stringify([...selectedLabels, otherText.trim()]) : otherText.trim());
+    const validSelection = (count: number) => count >= (payload.minItems ?? 1) && count <= (payload.maxItems ?? 100);
+    const submitCustom = () => {
+        if (!otherText.trim() || (payload.multiSelect && !validSelection(selectedLabels.length + 1))) return;
+        settle(payload.multiSelect ? JSON.stringify([...selectedLabels, otherText.trim()]) : otherText.trim());
+    };
 
     return (
         <section className="decision-card pending" aria-label={title}>
@@ -1905,7 +1915,7 @@ function DecisionCard({
                 ))}
             </div>
 
-            {payload.multiSelect && <button type="button" className="apply-btn" disabled={!selectedLabels.length || submitting} onClick={() => settle(JSON.stringify(selectedLabels))}><Check size={13} />{t('decisionSend')}</button>}
+            {payload.multiSelect && <button type="button" className="apply-btn" disabled={!validSelection(selectedLabels.length) || submitting} onClick={() => { if (validSelection(selectedLabels.length)) settle(JSON.stringify(selectedLabels)); }}><Check size={13} />{t('decisionSend')}</button>}
             {otherOpen ? (
                 <div className="decision-other-box">
                     <textarea
@@ -1929,7 +1939,7 @@ function DecisionCard({
                             type="button"
                             className="apply-btn"
                             onClick={submitCustom}
-                            disabled={!otherText.trim() || submitting}
+                            disabled={!otherText.trim() || submitting || (payload.multiSelect && !validSelection(selectedLabels.length + 1))}
                         >
                             {submitting ? <span className="step-status spinner" /> : <Check size={13} />}
                             {t('decisionSend')}

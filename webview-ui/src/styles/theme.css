@@ -5411,6 +5411,14 @@ pre.tool-cmd {
     word-break: break-word;
 }
 
+.notif-warning .notif-copy {
+    color: var(--vscode-editorWarning-foreground);
+}
+
+.notif-error .notif-copy {
+    color: var(--vscode-errorForeground);
+}
+
 .notif-actions {
     display: flex;
     align-items: center;

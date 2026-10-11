@@ -637,6 +637,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _engineInstallController?: AbortController;
     private _engineSetup: EngineSetupState = { active: 'xratu', phase: 'checking', customPath: '', installedByXratu: false, busy: false };
     private _engineCheckEpoch = 0;
+    private _engineCheck?: Promise<void>;
     private _nativeModelWindows: Record<string, number> = {};
     private _nativeTurnActive = false;
     private _openCodeEnvironmentKey = '';
@@ -645,6 +646,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _postEngineState(): void { this._view?.webview.postMessage({ type: 'enginesState', state: { ...this._engineSetup, active: this._activeEngine, busy: this._localRunActive } }); }
     async _sendEnginesState(): Promise<void> {
         if (this._engineInstallController) { this._postEngineState(); return; }
+        return this._engineCheck ??= this._checkEngine().finally(() => { this._engineCheck = undefined; });
+    }
+    private async _checkEngine(): Promise<void> {
         const epoch = ++this._engineCheckEpoch;
         const customPath = this._globalState.get<string>('xratu.enginePath.opencode') ?? '';
         this._engineSetup = { active: this._activeEngine, phase: 'checking', customPath, installedByXratu: false, busy: this._localRunActive };
@@ -666,6 +670,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const binary = value.trim();
         if (binary && !path.isAbsolute(binary)) { this._view?.webview.postMessage({ type: 'error', valueKey: 'enginePathAbsolute' }); return; }
         await this._globalState.update('xratu.enginePath.opencode', binary);
+        await this._engineCheck;
         await this._sendEnginesState();
     }
     _engineCancelInstall(): void { this._engineInstallController?.abort(); }
@@ -686,6 +691,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         } catch (error) {
             if (!controller.signal.aborted) this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineInstallFailed', detail: error instanceof Error ? error.message : String(error) };
         } finally {
+            await this._engineCheck;
             this._engineInstallController = undefined;
             if (this._engineSetup.phase === 'failed') this._postEngineState();
             else await this._sendEnginesState();
@@ -3700,6 +3706,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     question: question.question,
                     options: question.options,
                     multiSelect: question.multiSelect,
+                    minItems: question.minItems,
+                    maxItems: question.maxItems,
                     allowCustomAnswer: question.allowCustomAnswer,
                 });
             }));
@@ -3726,7 +3734,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (entry.question.multiSelect && !dismissed && trimmed) {
             try {
                 const labels: unknown = JSON.parse(trimmed);
-                if (Array.isArray(labels) && labels.length <= 100 && labels.every((label) => typeof label === 'string' && (entry.question.allowCustomAnswer !== false || entry.question.options.some((option) => option.label === label)))) {
+                if (Array.isArray(labels) && labels.length >= (entry.question.minItems ?? 1) && labels.length <= (entry.question.maxItems ?? 100) && labels.length <= 100 && labels.every((label) => typeof label === 'string' && (entry.question.allowCustomAnswer !== false || entry.question.options.some((option) => option.label === label)))) {
                     this._resolveLocalDecision(decisionId, { kind: 'custom', text: JSON.stringify(labels) });
                     return;
                 }

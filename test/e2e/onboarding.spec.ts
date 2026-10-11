@@ -144,3 +144,26 @@ test('provider settings scope lists native connections and does not switch the c
     await page.locator('.sidebar-back').click();
     await expect(page.locator('.composer-input')).toHaveValue('keep draft');
 });
+
+test('native OAuth code submission ignores blank and busy input and trims the code', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: true, busy: false } });
+    await post(page, { type: 'openCredentials' });
+    const req = await request(page, 'nativeGetState');
+    const nativeState = { requestId: req.requestId, phase: 'ready', integrations: [], servers: [], skills: [], oauth: { integrationID: 'test', url: 'https://example.test/auth', instructions: 'Enter code', mode: 'code' } };
+    await post(page, { type: 'nativeSetupState', state: nativeState });
+    const input = page.getByRole('textbox', { name: 'Sign-in code' });
+    const form = page.locator('.native-provider-form form');
+    await input.fill('   ');
+    await form.evaluate((element) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect((await messages(page)).some((message) => message.type === 'nativeOAuthCode')).toBe(false);
+    await input.fill('  test-code  ');
+    await post(page, { type: 'nativeSetupState', state: { ...nativeState, busy: true } });
+    await expect(input).toBeDisabled();
+    await form.evaluate((element) => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect((await messages(page)).some((message) => message.type === 'nativeOAuthCode')).toBe(false);
+    await post(page, { type: 'nativeSetupState', state: nativeState });
+    await input.press('Enter');
+    expect(await messages(page)).toContainEqual({ type: 'nativeOAuthCode', requestId: req.requestId, code: 'test-code' });
+});

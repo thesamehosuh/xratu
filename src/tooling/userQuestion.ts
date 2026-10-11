@@ -14,6 +14,8 @@ export interface UserQuestionOption {
 
 export interface UserQuestion {
     multiSelect?: boolean;
+    minItems?: number;
+    maxItems?: number;
     allowCustomAnswer?: boolean;
     header: string;
     question: string;

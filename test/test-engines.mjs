@@ -78,7 +78,7 @@ async function harness(mode = 'complete') {
         res.writeHead(204); res.end();
         if (req.url.includes('/permission/') && req.url.endsWith('/reply')) {
             emit('session.tool.success', { sessionID: 'native-1', id: 'call-1', content: [{ type: 'text', text: 'test' }] });
-            emit('form.created', { form: { id: 'form-1', sessionID: 'native-1', title: 'Choose', fields: [{ key: 'choices', type: 'multiselect', title: 'Which?', custom: false, options: [{ label: 'First', value: 'one' }, { label: 'Second', value: 'two' }] }] } });
+                emit('form.created', { form: { id: 'form-1', sessionID: 'native-1', title: 'Choose', fields: [{ key: 'choices', type: 'multiselect', title: 'Which?', custom: false, minItems: 2, maxItems: 2, options: [{ label: 'First', value: 'one' }, { label: 'Second', value: 'two' }] }] } });
         }
         if (req.url.includes('/form/') && req.url.endsWith('/reply')) finish();
     });
@@ -88,7 +88,7 @@ async function harness(mode = 'complete') {
     return { engine, requests, close: async () => { stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
-const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
+const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
 try {
     for (const mode of ['complete', 'plan', 'resume', 'failed', 'cancel', 'steer', 'steerCancel']) {
         const test = await harness(mode);
@@ -188,10 +188,44 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants'];
+    const names = ['_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { AbortController, AbortSignal, EngineError, classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { AbortController, AbortSignal, EngineError, path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    const checkHost = new sandbox.Host();
+    const enginePaths = new Map();
+    checkHost._globalState = { get: (key) => enginePaths.get(key), update: async (key, value) => { enginePaths.set(key, value); } };
+    checkHost._engineCheckEpoch = 0;
+    checkHost._postEngineState = () => {};
+    checkHost._engineInstallation = () => ({ managedBinary: async () => undefined });
+    const checks = [];
+    let releaseCheck;
+    sandbox.checkOpenCode = async (binary) => { checks.push(binary); return new Promise((resolve) => { releaseCheck = () => resolve('2.0.26'); }); };
+    const firstCheck = checkHost._sendEnginesState();
+    const secondCheck = checkHost._sendEnginesState();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(checks, ['opencode'], 'concurrent callers share one binary check');
+    const customBinary = join(root, 'custom-opencode');
+    const changedPath = checkHost._engineSetPath(customBinary);
+    releaseCheck();
+    await Promise.all([firstCheck, secondCheck]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(checks, ['opencode', customBinary], 'changed inputs receive a fresh check');
+    releaseCheck();
+    await changedPath;
+    assert.equal(checkHost._engineSetup.phase, 'ready');
+    assert.equal(checkHost._engineSetup.binaryPath, customBinary);
+    assert.equal(checkHost._engineCheck, undefined);
+    const decisionHost = new sandbox.Host();
+    decisionHost._localDecisionResolvers = new Map([['limited', { question: { multiSelect: true, minItems: 2, maxItems: 2, allowCustomAnswer: false, options: [{ label: 'First' }, { label: 'Second' }, { label: 'Third' }] } }]]);
+    let resolvedDecision;
+    decisionHost._resolveLocalDecision = (_id, outcome) => { resolvedDecision = outcome; };
+    decisionHost._handleToolDecision('limited', '["First"]', false);
+    decisionHost._handleToolDecision('limited', '["First","Second","Third"]', false);
+    assert.equal(resolvedDecision, undefined, 'invalid selection counts keep the decision open');
+    decisionHost._handleToolDecision('limited', '["First","Second"]', false);
+    assert.equal(resolvedDecision.text, '["First","Second"]');
+    console.log('ok concurrent engine checks, path invalidation and form selection bounds');
     const approvalHost = new sandbox.Host();
     const switchHost = new sandbox.Host();
     const state = new Map([['xratu.setupPath', 'provider']]);
@@ -349,6 +383,23 @@ try {
         assert.equal(monitor.views()[0].status, 'killed');
     } finally { monitor.dispose(); }
     console.log('ok native background output, exit codes, ownership and stop');
+    let foregroundCursor = 0;
+    const foregroundUpdates = [];
+    const foreground = new NativeShellMonitor(async () => ({ message: { list: async () => ({ data: [] }) }, shell: {
+        get: async () => ({ data: { ...info(), status: 'running' } }), list: async () => ({ data: [] }),
+        output: async () => ({ data: { output: ['first\n', 'second\n', 'third\n'][foregroundCursor++] ?? '', cursor: foregroundCursor, truncated: false } }),
+    } }), (update) => { if (update.output) foregroundUpdates.push(update); });
+    try {
+        foreground.watch('native-1', root);
+        await new Promise((resolve) => setImmediate(resolve));
+        await foreground.track('shell-1', 'native-1', 'foreground-call');
+        await foreground.refresh();
+        await foreground.refresh();
+        assert.deepEqual(foregroundUpdates.map((update) => update.output), ['first\n', 'second\n'], 'foreground reducers receive deltas without repeated output');
+        await foreground.track('shell-1', 'native-1', 'foreground-call', true);
+        await foreground.refresh();
+        assert.equal(foregroundUpdates.at(-1).output, 'first\nsecond\nthird\n', 'background reducers receive the full accumulated buffer');
+    } finally { foreground.dispose(); }
     const policy = openCodePermissions(true, true);
     assert.deepEqual(policy[0], { action: '*', resource: '*', effect: 'deny' });
     assert.ok(!policy.some((rule) => ['shell', 'edit', 'subagent', 'mcp__server__write'].includes(rule.action) && rule.effect === 'allow'));

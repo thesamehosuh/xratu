@@ -467,7 +467,7 @@ export type FromExtensionMessage =
     /** A pending decision card (the `ask_user_question` tool): the model asked
      *  the user to pick between options. Attaches to the live assistant
      *  bubble like `needsApproval`. */
-    | { type: 'decisionRequest'; decision_id: string; header: string; question: string; options: DecisionOption[]; multiSelect?: boolean; allowCustomAnswer?: boolean }
+    | { type: 'decisionRequest'; decision_id: string; header: string; question: string; options: DecisionOption[]; multiSelect?: boolean; minItems?: number; maxItems?: number; allowCustomAnswer?: boolean }
     /** The decision settled. `answer` is the picked option label, the custom
      *  answer text, or null when the card was dismissed/cancelled. */
     | { type: 'decisionResolved'; decision_id: string; answer: string | null }
@@ -873,6 +873,8 @@ export interface DecisionOption {
 
 export interface DecisionPayload {
     multiSelect?: boolean;
+    minItems?: number;
+    maxItems?: number;
     allowCustomAnswer?: boolean;
     decision_id: string;
     /** Short card header from the model; falls back to a generic label. */
