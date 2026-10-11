@@ -259,11 +259,14 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     h._modelManagementController = new AbortController();
     h._benchmarkController = new AbortController();
     h._modelManagementAction = 'delete';
+    let browserClosed = 0;
+    h._browser = { close: () => { browserClosed++; } };
     try {
         policy.setOfflineMode(false);
         const remote = policy.networkSignal('https://provider.example/v1');
         const local = policy.networkSignal('http://localhost:11434/v1', h._benchmarkController.signal);
         await h._setOfflineMode(true);
+        assert.equal(browserClosed, 1, 'offline closes existing browser connections');
         assert.equal(remote.aborted, true, 'offline policy cancels remote requests');
         assert.equal(local.aborted, false, 'offline policy preserves loopback benchmarks');
         assert.equal(h._modelManagementController.signal.aborted, false, 'local deletion remains permitted');

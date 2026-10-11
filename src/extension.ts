@@ -11,6 +11,8 @@ import { isOfflineMode, setOfflineMode, isLoopbackUrl } from './networkPolicy';
 import { manageOllamaModel } from './local/ollamaManagement';
 import { requestStreamingCompletion } from './local/wireAdapters';
 import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
+import { BrowserController } from './browserController';
+import type { BrowserCommand } from './browserTypes';
 import {
     adoptDetachedJob,
     adoptableJobRecords,
@@ -305,6 +307,40 @@ const EDIT_SNAPSHOT_MAX_ENTRIES = 60;
 const REVIEW_MAX_CHARS = 1_000_000;
 
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
+    private _browserPanelVisible = false;
+    private readonly _browser = new BrowserController({
+        emit: event => { this._view?.webview.postMessage(event); },
+        executablePath: () => vscode.workspace.getConfiguration('xratu').get<string>('browserExecutablePath', ''),
+    });
+
+    private _browserSessionId(): string {
+        // Persistence assigns a disk id without replacing the live browser.
+        return this._ephemeralSessionId ?? this._sessionId ?? (this._ephemeralSessionId = `xratu-${crypto.randomUUID()}`);
+    }
+
+    _sendBrowserState(): void {
+        this._browser.setSession(this._browserSessionId());
+        this._browser.publish();
+    }
+
+    async _browserCommand(sessionId: string, browserId: string, command: BrowserCommand): Promise<void> {
+        if (sessionId !== this._browserSessionId()) return;
+        try { await this._browser.command(sessionId, browserId, command); }
+        catch (error) {
+            if (this._browser.getState().browserId !== browserId) return;
+            this._view?.webview.postMessage({ type: 'browserActionError', sessionId, browserId, errorKey: 'browserActionFailed', detail: error instanceof Error ? error.message : String(error) });
+        }
+    }
+
+    _browserVisible(sessionId: string, browserId: string, visible: boolean): void {
+        const current = this._browser.getState();
+        if (current.sessionId !== sessionId || current.browserId !== browserId) return;
+        this._browserPanelVisible = visible;
+        void this._browser.setVisible(sessionId, browserId, visible && this._view?.visible === true).catch(() => undefined);
+    }
+
+    _browserAck(sessionId: string, browserId: string, frameId: number): void { this._browser.ack(sessionId, browserId, frameId); }
+    disposeBrowser(): void { this._browser.dispose(); }
     public static readonly viewType = 'xratu-chat-view';
     _view?: vscode.WebviewView;
     _sessionId: string | null = null;
@@ -3302,6 +3338,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _setOfflineMode(enabled: boolean): Promise<void> {
         setOfflineMode(enabled);
+        // Terminate existing remote page connections, including WebSockets.
+        if (enabled) this._browser.close();
         // Remote requests share the network-policy signal. Local work stays
         // permitted, except a pull asks Ollama to download from the network.
         if (enabled && this._modelManagementAction === 'pull') this._modelManagementController?.abort();
@@ -3758,6 +3796,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // conversation's requests to the same prompt cache. Prefer the persisted
         // session id; fall back to one stable id per live chat.
         const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
+        const browserSessionId = this._browserSessionId();
+        this._browser.setSession(browserSessionId);
 
         // One approval gate for the whole run tree: a child tool call that
         // needs consent surfaces as the same webview approval card. YOLO is
@@ -3865,7 +3905,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
                     undefined,
-                    { nested: true },
+                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode },
                 ),
                 approvalGate: localApprovalGate,
                 onObservation: (callId, trace) => {
@@ -3903,6 +3943,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ),
             subagentRunner,
             decisionGate,
+            { browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode },
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -4664,13 +4705,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._webviewSubscriptions.push(
             webviewView.onDidChangeVisibility(() => {
                 if (webviewView.visible) {
+                    const browserState = this._browser.getState();
+                    void this._browser.setVisible(browserState.sessionId, browserState.browserId, this._browserPanelVisible).catch(() => undefined);
                     this._startConnectionPolling();
                     this._pushEditorContext();
                     // Skills live on disk - rescan on every focus so the
                     // capabilities page never shows a stale list.
                     void this._sendSkillsState();
                 } else {
-                            }
+                    const state = this._browser.getState();
+                    void this._browser.setVisible(state.sessionId, state.browserId, false).catch(() => undefined);
+                }
             })
         );
 
@@ -5402,8 +5447,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Echo current session identity to the webview (toolbar title button). */
     private _pushSessionState(): void {
+        this._browser.setSession(this._browserSessionId());
         this._view?.webview.postMessage({
             type: 'sessionState',
+            browserSessionId: this._browserSessionId(),
             id: this._sessionId,
             title: this._sessionTitle,
         });
@@ -6859,6 +6906,7 @@ export function activate(context: vscode.ExtensionContext) {
     // to be dropped explicitly - VS Code disposing the subscriptions is what
     // guarantees a window reload leaves nothing posting into a dead webview.
     context.subscriptions.push({ dispose: () => provider.disposeJobEvents() });
+    context.subscriptions.push({ dispose: () => provider.disposeBrowser() });
 
     // Adopt background jobs a previous host window left running. A reload must
     // not turn the user's dev server into an unstoppable orphan - but nothing is

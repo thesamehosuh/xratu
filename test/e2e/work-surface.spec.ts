@@ -424,7 +424,7 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.dock-tabs.main #surface-tab-changes')).toBeVisible();
         await page.setViewportSize({ width: 420, height: 900 });
         await expect(page.locator('.dock-sidebar')).toBeHidden();
-        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(3);
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(4);
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
         await page.setViewportSize({ width: 1080, height: 900 });

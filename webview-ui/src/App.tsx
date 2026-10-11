@@ -1,4 +1,5 @@
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
+import { BrowserPanel } from './components/BrowserPanel';
 import { collectAgentRuns } from './subagentView';
 import { SubagentsPanel } from './components/SubagentsPanel';
 import { AgentNavigation } from './components/AgentNavigation';
@@ -218,6 +219,7 @@ export function App() {
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const [currentBrowserSessionId, setCurrentBrowserSessionId] = useState<string | null>(null);
     const [sessionsOpen, setSessionsOpen] = useState(false);
     const [sessions, setSessions] = useState<SessionMeta[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -689,6 +691,10 @@ export function App() {
         const handler = (event: MessageEvent) => {
             const msg = event.data as FromExtensionMessage;
             switch (msg.type) {
+                case 'openBrowser':
+                    setScreen('chat');
+                    setSurfaceTab('browser');
+                    break;
                 case 'connectionStatus':
                     setConn(msg.status);
                     setExtensionVersion(msg.details?.version ?? null);
@@ -706,6 +712,7 @@ export function App() {
                     break;
                 case 'sessionState':
                     setCurrentSessionId(msg.id);
+                    setCurrentBrowserSessionId(msg.browserSessionId ?? msg.id);
                     setSessionTitle(msg.title);
                     break;
                 case 'sessionList':
@@ -918,7 +925,7 @@ export function App() {
 
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [send]);
+    }, [send, setSurfaceTab]);
 
     // The git line under the composer must reflect what the agent just did, so
     // it refreshes whenever a run settles - and once on mount, for the first
@@ -1573,6 +1580,7 @@ export function App() {
             {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
+            <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
             <div className={`compose-dock${surfaceTab !== 'conversation' ? ' panel-hidden' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined}>
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
