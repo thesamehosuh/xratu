@@ -13,6 +13,7 @@ import { getLocale, t } from '../i18n';
 import { prefOn, TRANSCRIPT_ROWS, type TranscriptPrefs } from '../transcriptPrefs';
 
 interface SettingsPageProps {
+    nativeEngine?: boolean;
     onBack: () => void;
     version?: string | null;
     error?: string | null;
@@ -48,6 +49,7 @@ function PreferenceHelp({ text }: { text: string }) {
 }
 
 export function SettingsPage({
+    nativeEngine = false,
     onBack,
     version,
     error = null,
@@ -99,6 +101,7 @@ export function SettingsPage({
                     </div>
                 </section>
 
+                {nativeEngine && offline && <p className="scope-hint">{t('setupNativeOffline')}</p>}
                 <section className="settings-card">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
@@ -166,28 +169,28 @@ export function SettingsPage({
 
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
-                            <strong>{t('settingsReplyLanguage')}</strong>
+                            <strong>{t('settingsReplyLanguage')}</strong>{nativeEngine && <span className="scope-hint">{t('setupNativeReply')}</span>}
                             <PreferenceHelp text={t('settingsReplyLanguageDesc')} />
                         </div>
                         <div className="lang-choice">
                             <button
                                 type="button"
                                 className={replyLanguage === 'fa' ? 'lang-chip active' : 'lang-chip'}
-                                onClick={() => onSetReplyLanguage?.('fa')}
+                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('fa')}
                             >
                                 فارسی
                             </button>
                             <button
                                 type="button"
                                 className={replyLanguage === 'en' ? 'lang-chip active' : 'lang-chip'}
-                                onClick={() => onSetReplyLanguage?.('en')}
+                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('en')}
                             >
                                 English
                             </button>
                             <button
                                 type="button"
                                 className={replyLanguage === 'auto' ? 'lang-chip active' : 'lang-chip'}
-                                onClick={() => onSetReplyLanguage?.('auto')}
+                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('auto')}
                             >
                                 {t('settingsReplyAuto')}
                             </button>

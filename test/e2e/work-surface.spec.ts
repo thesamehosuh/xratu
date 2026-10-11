@@ -98,7 +98,7 @@ test('sidebar pages preserve drafts and Escape returns from a setup panel before
     await page.locator('.composer-input').fill('Unfinished draft');
     await post(page, { type: 'openSettings' });
     await post(page, { type: 'savedCredentials', credentials: [{ id: 'one', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true }] });
-    for (const index of [1, 2, 3, 4, 5, 6, 7, 0]) {
+    for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 0]) {
         await page.locator('.sidebar-item').nth(index).click();
         await expect(page.locator('.sidebar-item').nth(index)).toHaveAttribute('aria-current', 'page');
     }
@@ -128,7 +128,7 @@ test('preference help and usage details remain reachable without API history', a
     await help.focus();
     await expect(help).toBeFocused();
     await expect(help).toHaveAccessibleName(/.+/);
-    await page.locator('.sidebar-item').nth(5).click();
+    await page.locator('.sidebar-item').nth(6).click();
     const totals = { input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
     await post(page, { type: 'usageState', providers: [], rates: [], history: [], allTime: totals, chatgpt: { totals, models: [], hasHistory: true } });
     await expect(page.locator('.usage-plan')).toBeVisible();
@@ -249,7 +249,7 @@ test('Activity keeps tool output, omits answer prose and updates persisted event
 
 test('agent loading stays compact while profile discovery is pending', async ({ page }) => {
     await post(page, { type: 'openSettings' });
-    await page.locator('.sidebar-item').nth(4).click();
+    await page.locator('.sidebar-item').nth(5).click();
     const loading = page.locator('.agent-loading');
     await expect(loading).toBeVisible();
     const dimensions = await loading.locator('svg').boundingBox();
@@ -306,7 +306,7 @@ test('background jobs remain available when switching work surfaces', async ({ p
 
 test('agent details surface both load problems and open only the discovered profile', async ({ page }) => {
     await post(page, { type: 'openSettings' });
-    await page.locator('.sidebar-item').nth(4).click();
+    await page.locator('.sidebar-item').nth(5).click();
     await post(page, { type: 'agentsState', profiles: [{ name: 'reviewer', description: 'Review code', source: 'project-xratu', editable: true, error: 'No valid tools remain', warning: 'Dropped unknown tool Read' }] });
     await page.locator('.agent-profile').click();
     await expect(page.locator('.agent-profile-details')).toContainText('No valid tools remain');
@@ -369,7 +369,7 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'openSettings' });
         await post(page, { type: 'savedCredentials', credentials: [{ id: 'one', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true }] });
-        for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
+        for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
             await page.locator('.sidebar-item').nth(index).click();
             const overflow = await page.locator('.page-content').evaluate((el) => el.scrollWidth - el.clientWidth);
             expect(overflow).toBeLessThanOrEqual(1);
@@ -625,21 +625,26 @@ test('review diffs omit patch metadata, grow taller and stay bounded in the main
 });
 
 for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
-    test(`progress prose stays in Activity and the answer stays in chat (${locale}, segments=${segments})`, async ({ page }) => {
+    test(`progress stays in chat until completion, then folds into Activity (${locale}, segments=${segments})`, async ({ page }) => {
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
         await post(page, { type: 'restoreUser', value: 'Check authentication' });
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'chunk', value: 'I will inspect the validation path.' });
+        const chat = page.locator('.transcript-pane');
         await post(page, { type: 'toolCall', tool: 'read_file', args: '{"path":"src/auth.ts"}', callId: 'read' });
+        await expect(chat).toContainText('I will inspect the validation path.');
         await post(page, { type: 'toolResult', tool: 'read_file', output: 'source', callId: 'read' });
         await post(page, { type: 'chunk', value: 'The expiry guard needs a regression test.' });
         await post(page, { type: 'toolCall', tool: 'run_terminal_command', args: '{"command":"npm test"}', callId: 'test' });
+        await expect(chat).toContainText('I will inspect the validation path.');
+        await expect(chat).toContainText('The expiry guard needs a regression test.');
         await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'Exit code: 0\nSTDOUT:\npassed\nSTDERR:\n(empty)', callId: 'test' });
         await post(page, { type: 'chunk', value: 'Expired tokens are now rejected.' });
+        await expect(chat).toContainText('I will inspect the validation path.');
+        await expect(chat).toContainText('The expiry guard needs a regression test.');
         if (segments) await post(page, { type: 'thinking', value: 'Final reasoning bookkeeping' });
         await post(page, { type: 'fullResponse', persian: 'I will inspect the validation path.The expiry guard needs a regression test.Expired tokens are now rejected.', renderedHtml: '<p>I will inspect the validation path.</p><p>The expiry guard needs a regression test.</p><p>Expired tokens are now rejected.</p>', ...(segments ? { segmentsHtml: ['<p>I will inspect the validation path.</p>', '<p>The expiry guard needs a regression test.</p>', '<p>Expired tokens are now rejected.</p>'] } : {}) });
-        const chat = page.locator('.transcript-pane');
         await expect(chat).toContainText('Expired tokens are now rejected.');
         await expect(chat).not.toContainText('I will inspect the validation path.');
         await expect(chat).not.toContainText('The expiry guard needs a regression test.');

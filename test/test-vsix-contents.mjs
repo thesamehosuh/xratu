@@ -34,6 +34,7 @@ const ALLOWED_FILES = new Set([
     'package.nls.fa.json',
     'README.md',
     'LICENSE',
+    'THIRD_PARTY_NOTICES.txt',
 ]);
 const ALLOWED_PREFIXES = [
     'dist/',            // esbuild host bundle + built webview + pdf worker

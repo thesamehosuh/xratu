@@ -70,7 +70,7 @@
        suggestion cards and icon tiles all sit on the same dark tone. */
     --xratu-surface-inset: var(--vscode-sideBar-background);
     --xratu-bubble-user: var(--xratu-surface-inset);
-    --xratu-input: var(--vscode-input-background);
+    --xratu-input: var(--xratu-surface-inset);
 
     /* Code shares the suggestion cards' theme-derived inset tone. */
     --xratu-code-bg: var(--xratu-surface-inset);
@@ -78,7 +78,7 @@
 
     /* Sub-page card tone - the composer card's exact color, kept from the
        sub-page redesign (settings/capabilities/credentials/welcome). */
-    --xratu-surface: var(--vscode-input-background);
+    --xratu-surface: var(--xratu-surface-inset);
 
     /* Shared shell tone - toolbar, chat section and composer strip are ONE
        surface; bubbles float on it. Matches VS Code EXACTLY. */
@@ -189,6 +189,8 @@ body.vscode-light {
     --xratu-bubble: var(--vscode-editor-background);
     --xratu-surface-inset: var(--vscode-editor-background);
     --xratu-bubble-user: var(--xratu-surface-inset);
+    --xratu-input: var(--xratu-surface-inset);
+    --xratu-surface: var(--xratu-surface-inset);
 
     --xratu-code-bg: var(--xratu-surface-inset);
     --xratu-code-head-bg: var(--xratu-surface-inset);
@@ -227,7 +229,7 @@ body.vscode-high-contrast-light {
     :root {
         --xratu-bubble: color-mix(in srgb, var(--vscode-editor-background) 94%, #000);
         --xratu-surface-inset: color-mix(in srgb, var(--vscode-sideBar-background) 80%, #000);
-        --xratu-input: color-mix(in srgb, var(--vscode-input-background) 86%, #000);
+        --xratu-input: var(--xratu-surface-inset);
         --xratu-border: color-mix(in srgb, var(--vscode-widget-border) 60%, var(--xratu-accent));
     }
 
@@ -279,6 +281,7 @@ button {
    App shell
    --------------------------------------------------------------------------- */
 .app {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -1606,7 +1609,7 @@ button {
     padding: 8px 10px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 8px;
-    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground, var(--vscode-foreground));
     font-family: inherit;
     font-size: 13px;
@@ -1799,7 +1802,7 @@ button {
     padding: 0 9px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 7px;
-    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground, var(--vscode-foreground));
     font-family: inherit;
     font-size: 13px;
@@ -1817,7 +1820,7 @@ button {
     padding: 0 9px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 7px;
-    background: var(--vscode-input-background, var(--xratu-surface-inset));
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground, var(--vscode-foreground));
     font-size: 13px;
 }
@@ -2589,7 +2592,7 @@ button {
     border: 1px solid var(--vscode-widget-border);
     border-bottom-color: var(--vscode-descriptionForeground);
     border-radius: 4px;
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 0.85em;
 }
@@ -4467,6 +4470,7 @@ pre.tool-cmd {
 
 .model-search {
     flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -4537,6 +4541,19 @@ pre.tool-cmd {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.model-row { display: flex; align-items: center; min-width: 0; }
+.model-row .model-item { flex: 1; min-width: 0; }
+.model-item-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.model-provider { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 400; flex: 0 0 auto; }
+.model-free-filter { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 26px; height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: none; border-radius: 4px; padding: 0; cursor: pointer; }
+.model-free-filter:hover { background: var(--vscode-list-hoverBackground); }
+.model-free-filter.active { color: var(--xratu-accent); background: var(--xratu-accent-faint); }
+.model-free-filter:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.model-ping { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; margin-inline-end: 8px; padding: 5px 4px; border: none; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: 10px; }
+.model-ping:hover { background: var(--vscode-list-hoverBackground); }
+.model-ping.available { color: var(--xratu-accent); }
+.model-ping.rateLimited, .model-ping.failed { color: var(--vscode-editorWarning-foreground); }
+.model-ping:disabled { cursor: default; }
 
 .model-badges {
     display: inline-flex;
@@ -5016,7 +5033,7 @@ pre.tool-cmd {
     font-size: 12px;
     font-weight: 500;
     color: var(--vscode-button-secondaryForeground);
-    background: var(--vscode-button-secondaryBackground);
+    background: var(--xratu-surface-inset);
     border: 1px solid var(--vscode-widget-border);
     border-radius: var(--xratu-radius-sm);
 }
@@ -5221,6 +5238,7 @@ pre.tool-cmd {
 
 .thinking-seg {
     display: flex;
+    flex-wrap: wrap;
     gap: 2px;
     padding: 2px;
     background: var(--xratu-surface-inset);
@@ -5338,25 +5356,32 @@ pre.tool-cmd {
    Notification banner - in-app replacement for vscode.window toasts
    --------------------------------------------------------------------------- */
 .notif {
+    position: absolute;
+    z-index: 60;
+    inset-block-start: 8px;
+    inset-inline-end: 12px;
+    max-width: min(420px, calc(100% - 24px));
     display: flex;
     align-items: center;
-    gap: 9px;
-    flex-wrap: wrap;
-    margin: 0 12px 8px;
-    padding: 8px 9px;
-    border: 1px solid var(--xratu-accent-dim);
-    border-radius: var(--xratu-radius-sm);
-    background: var(--xratu-accent-faint);
+    gap: 6px;
+    padding: 5px 8px;
+    min-height: 22px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 6px;
+    background: var(--vscode-editorWidget-background);
+    box-shadow: 0 4px 12px var(--vscode-widget-shadow);
 }
 
 .notif-warning {
-    border-color: rgba(240, 173, 78, 0.4);
-    background: rgba(240, 173, 78, 0.08);
+    color: var(--vscode-editorWarning-foreground);
+}
+
+.workbench-body > .notif {
+    inset-block-start: 49px;
 }
 
 .notif-error {
-    border-color: rgba(241, 76, 76, 0.35);
-    background: rgba(241, 76, 76, 0.08);
+    color: var(--vscode-errorForeground);
 }
 
 .notif-icon {
@@ -5364,27 +5389,23 @@ pre.tool-cmd {
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 27px;
-    height: 27px;
-    border-radius: 7px;
+    width: 14px;
+    height: 14px;
     color: var(--xratu-accent);
-    background: color-mix(in srgb, var(--xratu-accent) 12%, transparent);
 }
 
 .notif-warning .notif-icon {
-    color: #f0ad4e;
-    background: rgba(240, 173, 78, 0.12);
+    color: var(--vscode-editorWarning-foreground);
 }
 
 .notif-error .notif-icon {
     color: var(--vscode-errorForeground);
-    background: rgba(241, 76, 76, 0.1);
 }
 
 .notif-copy {
     flex: 1;
     min-width: 0;
-    color: var(--vscode-foreground);
+    color: var(--vscode-descriptionForeground);
     font-size: 10.5px;
     line-height: 1.45;
     word-break: break-word;
@@ -7917,7 +7938,7 @@ button.settings-nav-row:hover {
     margin-bottom: 8px;
     border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
     border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
 }
 
@@ -9130,7 +9151,7 @@ button:not(:disabled):active,
     padding: 6px 8px;
     border: 1px solid var(--xratu-accent-dim);
     border-radius: 5px;
-    background: var(--vscode-input-background);
+    background: var(--xratu-surface-inset);
     color: var(--vscode-input-foreground);
     font-size: 12px;
 }

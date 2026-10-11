@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -180,6 +180,11 @@
         "command": "xratu.attachFromExplorer",
         "title": "%command.attachFromExplorer.title%",
         "category": "%command.category%"
+      },
+      {
+        "command": "xratu.setup",
+        "title": "%command.setup.title%",
+        "category": "%command.category%"
       }
     ],
     "menus": {
@@ -225,6 +230,7 @@
     "test:webview": "node test/run-webview-tests.mjs",
     "test:e2e": "npm run build:webview && playwright test -c test/e2e/playwright.config.ts",
     "test:host": "node test/run-host-tests.mjs",
+    "test:engines": "node test/test-engines.mjs",
     "test:sanitizer": "node test/test-sanitizer.mjs",
     "test:endpoint-guard": "node test/test-endpoint-guard.mjs",
     "test:ssrf-guard": "node test/test-ssrf-guard.mjs",
@@ -341,12 +347,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@opencode/client": "2.0.26",
     "cross-spawn": "^7.0.6",
     "lucide-react": "^1.33.0",
     "markdown-it": "^14.3.2",
     "pdfjs-dist": "^4.10.38",
     "playwright-core": "^1.64.0",
     "shiki": "^4.2.0",
+    "tar": "7.5.22",
     "undici": "^6.28.1",
     "ws": "^8.22.0"
   }

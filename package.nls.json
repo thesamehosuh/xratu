@@ -19,6 +19,7 @@
 	"command.category": "Xratu",
 	"command.clearHistory.title": "New Session",
 	"command.setLlmCredentials.title": "Set LLM Credentials",
+	"command.setup.title": "Set Up Xratu",
 	"command.openSettings.title": "Open Settings",
 	"command.agentFiles.title": "Agent Files…",
 	"command.restoreCheckpoint.title": "Restore Checkpoint…",

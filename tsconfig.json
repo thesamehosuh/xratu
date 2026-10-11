@@ -1,6 +1,9 @@
 {
     "compilerOptions": {
         "module": "commonjs",
+        "paths": {
+            "@opencode/client": ["./node_modules/@opencode/client/dist/promise/index"]
+        },
         "target": "ES2022",
         "outDir": "out",
         "lib": [

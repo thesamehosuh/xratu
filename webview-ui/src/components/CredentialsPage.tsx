@@ -1,3 +1,6 @@
+import type { NativeSetupState, ToExtensionMessage } from '../types';
+import { tOrRaw } from '../i18n';
+import { Dropdown } from './Dropdown';
 import { SidePanel } from './SidePanel';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -36,6 +39,8 @@ import { getLocale, t, tf } from '../i18n';
 import type { StringKey } from '../i18n';
 
 interface CredentialsPageProps {
+    native?: { state: NativeSetupState | null; send: (message: ToExtensionMessage) => void; refresh: () => void };
+    embedded?: 'provider' | 'local';
     reason?: string | null;
     error?: string | null;
     currentUrl?: string | null;
@@ -129,6 +134,7 @@ const PRESETS: Preset[] = [
     { id: 'google', label: 'Google Gemini', group: 'other', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/' },
     { id: 'ollama', label: 'Ollama', group: 'local', baseUrl: 'http://localhost:11434/v1', hintKey: 'credLocal' },
     { id: 'lmstudio', label: 'LM Studio', group: 'local', baseUrl: 'http://localhost:1234/v1', hintKey: 'credLocal' },
+    { id: 'llamacpp', label: 'llama.cpp', group: 'local', baseUrl: 'http://localhost:8080/v1', hintKey: 'credLocal' },
     { id: 'vllm', label: 'vLLM', group: 'local', baseUrl: 'http://localhost:8000/v1', hintKey: 'credLocal' },
     { id: 'custom', label: 'Custom', labelKey: 'customPreset', group: 'other', baseUrl: '', hintKey: 'credOpenAICompatible' },
 ];
@@ -175,6 +181,7 @@ function ProviderMark({ provider }: { provider: Preset }) {
 }
 
 export function CredentialsPage({
+    native, embedded,
     reason,
     error,
     currentUrl,
@@ -960,6 +967,14 @@ export function CredentialsPage({
         </div>
     );
 
+    if (native) return <NativeCredentials {...native} />;
+    if (embedded) return <div className="cred-page setup-credentials">
+        {error && <p className="setup-error" role="alert" dir="auto">{error}</p>}
+        {renderSavedList()}
+        {embedded === 'provider' && renderOauthSection()}
+        {renderProviderForm()}
+    </div>;
+
     return (
         <div className="cred-page">
             <header className="cred-head">
@@ -1046,4 +1061,26 @@ export function CredentialsPage({
                 onRun={() => onBenchmark?.()} onGuide={() => onOpenGuide?.('providers')} />
         </div>
     );
+}
+
+
+function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPageProps['native']>) {
+    const [integrationID, setIntegrationID] = useState('');
+    const [key, setKey] = useState('');
+    const [code, setCode] = useState('');
+    const selected = state?.integrations.find((entry) => entry.id === integrationID);
+    useEffect(() => { setKey(''); setCode(''); }, [integrationID, state?.requestId, state?.busy]);
+    const locked = !state || state.phase !== 'ready' || !!state.busy;
+    return <section className="settings-page native-config"><header className="settings-head"><h2>{t('providersTitle')}</h2><button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} onClick={refresh} disabled={state?.busy}><RefreshCw size={13} /></button></header><div className="settings-scroll">
+        {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
+        {state?.phase === 'checking' && <span role="status">{t('setupChecking')}</span>}
+        {state?.integrations.filter((entry) => entry.connections.length).map((entry) => <div className="native-config-row" key={entry.id}><strong dir="ltr">{entry.name}</strong>{entry.connections.map((connection, index) => <span className="native-connection" key={index}><span dir="auto">{connection.label === 'Personal account' ? t('nativePersonalAccount') : connection.label}</span><span>{t(connection.needsAuth ? 'nativeNeedsAuth' : 'nativeConfigured')}</span><span>{t(connection.source === 'env' ? 'nativeEnvironment' : 'nativeStored')}</span></span>)}</div>)}
+        {state?.phase === 'ready' && <form className="native-provider-form" onSubmit={(event) => { event.preventDefault(); if (!selected?.key || !key.trim() || locked) return; send({ type: 'nativeConnect', requestId: state.requestId, integrationID, key: key.trim() }); setKey(''); }}>
+            <label htmlFor="native-provider">{t('credSelectProvider')}</label><Dropdown id="native-provider" label={t('credSelectProvider')} value={integrationID} disabled={locked} onChange={setIntegrationID} options={[{ value: '', label: t('nativeChooseProvider') }, ...state.integrations.filter((entry) => entry.key || entry.oauth.length).map((entry) => ({ value: entry.id, label: entry.name }))]} />
+            {selected?.key && <><label htmlFor="native-key">{t('credKeyLabel')}</label><input id="native-key" type="password" dir="ltr" autoComplete="off" value={key} disabled={locked} onChange={(event) => setKey(event.target.value)} /><button type="submit" className="primary-btn" disabled={locked || !key.trim()}>{t('credConnect')}</button></>}
+            {selected?.oauth.map((method) => <button key={method.id} type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'nativeConnect', requestId: state.requestId, integrationID, methodID: method.id })}>{method.label}</button>)}
+        </form>}
+        {state?.oauth && <div className="native-provider-form"><a href={state.oauth.url} target="_blank" rel="noreferrer">{t('credOAuthOpenBrowser')}</a><p dir="auto">{state.oauth.instructions}</p>{state.oauth.mode === 'code' && <form onSubmit={(event) => { event.preventDefault(); send({ type: 'nativeOAuthCode', requestId: state.requestId, code }); setCode(''); }}><input aria-label={t('nativeAuthCode')} value={code} onChange={(event) => setCode(event.target.value)} autoComplete="off" /><button type="submit" className="secondary-btn" disabled={!code.trim()}>{t('nativeSubmitCode')}</button></form>}<button type="button" className="secondary-btn" onClick={refresh}>{t('engineCancel')}</button></div>}
+        {state?.phase === 'attention' && <button type="button" className="secondary-btn" onClick={() => send({ type: 'setupOpen', path: 'free' })}>{t('setupResume')}</button>}
+    </div></section>;
 }

@@ -29,6 +29,7 @@ assert.doesNotMatch(activity, /Final answer/);
 assert.match(activity, /class="activity-age"/);
 assert.doesNotMatch(activity, /completed-steps/);
 assert.doesNotMatch(render({...message,status:'streaming'}), /completed-steps/);
+assert.match(render({...message,status:'streaming'}), /Before tools/);
 assert.doesNotMatch(render({...message,approval:{approval_id:'ap',approvals:[{tool_call_id:'call',tool_name:'write_file',args:{path:'a',content:'b'}}]}}), /completed-steps/);
 assert.doesNotMatch(render({...message,steps:[{...terminal,background:{jobId:'job',byUser:true}}]}), /completed-steps/);
 assert.deepEqual(completedCommands([terminal]),[{id:'cmd',command:'npm test',exit:'1'}]);

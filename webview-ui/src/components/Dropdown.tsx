@@ -41,11 +41,15 @@ export function popupPlacement(el: HTMLElement, maxHeight: number): { up: boolea
  */
 export function Dropdown({
     label,
+    id,
+    disabled = false,
     value,
     options,
     onChange,
 }: {
     label: string;
+    id?: string;
+    disabled?: boolean;
     value: string;
     options: Array<{ value: string; label: string }>;
     onChange: (value: string) => void;
@@ -57,6 +61,8 @@ export function Dropdown({
     const triggerRef = useRef<HTMLButtonElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const current = options.find((o) => o.value === value) ?? options[0];
+
+    useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
     useLayoutEffect(() => {
         if (!open || !triggerRef.current) return;
@@ -102,6 +108,8 @@ export function Dropdown({
         <div className="dropdown" ref={rootRef}>
             <button
                 ref={triggerRef}
+                id={id}
+                disabled={disabled}
                 type="button"
                 className="dropdown-trigger"
                 aria-haspopup="listbox"

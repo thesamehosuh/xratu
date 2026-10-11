@@ -13,6 +13,8 @@ export interface UserQuestionOption {
 }
 
 export interface UserQuestion {
+    multiSelect?: boolean;
+    allowCustomAnswer?: boolean;
     header: string;
     question: string;
     options: UserQuestionOption[];

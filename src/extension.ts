@@ -1,4 +1,7 @@
+import { setTimeout as nativeSetupDelay } from 'timers/promises';
+import type { NativeSetupState } from './engines/nativeSetup';
 import { readSubagentTrace, type SubagentApprovalSource } from './subagentObservation';
+import { canStartSetup, setupPhase, type RuntimeSetupState, type SetupEngine, type SetupPath } from './engines/setup';
 import { readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
@@ -126,7 +129,13 @@ import { parseTranscriptPrefs, withTranscriptPref } from './transcriptPrefs';
 import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics, type ChangedFile } from './shadowGit';
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
-import { runLocalAgent, type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
+import { type LocalAgentEvent, type LocalApprovalGate, type LocalImageAttachment, type LocalUsage } from './local/localAgent';
+import { EngineRegistry } from './engines/registry';
+import { xratuEngine } from './engines/xratuEngine';
+import { EngineError, isFreeModel, OpenCodeEngine } from './engines/opencode/engine';
+import type { NativeShellUpdate } from './engines/opencode/shells';
+import { checkOpenCode, OpenCodeInstallation } from './engines/opencode/installation';
+import type { EngineId, EngineSessionRef, EngineSetupState } from './engines/types';
 import type { LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
 import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
@@ -340,7 +349,398 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     _browserAck(sessionId: string, browserId: string, frameId: number): void { this._browser.ack(sessionId, browserId, frameId); }
-    disposeBrowser(): void { this._browser.dispose(); }
+    disposeBrowser(): void { this._browser.dispose(); this._engineInstallController?.abort(); this._cancelSetup(); this._cancelNativeSetup(); this._cancelModelPings(); void this._engines.dispose(); }
+    private readonly _engines = new EngineRegistry();
+    private _openCodeEngine?: OpenCodeEngine;
+    private readonly _modelPingControllers = new Map<string, AbortController>();
+    private _modelPingEngine?: Promise<OpenCodeEngine>;
+    private _cancelModelPings(): void {
+        for (const [model, controller] of this._modelPingControllers) {
+            controller.abort();
+            this._view?.webview.postMessage({ type: 'modelPing', model, state: { status: 'failed', checkedAt: Date.now(), detail: 'requestCancelled' } });
+        }
+        this._modelPingControllers.clear();
+        this._modelPingEngine = undefined;
+    }
+    async _pingFreeModel(model: string, automatic = false): Promise<void> {
+        if (this._activeEngine !== 'opencode' || typeof model !== 'string' || this._modelPingControllers.has(model)) return;
+        const controller = new AbortController();
+        this._modelPingControllers.set(model, controller);
+        const epoch = this._sessionEpoch;
+        const emit = (state: Record<string, unknown>) => {
+            if (this._activeEngine === 'opencode' && epoch === this._sessionEpoch && this._modelPingControllers.get(model) === controller) this._view?.webview.postMessage({ type: 'modelPing', model, state });
+        };
+        emit({ status: 'checking' });
+        try {
+            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspace) throw new EngineError('engineWorkspaceRequired');
+            const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+            const engine = await (this._modelPingEngine ??= this._getOpenCodeEngine());
+            signal.throwIfAborted();
+            const scope = `${JSON.stringify([workspace, engine.binary])}:${model}`;
+            const cached = this._setupAvailability.get(scope);
+            if (automatic && cached && Date.now() - cached.checkedAt < 30_000) {
+                emit({ status: cached.availability, checkedAt: cached.checkedAt, detail: cached.detail });
+                return;
+            }
+            await engine.ping(model, workspace, signal);
+            this._setupAvailability.set(scope, { availability: 'available', checkedAt: Date.now() });
+            if (this._setupAvailability.size > 100) this._setupAvailability.delete(this._setupAvailability.keys().next().value!);
+            emit({ status: 'available', checkedAt: Date.now() });
+        } catch (error) {
+            const detail = error instanceof EngineError ? error.valueKey : error instanceof Error ? error.message : String(error);
+            emit({ status: /rate.?limit|429/i.test(detail) ? 'rateLimited' : 'failed', checkedAt: Date.now(), detail });
+        } finally {
+            if (this._modelPingControllers.get(model) === controller) this._modelPingControllers.delete(model);
+            if (this._modelPingControllers.size === 0) this._modelPingEngine = undefined;
+        }
+    }
+    private _setupController?: AbortController;
+    private _runtimeSetup?: RuntimeSetupState;
+    private _setupWorkspace?: string;
+    private readonly _setupAvailability = new Map<string, { checkedAt: number; availability: 'available' | 'rateLimited' | 'failed'; detail?: string }>();
+    _cancelSetup(): void {
+        this._setupController?.abort();
+        this._setupController = undefined;
+        this._runtimeSetup = undefined;
+    }
+    async _openSetup(path?: SetupPath): Promise<void> {
+        if (this._globalState.get<boolean>('xratu.setupCompleted') === true) {
+            this._cancelSetup();
+            await this._globalState.update('xratu.setupPath', undefined);
+            this._view?.webview.postMessage({ type: 'openEngines' });
+            return;
+        }
+        await this._sendSavedCredentials();
+        await this._sendOAuthState();
+        this._view?.webview.postMessage({ type: 'showWelcome', path, canBack: true });
+    }
+    async _setupGetState(requestId: string, engine: SetupEngine, setupPath: SetupPath, credentialId?: string, onboarding = false): Promise<void> {
+        this._cancelSetup();
+        const controller = new AbortController();
+        this._setupController = controller;
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]);
+        const epoch = this._sessionEpoch;
+        const current = () => this._setupController === controller && epoch === this._sessionEpoch && !controller.signal.aborted;
+        let state: RuntimeSetupState = { requestId, engine, path: setupPath, phase: 'checking', models: [], busy: this._localRunActive };
+        const emit = () => {
+            if (!current()) return;
+            this._runtimeSetup = state;
+            this._view?.webview.postMessage({ type: 'runtimeSetupState', state });
+        };
+        emit();
+        try {
+            if (onboarding) await this._globalState.update('xratu.setupPath', setupPath);
+            const credentials = await this._getSavedCredentials();
+            const candidates = setupPath === 'local' ? credentials.filter((entry) => this._isLikelyLocalUrl(entry.baseUrl)) : credentials;
+            const credential = candidates.find((entry) => entry.id === (credentialId ?? this._globalState.get<string>('xratu.activeLlmCredentialId'))) ?? (!credentialId ? candidates[0] : undefined);
+            await this._sendSavedCredentials();
+            await this._sendOAuthState();
+            if (engine === 'opencode') await this._sendEnginesState();
+            signal.throwIfAborted();
+            if (!current()) return;
+            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            this._setupWorkspace = workspace;
+            const phase = setupPhase({ engine, installed: this._engineSetup.phase === 'ready', hasWorkspace: !!workspace, offline: isOfflineMode(), hasCredential: !!credential, freeOnly: setupPath === 'free' });
+            state = { ...state, phase, credentialId: engine === 'xratu' ? credential?.id : undefined, providerName: engine === 'xratu' ? credential?.label : undefined };
+            emit();
+            if (phase !== 'checking') return;
+            if (engine === 'opencode') {
+                const native = await this._getOpenCodeEngine();
+                const catalog = await native.models(workspace!, signal);
+                if (!current()) return;
+                const scope = JSON.stringify([workspace, native.binary]);
+                state = { ...state, models: catalog.filter((model) => setupPath !== 'free' || isFreeModel(model)).map((model) => {
+                    const id = `${model.providerID}/${model.id}`;
+                    const cached = this._setupAvailability.get(`${scope}:${id}`);
+                    const fresh = cached && Date.now() - cached.checkedAt < 30_000;
+                    return { id, name: model.name, provider: model.providerID, free: isFreeModel(model), tools: model.capabilities.tools,
+                        ...(setupPath === 'free' ? fresh ? cached : { availability: 'checking' as const } : {}) };
+                }) };
+                const recompute = () => {
+                    state = { ...state, phase: setupPhase({ engine, installed: true, hasWorkspace: true, offline: false, hasCredential: true, freeOnly: setupPath === 'free', models: state.models }) };
+                    emit();
+                };
+                recompute();
+                if (setupPath === 'free') await Promise.all(state.models.filter((model) => model.availability === 'checking').map(async (model) => {
+                    let result: { availability: 'available' | 'rateLimited' | 'failed'; checkedAt: number; detail?: string };
+                    try {
+                        await native.ping(model.id, workspace!, signal);
+                        result = { availability: 'available', checkedAt: Date.now() };
+                    } catch (error) {
+                        const detail = error instanceof EngineError ? error.valueKey : error instanceof Error ? error.message : String(error);
+                        result = { availability: /rate.?limit|429/i.test(detail) ? 'rateLimited' : 'failed', checkedAt: Date.now(), detail };
+                    }
+                    if (!current()) return;
+                    this._setupAvailability.set(`${scope}:${model.id}`, result);
+                    if (this._setupAvailability.size > 100) this._setupAvailability.delete(this._setupAvailability.keys().next().value!);
+                    state = { ...state, models: state.models.map((entry) => entry.id === model.id ? { ...entry, ...result } : entry) };
+                    recompute();
+                }));
+            } else if (credential) {
+                if (isOfflineMode() && !isLoopbackUrl(credential.baseUrl)) throw new EngineError('offlineRemoteBlocked');
+                const insecureError = insecureRemoteHttpError(credential.baseUrl, credential.apiKey);
+                if (insecureError) throw new EngineError(insecureError);
+                const auth = await this._resolveCredentialAuth(credential, signal);
+                const handler = credential.oauthProviderId ? getOAuthProvider(credential.oauthProviderId) : undefined;
+                const probed = handler?.discoverModels && auth.tokens
+                    ? await handler.discoverModels(this._oauthContext(signal), auth.tokens)
+                    : await probeLocalEndpoint(credential.baseUrl, signal, auth.apiKey, getProxyDispatcher(credential.baseUrl), undefined, auth.headers);
+                signal.throwIfAborted();
+                if (!probed) throw new EngineError('localUnreachable');
+                state = { ...state, models: probed.models.filter((model) => !(isOpenCodeHost(credential.baseUrl) && isNonChatModel(model.id))).map((model) => ({ id: model.id, name: model.id, provider: credential.label, tools: model.supportsTools })), phase: probed.models.length ? 'ready' : 'model' };
+                if (!state.models.length) state.phase = 'model';
+                emit();
+            }
+        } catch (error) {
+            if (!current()) return;
+            state = { ...state, phase: 'attention', errorKey: error instanceof EngineError ? error.valueKey : 'setupCheckFailed', detail: error instanceof EngineError ? undefined : error instanceof Error ? error.message : String(error) };
+            emit();
+        }
+    }
+    private _nativeSetupController?: AbortController;
+    private _nativeSetupState?: NativeSetupState;
+    private _nativeAuth?: { integrationID: string; attemptID: string; workspace: string; controller: AbortController };
+    _cancelNativeSetup(): void {
+        this._nativeSetupController?.abort();
+        this._nativeSetupController = undefined;
+        this._nativeSetupState = undefined;
+        const auth = this._nativeAuth;
+        this._nativeAuth = undefined;
+        if (auth) {
+            auth.controller.abort();
+            void this._getOpenCodeEngine().then((engine) => engine.oauthCancel(auth.integrationID, auth.attemptID, auth.workspace)).catch(() => undefined);
+        }
+    }
+    async _nativeGetState(requestId: string): Promise<void> {
+        this._cancelNativeSetup();
+        const controller = new AbortController();
+        this._nativeSetupController = controller;
+        const current = () => this._nativeSetupController === controller && !controller.signal.aborted;
+        const state: NativeSetupState = { requestId, phase: 'checking', integrations: [], servers: [], skills: [] };
+        this._nativeSetupState = state;
+        this._view?.webview.postMessage({ type: 'nativeSetupState', state });
+        try {
+            if (isOfflineMode()) throw new EngineError('engineOfflineUnsupported');
+            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspace) throw new EngineError('engineWorkspaceRequired');
+            const engine = await this._getOpenCodeEngine();
+            const data = await engine.configuration(workspace, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]));
+            if (!current()) return;
+            this._nativeSetupState = { requestId, phase: 'ready', ...data };
+        } catch (error) {
+            if (!current()) return;
+            this._nativeSetupState = { ...state, phase: 'attention', errorKey: error instanceof EngineError ? error.valueKey : 'setupCheckFailed' };
+        }
+        this._view?.webview.postMessage({ type: 'nativeSetupState', state: this._nativeSetupState });
+    }
+    async _nativeConnect(requestId: string, integrationID: string, methodID?: string, key?: string): Promise<void> {
+        const state = this._nativeSetupState;
+        const controller = this._nativeSetupController;
+        if (!state || state.requestId !== requestId || state.phase !== 'ready' || state.busy || !controller || isOfflineMode()) return;
+        const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const integration = state.integrations.find((entry) => entry.id === integrationID);
+        if (!workspace || !integration || (key ? !integration.key : !integration.oauth.some((method) => method.id === methodID))) return;
+        const current = () => this._nativeSetupController === controller && !controller.signal.aborted;
+        const post = (patch: Partial<NativeSetupState>) => {
+            if (!current()) return;
+            this._nativeSetupState = { ...this._nativeSetupState!, ...patch };
+            this._view?.webview.postMessage({ type: 'nativeSetupState', state: this._nativeSetupState });
+        };
+        post({ busy: true, errorKey: undefined });
+        try {
+            const engine = await this._getOpenCodeEngine();
+            if (key) {
+                await engine.connectKey(integrationID, key, workspace, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]));
+            } else {
+                const attempt = await engine.oauthConnect(integrationID, methodID!, workspace, controller.signal);
+                if (!current()) { await engine.oauthCancel(integrationID, attempt.attemptID, workspace).catch(() => undefined); return; }
+                const url = new URL(attempt.url);
+                if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EngineError('oauthBadResponse');
+                this._nativeAuth = { integrationID, attemptID: attempt.attemptID, workspace, controller };
+                post({ oauth: { integrationID, url: url.toString(), instructions: attempt.instructions, mode: attempt.mode } });
+                await vscode.env.openExternal(vscode.Uri.parse(url.toString()));
+                const expires = Math.min(attempt.time.expires, Date.now() + 5 * 60_000);
+                let completed = false;
+                while (current() && Date.now() < expires) {
+                    await nativeSetupDelay(1500, undefined, { signal: controller.signal });
+                    if (!current()) return;
+                    const result = await engine.oauthStatus(integrationID, attempt.attemptID, workspace, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]));
+                    if (result.status === 'complete') { completed = true; break; }
+                    if (result.status !== 'pending') throw new EngineError('oauthBadResponse');
+                    if (Date.now() >= expires) throw new EngineError('oauthTimeout');
+                }
+                if (current() && !completed) throw new EngineError('oauthTimeout');
+            }
+            if (!current()) return;
+            this._nativeAuth = undefined;
+            await this._nativeGetState(requestId);
+            if (this._activeEngine === 'opencode' && !this._localRunActive) await this._fetchModels();
+        } catch (error) {
+            const auth = this._nativeAuth;
+            if (auth?.controller === controller) { this._nativeAuth = undefined; void this._getOpenCodeEngine().then((engine) => engine.oauthCancel(auth.integrationID, auth.attemptID, auth.workspace)).catch(() => undefined); }
+            post({ busy: false, oauth: undefined, errorKey: error instanceof EngineError ? error.valueKey : 'setupCheckFailed' });
+        }
+    }
+    async _nativeOAuthCode(requestId: string, code: string): Promise<void> {
+        const auth = this._nativeAuth;
+        if (!auth || this._nativeSetupState?.requestId !== requestId || !code.trim()) return;
+        try { await (await this._getOpenCodeEngine()).oauthComplete(auth.integrationID, auth.attemptID, auth.workspace, code.trim(), auth.controller.signal); }
+        catch { if (this._nativeAuth === auth) this._view?.webview.postMessage({ type: 'nativeSetupState', state: { ...this._nativeSetupState, errorKey: 'oauthBadResponse' } }); }
+    }
+    private _setupStarting = false;
+    async _setupComplete(requestId: string, model: string): Promise<void> {
+        const state = this._runtimeSetup;
+        if (!state || state.requestId !== requestId || this._setupStarting) return;
+        const reject = (errorKey = 'setupCheckAgain') => {
+            if (this._runtimeSetup?.requestId !== requestId) return;
+            this._runtimeSetup = { ...this._runtimeSetup, phase: 'attention', errorKey, busy: this._localRunActive };
+            this._view?.webview.postMessage({ type: 'runtimeSetupState', state: this._runtimeSetup });
+        };
+        if (!canStartSetup(state, model) || this._localRunActive || this._engineInstallController) { reject(); return; }
+        this._setupStarting = true;
+        try {
+            await this._serializeSessionTransition(async () => {
+                if (this._runtimeSetup?.requestId !== requestId) return;
+                if (this._localRunActive) { reject('engineBusyHint'); return; }
+                if (this._setupWorkspace !== vscode.workspace.workspaceFolders?.[0]?.uri.fsPath) { reject('engineWorkspaceMismatch'); return; }
+                const credential = state.engine === 'xratu' ? (await this._getSavedCredentials()).find((entry) => entry.id === state.credentialId) : undefined;
+                if (state.engine === 'xratu' && !credential) { reject('setupChangeConnection'); return; }
+                if (state.engine === 'opencode') {
+                    await this._sendEnginesState();
+                    if (this._engineSetup.phase !== 'ready' || isOfflineMode() || !vscode.workspace.workspaceFolders?.length) { reject(); return; }
+                }
+                if (this._runtimeSetup?.requestId !== requestId) return;
+                if (!canStartSetup(this._runtimeSetup, model)) { reject(); return; }
+                await this._persistLocalSession();
+                this._activeEngine = state.engine;
+                await this._globalState.update('xratu.activeEngine', state.engine);
+                if (credential) {
+                    await this._globalState.update('xratu.activeLlmCredentialId', credential.id);
+                    await this._secrets.store('xratu.llmBaseUrl', credential.baseUrl);
+                    await this._secrets.store('xratu.llmApiKey', credential.apiKey);
+                }
+                this._selectedModel = model;
+                await this._rememberModelForActiveCredential(model);
+                await this._globalState.update('xratu.setupCompleted', true);
+                await this._globalState.update('xratu.setupPath', undefined);
+                this._cancelSetup();
+                await this._clearHistoryNow();
+                this._postEngineState();
+            });
+        } catch (error) {
+            reject(error instanceof EngineError ? error.valueKey : 'setupCheckFailed');
+        } finally { this._setupStarting = false; }
+    }
+    private _engineSession?: EngineSessionRef;
+    private _activeEngine: EngineId = 'xratu';
+    private _engineInstallController?: AbortController;
+    private _engineSetup: EngineSetupState = { active: 'xratu', phase: 'checking', customPath: '', installedByXratu: false, busy: false };
+    private _engineCheckEpoch = 0;
+    private _nativeModelWindows: Record<string, number> = {};
+    private _nativeTurnActive = false;
+    private _openCodeEnvironmentKey = '';
+
+    private _engineInstallation(): OpenCodeInstallation { return new OpenCodeInstallation(path.join(this._storagePath, 'tools', 'opencode')); }
+    private _postEngineState(): void { this._view?.webview.postMessage({ type: 'enginesState', state: { ...this._engineSetup, active: this._activeEngine, busy: this._localRunActive } }); }
+    async _sendEnginesState(): Promise<void> {
+        if (this._engineInstallController) { this._postEngineState(); return; }
+        const epoch = ++this._engineCheckEpoch;
+        const customPath = this._globalState.get<string>('xratu.enginePath.opencode') ?? '';
+        this._engineSetup = { active: this._activeEngine, phase: 'checking', customPath, installedByXratu: false, busy: this._localRunActive };
+        this._postEngineState();
+        const managed = await this._engineInstallation().managedBinary();
+        const binary = customPath || managed || 'opencode';
+        try {
+            const version = await checkOpenCode(binary);
+            if (epoch !== this._engineCheckEpoch) return;
+            this._engineSetup = { ...this._engineSetup, phase: version.startsWith('2.') ? 'ready' : 'unsupported', version, binaryPath: binary, installedByXratu: binary === managed };
+        } catch (error) {
+            if (epoch !== this._engineCheckEpoch) return;
+            this._engineSetup = { ...this._engineSetup, phase: customPath ? 'failed' : 'missing', errorKey: customPath ? 'enginePathFailed' : undefined, detail: customPath ? String(error) : undefined };
+        }
+        this._postEngineState();
+    }
+    async _engineSetPath(value: string): Promise<void> {
+        if (this._localRunActive || this._engineInstallController) return;
+        const binary = value.trim();
+        if (binary && !path.isAbsolute(binary)) { this._view?.webview.postMessage({ type: 'error', valueKey: 'enginePathAbsolute' }); return; }
+        await this._globalState.update('xratu.enginePath.opencode', binary);
+        await this._sendEnginesState();
+    }
+    _engineCancelInstall(): void { this._engineInstallController?.abort(); }
+    async _engineInstall(): Promise<void> {
+        if (this._engineInstallController || this._localRunActive) return;
+        const controller = new AbortController();
+        this._engineInstallController = controller;
+        ++this._engineCheckEpoch;
+        this._engineSetup = { ...this._engineSetup, phase: 'installing', errorKey: undefined, detail: undefined, downloadedBytes: 0, totalBytes: undefined };
+        this._postEngineState();
+        let lastProgress = 0;
+        try {
+            await this._engineInstallation().install(controller.signal, (downloadedBytes, totalBytes) => {
+                this._engineSetup = { ...this._engineSetup, downloadedBytes, totalBytes };
+                if (Date.now() - lastProgress > 150) { lastProgress = Date.now(); this._postEngineState(); }
+            }, getProxyDispatcher('https://registry.npmjs.org'));
+            await this._globalState.update('xratu.enginePath.opencode', '');
+        } catch (error) {
+            if (!controller.signal.aborted) this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineInstallFailed', detail: error instanceof Error ? error.message : String(error) };
+        } finally {
+            this._engineInstallController = undefined;
+            if (this._engineSetup.phase === 'failed') this._postEngineState();
+            else await this._sendEnginesState();
+        }
+    }
+    async _engineSelect(id: EngineId): Promise<void> {
+        if (this._localRunActive || this._engineInstallController || id === this._activeEngine) return;
+        const needsCredentials = id === 'xratu' && !(await this._getSavedCredentials()).length;
+        if (id === 'opencode') {
+            await this._sendEnginesState();
+            if (this._engineSetup.phase !== 'ready') return;
+        }
+        // Switching engines starts a new conversation; preserve the old one.
+        await this._serializeSessionTransition(async () => {
+            if (this._localRunActive) return;
+            await this._persistLocalSession();
+            this._activeEngine = id;
+            await this._globalState.update('xratu.activeEngine', id);
+            await this._globalState.update('xratu.setupCompleted', true);
+            await this._globalState.update('xratu.setupPath', undefined);
+            this._cancelSetup();
+            this._selectedModel = id === 'opencode' ? this._globalState.get<string>('xratu.engineModel.opencode') ?? null : null;
+            await this._clearHistoryNow();
+            this._postEngineState();
+            if (needsCredentials) this._startupPage.open(() => { void this._setLlmCredentials(undefined, 'byok'); });
+        });
+    }
+    private async _getOpenCodeEngine(): Promise<OpenCodeEngine> {
+        if (isOfflineMode()) throw new EngineError('engineOfflineUnsupported');
+        await this._sendEnginesState();
+        if (this._engineSetup.phase !== 'ready' || !this._engineSetup.binaryPath) throw new EngineError('engineNotReady');
+        const proxy = getProxyResolution();
+        const environmentKey = JSON.stringify([proxy.mode, proxy.url, proxy.noProxy]);
+        if (this._openCodeEngine?.binary !== this._engineSetup.binaryPath || (!this._nativeTurnActive && this._openCodeEnvironmentKey !== environmentKey)) {
+            const previous = this._openCodeEngine;
+            const env = { ...process.env };
+            if (proxy.url) {
+                env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = proxy.url;
+                env.NO_PROXY = env.no_proxy = ['127.0.0.1', 'localhost', '::1', proxy.noProxy].filter(Boolean).join(',');
+            } else if (proxy.mode === 'off') {
+                for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
+            }
+            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env);
+            this._openCodeEnvironmentKey = environmentKey;
+            this._engines.register(this._openCodeEngine);
+            await previous?.dispose();
+        }
+        return this._openCodeEngine;
+    }
+    private async _restoreEngine(session?: EngineSessionRef): Promise<void> {
+        this._engineSession = session;
+        this._activeEngine = session?.engineId ?? 'xratu';
+        await this._globalState.update('xratu.activeEngine', this._activeEngine);
+        this._postEngineState();
+    }
     public static readonly viewType = 'xratu-chat-view';
     _view?: vscode.WebviewView;
     _sessionId: string | null = null;
@@ -352,6 +752,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _runCostCurrency: 'USD' | 'IRT' = 'USD';
     /** Base URL of the current run/provider, used to resolve its pricing. */
     private _runBaseUrl: string | null = null;
+    private _runNativeProvider: string | null = null;
     private _runSubscription = false;
     _history: HistoryMessage[] = [];
     private _sessionSummary: string | null = null;
@@ -758,6 +1159,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         setOfflineMode(this._globalState.get<boolean>('xratu.offlineMode') === true);
         this._checkpoints = checkpoints;
         this._storagePath = localStorageUri.fsPath;
+        this._engines.register(xratuEngine);
+        this._activeEngine = this._globalState.get<string>('xratu.activeEngine') === 'opencode' ? 'opencode' : 'xratu';
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
         this._usageLedger = new UsageLedgerStore(localStorageUri.fsPath);
         // Prune once per host session: the append counter resets with the
@@ -1387,6 +1790,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         );
         if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
         const rewindChat = choice === 'checkpointScopeFilesAndChat';
+        if (rewindChat && this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
 
         // The confirm is non-blocking: a run may have started (or the history
         // changed) while it was open. Re-check before mutating anything.
@@ -1445,6 +1849,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     /** Palette commands are useless before the panel exists - surface it. */
+    public openSetup(): void { this._startupPage.open(() => { void this._openSetup(); }); }
+
     public async ensureView(): Promise<void> {
         if (!this._view?.visible) {
             await vscode.commands.executeCommand(`${XratuChatViewProvider.viewType}.focus`);
@@ -1463,15 +1869,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _showStartScreen() {
         if (!this._view) return;
-        // The only gate: a saved credential. Returning users (or anyone who
-        // just connected from the welcome screen) go straight to chat;
-        // otherwise the welcome screen offers provider setup (Phase 3:
-        // BYOK/local entry with auto-discovery, no accounts).
+        // Resume an unfinished first setup; later configuration belongs in Settings.
         const credentials = await this._getSavedCredentials();
-        if (credentials.length === 0) {
-            this._view.webview.postMessage({ type: 'showWelcome' });
+        const setupPath = this._globalState.get<SetupPath>('xratu.setupPath');
+        const setupCompleted = this._globalState.get<boolean>('xratu.setupCompleted') === true;
+        if (!setupCompleted && ((credentials.length === 0 && this._activeEngine !== 'opencode') || setupPath)) {
+            await this._sendSavedCredentials();
+            await this._sendOAuthState();
+            this._view.webview.postMessage({ type: 'showWelcome', path: setupPath });
             return;
         }
+        if (!setupCompleted) await this._globalState.update('xratu.setupCompleted', true);
+        if (setupPath) await this._globalState.update('xratu.setupPath', undefined);
         await this._restoreLocalSession();
         this._restoreChatUI();
         // workspaceKind picks the empty-state suggestion set: the default chips
@@ -1596,6 +2005,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
+        if (this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
         if (!this._view || this._abortControllers.size > 0) return;
 
         let targetIdx = this._findUserEntry(userIndex);
@@ -1746,6 +2156,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             totalTokens: (prev.totalTokens ?? 0) + (next.totalTokens ?? 0),
             cachedTokens: (prev.cachedTokens ?? 0) + (next.cachedTokens ?? 0),
             cacheWriteTokens: (prev.cacheWriteTokens ?? 0) + (next.cacheWriteTokens ?? 0),
+            ...(prev.costUsd !== undefined || next.costUsd !== undefined ? { costUsd: (prev.costUsd ?? 0) + (next.costUsd ?? 0) } : {}),
         };
     }
 
@@ -1791,6 +2202,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  currency the price is quoted in (never converted). */
     private _costFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
         if (!usage || this._runSubscription) return null;
+        if (usage.costUsd !== undefined) return { amount: usage.costUsd, currency: 'USD' };
+        if (this._runNativeProvider) return null;
         const price = priceForModel(
             this._selectedModel ?? '',
             this._modelPriceOverrides(),
@@ -1807,6 +2220,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  reload. */
     private _setCostCurrencyFor(baseUrl: string): void {
         this._runBaseUrl = baseUrl;
+        this._runNativeProvider = null;
         const lookup = this._priceLookupFor(baseUrl);
         // A resolved price knows its own currency - an explicit USD per-model
         // override on an Iranian provider must bill in USD, so it wins over the
@@ -1883,7 +2297,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._sessionUsage.input += prompt;
         this._sessionUsage.output += completion;
         this._sessionUsage.cached += cached;
-        const host = baseUrlHost(this._runBaseUrl ?? '');
+        const host = this._runNativeProvider ?? baseUrlHost(this._runBaseUrl ?? '');
         if (!host) return;
         const entry = this._sessionUsageByHost[host] ?? { input: 0, output: 0, cached: 0 };
         entry.input += prompt;
@@ -2015,7 +2429,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Re-resolve the run's cost currency after a pricing edit and re-post the
      *  total, so a changed gateway rate is reflected without a new turn. */
     private async _refreshCostDisplay(): Promise<void> {
-        this._setCostCurrencyFor(await this._activeBaseUrl());
+        if (this._activeEngine === 'opencode') this._runCostCurrency = 'USD';
+        else this._setCostCurrencyFor(await this._activeBaseUrl());
         this._postSessionCost();
     }
 
@@ -2040,7 +2455,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const recentPlan = planLedger.filter((entry) => entry.ts >= cutoff);
         const providers = totalsByHost(apiLedger).map((t) => ({
             host: t.host,
-            label: byHost.get(t.host)?.label ?? (t.host || '—'),
+            label: byHost.get(t.host)?.label ?? (t.host.startsWith('opencode/') ? `OpenCode · ${t.host.slice(9)}` : t.host || '—'),
             iranian: byHost.get(t.host)?.iranian ?? false,
             input: t.input,
             output: t.output,
@@ -2571,12 +2986,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     await this._globalState.update('xratu.oauthRegistrations', registrations);
                 }
                 await this._persistSavedCredentials([...credentials.filter((c) => c.id !== record.id), record]);
-                await this._globalState.update('xratu.activeLlmCredentialId', record.id);
-                await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
+                if (!this._runtimeSetup) {
+                    await this._globalState.update('xratu.activeLlmCredentialId', record.id);
+                    await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
+                }
             }, flow.controller.signal);
         }, flow.controller.signal);
-        await this._fetchModels();
+        if (!this._runtimeSetup) await this._fetchModels();
         await this._sendSavedCredentials();
+        this._view?.webview.postMessage({ type: 'credentialsSaved', credentialId: record.id });
     }
 
     private _maskApiKey(apiKey: string): string {
@@ -2695,19 +3113,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const next = credentials.filter((c) => c.id !== id);
         next.push({ id, providerId, baseUrl: cleanUrl, apiKey: api_key, label });
 
+        const onboarding = !!this._runtimeSetup;
         await this._persistSavedCredentials(next);
-        await this._globalState.update('xratu.activeLlmCredentialId', id);
+        if (!onboarding) await this._globalState.update('xratu.activeLlmCredentialId', id);
 
         // Keep legacy slots synchronized for older Xratu code/data.
-        await this._secrets.store('xratu.llmBaseUrl', cleanUrl);
-        await this._secrets.store('xratu.llmApiKey', api_key);
+        if (!onboarding) {
+            await this._secrets.store('xratu.llmBaseUrl', cleanUrl);
+            await this._secrets.store('xratu.llmApiKey', api_key);
+        }
 
-        await this._fetchModels();
+        if (!this._runtimeSetup) await this._fetchModels();
         await this._sendSavedCredentials();
 
         this._view?.webview.postMessage({
             type: 'credentialsSaved',
-            returnToChat,
+            credentialId: id,
+            returnToChat: !onboarding && returnToChat,
         });
     }
 
@@ -2819,6 +3241,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _rememberModelForActiveCredential(model: string | null): Promise<void> {
         if (!model) return;
+        if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model); return; }
+        await this._secrets.store('xratu.selectedModel', model);
         const credId = await this._resolveActiveCredentialId();
         if (!credId) return;
         const map = this._credentialModelMap();
@@ -2893,6 +3317,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!model) return undefined;
         const override = this._contextWindowOverrides()[model];
         if (typeof override === 'number' && override >= 1024) return override;
+        if (this._activeEngine === 'opencode') return this._nativeModelWindows[model];
         const lowered = model.toLowerCase();
         const table = this._contextWindowsFor(baseUrlHost(this._runBaseUrl ?? ''));
         let best: { len: number; win: number } | null = null;
@@ -2940,6 +3365,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _thinkingLevelHint(model: string | null | undefined): ThinkingLevel | undefined {
         if (!model) return undefined;
         return this._thinkingLevels()[model];
+    }
+
+    private _nativeModelVariants: Record<string, string[]> = {};
+    private _nativeVariants(): Record<string, string> {
+        const stored = this._globalState.get<unknown>('xratu.nativeVariants');
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+        return Object.fromEntries(Object.entries(stored).filter(([model, variant]) => model.length <= 300 && typeof variant === 'string' && variant.length <= 100)) as Record<string, string>;
+    }
+    async _setNativeVariant(model: string, variant: string | null): Promise<void> {
+        if (this._activeEngine !== 'opencode' || !this._nativeModelVariants[model]) return;
+        if (variant !== null && !this._nativeModelVariants[model].includes(variant)) return;
+        const variants = this._nativeVariants();
+        if (variant) variants[model] = variant;
+        else delete variants[model];
+        await this._globalState.update('xratu.nativeVariants', variants);
     }
 
     /** The effort to actually send: the user's variant, unless the provider
@@ -3259,6 +3699,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     header: question.header,
                     question: question.question,
                     options: question.options,
+                    multiSelect: question.multiSelect,
+                    allowCustomAnswer: question.allowCustomAnswer,
                 });
             }));
         });
@@ -3281,6 +3723,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const entry = this._localDecisionResolvers.get(decisionId);
         if (!entry) return;
         const trimmed = typeof answer === 'string' ? answer.trim() : '';
+        if (entry.question.multiSelect && !dismissed && trimmed) {
+            try {
+                const labels: unknown = JSON.parse(trimmed);
+                if (Array.isArray(labels) && labels.length <= 100 && labels.every((label) => typeof label === 'string' && (entry.question.allowCustomAnswer !== false || entry.question.options.some((option) => option.label === label)))) {
+                    this._resolveLocalDecision(decisionId, { kind: 'custom', text: JSON.stringify(labels) });
+                    return;
+                }
+            } catch { /* malformed answer is ignored; keep the card open */ }
+            return;
+        }
         if (dismissed || !trimmed) {
             this._resolveLocalDecision(decisionId, { kind: 'dismissed' });
             return;
@@ -3340,6 +3792,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         setOfflineMode(enabled);
         // Terminate existing remote page connections, including WebSockets.
         if (enabled) this._browser.close();
+        if (enabled && this._activeEngine === 'opencode') { this._cancelActiveRequests(); await this._openCodeEngine?.dispose(); }
         // Remote requests share the network-policy signal. Local work stays
         // permitted, except a pull asks Ollama to download from the network.
         if (enabled && this._modelManagementAction === 'pull') this._modelManagementController?.abort();
@@ -3398,6 +3851,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _benchmarkProvider(): Promise<void> {
+        if (this._activeEngine !== 'xratu') { this.notifyBanner('warning', 'setupOwnershipXratu'); return; }
         if (this._benchmarkController || this._localRunActive) { this.notifyBanner('warning', 'localModelBusy'); return; }
         const credentialId = await this._resolveActiveCredentialId();
         const model = this._selectedModel;
@@ -3540,6 +3994,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const images = sendAttachments
             ?.filter((a) => isImageAttachment(a.mimeType))
             .map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 }));
+        if (this._activeEngine === 'opencode') {
+            try {
+                const accepted = await this._openCodeEngine?.steer({ text: buildLocalUserText(text, sendAttachments), attachments: images, steerId });
+                if (accepted) return;
+                if (!this._localRunActive) {
+                    this._confirmSteer(steerId, 'turn');
+                    void this._handleChatRequest(text, sendAttachments);
+                    return;
+                }
+            } catch (error) {
+                this._view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : String(error), ...(steerId ? { steerId } : {}) });
+                return;
+            }
+        }
         this._localSteerQueue.push({
             text: buildLocalUserText(text, sendAttachments),
             ...(images?.length ? { images } : {}),
@@ -3573,6 +4041,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * would train the user to click through dialogs for a strictly safer state.
      */
     _backgroundTerminalCall(callId: string | undefined): void {
+        if (this._activeEngine === 'opencode') {
+            if (callId) void this._openCodeEngine?.background(callId).then((moved) => { if (!moved) this.notifyBanner('info', 'engineBackgroundNotReady'); }).catch((error) => this.notifyBanner('error', 'engineBackgroundFailed', { detail: error instanceof Error ? error.message : String(error) }));
+            return;
+        }
         const job = getJobByCallId(callId);
         if (!job) {
             // The command may have finished (or been killed) between the row
@@ -3600,6 +4072,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Stop a background job from the UI. */
     async _killBackgroundJob(jobId: string): Promise<void> {
+        if (jobId.startsWith('opencode:')) {
+            if (await this._openCodeEngine?.stopShell(jobId)) this._view?.webview.postMessage({ type: 'backgroundJobStopped', jobId });
+            this._postBackgroundJobs();
+            return;
+        }
         const job = getTerminalJob(jobId);
         if (!job || job.status !== 'running') {
             this._postBackgroundJobs();
@@ -3615,7 +4092,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _postBackgroundJobs(): void {
         this._view?.webview.postMessage({
             type: 'backgroundJobs',
-            jobs: backgroundJobViews(),
+            jobs: [...backgroundJobViews(), ...(this._openCodeEngine?.backgroundJobs() ?? [])],
+        });
+    }
+    private _observeNativeShells(engine: OpenCodeEngine, sessionID: string, workspace: string): void {
+        engine.observeShells(sessionID, workspace, (update: NativeShellUpdate) => {
+            this._postBackgroundJobs();
+            if (update.background && update.callId && update.jobId) this._view?.webview.postMessage({ type: 'terminalBackgrounded', callId: update.callId, jobId: update.jobId, byUser: update.byUser === true });
+            if (update.output !== undefined) {
+                this._view?.webview.postMessage(update.background ? { type: 'backgroundJobOutput', jobId: update.jobId, output: update.output } : { type: 'toolOutput', callId: update.callId, value: update.output });
+            }
         });
     }
 
@@ -3696,6 +4182,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         existingController?: AbortController,
         planMode?: boolean,
     ): Promise<StreamOutcome> {
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, rulesContext, attachments, existingController, planMode);
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
@@ -3995,8 +4482,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._runInFlight = true;
             // Baseline for the run's cumulative dropped-user-turn report.
             this._compactionRunReplayBase = this._localReplayUserTurns;
-            const agent = runLocalAgent(
-                {
+            const agent = this._engines.get('xratu').runTurn(
+                { prompt, model, workspace: workspaceRoot, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, localRequest: {
                     baseUrl: active.baseUrl,
                     apiKey: auth.apiKey,
                     headers: auth.headers,
@@ -4070,11 +4557,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     parallelTools: [SUBAGENT_TOOL_NAME],
                     parallelToolLimit: resolveParallelSubagents(
                         vscode.workspace.getConfiguration('xratu').get('maxParallelSubagents')),
-                },
-                executor,
+                } },
+                { executor,
                 // Shared with nested subagent runs (same live YOLO check).
-                localApprovalGate,
-                {
+                approvals: localApprovalGate, questions: decisionGate, steer: {
                     // Mid-run steering: the loop drains this at every round
                     // boundary (after tool results, before the next model
                     // request), so steered messages join the conversation
@@ -4084,7 +4570,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         ...(e.images?.length ? { attachments: e.images } : {}),
                         ...(e.steerId ? { steerId: e.steerId } : {}),
                     })),
-                },
+                } },
             );
 
             for await (const event of agent) {
@@ -4126,6 +4612,55 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             }
         }
 
+        return outcome;
+    }
+
+    private async _runOpenCodeAgent(prompt: string, rulesContext: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean): Promise<StreamOutcome> {
+        const controller = existingController ?? new AbortController();
+        const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
+        this._abortControllers.set('chat', controller);
+        this._runInFlight = true;
+        this._localAccumulatedText = '';
+        this._localAccumulatedThinking = '';
+        this._localThinkingBlockEvent = null;
+        this._localThinkingBlockRaw = null;
+        this._localCurrentUsage = null;
+        this._localTurnUsage = null;
+        this._runBaseUrl = null;
+        this._runNativeProvider = `opencode/${this._selectedModel?.split('/')[0] ?? 'unknown'}`;
+        this._runSubscription = false;
+        this._runCostCurrency = 'USD';
+        this._localPendingTurn = { prompt, events: outcome.events };
+        this._postEngineState();
+        try {
+            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspace) throw new EngineError('engineWorkspaceRequired');
+            if (!this._selectedModel) throw new EngineError('engineModelMissing');
+            const engine = await this._getOpenCodeEngine();
+            this._nativeTurnActive = true;
+            const agent = engine.runTurn({ prompt: buildLocalUserText(prompt, attachments), context: rulesContext, model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments: attachments?.filter((a) => isImageAttachment(a.mimeType)).map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 })) }, {
+                approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
+                questions: { ask: (question) => this._requestLocalDecision(question) },
+                onSession: async (session) => { this._engineSession = session; this._observeNativeShells(engine, session.nativeSessionId!, workspace); await this._persistLocalSession(); },
+                steer: { drain: () => this._localSteerQueue.splice(0).map((entry) => ({ text: entry.text, attachments: entry.images, steerId: entry.steerId })) },
+                onSteerRejected: (steerId) => this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId }),
+            });
+            for await (const event of agent) this._handleLocalAgentEvent(event, outcome);
+        } catch (error) {
+            if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) outcome.aborted = true;
+            else {
+                const detail = error instanceof Error ? error.message : String(error);
+                outcome.errorEvent = { error: detail };
+                this._view?.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: detail });
+            }
+        } finally {
+            this._nativeTurnActive = false;
+            this._runInFlight = false;
+            this._localPendingTurn = null;
+            if (this._localPartialTimer) { clearTimeout(this._localPartialTimer); this._localPartialTimer = null; }
+            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
+            this._postEngineState();
+        }
         return outcome;
     }
 
@@ -4229,6 +4764,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 });
                 break;
             case 'steer':
+                this._flushLiveSegment();
                 // The webview held this steer bubble while the tool call ran;
                 // confirm it now so the timeline splits at the exact point the
                 // model receives the message.
@@ -4280,7 +4816,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     void this._recordUsage({
                         ts: Date.now(),
                         sessionId: this._sessionId,
-                        host: baseUrlHost(this._runBaseUrl ?? '') ?? '',
+                        host: this._runNativeProvider ?? baseUrlHost(this._runBaseUrl ?? '') ?? '',
+                        engine: this._runNativeProvider ? 'opencode' : 'xratu',
+                        ...(this._runNativeProvider ? { costSource: event.usage.costUsd === undefined ? 'unknown' as const : 'reported' as const } : {}),
                         model: this._selectedModel ?? '',
                         ...(this._runSubscription ? { billing: 'chatgpt-plan' as const } : {}),
                         input: event.usage.promptTokens ?? 0,
@@ -4372,6 +4910,30 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _fetchModels(): Promise<boolean> {
         if (!this._view) return false;
+        if (this._activeEngine === 'opencode') {
+            this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
+            try {
+                const epoch = this._sessionEpoch;
+                const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                if (!workspace) throw new EngineError('engineWorkspaceRequired');
+                const engine = await this._getOpenCodeEngine();
+                if (this._engineSession?.nativeSessionId) this._observeNativeShells(engine, this._engineSession.nativeSessionId, workspace);
+                const catalog = await engine.models(workspace);
+                if (this._activeEngine !== 'opencode' || epoch !== this._sessionEpoch) return false;
+                const models = catalog.map((model) => `${model.providerID}/${model.id}`);
+                if (!this._selectedModel || !models.includes(this._selectedModel)) this._selectedModel = models.find((id) => id === 'opencode/big-pickle') ?? models[0] ?? null;
+                await this._rememberModelForActiveCredential(this._selectedModel);
+                const contextWindows = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.limit.context]));
+                this._nativeModelWindows = contextWindows;
+                this._nativeModelVariants = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.variants.map((variant) => variant.id).filter((id) => id !== 'default')]));
+                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: this._selectedModel ?? '', selectedModel: this._selectedModel ?? undefined, models, contextWindows, nativeVariants: this._nativeVariants(), capabilities: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, { provider: model.providerID, free: isFreeModel(model), variants: this._nativeModelVariants[`${model.providerID}/${model.id}`], noReasoning: !this._nativeModelVariants[`${model.providerID}/${model.id}`].length, vision: model.capabilities.input.includes('image'), noTools: !model.capabilities.tools }])), visionCapable: catalog.find((model) => `${model.providerID}/${model.id}` === this._selectedModel)?.capabilities.input.includes('image') ?? false, displayNames: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.name])) });
+                return models.length > 0;
+            } catch (error) {
+                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: '', models: [] });
+                this._view.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: error instanceof Error ? error.message : String(error) });
+                return false;
+            } finally { this._view.webview.postMessage({ type: 'modelsRefreshing', active: false }); }
+        }
         // A remembered model for THIS credential wins over the in-memory one -
         // the in-memory value may belong to the credential we just switched
         // away from. The legacy secret is the pre-multi-provider fallback.
@@ -4438,6 +5000,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 ? await this._ensureModelsDevCatalog()
                 : null;
             let probed = discoverModels ? await discoverModels() : await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev, extraHeaders);
+            if (this._activeEngine !== 'xratu') return false;
             if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
                 return false;
             }
@@ -5463,6 +6026,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Reset the per-session ledgers. Callers own cancel + epoch bump. */
     private _resetSessionLedgers(): void {
+        this._engineSession = { engineId: this._activeEngine };
         this._forgetSubagentRuns();
         this._sessionId = null;
         // A new conversation gets a fresh OpenCode session id.
@@ -5557,6 +6121,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return;
         }
         this._sessionId = snapshot.sessionId;
+        await this._restoreEngine(snapshot.engineSession);
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
@@ -5578,6 +6143,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             void this._rememberModelForActiveCredential(snapshot.model);
         }
         await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
+        await this._persistLocalSession();
         await this._reloadWebviewChat();
     }
 
@@ -5616,6 +6182,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             console.error('xratu: create local session failed', e);
         }
         await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
+        await this._persistLocalSession();
         await this._reloadWebviewChat();
     }
 
@@ -5700,6 +6267,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._ephemeralSessionId = null;
         }
         this._sessionId = snapshot.sessionId;
+        await this._restoreEngine(snapshot.engineSession);
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {
             USD: snapshot.totalCostUsd ?? 0,
@@ -5827,6 +6395,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._sessionId!,
             {
                 workspace: this._localWorkspaceKey(),
+                engineSession: this._engineSession ?? { engineId: this._activeEngine },
                 model: this._selectedModel,
                 summary: this._sessionSummary,
                 localHistory: this._localHistory,
@@ -5991,6 +6560,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     _cancelActiveRequests() {
+        this._cancelModelPings();
         for (const controller of this._abortControllers.values()) {
             controller.abort();
         }
@@ -6466,6 +7036,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
             if (!opts?.steerCarry) {
                 this._localRunActive = false;
+                this._postEngineState();
                 this._settleLocalRun();
             }
             this._abortControllers.delete('chat');
@@ -6699,7 +7270,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         // --- Local approval: resolve the pending promise, the local agent
         //     generator continues on its own (no cloud /chat/approve call).
-        if (approvalId.startsWith('local-')) {
+        if (this._localApprovalResolvers[approvalId]) {
             // "Allow for this session": every approvable kind in this round
             // is trusted for the REST of the session (cleared on new session).
             if (sessionApprove) {
@@ -6938,6 +7509,10 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('xratu.setLlmCredentials', async () => {
             await provider.setLlmCredentialsPublic();
+        }),
+        vscode.commands.registerCommand('xratu.setup', async () => {
+            await provider.ensureView();
+            provider.openSetup();
         }),
         vscode.commands.registerCommand('xratu.openSettings', async () => {
             await provider.openSettingsPublic();

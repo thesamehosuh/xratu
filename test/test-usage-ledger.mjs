@@ -270,5 +270,14 @@ check('USAGE_MAX_ENTRIES is a sane cap', USAGE_MAX_ENTRIES >= 1000, true);
     check('mixed totals count all tokens but only API cost', sumUsage(repriced.entries), { input: 200, output: 40, cached: 0, USD: 9, IRT: 0 });
 }
 
+{
+    const native = normalizeEntry(entry({ engine: 'opencode', host: 'opencode/openrouter', costSource: 'reported', amount: 0.123, currency: 'USD' }));
+    check('native provenance survives reload', [native.engine, native.host, native.costSource], ['opencode', 'opencode/openrouter', 'reported']);
+    const repriced = recomputeCosts([native], () => ({ amount: 99, currency: 'IRT' }));
+    check('Xratu price edits preserve native reported cost', [repriced.changed, repriced.entries[0].amount, repriced.entries[0].currency], [false, 0.123, 'USD']);
+    const unknown = normalizeEntry(entry({ engine: 'opencode', costSource: 'unknown', amount: null, currency: null }));
+    check('unknown native costs are not inferred from Xratu rates', recomputeCosts([unknown], () => ({ amount: 99, currency: 'USD' })).entries[0].amount, null);
+}
+
 console.log(failed === 0 ? '\nusage-ledger tests: all passed' : `\nusage-ledger tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

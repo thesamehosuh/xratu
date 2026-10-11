@@ -20,6 +20,7 @@ import type {
 } from '../types';
 
 interface ProxyPageProps {
+    nativeEngine?: boolean;
     onBack: () => void;
     /** Live host resolution + stored settings (null until the first echo). */
     state: ProxyStateView | null;
@@ -82,6 +83,7 @@ const MODE_TIPS: Record<'auto' | 'custom' | 'off', Parameters<typeof t>[0]> = {
 };
 
 export function ProxyPage({
+    nativeEngine = false,
     onBack,
     state,
     candidates,
@@ -364,6 +366,7 @@ export function ProxyPage({
                         <h3>{t('proxyCardMcp')}</h3>
                     </div>
 
+                    {nativeEngine && <p className="scope-hint">{t('setupProxyScope')}</p>}
                     <div className="proxy-mcp-bulk">
                         <span>{t('proxyMcpAll')}</span>
                         <div className="lang-choice">

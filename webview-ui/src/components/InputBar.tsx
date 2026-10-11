@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
+    Activity,
     ChevronDown,
     ShieldCheck,
     ListChecks,
@@ -9,6 +10,7 @@ import {
     ChevronUp,
     Cpu,
     Eye,
+    Filter,
     File,
     Link,
     Paperclip,
@@ -22,10 +24,10 @@ import {
     TriangleAlert,
     X,
 } from 'lucide-react';
-import type { ComposerAttachment, ModelCapability, ThinkingLevel, TokenUsage } from '../types';
+import type { ComposerAttachment, ModelCapability, ModelPingState, ThinkingLevel, TokenUsage } from '../types';
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
 import { formatCost, type Cost } from '../cost';
-import { getLocale, t, tf } from '../i18n';
+import { getLocale, t, tf, tOrRaw } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 
 /** Fallback when no window is known for this model yet. */
@@ -276,6 +278,9 @@ interface InputBarProps {
     modelDisplayNames?: Record<string, string>;
     /** Per-model capability badges (vision / no tools). */
     modelCapabilities?: Record<string, ModelCapability>;
+    engineLabel?: string;
+    modelPings?: Record<string, ModelPingState>;
+    onPingModel?: (model: string, automatic?: boolean) => void;
     /** Per-model context windows, shown as a compact badge. */
     modelWindows?: Record<string, number>;
     selectedModel?: string | null;
@@ -289,9 +294,9 @@ interface InputBarProps {
      *  selected model. */
     onSetContextWindow?: (window: number | null) => void;
     /** Reasoning effort currently selected for the model (null = Default). */
-    thinkingLevel?: ThinkingLevel | null;
+    thinkingLevel?: string | null;
     /** Persist (or clear with null) a thinking level for the selected model. */
-    onSetThinkingLevel?: (level: ThinkingLevel | null) => void;
+    onSetThinkingLevel?: (level: string | null) => void;
     usage?: TokenUsage | null;
     /** Summed cost of the conversation so far (null when unknown). */
     sessionCost?: Cost | null;
@@ -345,6 +350,8 @@ export function InputBar({
     models = [],
     modelDisplayNames,
     modelCapabilities,
+    engineLabel, modelPings,
+    onPingModel,
     modelWindows,
     selectedModel,
     onSelectModel,
@@ -382,6 +389,17 @@ export function InputBar({
     const [value, setValue] = useState(draftText);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [filter, setFilter] = useState('');
+    const [freeOnly, setFreeOnly] = useState(true);
+    const autoPinged = useRef(new Set<string>());
+    useEffect(() => {
+        if (!pickerOpen) { autoPinged.current.clear(); return; }
+        if (!onPingModel) return;
+        for (const model of models) {
+            if (modelCapabilities?.[model]?.free !== true || autoPinged.current.has(model)) continue;
+            autoPinged.current.add(model);
+            if (modelPings?.[model]?.status !== 'checking') onPingModel(model, true);
+        }
+    }, [pickerOpen, models, modelCapabilities, modelPings, onPingModel]);
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
     const [attachments, setAttachments] = useState<ComposerAttachment[]>(draftAttachments);
@@ -437,7 +455,9 @@ export function InputBar({
     // Effort variants for the selected model: the provider's reported set when
     // it exposes one, else the conservative default set. Sorted weakest →
     // strongest for the segmented control.
-    const thinkingOptions = useMemo<ThinkingLevel[]>(() => {
+    const thinkingOptions = useMemo<string[]>(() => {
+        const native = selectedModel ? modelCapabilities?.[selectedModel]?.variants : undefined;
+        if (native) return native;
         const reported = selectedModel ? modelCapabilities?.[selectedModel]?.reasoningLevels : undefined;
         if (!reported?.length) return DEFAULT_THINKING_LEVELS;
         return [...reported].sort((a, b) => THINKING_ORDER.indexOf(a) - THINKING_ORDER.indexOf(b));
@@ -445,6 +465,7 @@ export function InputBar({
     // A persisted variant the model no longer reports reads as Default, so the
     // chip and the radio group never show a level the request would drop.
     const activeThinking = thinkingLevel && thinkingOptions.includes(thinkingLevel) ? thinkingLevel : null;
+    const thinkingLabel = (level: string) => Object.prototype.hasOwnProperty.call(THINKING_KEYS, level) ? t(THINKING_KEYS[level as ThinkingLevel]) : level;
 
     // Window options smaller than the context ALREADY occupied by the
     // conversation are disabled - shrinking below the filled level would
@@ -619,9 +640,9 @@ export function InputBar({
 
     const filteredModels = useMemo(() => {
         const q = normalizeModelQuery(filter);
-        if (!q) return models;
-        return models.filter((m) => normalizeModelQuery(`${m} ${modelDisplayNames?.[m] ?? ''}`).includes(q));
-    }, [filter, models, modelDisplayNames]);
+        const hasPricing = models.some((m) => modelCapabilities?.[m]?.free !== undefined);
+        return models.filter((m) => (!hasPricing || !freeOnly || modelCapabilities?.[m]?.free === true) && (!q || normalizeModelQuery(`${m} ${modelDisplayNames?.[m] ?? ''} ${modelCapabilities?.[m]?.provider ?? ''}`).includes(q)));
+    }, [filter, models, modelDisplayNames, modelCapabilities, freeOnly]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
         setAttachError(null);
@@ -1162,6 +1183,7 @@ export function InputBar({
                         title={t('pickModel')}
                     >
                         <Cpu size={12} />
+                        {engineLabel && <span className="composer-engine" dir="ltr">{engineLabel}</span>}
                         <span dir="ltr" className="chip-model-name">
                             {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}
                         </span>
@@ -1171,7 +1193,7 @@ export function InputBar({
                                 title={t('thinkingLevel')}
                             >
                                 <Brain size={11} />
-                                {t(THINKING_KEYS[activeThinking])}
+                                {thinkingLabel(activeThinking)}
                             </span>
                         )}
                         <ChevronUp size={12} />
@@ -1282,6 +1304,11 @@ export function InputBar({
                                     aria-label={t('searchModelAria')}
                                 />
                             </div>
+                            {models.some((m) => modelCapabilities?.[m]?.free !== undefined) && (
+                                <button type="button" className={`model-free-filter${freeOnly ? ' active' : ''}`} aria-label={t('modelFreeOnly')} title={t('modelFreeOnly')} aria-pressed={freeOnly} onClick={() => setFreeOnly((value) => !value)}>
+                                    <Filter size={14} />
+                                </button>
+                            )}
                             <button
                                 type="button"
                                 className={`ghost-btn small${refreshing ? ' spinning' : ''}`}
@@ -1299,6 +1326,7 @@ export function InputBar({
                                 <p className="model-empty">{t('noModels')}</p>
                             )}
                             {filteredModels.map((m) => (
+                                <div className="model-row" key={m}>
                                 <button
                                     key={m}
                                     type="button"
@@ -1307,7 +1335,7 @@ export function InputBar({
                                     className={`model-item${m === selectedModel ? ' selected' : ''}`}
                                     onClick={() => pickModel(m)}
                                 >
-                                    <span dir="ltr" className="model-item-name" title={m}>{modelDisplayNames?.[m] ?? m}</span>
+                                    <span dir="ltr" className="model-item-label" title={m}><span className="model-item-name">{modelDisplayNames?.[m] ?? m}</span>{modelCapabilities?.[m]?.provider && <span className="model-provider">{modelCapabilities[m].provider}</span>}</span>
                                     <span className="model-badges">
                                         {modelWindows?.[m] ? (
                                             <span className="model-badge" dir="ltr" title={t('modelWindowTitle')} aria-label={t('modelWindowTitle')}>
@@ -1329,6 +1357,20 @@ export function InputBar({
                                         <Check size={13} className="model-check" />
                                     )}
                                 </button>
+                                {modelCapabilities?.[m]?.free === true && onPingModel && <button
+                                    type="button"
+                                    className={`model-ping ${modelPings?.[m]?.status ?? ''}`}
+                                    disabled={modelPings?.[m]?.status === 'checking'}
+                                    onClick={() => onPingModel(m)}
+                                    aria-label={tf('modelPingAction', { model: modelDisplayNames?.[m] ?? m })}
+                                    title={[t('modelPing'), modelPings?.[m] && t(`modelPing${modelPings[m].status === 'rateLimited' ? 'Limited' : modelPings[m].status === 'available' ? 'Available' : modelPings[m].status === 'checking' ? 'Checking' : 'Failed'}`), modelPings?.[m]?.checkedAt && new Date(modelPings[m].checkedAt!).toLocaleTimeString(getLocale()), modelPings?.[m]?.detail && tOrRaw(modelPings[m].detail!)].filter(Boolean).join(' · ')}
+                                >
+                                    {modelPings?.[m]?.status === 'checking' ? <RefreshCw size={12} className="spinning" /> : <Activity size={12} />}
+                                    {modelPings?.[m]?.status === 'available' && <span>{t('modelPingAvailable')}</span>}
+                                    {modelPings?.[m]?.status === 'rateLimited' && <span>{t('modelPingLimited')}</span>}
+                                    {modelPings?.[m]?.status === 'failed' && <span>{t('modelPingFailed')}</span>}
+                                </button>}
+                                </div>
                             ))}
                         </div>
                         {selectedModel && onSetThinkingLevel && modelCapabilities?.[selectedModel]?.noReasoning !== true && (
@@ -1349,7 +1391,7 @@ export function InputBar({
                                                 className={`thinking-seg-opt${active ? ' selected' : ''}`}
                                                 onClick={() => onSetThinkingLevel(lvl)}
                                             >
-                                                {t(lvl === null ? 'thinkingDefault' : THINKING_KEYS[lvl])}
+                                                {lvl === null ? t('thinkingDefault') : thinkingLabel(lvl)}
                                             </button>
                                         );
                                     })}

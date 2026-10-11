@@ -51,7 +51,7 @@ test('showChat renders the chat composer', async ({ page }) => {
 test('showWelcome renders the welcome screen', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showWelcome' });
-    await expect(page.locator('.welcome')).toBeVisible();
+    await expect(page.locator('.onboarding')).toBeVisible();
 });
 
 test('the composer cost pill opens the usage page and goes back to chat', async ({ page }) => {

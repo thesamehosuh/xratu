@@ -1,3 +1,8 @@
+export type { SetupEngine } from '../../src/engines/setup';
+import type { NativeSetupState } from '../../src/engines/nativeSetup';
+export type { NativeSetupState } from '../../src/engines/nativeSetup';
+import type { RuntimeSetupState, SetupEngine, SetupPath } from '../../src/engines/setup';
+export type { RuntimeSetupState, SetupPath } from '../../src/engines/setup';
 import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
 import type { BrowserCommand, BrowserFrame, BrowserState } from '../../src/browserTypes';
 export type { SubagentTrace } from '../../src/subagentObservation';
@@ -18,7 +23,37 @@ export interface OpenDiffEdit {
     result?: string;
 }
 
+export interface EngineSetupState {
+    active: 'xratu' | 'opencode';
+    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'failed';
+    version?: string;
+    binaryPath?: string;
+    customPath: string;
+    installedByXratu: boolean;
+    downloadedBytes?: number;
+    totalBytes?: number;
+    errorKey?: string;
+    detail?: string;
+    busy: boolean;
+}
+
 export type ToExtensionMessage =
+    | { type: 'nativeGetState'; requestId: string }
+    | { type: 'nativeCancel' }
+    | { type: 'nativeConnect'; requestId: string; integrationID: string; key?: string; methodID?: string }
+    | { type: 'nativeOAuthCode'; requestId: string; code: string }
+    | { type: 'setupGetState'; requestId: string; engine: SetupEngine; path: SetupPath; credentialId?: string; onboarding?: boolean }
+    | { type: 'setupComplete'; requestId: string; model: string }
+    | { type: 'setupCancel' }
+    | { type: 'setupOpen'; path?: SetupPath }
+    | { type: 'setupOpenFolder' }
+    | { type: 'setupOpenRuntime'; runtime: 'ollama' | 'lmstudio' | 'vllm' | 'llama.cpp' }
+    | { type: 'enginesGetState' }
+    | { type: 'engineSelect'; engine: 'xratu' | 'opencode' }
+    | { type: 'engineInstall' }
+    | { type: 'engineInstallCancel' }
+    | { type: 'engineSetPath'; path: string }
+    | { type: 'pingFreeModel'; model: string; automatic?: boolean }
     | { type: 'browserGetState' }
     | { type: 'browserCommand'; sessionId: string; browserId: string; command: BrowserCommand }
     | { type: 'browserVisible'; sessionId: string; browserId: string; visible: boolean }
@@ -91,6 +126,7 @@ export type ToExtensionMessage =
     | { type: 'setContextWindowOverride'; model: string; window: number | null }
     /** Persist a per-model reasoning-effort level (null = Default - omit the parameter). */
     | { type: 'setThinkingLevel'; model: string; level: ThinkingLevel | null }
+    | { type: 'setNativeVariant'; model: string; variant: string | null }
     /** Edit the userIndex-th user message and resend (workspace rewinds).
      *  Attachments ride along when the composer edit added files. */
     | { type: 'editMessage'; userIndex: number; value: string; attachments?: ComposerAttachment[] }
@@ -300,6 +336,8 @@ export interface OAuthHostState {
  *  informative signals are present: `vision` when supported, `noTools` when
  *  the model cannot drive the agent loop. */
 export interface ModelCapability {
+    provider?: string;
+    free?: boolean;
     vision?: boolean;
     noTools?: boolean;
     /** Model supports configurable reasoning effort. */
@@ -308,6 +346,13 @@ export interface ModelCapability {
     noReasoning?: boolean;
     /** Provider-reported effort variants; absent = offer the default set. */
     reasoningLevels?: ThinkingLevel[];
+    /** Native engine variant IDs, preserved without translating SDK settings. */
+    variants?: string[];
+}
+export interface ModelPingState {
+    status: 'checking' | 'available' | 'rateLimited' | 'failed';
+    checkedAt?: number;
+    detail?: string;
 }
 
 export interface SessionMeta {
@@ -330,6 +375,9 @@ export interface ProviderBenchmark {
 }
 
 export type FromExtensionMessage =
+    | { type: 'modelPing'; model: string; state: ModelPingState }
+    | { type: 'enginesState'; state: EngineSetupState }
+    | { type: 'openEngines' }
     | { type: 'openBrowser' }
     | { type: 'browserState'; state: BrowserState }
     | { type: 'browserFrame'; frame: BrowserFrame }
@@ -341,7 +389,9 @@ export type FromExtensionMessage =
     | ({ type: 'localModelOperation' } & LocalModelOperation)
     | ({ type: 'providerBenchmark' } & ProviderBenchmark)
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
-    | { type: 'showWelcome' }
+    | { type: 'showWelcome'; path?: SetupPath; canBack?: boolean }
+    | { type: 'nativeSetupState'; state: NativeSetupState }
+    | { type: 'runtimeSetupState'; state: RuntimeSetupState }
     /** Enter the chat view. `workspaceKind` picks the empty-state suggestion
      *  set - the default chips all assume an established project, so an empty
      *  or not-yet-started folder gets starting-from-scratch prompts instead.
@@ -417,13 +467,13 @@ export type FromExtensionMessage =
     /** A pending decision card (the `ask_user_question` tool): the model asked
      *  the user to pick between options. Attaches to the live assistant
      *  bubble like `needsApproval`. */
-    | { type: 'decisionRequest'; decision_id: string; header: string; question: string; options: DecisionOption[] }
+    | { type: 'decisionRequest'; decision_id: string; header: string; question: string; options: DecisionOption[]; multiSelect?: boolean; allowCustomAnswer?: boolean }
     /** The decision settled. `answer` is the picked option label, the custom
      *  answer text, or null when the card was dismissed/cancelled. */
     | { type: 'decisionResolved'; decision_id: string; answer: string | null }
     | { type: 'yoloMode'; enabled: boolean }
     | { type: 'planMode'; enabled: boolean }
-    | { type: 'modelInfo'; defaultModel: string; models: string[]; displayNames?: Record<string, string>; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
+    | { type: 'modelInfo'; defaultModel: string; models: string[]; displayNames?: Record<string, string>; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; nativeVariants?: Record<string, string>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
     | { type: 'modelsRefreshing'; active: boolean }
     /** History was rewound to before the userIndex-th user message. */
     | { type: 'truncateFromUser'; userIndex: number }
@@ -442,7 +492,7 @@ export type FromExtensionMessage =
     | { type: 'savedCredentials'; credentials: SavedCredential[] }
     | { type: 'oauthState'; state: OAuthHostState }
     | { type: 'clipboardResult'; requestId: string; ok: boolean }
-    | { type: 'credentialsSaved'; returnToChat?: boolean }
+    | { type: 'credentialsSaved'; returnToChat?: boolean; credentialId?: string }
     | { type: 'byokReset' }
     | { type: 'openSettings' }
     | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number; offline?: boolean }
@@ -822,6 +872,8 @@ export interface DecisionOption {
 }
 
 export interface DecisionPayload {
+    multiSelect?: boolean;
+    allowCustomAnswer?: boolean;
     decision_id: string;
     /** Short card header from the model; falls back to a generic label. */
     header?: string;

@@ -213,6 +213,7 @@ console.log('oauth-host: Usage separates plan tokens from API spend on the same 
         });
         const posts = [];
         h._view = { webview: { postMessage: (value) => posts.push(value) } };
+        h._activeEngine = 'xratu';
         h._selectedModel = 'gpt-6-luna';
         h._resolveActiveCredentialId = async () => 'account';
         h._getSavedCredentials = async () => [{ id: 'account', baseUrl: 'https://api.openai.com/v1' }];
@@ -239,6 +240,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     });
     const posts = [];
     h._view = { webview: { postMessage: (value) => posts.push(value) } };
+    h._activeEngine = 'xratu';
     h._selectedModel = 'test-model';
     h._resolveActiveCredentialId = async () => 'insecure';
     h._getSavedCredentials = async () => [{ id: 'insecure', baseUrl: 'http://provider.example/v1' }];
@@ -287,6 +289,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     });
     h._globalState = { get: (key) => state.get(key), update: async (key, value) => state.set(key, value) };
     h._secrets = { delete: async (key) => deletedSecrets.push(key) };
+    h._activeEngine = 'xratu';
     h._selectedModel = 'deleted-model';
     h._getLlmCredentials = async () => ({ llm_base_url: 'http://localhost:11434/v1' });
     h._resolveActiveCredentialId = async () => 'local';

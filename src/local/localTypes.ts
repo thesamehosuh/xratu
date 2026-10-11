@@ -115,6 +115,8 @@ export interface LocalToolImage {
 }
 
 export interface LocalUsage {
+    /** Actual native-engine spend, when its runtime reports it. */
+    costUsd?: number;
     promptTokens: number | null;
     completionTokens: number | null;
     totalTokens: number | null;

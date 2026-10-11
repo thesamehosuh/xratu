@@ -1,10 +1,11 @@
-import { ArrowLeft, ArrowRight, Bot, ChartNoAxesColumn, Globe, KeyRound, PlugZap, Settings, Sparkles, Store } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Bot, Cpu, ChartNoAxesColumn, Globe, KeyRound, PlugZap, Settings, Sparkles, Store } from 'lucide-react';
 import { getLocale, t } from '../i18n';
 
-export type SettingsSection = 'providers' | 'mcp' | 'marketplace' | 'skills' | 'agents' | 'usage' | 'proxy' | 'settings';
+export type SettingsSection = 'providers' | 'engines' | 'mcp' | 'marketplace' | 'skills' | 'agents' | 'usage' | 'proxy' | 'settings';
 
 const SECTIONS = [
     { id: 'providers', label: 'providersTitle', icon: KeyRound },
+    { id: 'engines', label: 'enginesTitle', icon: Cpu },
     { id: 'mcp', label: 'mcpServersTab', icon: PlugZap },
     { id: 'marketplace', label: 'mcpMarketTab', icon: Store },
     { id: 'skills', label: 'skillsTitle', icon: Sparkles },
