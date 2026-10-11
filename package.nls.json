@@ -26,5 +26,6 @@
 	"command.attachFile.title": "Attach Files…",
 	"command.attachFromExplorer.title": "Attach to Xratu Chat",
 	"view.container.title": "Xratu",
-	"view.chat.name": "Xratu Chat"
+	"view.chat.name": "Xratu Chat",
+	"config.browserExecutablePath.desc": "Absolute path to a Chromium browser executable. Leave empty to use installed Chrome or Edge. The browser runs in an isolated profile on the extension host."
 }

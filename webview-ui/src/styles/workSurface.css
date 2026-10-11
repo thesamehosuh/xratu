@@ -259,8 +259,8 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .panel-hidden { display:none; }
 .dock-sidebar { display:none; position:relative; min-width:0; min-height:0; background:var(--page-canvas); }
 .dock-tabs { position:relative; min-width:0; grid-area:1 / 1; gap:10px; z-index:5; }
-.dock-tab-list { display:flex; align-items:center; gap:20px; min-width:0; flex:1; }
-.dock-tabs .surface-tab { gap:5px; white-space:nowrap; min-width:0; }
+.dock-tab-list { display:flex; align-items:center; gap:20px; min-width:0; flex:1; overflow-x:auto; scrollbar-width:thin; }
+.dock-tabs .surface-tab { gap:5px; white-space:nowrap; min-width:0; flex-shrink:0; }
 .dock-tabs .surface-tab[draggable=true] { cursor:grab; }
 .dock-tabs .surface-tab[draggable=true]:active { cursor:grabbing; }
 .dock-tabs .surface-tab > span:not(.tab-count) { overflow:hidden; text-overflow:ellipsis; }

@@ -1,4 +1,5 @@
 import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
+import type { BrowserCommand, BrowserFrame, BrowserState } from '../../src/browserTypes';
 export type { SubagentTrace } from '../../src/subagentObservation';
 import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
@@ -18,6 +19,10 @@ export interface OpenDiffEdit {
 }
 
 export type ToExtensionMessage =
+    | { type: 'browserGetState' }
+    | { type: 'browserCommand'; sessionId: string; browserId: string; command: BrowserCommand }
+    | { type: 'browserVisible'; sessionId: string; browserId: string; visible: boolean }
+    | { type: 'browserFrameAck'; sessionId: string; browserId: string; frameId: number }
     | { type: 'changesGetState'; sha: string; requestId: string }
     | { type: 'changeFileGet'; sha: string; path: string; requestId: string }
     | { type: 'changeFileOpen'; sha: string; path: string }
@@ -325,6 +330,10 @@ export interface ProviderBenchmark {
 }
 
 export type FromExtensionMessage =
+    | { type: 'openBrowser' }
+    | { type: 'browserState'; state: BrowserState }
+    | { type: 'browserFrame'; frame: BrowserFrame }
+    | { type: 'browserActionError'; sessionId: string; browserId: string; errorKey: string; detail: string }
     | { type: 'changesState'; sha: string; requestId: string; files: ReviewChange[]; errorKey?: string }
     | { type: 'changeFileState'; sha: string; requestId: string; file?: ReviewFile; errorKey?: string }
     | { type: 'agentsState'; profiles: AgentProfileView[]; errorKey?: string }

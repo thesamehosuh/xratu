@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -124,13 +124,20 @@
           "type": "number",
           "default": 90,
           "description": "%config.autoCompactThreshold.desc%"
+        },
+        "xratu.browserExecutablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%config.browserExecutablePath.desc%"
         }
       },
       "restrictedConfigurations": [
         "xratu.mcpServers",
         "xratu.proxyUrl",
         "xratu.noProxy",
-        "xratu.mcpMarketplaceSources"
+        "xratu.mcpMarketplaceSources",
+        "xratu.browserExecutablePath"
       ]
     },
     "commands": [
@@ -300,7 +307,8 @@
     "lint:fix": "eslint . --fix",
     "prepare": "husky",
     "test:runtime-controls": "node test/test-runtime-controls.mjs",
-    "test:first-token-timeout": "node test/test-first-token-timeout.mjs"
+    "test:first-token-timeout": "node test/test-first-token-timeout.mjs",
+    "test:browser": "node test/test-browser.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [
@@ -337,6 +345,7 @@
     "lucide-react": "^1.33.0",
     "markdown-it": "^14.3.2",
     "pdfjs-dist": "^4.10.38",
+    "playwright-core": "^1.64.0",
     "shiki": "^4.2.0",
     "undici": "^6.28.1",
     "ws": "^8.22.0"

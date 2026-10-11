@@ -24,6 +24,7 @@ import type { ThinkingLevel } from './local/localTypes';
 import type { ExternalServerConfig, McpConfigStore, McpSaveTarget } from './mcpConfig';
 import { isDir, isKnownSkillsPath, openSkillFile } from './skillsHost';
 import type { TaskListItem } from './taskList';
+import type { BrowserCommand } from './browserTypes';
 
 /** Payload vscode hands to webview.onDidReceiveMessage: typed any
  *  upstream - derived here so no local any annotation exists. */
@@ -38,6 +39,10 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _sendBrowserState(): void;
+    _browserCommand(sessionId: string, browserId: string, command: BrowserCommand): Promise<void>;
+    _browserVisible(sessionId: string, browserId: string, visible: boolean): void;
+    _browserAck(sessionId: string, browserId: string, frameId: number): void;
     _completeWebviewStartup(): void;
     _sendChangesState(sha: string, requestId: string): Promise<void>;
     _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean): Promise<void>;
@@ -140,6 +145,18 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
     (async () => {
         try {
             switch (data.type) {
+                case 'browserGetState':
+                    host._sendBrowserState();
+                    break;
+                case 'browserCommand':
+                    if (typeof data.sessionId === 'string' && typeof data.browserId === 'string' && data.command && typeof data.command === 'object') await host._browserCommand(data.sessionId, data.browserId, data.command);
+                    break;
+                case 'browserVisible':
+                    if (typeof data.sessionId === 'string' && typeof data.browserId === 'string' && typeof data.visible === 'boolean') host._browserVisible(data.sessionId, data.browserId, data.visible);
+                    break;
+                case 'browserFrameAck':
+                    if (typeof data.sessionId === 'string' && typeof data.browserId === 'string' && Number.isInteger(data.frameId)) host._browserAck(data.sessionId, data.browserId, data.frameId);
+                    break;
                 case 'changesGetState':
                     if (typeof data.sha === 'string' && typeof data.requestId === 'string') await host._sendChangesState(data.sha, data.requestId);
                     break;

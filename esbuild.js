@@ -15,7 +15,7 @@ async function main() {
     sourcesContent: false,
     platform: 'node',
     outfile: 'dist/extension.js',
-    external: ['vscode'],
+    external: ['vscode', 'playwright-core'],
     logLevel: 'info',
 
   });
@@ -38,6 +38,11 @@ async function main() {
   } else {
     console.warn('pdf.worker.min.mjs not found - PDF text extraction will fail at runtime');
   }
+  // Playwright loads its protocol driver and injected scripts relative to its
+  // package root. Keep that runtime intact instead of flattening it into esbuild.
+  const browserDriverOut = path.join(__dirname, 'dist', 'node_modules', 'playwright-core');
+  fs.rmSync(browserDriverOut, { recursive: true, force: true });
+  fs.cpSync(path.dirname(require.resolve('playwright-core/package.json')), browserDriverOut, { recursive: true });
 }
 
 main().catch(e => {

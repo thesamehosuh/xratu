@@ -1,5 +1,5 @@
 /** Placement belongs to the work surface; panel contents keep their own state. */
-export const SURFACE_PANELS = ['conversation', 'changes', 'activity', 'agents', 'background'] as const;
+export const SURFACE_PANELS = ['conversation', 'changes', 'activity', 'agents', 'background', 'browser'] as const;
 export type SurfacePanel = typeof SURFACE_PANELS[number];
 export type DockLocation = 'main' | 'side';
 export interface DockLayout {
@@ -11,7 +11,7 @@ export interface DockLayout {
 }
 
 export function defaultDockLayout(): DockLayout {
-    return { version: 1, main: ['conversation', 'activity', 'agents', 'background'], side: ['changes'], mainActive: 'conversation', sideActive: 'changes' };
+    return { version: 1, main: ['conversation', 'activity', 'agents', 'background', 'browser'], side: ['changes'], mainActive: 'conversation', sideActive: 'changes' };
 }
 
 export function readDockLayout(value: unknown): DockLayout {
@@ -20,7 +20,7 @@ export function readDockLayout(value: unknown): DockLayout {
     if (candidate.version !== 1 || !Array.isArray(candidate.main) || !Array.isArray(candidate.side)) return defaultDockLayout();
     const all = [...candidate.main, ...candidate.side];
     // Reject partial, duplicate, unknown or pinned-conversation placements.
-    if (![3, 4, 5].includes(all.length) || !['conversation', 'changes', 'activity'].every(id => all.includes(id as SurfacePanel)) || new Set(all).size !== all.length || all.some((id) => !SURFACE_PANELS.includes(id)) || !candidate.main.includes('conversation')) return defaultDockLayout();
+    if (all.length < 3 || all.length > SURFACE_PANELS.length || !['conversation', 'changes', 'activity'].every(id => all.includes(id as SurfacePanel)) || new Set(all).size !== all.length || all.some((id) => !SURFACE_PANELS.includes(id)) || !candidate.main.includes('conversation')) return defaultDockLayout();
     return {
         version: 1, main: [...candidate.main, ...SURFACE_PANELS.filter(panel => !all.includes(panel))], side: [...candidate.side],
         mainActive: candidate.main.includes(candidate.mainActive!) ? candidate.mainActive! : 'conversation',

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { BROWSER_MUTATING_TOOLS, BROWSER_TOOL_DEFINITIONS } from './browserPolicy';
+import type { BrowserController } from './browserController';
 import { isOfflineMode } from './networkPolicy';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -587,7 +589,10 @@ export function getLocalToolDefinitions(opts?: {
             requiresApproval: false,
         });
     }
-    return [...builtin, ...web, ...taskDefs, ...skillDefs, ...external];
+    const browser = BROWSER_TOOL_DEFINITIONS
+        .filter(tool => !plan || !BROWSER_MUTATING_TOOLS.has(tool.name))
+        .map(tool => ({ ...tool, requiresApproval: !yolo && BROWSER_MUTATING_TOOLS.has(tool.name) }));
+    return [...builtin, ...web, ...browser, ...taskDefs, ...skillDefs, ...external];
 }
 
 /**
@@ -1424,10 +1429,16 @@ export function createLocalToolExecutor(
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
     /** Marks this executor as a delegated child's. */
-    opts?: { nested?: boolean },
+    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean },
 ): import('./local/localAgent').LocalToolExecutor {
     return {
-        execute: async (call, onOutput) =>
-            executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested),
+        execute: async (call, onOutput) => {
+            if (call.name.startsWith('browser_')) {
+                if (opts?.plan && BROWSER_MUTATING_TOOLS.has(call.name)) return { output: 'Error: browser actions are disabled in plan mode.', isError: true };
+                if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };
+                return opts.browser.tool(opts.sessionId, call.name, call.arguments, opts.signal);
+            }
+            return executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested);
+        },
     };
 }

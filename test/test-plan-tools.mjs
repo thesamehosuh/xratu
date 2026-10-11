@@ -61,6 +61,11 @@ for (const name of ['run_tests', 'install_dependency', 'run_terminal_command', '
     const tool = runTools.find((t) => t.name === name);
     check(`run: ${name} requires approval`, tool ? tool.requiresApproval : false, true);
 }
+for (const name of ['browser_open', 'browser_navigate', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_resize', 'browser_evaluate', 'browser_close']) {
+    check(`plan: no ${name}`, planNames.has(name), false);
+    check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
+}
+for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot']) check(`plan: keeps ${name}`, planNames.has(name), true);
 
 // Read tools stay (planning needs them).
 for (const name of ['read_file', 'grep_search', 'list_files', 'update_task_list', 'exit_plan_mode', 'ask_user_question']) {

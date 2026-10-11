@@ -58,7 +58,7 @@ assert.match(html,/detail-source-line/); assert.match(html,/>38<\/span>/); asser
 const finalMessage = agentMessage({...collectAgentRuns(state.messages)[0],trace:{...trace,status:'done',entries:[{id:'final',kind:'text',text:'Final findings',html:'<p><strong>Final findings</strong></p>',startedAt:1,endedAt:2}]},status:'done'});
 assert.match(renderToString(createElement(MessageItem,{message:finalMessage,observation:true})), /<strong>Final findings<\/strong>/);
 const oldLayout = readDockLayout({version:1,main:['conversation','activity'],side:['changes']});
-assert.deepEqual(oldLayout.main,['conversation','activity','agents','background']);
+assert.deepEqual(oldLayout.main,['conversation','activity','agents','background','browser']);
 assert.deepEqual(movePanel(oldLayout,'agents','side').side,['changes','agents']);
 post({type:'toolCall',tool:'run_terminal_command',args:'{"command":"npm test"}',callId:'bg'});
 post({type:'terminalBackgrounded',callId:'bg',jobId:'job',byUser:true});

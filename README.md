@@ -37,7 +37,7 @@ runtime. Everything runs inside the extension host, on your machine.
   on hover. Approvals and questions stay in Conversation. Review checkpoint
   diffs inline, mark files reviewed, and add feedback to your draft before
   sending. Wide panels show Changes alongside
-  the conversation by default. Drag Activity, Changes, Agents, or Background between the main
+  the conversation by default. Drag Activity, Changes, Agents, Background, or Browser between the main
   tabs and sidebar, or use the tab menu. Placement and sidebar width are
   remembered; narrow windows keep every view in the main tabs. Drag the
   divider or use its arrow keys to resize.
@@ -73,6 +73,26 @@ runtime. Everything runs inside the extension host, on your machine.
   running on your machine. Per-MCP routing (auto / via proxy / direct).
 - **Persian-first** - fa UI, Jalali dates, Persian error explanations, and
   colloquial Farsi replies when you ask for them.
+
+## Browser control
+
+Open the **Browser** tab, enter a website or a local dev-server URL, and interact
+with the live page. Move the tab to the sidebar to keep the conversation beside
+it. The agent uses the same page: it can inspect accessibility and console/network
+diagnostics, capture screenshots, navigate, click, type, scroll, run page JavaScript,
+and resize the viewport. Agent actions require approval unless YOLO is on; plan
+mode only allows inspection of an already-open browser.
+
+Xratu launches installed Chrome or Edge on demand, or uses the absolute executable
+path in `xratu.browserExecutablePath`. Chromium runs inside the extension host's
+environment with its sandbox enabled and an isolated, temporary profile. In a
+remote VS Code window, URLs such as `localhost:3000` refer to the remote host.
+There is no automatic browser download. Launch failures appear in the tab.
+
+The page survives tab moves and webview reloads within the same chat; switching
+chats, closing the browser, or reloading VS Code discards it. Offline mode closes
+existing browser connections and permits only loopback requests after reopening.
+This first version supports one page per chat; popups and downloads are blocked.
 
 ## Models
 

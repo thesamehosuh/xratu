@@ -57,7 +57,7 @@ for (const saved of [null, {}, {version: 2}, {version: 1, main: ['activity'], si
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
-assert.deepEqual(layout.main, ['conversation', 'agents', 'background']);
+assert.deepEqual(layout.main, ['conversation', 'agents', 'background', 'browser']);
 assert.deepEqual(layout.side, ['changes', 'activity']);
 assert.equal(layout.sideActive, 'activity');
 layout = movePanel(layout, 'changes', 'main');
@@ -69,6 +69,11 @@ assert.deepEqual(readDockLayout(layout), layout);
 assert.equal(movePanel(layout, 'conversation', 'side'), layout);
 assert.equal(movePanel(layout, 'changes', 'main'), layout);
 assert.equal(readDockLayout({...layout, mainActive: 'unknown'}).mainActive, 'conversation');
+const legacyLayout = readDockLayout({ version: 1, main: ['conversation', 'activity', 'agents', 'background'], side: ['changes'], mainActive: 'activity', sideActive: 'changes' });
+assert.equal(legacyLayout.mainActive, 'activity');
+assert.equal(legacyLayout.main.at(-1), 'browser');
+const browserDocked = movePanel(legacyLayout, 'browser', 'side');
+assert.deepEqual(readDockLayout(browserDocked), browserDocked);
 
 const withApproval = {...message, status: 'streaming' as const, approval: {approval_id:'pending',approvals:[{tool_call_id:'cmd',tool_name:'run_terminal_command',args:{command:'npm test'}}]}};
 const observation = renderToString(createElement(ActivityTimeline, {messages:[withApproval,{...withApproval,id:'system-approval',role:'system' as const}], onApprovalDecision:()=>{}, onBackgroundTerminal:()=>{}, onKillBackground:()=>{}}));

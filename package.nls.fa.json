@@ -26,5 +26,6 @@
 	"command.attachFile.title": "پیوست فایل ها…",
 	"command.attachFromExplorer.title": "پیوست به گفتگوی خراتو",
 	"view.container.title": "خراتو",
-	"view.chat.name": "گفتگوی خراتو"
+	"view.chat.name": "گفتگوی خراتو",
+	"config.browserExecutablePath.desc": "مسیر کامل فایل اجرایی Chromium. اگه خالی باشه، Chrome یا Edge نصب شده استفاده میشه. مرورگر با یه پروفایل جدا روی دستگاه میزبان اجرا میشه."
 }
