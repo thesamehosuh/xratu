@@ -42,7 +42,7 @@ export const BROWSER_TOOL_DEFINITIONS = [
     tool('browser_click', 'Click a strict locator, or viewport coordinates from a fresh screenshot.', { locator, x: { type: 'number' }, y: { type: 'number' } }),
     tool('browser_type', 'Fill an editable element identified by a strict locator.', { locator, text: { type: 'string' } }, ['locator', 'text']),
     tool('browser_press', 'Press a key or chord, e.g. Enter, Tab, Control+A.', { key: { type: 'string' } }, ['key']),
-    tool('browser_scroll', 'Scroll the page by CSS pixels.', { deltaX: { type: 'number' }, deltaY: { type: 'number' } }, ['deltaY']),
+    tool('browser_scroll', 'Scroll at viewport coordinates from a fresh screenshot, or at the viewport center by default.', { x: { type: 'number' }, y: { type: 'number' }, deltaX: { type: 'number' }, deltaY: { type: 'number' } }, ['deltaY']),
     tool('browser_resize', 'Set viewport CSS dimensions (240–2560) to check responsive layouts.', { width: { type: 'number' }, height: { type: 'number' } }, ['width', 'height']),
     tool('browser_evaluate', 'Evaluate JavaScript in the shared page. May mutate the page, so approval is required. Result is bounded to 64 KB.', { expression: { type: 'string' } }, ['expression']),
     tool('browser_close', 'Close the browser and discard its isolated cookies and page state.'),

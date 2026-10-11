@@ -13,6 +13,7 @@ interface Options {
     executablePath: () => string;
     /** Tests can supply a real, already-launched browser without changing production sandboxing. */
     launch?: () => Promise<Browser>;
+    protocolTimeoutMs?: number;
 }
 const MAX_DIAGNOSTICS = 100;
 const TIMEOUT = 15_000;
@@ -210,21 +211,38 @@ export class BrowserController {
         return this.enqueue(sessionId, browserId, async () => { this.visible = visible; await this.stream(); });
     }
 
+    private async protocolCommand(operation: Promise<unknown>): Promise<void> {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            await Promise.race([operation, new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('Browser screencast timed out.')), this.options.protocolTimeoutMs ?? TIMEOUT);
+            })]);
+        } finally { clearTimeout(timer); }
+    }
+
     private async stream(): Promise<void> {
         const cdp = this.cdp, page = this.page;
         if (!cdp || !page) return;
         if (this.visible && !this.streaming) {
             this.streaming = true;
-            await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 1280 });
-            if (cdp !== this.cdp || page !== this.page) return;
-            // An idle page may not emit a screencast frame until it changes.
-            this.pendingFrame = null;
-            const still = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
-            if (still && page === this.page && this.visible) this.sendFrame(still.toString('base64'));
+            try {
+                await this.protocolCommand(cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 1280 }));
+                if (cdp !== this.cdp || page !== this.page) return;
+                // An idle page may not emit a screencast frame until it changes.
+                this.pendingFrame = null;
+                const still = await page.screenshot({ type: 'jpeg', quality: 70, timeout: TIMEOUT }).catch(() => null);
+                if (still && page === this.page && this.visible) this.sendFrame(still.toString('base64'));
+            } catch (error) {
+                if (cdp === this.cdp) {
+                    this.streaming = false; this.pendingFrame = null; this.latestFrame = null;
+                    clearTimeout(this.frameTimer); this.frameTimer = undefined;
+                }
+                throw error;
+            }
         } else if (!this.visible && this.streaming) {
             this.streaming = false; this.pendingFrame = null;
             this.latestFrame = null; clearTimeout(this.frameTimer); this.frameTimer = undefined;
-            await cdp.send('Page.stopScreencast').catch(() => undefined);
+            await this.protocolCommand(cdp.send('Page.stopScreencast')).catch(() => undefined);
         }
     }
 
@@ -256,7 +274,7 @@ export class BrowserController {
                     // Restart it and seed a still so an idle resized page cannot remain stale.
                     if (this.streaming && this.cdp) {
                         this.streaming = false;
-                        await this.cdp.send('Page.stopScreencast').catch(() => undefined);
+                        await this.protocolCommand(this.cdp.send('Page.stopScreencast')).catch(() => undefined);
                     }
                     this.current(sessionId, browserId);
                     this.pendingFrame = null; this.latestFrame = null;
@@ -303,12 +321,13 @@ export class BrowserController {
                 if (name === 'browser_open' || name === 'browser_navigate') command = { action: 'navigate', url: boundedString(args.url) };
                 else if (name === 'browser_resize') command = { action: 'resize', ...browserViewport(args.width, args.height) };
                 else if (name === 'browser_press') command = { action: 'press', key: boundedString(args.key, 128) };
-                else if (name === 'browser_scroll') command = { action: 'scroll', x: 1, y: 1, deltaX: this.delta(args.deltaX ?? 0), deltaY: this.delta(args.deltaY) };
+                else if (name === 'browser_scroll') command = { action: 'scroll', ...browserPoint(args.x ?? this.state.viewport.width / 2, args.y ?? this.state.viewport.height / 2, this.state.viewport), deltaX: this.delta(args.deltaX ?? 0), deltaY: this.delta(args.deltaY) };
                 else command = { action: 'close' };
+                this.current(sessionId, browserId);
+                if (name === 'browser_open') this.options.emit({ type: 'openBrowser' });
                 await this.command(sessionId, browserId, command);
                 checkAbort();
                 if (name !== 'browser_close') this.current(sessionId, browserId);
-                if (name === 'browser_open') this.options.emit({ type: 'openBrowser' });
                 return { output: JSON.stringify(this.getState()) };
             }
             return await this.enqueue(sessionId, browserId, async () => {

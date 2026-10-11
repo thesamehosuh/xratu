@@ -429,7 +429,7 @@ export type FromExtensionMessage =
     | { type: 'truncateFromUser'; userIndex: number }
     | { type: 'byokSetupHint' }
     /** Current session identity for the toolbar's title button. */
-    | { type: 'sessionState'; id: string | null; title: string | null }
+    | { type: 'sessionState'; id: string | null; title: string | null; browserSessionId?: string }
     /** Response to listSessions - the session-picker panel's contents. */
     | { type: 'sessionList'; items: SessionMeta[]; currentId: string | null }
     /** Response to searchSessions. `requestId` echoes the request so the

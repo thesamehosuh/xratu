@@ -10,6 +10,8 @@
  */
 import { createRequire } from 'module';
 import Module from 'module';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 // out/mcp.js imports `vscode` at the top; stub it so the pure tool-shape
 // logic is testable in plain node.
@@ -64,6 +66,7 @@ for (const name of ['run_tests', 'install_dependency', 'run_terminal_command', '
 for (const name of ['browser_open', 'browser_navigate', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_resize', 'browser_evaluate', 'browser_close']) {
     check(`plan: no ${name}`, planNames.has(name), false);
     check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
+    check(`YOLO snapshot: ${name} still reaches the live approval gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);
 }
 for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot']) check(`plan: keeps ${name}`, planNames.has(name), true);
 
@@ -74,6 +77,34 @@ for (const name of ['read_file', 'grep_search', 'list_files', 'update_task_list'
 
 // Web tools stay: they are read-only research (SSRF-guarded fetch).
 check('plan: keeps fetch_url (read-only)', planNames.has('fetch_url'), true);
+
+// Exercise the host's real live gate against a tool snapshot created in YOLO.
+{
+    const ts = require('typescript');
+    const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
+    const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
+    let initializer;
+    const visit = node => {
+        if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'localApprovalGate') initializer = node.initializer;
+        ts.forEachChild(node, visit);
+    };
+    visit(file);
+    if (!initializer) throw new Error('Host approval gate not found');
+    const js = ts.transpileModule(`globalThis.makeGate = function(runPlanMode) { return ${initializer.getText(file)}; };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const sandbox = {}; vm.runInNewContext(js, sandbox);
+    let approvals = 0;
+    const host = { _yoloMode: true, _requestLocalApproval: async () => { approvals++; return { browser: false }; } };
+    const gate = sandbox.makeGate.call(host, false);
+    const calls = [{ id: 'browser', name: 'browser_evaluate', arguments: { expression: 'document.title' } }];
+    check('live YOLO: gate approves without prompting', (await gate.requestApproval('one', calls)).browser, true);
+    host._yoloMode = false;
+    check('YOLO disabled after snapshot: gate waits for real approval', (await gate.requestApproval('two', calls)).browser, false);
+    check('YOLO disabled after snapshot: approval was requested', approvals, 1);
+    host._yoloMode = true;
+    const planGate = sandbox.makeGate.call(host, true);
+    check('plan gate never bypasses approval through YOLO', (await planGate.requestApproval('three', calls)).browser, false);
+    check('plan gate reaches real approval', approvals, 2);
+}
 
 console.log(failed === 0 ? '\nplan-tools: all tests passed' : `\nplan-tools: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

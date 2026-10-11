@@ -314,7 +314,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     });
 
     private _browserSessionId(): string {
-        return this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
+        // Persistence assigns a disk id without replacing the live browser.
+        return this._ephemeralSessionId ?? this._sessionId ?? (this._ephemeralSessionId = `xratu-${crypto.randomUUID()}`);
     }
 
     _sendBrowserState(): void {
@@ -3795,7 +3796,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // conversation's requests to the same prompt cache. Prefer the persisted
         // session id; fall back to one stable id per live chat.
         const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
-        this._browser.setSession(conversationId);
+        const browserSessionId = this._browserSessionId();
+        this._browser.setSession(browserSessionId);
 
         // One approval gate for the whole run tree: a child tool call that
         // needs consent surfaces as the same webview approval card. YOLO is
@@ -3903,7 +3905,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
                     undefined,
-                    { nested: true, browser: this._browser, sessionId: conversationId, signal: controller.signal, plan: runPlanMode },
+                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode },
                 ),
                 approvalGate: localApprovalGate,
                 onObservation: (callId, trace) => {
@@ -3941,7 +3943,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ),
             subagentRunner,
             decisionGate,
-            { browser: this._browser, sessionId: conversationId, signal: controller.signal, plan: runPlanMode },
+            { browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode },
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -5448,6 +5450,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._browser.setSession(this._browserSessionId());
         this._view?.webview.postMessage({
             type: 'sessionState',
+            browserSessionId: this._browserSessionId(),
             id: this._sessionId,
             title: this._sessionTitle,
         });

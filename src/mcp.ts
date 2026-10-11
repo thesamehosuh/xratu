@@ -591,7 +591,8 @@ export function getLocalToolDefinitions(opts?: {
     }
     const browser = BROWSER_TOOL_DEFINITIONS
         .filter(tool => !plan || !BROWSER_MUTATING_TOOLS.has(tool.name))
-        .map(tool => ({ ...tool, requiresApproval: !yolo && BROWSER_MUTATING_TOOLS.has(tool.name) }));
+        // Always reach the live gate: YOLO may be toggled after this snapshot.
+        .map(tool => ({ ...tool, requiresApproval: BROWSER_MUTATING_TOOLS.has(tool.name) }));
     return [...builtin, ...web, ...browser, ...taskDefs, ...skillDefs, ...external];
 }
 

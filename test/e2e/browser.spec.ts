@@ -64,6 +64,14 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             const snapshot = await controller.tool('browser-session', 'browser_snapshot', {});
             expect(JSON.parse(snapshot.output).accessibilityTree).toContain('textbox "Name"');
             expect(snapshot.output).toContain('demo loaded');
+            const beforePersistence = controller.getState();
+            await post(page, { type: 'sessionState', id: 'persisted-browser-session', title: null, browserSessionId: 'browser-session' });
+            await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('aria-selected', 'true');
+            await page.locator('#surface-tab-browser').click();
+            controller.publish(); await settle();
+            await expect(page.locator('.browser-viewport img')).toBeVisible();
+            await expect(page.locator('.browser-address')).toHaveValue(beforePersistence.url);
+            expect(controller.getState().browserId).toBe(beforePersistence.browserId);
             expect((await controller.tool('browser-session', 'browser_type', { locator: 'role=textbox[name="Name"]', text: 'Xratu سلام' })).isError).toBeUndefined();
             expect((await controller.tool('browser-session', 'browser_click', { locator: 'role=button[name="Save"]' })).isError).toBeUndefined();
             expect((await controller.tool('browser-session', 'browser_snapshot', {})).output).toContain('Saved Xratu سلام');
