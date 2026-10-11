@@ -15,12 +15,9 @@
   <img src="https://img.shields.io/badge/VS%20Code-1.90%2B-007ACC.svg" alt="VS Code 1.90+" />
 </p>
 
-Open-source AI coding agent for VS Code. Bring your own key or use a local
-runtime. Everything runs inside the extension host, on your machine.
-
-<p align="center">
-  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, tool details, approvals, subagents, movable tabs, change review, and settings" />
-</p>
+Open-source AI coding agent for VS Code. Use free OpenCode models, bring your
+own key, or use a local runtime. Xratu's built-in agent runs inside the extension
+host; the OpenCode engine runs through its local CLI and SDK.
 
 ## Your keys. Your models. Your machine.
 
@@ -37,9 +34,11 @@ model before opening chat. Free OpenCode models are checked in parallel;
 provider and local catalogs are loaded without a paid test inference. A local
 server with no models stays in setup; Ollama downloads are available in the app.
 
-Reopen setup through **Settings → Engines** or **Xratu: Set Up Xratu**. Your
-current conversation and draft stay intact until you select **Start chat**.
-Unfinished setup resumes on the next launch. Installing OpenCode alone does
+Onboarding appears only before the first completed setup. Unfinished setup
+resumes on the next launch. After setup, **Settings → Engines** and
+**Xratu: Set Up Xratu** open engine settings; switching engines starts a new
+chat without reopening onboarding. A missing Xratu connection opens Providers.
+Installing OpenCode alone does
 not mean a model is available; workspace, offline mode, and upstream rate limits
 are checked separately.
 
