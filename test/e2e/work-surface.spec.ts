@@ -446,6 +446,7 @@ for (const locale of ['en', 'fa']) {
         await page.locator('#surface-tab-browser').dragTo(page.locator('.dock-tabs.side'));
         await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(0);
         await expect(page.locator('.dock-tabs.main .dock-drop-label')).toBeVisible();
+        await expect(page.locator('#surface-tab-browser')).toBeFocused();
         await page.locator('#surface-tab-browser').press('Shift+F10');
         await expect(page.locator('.dock-layout-menu [role=menuitem]').first()).toBeFocused();
         await page.keyboard.press('Enter');

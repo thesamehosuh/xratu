@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SURFACE_PANELS, defaultDockLayout, movePanel, readDockLayout, type DockLocation, type SurfacePanel } from './dockLayout';
 import { getWebviewState, patchWebviewState } from './vscode';
 
@@ -7,6 +7,12 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     const [wide, setWide] = useState(() => window.matchMedia('(min-width: 860px)').matches);
     const [narrowActive, setNarrowActive] = useState<SurfacePanel>('conversation');
     const [dragging, setDragging] = useState<SurfacePanel | null>(null);
+    const movedTab = useRef<SurfacePanel | null>(null);
+    useLayoutEffect(() => {
+        if (!movedTab.current) return;
+        document.getElementById(`surface-tab-${movedTab.current}`)?.focus();
+        movedTab.current = null;
+    }, [layout]);
     useEffect(() => {
         // A moved tab can be removed from its old nav before dragend bubbles.
         const finish = () => setDragging(null);
@@ -38,13 +44,14 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     }, []);
     const move = (panel: SurfacePanel, location: DockLocation) => {
         if (!wide) return;
+        if (layout[location].includes(panel)) { setDragging(null); return; }
+        movedTab.current = panel;
         setLayout((current) => {
             const next = movePanel(current, panel, location);
             patchWebviewState({ surfaceLayout: next });
             return next;
         });
         setDragging(null);
-        requestAnimationFrame(() => document.getElementById(`surface-tab-${panel}`)?.focus());
     };
     const reset = () => {
         const next = defaultDockLayout();
