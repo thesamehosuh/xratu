@@ -381,6 +381,80 @@ for (const locale of ['en', 'fa']) {
 }
 
 for (const locale of ['en', 'fa']) {
+    test(`Conversation docks beside the main Browser without losing its draft or transcript (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await post(page, { type: 'restoreUser', value: 'Keep this conversation' });
+        await page.locator('.composer-input').fill('Keep this draft');
+        await page.locator('.composer-input').evaluate((el) => { (el as HTMLElement).dataset.retained = 'yes'; });
+        await page.locator('#surface-tab-conversation').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-browser').click();
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+        await expect(page.locator('.composer-input')).toHaveAttribute('data-retained', 'yes');
+        await expect(page.locator('.conversation-panel .msg.user')).toContainText('Keep this conversation');
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+        await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.conversation-panel .chat-stage')).toBeVisible();
+        await expect(page.locator('.conversation-panel .msg.user')).toBeVisible();
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('#surface-tab-browser').click();
+        for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
+        await expect(page.locator('.conversation-panel .msg.user')).toHaveCount(13);
+        const transcript = page.locator('.messages');
+        const distanceFromTail = () => transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
+        await expect.poll(distanceFromTail).toBeLessThan(2);
+        await transcript.hover();
+        await page.mouse.wheel(0, -300);
+        await expect.poll(distanceFromTail).toBeGreaterThan(100);
+        await expect(page.locator('.jump-btn')).toBeVisible();
+        const scroll = await page.locator('.messages').evaluate(el => el.scrollTop);
+        await page.locator('#surface-tab-changes').click();
+        await page.locator('#surface-tab-conversation').click();
+        await expect.poll(() => page.locator('.messages').evaluate(el => el.scrollTop)).toBe(scroll);
+        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
+        await expect(page.locator('.dock-tabs.drop-over')).toHaveCount(0);
+        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
+        const divider = await page.locator('.dock-sidebar').evaluate(el => getComputedStyle(el).outlineStyle);
+        expect(divider).toBe('none');
+        await page.locator('.review-resize').focus();
+        await page.keyboard.press('Home');
+        expect(await page.locator('.conversation-panel').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        await page.setViewportSize({ width: 420, height: 900 });
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
+        await page.addInitScript(value => Object.assign(window, { __xratuUiState: value }), saved);
+        await page.reload();
+        await post(page, { type: 'showChat' });
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        // Cancellation away from the original tab must remove the drag outline.
+        await page.locator('#surface-tab-conversation').dispatchEvent('dragstart', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
+        await expect(page.locator('.work-surface')).toHaveClass(/docking/);
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
+        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-browser').dragTo(page.locator('.dock-tabs.side'));
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(0);
+        await expect(page.locator('.dock-tabs.main .dock-drop-label')).toBeVisible();
+        await expect(page.locator('#surface-tab-browser')).toBeFocused();
+        await page.locator('#surface-tab-browser').press('Shift+F10');
+        await expect(page.locator('.dock-layout-menu [role=menuitem]').first()).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'fa']) {
     test(`panels dock by drag, retain review state and drafts, and restore their placement (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 1080, height: 900 });
         await post(page, { type: 'locale', locale });

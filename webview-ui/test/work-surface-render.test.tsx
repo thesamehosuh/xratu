@@ -52,8 +52,8 @@ assert.doesNotMatch(safeDiff, /<img/);
 assert.match(safeDiff, /&lt;img/);
 console.log('work-surface render: completed logs, retained activity, approvals, jobs, real exits, checkpoint ownership, and bounded diffs passed');
 
-// Corrupt saved layouts cannot hide a panel or move the pinned conversation.
-for (const saved of [null, {}, {version: 2}, {version: 1, main: ['activity'], side: ['conversation', 'changes']}, {version: 1, main: ['conversation', 'activity'], side: ['activity']}, {version: 1, main: ['conversation', 'unknown'], side: ['changes']}]) {
+// Corrupt saved layouts cannot hide or duplicate a panel.
+for (const saved of [null, {}, {version: 2}, {version: 1, main: ['conversation', 'activity'], side: ['activity']}, {version: 1, main: ['conversation', 'unknown'], side: ['changes']}]) {
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
@@ -66,7 +66,17 @@ layout = movePanel(layout, 'activity', 'main');
 assert.equal(layout.sideActive, null);
 assert.deepEqual(layout.side, []);
 assert.deepEqual(readDockLayout(layout), layout);
-assert.equal(movePanel(layout, 'conversation', 'side'), layout);
+const conversationDocked = movePanel(layout, 'conversation', 'side');
+assert.deepEqual(conversationDocked.side, ['conversation']);
+assert.equal(conversationDocked.mainActive, 'activity');
+assert.deepEqual(readDockLayout(conversationDocked), conversationDocked);
+assert.equal(readDockLayout({...conversationDocked, mainActive: 'conversation'}).mainActive, conversationDocked.main[0]);
+let emptyMain = conversationDocked;
+for (const panel of [...emptyMain.main]) emptyMain = movePanel(emptyMain, panel, 'side');
+assert.deepEqual(emptyMain.main, []);
+assert.equal(emptyMain.mainActive, null);
+assert.deepEqual(readDockLayout(emptyMain), emptyMain);
+assert.equal(movePanel(emptyMain, 'browser', 'main').mainActive, 'browser');
 assert.equal(movePanel(layout, 'changes', 'main'), layout);
 assert.equal(readDockLayout({...layout, mainActive: 'unknown'}).mainActive, 'conversation');
 const legacyLayout = readDockLayout({ version: 1, main: ['conversation', 'activity', 'agents', 'background'], side: ['changes'], mainActive: 'activity', sideActive: 'changes' });

@@ -209,6 +209,7 @@ export function App() {
     }, [setSurfaceTab]);
     const showConversation = useCallback(() => setSurfaceTab('conversation'), [setSurfaceTab]);
     const surfaceTab = dock.mainActive;
+    const conversationVisible = dock.mainActive === 'conversation' || dock.sideActive === 'conversation';
     const activityVisible = dock.mainActive === 'activity' || dock.sideActive === 'activity';
     const [activityOpened, setActivityOpened] = useState(false);
     useEffect(() => { if (activityVisible) setActivityOpened(true); }, [activityVisible]);
@@ -1530,8 +1531,9 @@ export function App() {
                     event.preventDefault(); dock.move(dock.dragging, 'side');
                 }}>
             <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+            <div className={`conversation-panel ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
             <div className="chat-stage">
-            <div className={`transcript-pane${surfaceTab !== 'conversation' ? ' hidden-pane' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
+            <div className="transcript-pane">
 
             <div className="chat-area">
                 <MessageList
@@ -1577,11 +1579,7 @@ export function App() {
             </div>
             </div>
             </div>
-            {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
-            {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
-            <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
-            <div className={`compose-dock${surfaceTab !== 'conversation' ? ' panel-hidden' : ''}`} aria-hidden={surfaceTab !== 'conversation' || undefined}>
+            <div className="compose-dock">
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}
@@ -1716,6 +1714,11 @@ export function App() {
                 }}
             />
             </div>
+            </div>
+            {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
+            {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
+            {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
+            <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
                 <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             </DockSidebar>

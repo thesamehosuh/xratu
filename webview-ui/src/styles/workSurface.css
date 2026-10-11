@@ -31,6 +31,11 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .surface-tab.active { border-block-end-color:var(--surface-accent); color:var(--surface-accent); }
 .tab-count,.review-count { font-size:10px; border-radius:4px; padding:0 4px; color:var(--surface-accent); background:var(--xratu-accent-faint); }
 .work-surface { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:41px minmax(0,1fr) auto; min-height:0; flex:1; }
+.conversation-panel { display:flex; flex-direction:column; min-width:0; min-height:0; container-type:inline-size; }
+.conversation-panel.panel-main { grid-row:2 / span 2; }
+.conversation-panel.panel-hidden { display:none; }
+.conversation-panel .chat-stage { flex:1; }
+.conversation-panel .compose-dock { flex:0 0 auto; }
 .chat-stage { grid-area:2 / 1; min-height:0; min-width:0; position:relative; }
 .transcript-pane { height:100%; display:flex; flex-direction:column; }
 .hidden-pane { visibility:hidden; pointer-events:none; }
@@ -152,7 +157,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .agent-paths { display:flex; flex-direction:column; gap:7px; margin-block-start:12px; font-size:12px; }
 .changes-pane { position:relative; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--page-canvas); }
 .review-resize { display:none; }
-.show-changes .chat-stage { visibility:hidden; }
 .changes-review { display:flex; flex-direction:column; min-height:0; width:100%; }
 .review-head { display:flex; align-items:center; gap:7px; min-height:44px; padding:0 18px; border-block-end:1px solid var(--page-line); flex-shrink:0; }
 .review-head > svg { color:var(--vscode-descriptionForeground); }
@@ -198,6 +202,18 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
     .toolbar,.surface-tabs { padding-inline:24px; }
 }
 @media(min-width:1180px) { .work-surface.has-sidebar { grid-template-columns:minmax(0,1fr) var(--review-width,410px); } .messages { padding-inline:45px; } }
+@container(max-width:450px) {
+    .conversation-panel .messages { padding-inline:18px; }
+    .conversation-panel .compose-dock { --composer-inset:13px; }
+    .conversation-panel .composer .picker-chip { max-width:190px; }
+    .conversation-panel .composer .tok-text { display:none; }
+}
+@container(max-width:360px) {
+    .conversation-panel .messages { padding-inline:12px; }
+    .conversation-panel .composer .picker-chip { max-width:145px; }
+    .conversation-panel .composer-policy { font-size:10px; gap:3px; padding-inline:4px; }
+    .conversation-panel .task-list-chip-bar { display:none; }
+}
 @media(min-width:1100px) { .composer .tok-text { display:inline; } }
 @media(max-width:700px) { .page-sidebar { width:126px; flex-basis:126px; padding:13px 6px; } .sidebar-item { padding:8px 6px; font-size:12px; gap:7px; } .settings-head,.cred-head { padding-inline:12px; } .settings-scroll { padding:14px 12px; } }
 @media(max-width:450px) { .toolbar { padding-inline:16px; } .toolbar-heading { gap:7px; } .session-btn { max-width:75%; } .toolbar-tools-label { display:none; } .surface-tabs { gap:20px; } .composer .picker-chip { max-width:190px; } }
