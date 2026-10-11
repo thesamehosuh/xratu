@@ -8,6 +8,21 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     const [narrowActive, setNarrowActive] = useState<SurfacePanel>('conversation');
     const [dragging, setDragging] = useState<SurfacePanel | null>(null);
     useEffect(() => {
+        // A moved tab can be removed from its old nav before dragend bubbles.
+        const finish = () => setDragging(null);
+        const cancel = (event: KeyboardEvent) => { if (event.key === 'Escape') finish(); };
+        window.addEventListener('dragend', finish, true);
+        window.addEventListener('drop', finish);
+        window.addEventListener('blur', finish);
+        window.addEventListener('keydown', cancel);
+        return () => {
+            window.removeEventListener('dragend', finish, true);
+            window.removeEventListener('drop', finish);
+            window.removeEventListener('blur', finish);
+            window.removeEventListener('keydown', cancel);
+        };
+    }, []);
+    useEffect(() => {
         const media = window.matchMedia('(min-width: 860px)');
         const sync = () => { setWide(media.matches); setDragging(null); };
         media.addEventListener('change', sync);
@@ -41,7 +56,7 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     const sidePanels = layout.side.filter(available);
     const allPanels = SURFACE_PANELS.filter(available);
     const wanted = wide ? layout.mainActive : narrowActive;
-    const mainActive = available(wanted) ? wanted : 'conversation';
+    const mainActive = wide ? mainPanels.includes(wanted) ? wanted : mainPanels[0] ?? null : available(wanted) ? wanted : 'conversation';
     const sideActive = wide ? layout.sideActive && available(layout.sideActive) ? layout.sideActive : sidePanels[0] ?? null : null;
     const position = (panel: SurfacePanel) => `${wide && layout.side.includes(panel) ? 'panel-side' : 'panel-main'}${mainActive !== panel && sideActive !== panel ? ' panel-hidden' : ''}`;
     return { layout, mainPanels, sidePanels, allPanels, wide, mainActive, sideActive, dragging, setDragging, activate, move, reset, position };

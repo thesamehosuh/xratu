@@ -73,7 +73,7 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
         <div className="dock-tab-list" role="tablist">
             {panels.map((panel) => {
                 const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : panel === 'agents' ? Bot : panel === 'background' ? SquareTerminal : panel === 'browser' ? Globe : List;
-                return <button type="button" key={panel} data-panel={panel} id={`surface-tab-${panel}`} className={`surface-tab ${panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide && panel !== 'conversation'}
+                return <button type="button" key={panel} data-panel={panel} id={`surface-tab-${panel}`} className={`surface-tab ${panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide}
                     onDragStart={(event) => { event.dataTransfer.setData(PANEL_DRAG_TYPE, panel); event.dataTransfer.effectAllowed = 'move'; onDrag(panel); }}
                     onDragEnd={() => onDrag(null)} onClick={() => onActivate(panel)}
                     onContextMenu={(event) => { if (wide) { event.preventDefault(); setMenu(panel); } }}>
@@ -81,10 +81,10 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
                 </button>;
             })}
         </div>
-        {panels.length === 0 && <span className="dock-drop-label"><PanelRight size={14} />{t('surfaceDropSidebar')}</span>}
+        {panels.length === 0 && <span className="dock-drop-label">{location === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(location === 'side' ? 'surfaceDropSidebar' : 'surfaceDropMain')}</span>}
         {wide && active && <button ref={trigger} type="button" className="icon-btn dock-layout-button" aria-label={t('surfacePanelLayout')} title={t('surfacePanelLayout')} aria-haspopup="menu" aria-expanded={!!menu} onClick={() => setMenu(menu ? null : active)}><MoreHorizontal size={15} /></button>}
         {menu && <div className="dock-layout-menu" role="menu" aria-label={t('surfacePanelLayout')}>
-            {menu !== 'conversation' && <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</button>}
+            <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</button>
             <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} />{t('surfaceResetLayout')}</button>
         </div>}
     </nav>;

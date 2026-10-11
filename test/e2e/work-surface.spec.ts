@@ -381,6 +381,58 @@ for (const locale of ['en', 'fa']) {
 }
 
 for (const locale of ['en', 'fa']) {
+    test(`Conversation docks beside the main Browser without losing its draft or transcript (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await post(page, { type: 'restoreUser', value: 'Keep this conversation' });
+        await page.locator('.composer-input').fill('Keep this draft');
+        await page.locator('.composer-input').evaluate((el) => { (el as HTMLElement).dataset.retained = 'yes'; });
+        await page.locator('#surface-tab-conversation').dragTo(page.locator('.dock-tabs.side'));
+        await page.locator('#surface-tab-browser').click();
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+        await expect(page.locator('.composer-input')).toHaveAttribute('data-retained', 'yes');
+        await expect(page.locator('.conversation-panel .msg.user')).toContainText('Keep this conversation');
+        for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
+        await page.locator('.messages').evaluate(el => { el.scrollTop = 150; });
+        await expect(page.locator('.jump-btn')).toBeVisible();
+        const scroll = await page.locator('.messages').evaluate(el => el.scrollTop);
+        await page.locator('#surface-tab-changes').click();
+        await page.locator('#surface-tab-conversation').click();
+        await expect.poll(() => page.locator('.messages').evaluate(el => el.scrollTop)).toBe(scroll);
+        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
+        await expect(page.locator('.dock-tabs.drop-over')).toHaveCount(0);
+        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
+        const divider = await page.locator('.dock-sidebar').evaluate(el => getComputedStyle(el).outlineStyle);
+        expect(divider).toBe('none');
+        await page.locator('.review-resize').focus();
+        await page.keyboard.press('Home');
+        expect(await page.locator('.conversation-panel').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        await page.setViewportSize({ width: 420, height: 900 });
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
+        await page.addInitScript(value => Object.assign(window, { __xratuUiState: value }), saved);
+        await page.reload();
+        await post(page, { type: 'showChat' });
+        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        // Cancellation away from the original tab must remove the drag outline.
+        await page.locator('#surface-tab-conversation').dispatchEvent('dragstart', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
+        await expect(page.locator('.work-surface')).toHaveClass(/docking/);
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
+        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
+    });
+}
+
+for (const locale of ['en', 'fa']) {
     test(`panels dock by drag, retain review state and drafts, and restore their placement (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 1080, height: 900 });
         await post(page, { type: 'locale', locale });
