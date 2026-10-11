@@ -108,6 +108,11 @@ const RESULT_PICK = 'The user selected the option: "SQLite"\n\nSingle file.';
 
 // 4. Custom answers and dismissals read as themselves.
 {
+    const multiple = renderBody({ decision_id: 'multi', question: 'Which databases?', options: OPTIONS, multiSelect: true, answered: true, answer: '["Postgres","SQLite"]' });
+    ok((multiple.match(/decision-option selected/g) ?? []).length === 2, 'all multi-select choices are highlighted');
+    ok(!multiple.includes('decision-resolution custom'), 'known selections do not render a raw JSON answer');
+    const mixed = renderBody({ decision_id: 'mixed', question: 'Which databases?', options: OPTIONS, multiSelect: true, answered: true, answer: '["SQLite","MySQL"]' });
+    ok(mixed.includes('decision-option selected') && mixed.includes('MySQL'), 'multi-select custom entries render with the selected options');
     const custom = renderBody({
         decision_id: 'dec-4',
         question: 'Which database?',

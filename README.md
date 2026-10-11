@@ -15,8 +15,9 @@
   <img src="https://img.shields.io/badge/VS%20Code-1.90%2B-007ACC.svg" alt="VS Code 1.90+" />
 </p>
 
-Open-source AI coding agent for VS Code. Bring your own key or use a local
-runtime. Everything runs inside the extension host, on your machine.
+Open-source AI coding agent for VS Code. Use free OpenCode models, bring your
+own key, or use a local runtime. Xratu's built-in agent runs inside the extension
+host; the OpenCode engine runs through its local CLI and SDK.
 
 <p align="center">
   <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, tool details, approvals, subagents, movable tabs, change review, and settings" />
@@ -28,6 +29,75 @@ runtime. Everything runs inside the extension host, on your machine.
   configure.
 - Fully offline capable: Ollama, LM Studio, vLLM, and llama.cpp are
   auto-discovered on your machine.
+
+## Quick setup
+
+The welcome screen offers **Start free**, **Use my provider**, and **Run locally**.
+It skips completed steps, reuses saved connections, and asks you to choose a
+model before opening chat. Free OpenCode models are checked in parallel;
+provider and local catalogs are loaded without a paid test inference. A local
+server with no models stays in setup; Ollama downloads are available in the app.
+
+Onboarding appears only before the first completed setup. Unfinished setup
+resumes on the next launch. After setup, **Settings → Engines** and
+**Xratu: Set Up Xratu** open engine settings; switching engines starts a new
+chat without reopening onboarding. A missing Xratu connection opens Providers.
+Installing OpenCode alone does
+not mean a model is available; workspace, offline mode, and upstream rate limits
+are checked separately.
+
+Providers, MCP, Skills, and Agents show which engine they configure. Browsing
+another engine's settings does not change the current conversation. OpenCode's
+provider view lists its saved and environment connections and supports simple
+SDK API-key and OAuth methods. Authentication methods with additional forms or
+commands still use OpenCode's own setup. Native MCP and skill lists are read-only;
+Xratu's enable switches do not control them. Native subagents remain unavailable.
+Usage attributes new native rounds to their engine/provider and preserves reported
+costs when Xratu pricing is edited.
+
+## OpenCode inside Xratu
+
+Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x
+installation, or installs a verified standalone 2.0.26 binary with one click.
+Node and npm are not required. Open a project folder, select **Use in new chat**,
+and pick an OpenCode model. The free models work without an Xratu API key;
+their availability and rate limits are controlled by OpenCode.
+The model picker shows the provider after each name and defaults to **Free
+models only**. Turn that filter off to see paid models configured in OpenCode.
+Opening the model picker checks every free model in parallel using small requests
+in separate temporary sessions. Results show availability or a rate limit with
+the check time. Recent onboarding checks are reused for 30 seconds. The check button beside each free model always lets you retry it manually.
+OpenCode uses its own saved credentials, including OpenRouter when selected;
+Xratu does not replace them or copy its provider keys into the engine.
+
+The installer supports Windows, macOS, and Linux on x64/arm64, with baseline
+x64 builds and Linux musl variants. It has progress, cancellation, retry, and
+a custom executable path. Managed binaries stay in VS Code global storage;
+existing installations remain available. OpenCode 1.x is detected but cannot
+run this engine. Back up your OpenCode configuration and history before
+migrating from 1.x: OpenCode owns its database migration.
+
+Switching engines starts a fresh conversation and preserves old Xratu
+history. Reopening an OpenCode conversation resumes its native session, tied
+to its original workspace and runtime. OpenCode manages authentication,
+configuration, tools, compaction, and native history. Its CLI sign-in and
+provider configuration apply here too; credentials are not copied into Xratu.
+
+Native permission requests use Xratu approval cards, and questions use its
+decision cards, including multiple selections. Plan mode deterministically
+denies mutation and unknown tools. YOLO permits native tools without approval.
+Native steering is delivered at OpenCode's next step boundary. Shell commands
+stream output and expose background/stop controls in Xratu's Background panel.
+OpenCode subagents and conversation rewind are not yet
+supported. File-only shadow checkpoint restore remains available. Offline
+mode blocks this engine because Xratu cannot enforce network isolation on the
+OpenCode process. Xratu's file-path and web-fetch guards apply to its own tools;
+OpenCode's native tools use OpenCode's permission boundary.
+
+The engine interface leaves room for Codex and Claude Code adapters. This
+release implements OpenCode only. Lifecycle, event, permission, question, and
+managed installation logic is adapted from [T3 Code](https://github.com/pingdotgg/t3code)
+under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
 
 ## Features
 

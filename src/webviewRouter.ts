@@ -10,6 +10,7 @@
  * through vscode's Event so the router's contract is identical to the
  * callback's (and neither side annotates an `any`).
  */
+import type { SetupEngine, SetupPath } from './engines/setup';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -39,6 +40,19 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _nativeGetState(requestId: string): Promise<void>;
+    _cancelNativeSetup(): void;
+    _nativeConnect(requestId: string, integrationID: string, methodID?: string, key?: string): Promise<void>;
+    _nativeOAuthCode(requestId: string, code: string): Promise<void>;
+    _setupGetState(requestId: string, engine: SetupEngine, setupPath: SetupPath, credentialId?: string, onboarding?: boolean): Promise<void>;
+    _setupComplete(requestId: string, model: string): Promise<void>;
+    _cancelSetup(): void;
+    _openSetup(path?: SetupPath): Promise<void>;
+    _sendEnginesState(): Promise<void>;
+    _engineSelect(id: 'xratu' | 'opencode'): Promise<void>;
+    _engineInstall(): Promise<void>;
+    _engineCancelInstall(): void;
+    _engineSetPath(value: string): Promise<void>;
     _sendBrowserState(): void;
     _browserCommand(sessionId: string, browserId: string, command: BrowserCommand): Promise<void>;
     _browserVisible(sessionId: string, browserId: string, visible: boolean): void;
@@ -59,6 +73,7 @@ export interface WebviewMessageHost {
     _deleteSkillFolder(dirPath: string): Promise<void>;
     _detectProxies(): Promise<void>;
     _fetchModels(): Promise<boolean>;
+    _pingFreeModel(model: string, automatic?: boolean): Promise<void>;
     _sendRuntimePreferences(): void;
     _setOfflineMode(enabled: boolean): Promise<void>;
     _openBundledGuide(guide: 'offline' | 'providers'): Promise<void>;
@@ -126,6 +141,7 @@ export interface WebviewMessageHost {
     _oauthSignOut(credentialId: string): Promise<void>;
     _setSkillEnabled(id: string, enabled: boolean): Promise<void>;
     _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void>;
+    _setNativeVariant(model: string, variant: string | null): Promise<void>;
     _setTranscriptPref(id: string, enabled: boolean): Promise<void>;
     _showStartScreen(): Promise<void>;
     _startConnectionPolling(): void;
@@ -145,6 +161,31 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
     (async () => {
         try {
             switch (data.type) {
+                case 'nativeGetState': if (typeof data.requestId === 'string' && data.requestId.length <= 100) await host._nativeGetState(data.requestId); break;
+                case 'nativeCancel': host._cancelNativeSetup(); break;
+                case 'nativeConnect':
+                    if (typeof data.requestId === 'string' && typeof data.integrationID === 'string' && (typeof data.key === 'string' || typeof data.methodID === 'string')) await host._nativeConnect(data.requestId, data.integrationID, typeof data.methodID === 'string' ? data.methodID : undefined, typeof data.key === 'string' ? data.key : undefined);
+                    break;
+                case 'nativeOAuthCode': if (typeof data.requestId === 'string' && typeof data.code === 'string') await host._nativeOAuthCode(data.requestId, data.code); break;
+                case 'setupGetState':
+                    if (typeof data.requestId === 'string' && data.requestId.length <= 100 && (data.engine === 'xratu' || data.engine === 'opencode') && ['free', 'provider', 'local'].includes(data.path)) await host._setupGetState(data.requestId, data.engine, data.path, typeof data.credentialId === 'string' ? data.credentialId : undefined, data.onboarding === true);
+                    break;
+                case 'setupComplete':
+                    if (typeof data.requestId === 'string' && typeof data.model === 'string') await host._setupComplete(data.requestId, data.model);
+                    break;
+                case 'setupCancel': host._cancelSetup(); break;
+                case 'setupOpen': await host._openSetup(['free', 'provider', 'local'].includes(data.path) ? data.path : undefined); break;
+                case 'setupOpenFolder': await vscode.commands.executeCommand('vscode.openFolder'); break;
+                case 'setupOpenRuntime': {
+                    const urls: Record<string, string> = { ollama: 'https://ollama.com/download', lmstudio: 'https://lmstudio.ai/download', vllm: 'https://docs.vllm.ai/en/latest/getting_started/quickstart/', 'llama.cpp': 'https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md' };
+                    if (Object.hasOwn(urls, data.runtime)) await vscode.env.openExternal(vscode.Uri.parse(urls[data.runtime]));
+                    break;
+                }
+                case 'enginesGetState': await host._sendEnginesState(); break;
+                case 'engineSelect': if (data.engine === 'xratu' || data.engine === 'opencode') await host._engineSelect(data.engine); break;
+                case 'engineInstall': await host._engineInstall(); break;
+                case 'engineInstallCancel': host._engineCancelInstall(); break;
+                case 'engineSetPath': if (typeof data.path === 'string') await host._engineSetPath(data.path); break;
                 case 'browserGetState':
                     host._sendBrowserState();
                     break;
@@ -295,6 +336,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'backgroundTerminal':
                     host._backgroundTerminalCall(data.callId);
                     break;
+                case 'pingFreeModel':
+                    void host._pingFreeModel(data.model, data.automatic === true);
+                    break;
                 case 'killBackgroundJob':
                     void host._killBackgroundJob(data.jobId);
                     break;
@@ -407,7 +451,6 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'selectModel': {
                     host._selectedModel = data.value;
-                    void host._secrets.store('xratu.selectedModel', data.value);
                     void host._rememberModelForActiveCredential(data.value);
                     break;
                 }
@@ -416,6 +459,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'setThinkingLevel':
                     void host._setThinkingLevel(data.model, data.level);
+                    break;
+                case 'setNativeVariant':
+                    if (typeof data.model === 'string' && (data.variant === null || typeof data.variant === 'string')) await host._setNativeVariant(data.model, data.variant);
                     break;
                 case 'copyToClipboard': {
                     let ok = true;

@@ -671,6 +671,10 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 header: msg.header,
                 question: msg.question,
                 options: msg.options,
+                multiSelect: msg.multiSelect,
+                minItems: msg.minItems,
+                maxItems: msg.maxItems,
+                allowCustomAnswer: msg.allowCustomAnswer,
             };
             if (state.streamingId) {
                 const current = state.messages.find((m) => m.id === state.streamingId);

@@ -32,6 +32,8 @@ export interface UsageEntry {
     model: string;
     /** Plan usage is tracked in tokens, never priced as API spend. */
     billing?: 'chatgpt-plan';
+    engine?: 'xratu' | 'opencode';
+    costSource?: 'reported' | 'unknown';
     input: number;
     output: number;
     cached: number;
@@ -94,6 +96,8 @@ export function normalizeEntry(raw: unknown): UsageEntry | null {
         sessionId: typeof e.sessionId === 'string' ? e.sessionId : null,
         host,
         model,
+        ...(e.engine === 'opencode' || e.engine === 'xratu' ? { engine: e.engine } : {}),
+        ...(e.costSource === 'reported' || e.costSource === 'unknown' ? { costSource: e.costSource } : {}),
         ...(billing ? { billing } : {}),
         input: finiteCount(e.input),
         output: finiteCount(e.output),
@@ -165,6 +169,7 @@ export function recomputeCosts(
     const key = onlyModel?.trim().toLowerCase();
     let changed = false;
     const next = entries.map((entry) => {
+        if (entry.engine === 'opencode') return entry;
         if (key && entry.model.trim().toLowerCase() !== key) return entry;
         const resolved = entry.billing === 'chatgpt-plan' ? null : resolve(entry);
         const amount = resolved ? resolved.amount : null;

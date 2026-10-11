@@ -315,10 +315,10 @@ async function settleLocalScan(page: Page): Promise<void> {
 async function welcomeScreen(page: Page, locale: Locale): Promise<Locator> {
     await shell(page, locale);
     await host(page, { type: 'showWelcome' });
-    const view = page.locator('.welcome');
+    const view = page.locator('.onboarding');
     await expect(view).toBeVisible();
     await settleLocalScan(page);
-    await expect(page.locator('.welcome-runtime')).toHaveCount(LOCAL_RUNTIMES.length);
+    await expect(page.locator('.setup-path')).toHaveCount(3);
     return view;
 }
 
@@ -423,7 +423,8 @@ async function openSettingsSubpage(page: Page, locale: Locale, row: 'capabilitie
     await expect(page.locator('.composer-input')).toBeVisible();
     await host(page, { type: 'openSettings' });
     await expect(page.locator('.settings-page').first()).toBeVisible();
-    const target = page.locator('.page-sidebar .sidebar-item').nth(row === 'capabilities' ? 1 : row === 'usage' ? 5 : 6);
+    const names = locale === 'fa' ? { capabilities: 'سرور ها', usage: 'مصرف', proxy: 'پروکسی' } : { capabilities: 'Servers', usage: 'Usage', proxy: 'Proxy' };
+    const target = page.locator('.page-sidebar').getByRole('button', { name: names[row], exact: true });
     await expect(target).toHaveCount(1);
     await target.click();
 }

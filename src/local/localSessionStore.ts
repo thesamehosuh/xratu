@@ -1,4 +1,5 @@
 import { boundSubagentEvents, readSubagentTrace } from '../subagentObservation';
+import type { EngineSessionRef } from '../engines/types';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
@@ -34,6 +35,7 @@ export interface LocalPendingTurn {
 }
 
 export interface LocalSessionSnapshot {
+    engineSession?: EngineSessionRef;
     /** Workspace folder path the session belongs to (list filtering). */
     workspace?: string;
     model: string | null;
@@ -59,6 +61,15 @@ export interface LocalSessionSnapshot {
     /** Token totals per provider host, so usage can be attributed per
      *  provider without re-reading the transcript. */
     usageByHost?: Record<string, { input?: number; output?: number; cached?: number }>;
+}
+
+/** Slim list entry for the session picker: metadata only, never transcripts. */
+function readEngineSession(raw: unknown): EngineSessionRef | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const value = raw as Record<string, unknown>;
+    if (value.engineId !== 'xratu' && value.engineId !== 'opencode') return undefined;
+    const bounded = (key: string) => typeof value[key] === 'string' && value[key].length <= 4096 ? value[key] as string : undefined;
+    return { engineId: value.engineId, nativeSessionId: bounded('nativeSessionId'), binaryPath: bounded('binaryPath'), workspace: bounded('workspace') };
 }
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
@@ -625,6 +636,7 @@ export class LocalSessionStore {
                 workspace: parsed?.workspace ?? 'default',
                 renamed: !!parsed?.renamed,
                 model: parsed?.model ?? null,
+                engineSession: readEngineSession(parsed?.engineSession),
                 summary: parsed?.summary ?? null,
                 localHistory: parsed?.localHistory ?? [],
                 replayUserTurns: typeof parsed?.replayUserTurns === 'number' && Number.isFinite(parsed.replayUserTurns)

@@ -1,0 +1,16 @@
+.scoped-page { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
+.scoped-page > .settings-page, .scoped-page > .cred-page, .scoped-page > .cap-page { flex: 1; min-block-size: 0; }
+.engine-scope { flex-shrink: 0; padding: 12px 18px; border-block-end: 1px solid var(--vscode-widget-border); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+.engine-scope label, .engine-scope > span, .scope-hint { color: var(--vscode-descriptionForeground); }
+.engine-scope-help { display: inline-flex; flex-shrink: 0; cursor: help; }
+.engine-scope .dropdown { margin-inline-start: auto; flex: 0 0 auto; min-inline-size: 115px; }
+.engine-scope .dropdown-trigger { padding: 5px 8px; min-block-size: 29px; background: var(--xratu-surface-inset); border: 1px solid var(--vscode-input-border); }
+
+.native-config .settings-scroll { display: flex; flex-direction: column; gap: 14px; }
+.native-config-row { display: flex; flex-direction: column; gap: 5px; padding-block: 10px; border-block-end: 1px solid var(--vscode-widget-border); font-size: 12px; }
+.native-config-row > span, .native-config-row > code { color: var(--vscode-descriptionForeground); font-size: 11px; overflow-wrap: anywhere; }
+.native-provider-form { display: flex; flex-direction: column; gap: 12px; }
+.native-provider-form label { font-size: 12px; }
+.native-provider-form input, .native-provider-form .dropdown-trigger { padding: 9px; color: var(--vscode-input-foreground); background: var(--xratu-surface-inset); border: 1px solid var(--vscode-input-border); border-radius: 7px; min-inline-size: 0; inline-size: 100%; box-sizing: border-box; }
+.native-provider-form .primary-btn { min-block-size: 34px; justify-content: center; }
+.native-config-row .native-connection { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -327,8 +327,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .iranian-providers .cred-provider-section-label { font-size:12px; font-weight:500; color:#b4d1c0; }
 .iranian-providers .cred-provider-section-hint { margin-block:3px 7px; display:block; color:#969f97; }
 .iranian-providers .cred-providers-inline { display:flex; flex-wrap:wrap; gap:5px; }
-.iranian-providers .prov-card-inline { border:1px solid #3a443d; background:#252b27; color:#b6c8bc; padding:4px 7px; font-size:11px; }
-.iranian-providers .prov-card-inline:hover,.iranian-providers .prov-card-inline.selected { background:#344a3d; border-color:#55715f; color:#d2e7d7; }
+.iranian-providers .prov-card-inline { padding:4px 7px; font-size:11px; }
 .cred-provider-section-hint { font-size:11px; }
 .cred-form-provider .provider-mark { width:22px; height:22px; border-radius:5px; }
 .cred-form-provider strong { font-size:13px; }
@@ -353,12 +352,12 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .cred-provider-option-hint { font-size:11px; }
 .cred-provider-menu { border-radius:6px; background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 7%); border-color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 23%); }
 /* Connection polish: inline sign-in, visible local choices, centered actions. */
-.connection-drawer .cred-oauth-row:not(.connected):not(.busy) { width:fit-content; max-width:100%; padding:0 10px; border:0; background:transparent; }
-.connection-drawer .cred-oauth-header { flex-direction:row; align-items:center; flex:0 1 auto; gap:8px; }
-.connection-drawer .cred-oauth-copy { flex:0 0 auto; }
-.connection-drawer .cred-oauth-header > .cred-oauth-actions { flex-wrap:nowrap; gap:5px; }
-.connection-drawer .cred-oauth-header .cred-oauth-action { font-size:12px; min-height:25px; padding:3px 7px; gap:4px; }
-.connection-drawer .cred-oauth-header .ghost-btn.cred-oauth-action { color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 89%); border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 21%); border-radius:5px; }
+.cred-page .cred-oauth-row { inline-size:100%; padding:10px; border:0; background:transparent; }
+.cred-page .cred-oauth-header { flex-direction:row; align-items:center; flex:1 0 100%; gap:8px; }
+.cred-page .cred-oauth-copy { flex:0 0 auto; }
+.cred-page .cred-oauth-header > .cred-oauth-actions { flex-wrap:nowrap; gap:5px; margin-inline-start:auto; }
+.cred-page .cred-oauth-header .cred-oauth-action { font-size:12px; min-height:25px; padding:3px 7px; gap:4px; }
+.cred-page .cred-oauth-header .ghost-btn.cred-oauth-action { color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 89%); border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 21%); border-radius:5px; }
 .saved-credential-actions { align-self:center; align-items:center; gap:2px; padding:3px; }
 .saved-credential-actions button { flex:0 0 25px; width:25px; height:25px; border:0; border-radius:4px; }
 .saved-credential-actions button > svg { display:block; width:12px; height:12px; flex-shrink:0; }
@@ -369,9 +368,9 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
  .saved-credential-main { flex:1; width:auto; }
  .saved-credential-actions { margin-inline-start:0; padding:3px; }
  .saved-credential-meta { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
- .connection-drawer .cred-oauth-header { gap:6px; }
- .connection-drawer .cred-oauth-header > .cred-oauth-actions { gap:4px; }
- .connection-drawer .cred-oauth-header .cred-oauth-action { font-size:11px; padding-inline:5px; }
+ .cred-page .cred-oauth-header { gap:6px; }
+ .cred-page .cred-oauth-header > .cred-oauth-actions { gap:4px; }
+ .cred-page .cred-oauth-header .cred-oauth-action { font-size:11px; padding-inline:5px; }
 }
 
 body:is(.vscode-light,.vscode-high-contrast-light) :is(.saved-active,.cred-local-connected,.route-node svg,.inventory-status,.catalog-grid .mcp-added-pill,.catalog-grid .mcp-badge.verified svg,.iranian-providers .cred-provider-section-label) { color:#2e6a50; }

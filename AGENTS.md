@@ -1,9 +1,10 @@
 # Xratu
 
 Open-source AI coding assistant for VS Code. Bring your own key (BYOK) or
-point it at a local runtime (Ollama, LM Studio, vLLM, llama.cpp). Every agent
-loop, tool, approval, and history store runs entirely inside the extension
-host, on the user's machine.
+point it at a local runtime (Ollama, LM Studio, vLLM, llama.cpp), or use the
+OpenCode 2 engine and its free models. Xratu's built-in agent loop and tools run
+inside the extension host; native engines run through local CLI processes and
+SDKs. Approvals and Xratu history remain local.
 
 ## Repo layout
 
@@ -11,9 +12,12 @@ The repo IS the extension — single-product, flat layout (no wrapper dir).
 
 ```
 src/            extension host (TypeScript, bundled by esbuild — no type checking)
-  local/        THE agent runtime: localAgent.ts (OpenAI-compatible loop),
+  local/        built-in runtime: localAgent.ts (OpenAI-compatible loop),
                 localModelClient.ts (runtime probing), localSessionStore.ts
                 (history on disk)
+  engines/      engine contracts/registry, first-run setup, native configuration;
+    opencode/   OpenCode 2 SDK adapter, server, installer, events, permissions,
+                and background shell monitoring
   mcp.ts        built-in tool definitions + executor + plan/YOLO gating
   externalMcp.ts user-configured MCP servers (mcp__<server>__<tool>)
   webTools.ts   web_search / fetch_url (SSRF-guarded)
@@ -144,7 +148,9 @@ mounted across page changes so drafts and scroll positions survive.
   docking registry and remains read-only. Run `test:subagent-observation` and
   the loader/runner suites for this pipeline.
 - Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
-  detailed outputs as a read-only view. Keep approvals, questions, and
+  detailed outputs as a read-only view. Intermediate assistant prose stays in
+  Conversation until the turn finishes, then earlier prose folds into Activity.
+  Keep approvals, questions, and
   background-process controls actionable in Conversation and Background.
   Background uses the shared docking registry, bounds recent process/log state,
   and keeps streaming after the parent turn ends; scrolling up pauses following.
@@ -167,6 +173,37 @@ mounted across page changes so drafts and scroll positions survive.
 For work-surface changes, run `npm run test:work-surface`, the webview suites,
 and the relevant `test/e2e/app.spec.ts` and `work-surface.spec.ts` checks.
 Inspect the actual UI in both locales at narrow and wide widths as above.
+
+## Engines and first-run setup
+
+- `src/engines/types.ts` and `registry.ts` define the engine boundary. Keep
+  native adapters expandable; Codex and Claude Code are not implemented yet.
+  Native sessions persist their engine, workspace, binary, and native session
+  ID. Resume with that identity rather than the currently selected engine.
+- OpenCode owns its credentials, tools, compaction, and native history. Never
+  copy Xratu provider keys into it. Native provider authentication uses its SDK;
+  native MCP/Skills remain read-only and native subagents remain unavailable.
+- Preserve native permission/form identity and steering delivery boundaries.
+  Plan deterministically rejects mutation and unknown tools; offline mode
+  blocks native execution because Xratu cannot isolate its network access.
+  Xratu path/SSRF guards protect built-in tools, not OpenCode's native tools.
+- The managed installer verifies release checksums and supports Windows,
+  macOS, Linux, x64/arm64, baseline x64, and Linux musl. Keep cancellation,
+  custom paths, process-tree cleanup, and existing installations intact.
+- Free classification requires a known public free route and zero costs in
+  every advertised tier, including caches. Subscription access and missing
+  pricing are not free. Automatic/manual probes only target eligible free
+  models, with isolated temporary sessions; model variants use advertised IDs.
+- `xratu.setupCompleted` makes onboarding first-run-only. Resume unfinished
+  setup, reject stale replies by request ID, and route completed users to
+  Engines/Providers. Engine switching starts a fresh chat without onboarding.
+- Engine scope on Providers/MCP/Skills/Agents is independent of the chat
+  engine. Keep the composer controls and setup header LTR in both locales;
+  model names/radio controls stay left and localized free badges stay right.
+- Engine/setup changes require `npm run test:engines`, webview suites, and
+  relevant `test/e2e/engines.spec.ts`, `onboarding.spec.ts`, and
+  `welcome-flow.spec.ts` coverage in both locales and narrow/wide layouts.
+  Keep English/Persian READMEs and `THIRD_PARTY_NOTICES.txt` accurate.
 
 ## Releasing
 
@@ -247,8 +284,9 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
   and kill process TREES with `killTree()` (`taskkill /T /F`), never a bare
   `child.kill()`; tolerate UTF-8 BOM + CRLF when parsing user-editable files;
   no `~` expansion or POSIX-only paths.
-- **No secrets in the repo. Ever.** Model + provider credentials live in VS
-  Code secrets storage; `CredentialsPage.tsx` is the single editing surface.
+- **No secrets in the repo. Ever.** Xratu model/provider credentials live in
+  VS Code secrets storage; native credentials stay in the runtime's own
+  storage and use its SDK. `CredentialsPage.tsx` is the single editing surface.
 - **Never weaken security behaviors** without an explicit discussion in the
   PR description:
   - `webTools.ts` SSRF guards (`validatePublicUrl`), including the

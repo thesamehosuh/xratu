@@ -37,7 +37,7 @@ async function openProxy(page: Page, locale: 'fa' | 'en' = 'en'): Promise<void> 
         systemProxy: 'http://127.0.0.1:7890',
         noProxyList: 'localhost,127.0.0.1',
     });
-    await page.locator('.page-sidebar .sidebar-item').nth(6).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: /^(Proxy|پروکسی)$/, exact: true }).click();
     await page.waitForSelector('.routing-page');
 }
 
@@ -231,7 +231,7 @@ test('proxy page polish assertions', async ({ page }) => {
             ],
         }],
     });
-    await page.locator('.page-sidebar .sidebar-item').nth(6).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: /^(Proxy|پروکسی)$/, exact: true }).click();
     await page.waitForSelector('.routing-page');
 
     await page.getByRole('button', { name: 'Custom', exact: true }).click();
@@ -316,7 +316,7 @@ test('entering credentials from settings requests the saved providers', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    await page.locator('.page-sidebar .sidebar-item').nth(0).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: 'Providers', exact: true }).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
     // openCredentials makes the host push the saved provider list.
@@ -342,7 +342,7 @@ test('entering capabilities from settings requests MCP + skills state', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
-    await page.locator('.page-sidebar .sidebar-item').nth(1).click();
+    await page.locator('.page-sidebar').getByRole('button', { name: 'Servers', exact: true }).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
     expect(sent.some((m) => m.type === 'mcpGetState')).toBe(true);

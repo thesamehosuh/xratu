@@ -20,6 +20,10 @@ export function getUiLocale(): UiLocale {
 }
 
 const STRINGS: Record<string, { fa: string; en: string }> = {
+    engineRewindUnsupported: { fa: "ویرایش پیام های قبلی در موتور OpenCode فعلا پشتیبانی نمیشه. یک گفتگوی تازه بساز.", en: "Editing past messages is not supported by the OpenCode engine yet. Start a new conversation." },
+    engineSteerUnsupported: { fa: "برای فرستادن پیام بعدی به OpenCode صبر کن اجرا تموم بشه یا لغوش کن.", en: "Wait for OpenCode to finish, or cancel the run, before sending another message." },
+    engineBackgroundFailed: { fa: "انتقال دستور به پس زمینه انجام نشد: {detail}", en: "Could not background the command: {detail}" },
+    engineBackgroundNotReady: { fa: "بعد از شروع دستور میتونی به پس زمینه بفرستیش.", en: "Background is available after the command starts." },
     surfaceChangesFailed: { fa: "تغییرات بارگذاری نشد. دوباره تازه سازی کن.", en: "Could not load changes. Try refreshing." },
     surfaceAgentsFailed: { fa: "فایل های ایجنت بارگذاری نشد. دوباره تازه سازی کن.", en: "Could not load agent files. Try refreshing." },
     offlineRemoteBlocked: { fa: 'حالت آفلاین دسترسی به سرویس های ابری رو بسته', en: 'Offline mode blocks cloud services' },

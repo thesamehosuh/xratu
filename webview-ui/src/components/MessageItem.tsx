@@ -1716,15 +1716,21 @@ function TextSegmentRow({ steps, streaming }: { steps: Step[]; streaming: boolea
  *  live card's expandable line and the reload record row. */
 export function DecisionResolvedBody({ payload }: { payload: DecisionPayload }) {
     const answer = payload.answer ?? null;
-    const pickedLabel =
-        answer !== null && payload.options.some((o) => o.label === answer) ? answer : null;
+    let answers = answer === null ? [] : [answer];
+    if (payload.multiSelect && answer !== null) {
+        try {
+            const parsed: unknown = JSON.parse(answer);
+            if (Array.isArray(parsed) && parsed.every((label) => typeof label === 'string')) answers = parsed;
+        } catch { /* preserve legacy plain-text answers */ }
+    }
+    const customAnswers = answers.filter((label) => !payload.options.some((option) => option.label === label));
     return (
         <section className="decision-card resolved" aria-label={t('decisionAnswered')}>
             <p className="decision-question" dir="auto">{payload.question}</p>
 
             <div className="decision-options" role="group" aria-label={t('decisionOptionsAria')}>
                 {payload.options.map((option) => {
-                    const selected = pickedLabel === option.label;
+                    const selected = answers.includes(option.label);
                     return (
                         <button
                             key={option.label}
@@ -1748,8 +1754,8 @@ export function DecisionResolvedBody({ payload }: { payload: DecisionPayload }) 
                 })}
             </div>
 
-            {answer !== null && !pickedLabel && (
-                <div className="decision-resolution custom" dir="auto">{answer}</div>
+            {customAnswers.length > 0 && (
+                <div className="decision-resolution custom" dir="auto">{customAnswers.join(', ')}</div>
             )}
             {answer === null && (
                 <div className="decision-resolution dismissed" dir="auto">{t('decisionDismissed')}</div>
@@ -1839,6 +1845,7 @@ function DecisionCard({
     const answered = !!payload.answered;
     const [otherOpen, setOtherOpen] = useState(false);
     const [otherText, setOtherText] = useState('');
+    const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
     const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
@@ -1857,6 +1864,11 @@ function DecisionCard({
     };
 
     const title = payload.header || t('decisionHead');
+    const validSelection = (count: number) => count >= (payload.minItems ?? 1) && count <= (payload.maxItems ?? 100);
+    const submitCustom = () => {
+        if (!otherText.trim() || (payload.multiSelect && !validSelection(selectedLabels.length + 1))) return;
+        settle(payload.multiSelect ? JSON.stringify([...selectedLabels, otherText.trim()]) : otherText.trim());
+    };
 
     return (
         <section className="decision-card pending" aria-label={title}>
@@ -1884,12 +1896,14 @@ function DecisionCard({
                     <button
                         key={option.label}
                         type="button"
-                        className="decision-option"
-                        onClick={() => settle(option.label)}
+                        className={`decision-option${selectedLabels.includes(option.label) ? ' selected' : ''}`}
+                        aria-pressed={payload.multiSelect ? selectedLabels.includes(option.label) : undefined}
+                        onClick={() => payload.multiSelect ? setSelectedLabels((labels) => labels.includes(option.label) ? labels.filter((label) => label !== option.label) : [...labels, option.label]) : settle(option.label)}
                         disabled={submitting}
                     >
                         <span className="decision-option-top">
                             <span className="decision-option-label" dir="auto">{option.label}</span>
+                            {payload.multiSelect && selectedLabels.includes(option.label) && <Check size={13} />}
                             {option.recommended && (
                                 <span className="decision-option-badge">{t('decisionRecommended')}</span>
                             )}
@@ -1901,6 +1915,7 @@ function DecisionCard({
                 ))}
             </div>
 
+            {payload.multiSelect && <button type="button" className="apply-btn" disabled={!validSelection(selectedLabels.length) || submitting} onClick={() => { if (validSelection(selectedLabels.length)) settle(JSON.stringify(selectedLabels)); }}><Check size={13} />{t('decisionSend')}</button>}
             {otherOpen ? (
                 <div className="decision-other-box">
                     <textarea
@@ -1912,7 +1927,7 @@ function DecisionCard({
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
-                                if (otherText.trim()) settle(otherText.trim());
+                                submitCustom();
                             }
                         }}
                     />
@@ -1923,20 +1938,20 @@ function DecisionCard({
                         <button
                             type="button"
                             className="apply-btn"
-                            onClick={() => otherText.trim() && settle(otherText.trim())}
-                            disabled={!otherText.trim() || submitting}
+                            onClick={submitCustom}
+                            disabled={!otherText.trim() || submitting || (payload.multiSelect && !validSelection(selectedLabels.length + 1))}
                         >
                             {submitting ? <span className="step-status spinner" /> : <Check size={13} />}
                             {t('decisionSend')}
                         </button>
                     </div>
                 </div>
-            ) : (
+            ) : payload.allowCustomAnswer !== false ? (
                 <button type="button" className="decision-other-btn" onClick={() => setOtherOpen(true)} disabled={submitting}>
                     <PencilLine size={12} />
                     {t('decisionOther')}
                 </button>
-            )}
+            ) : null}
         </section>
     );
 }
@@ -1958,12 +1973,12 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
     const rows = useMemo(() => {
         const timeline = buildRows(steps, !!message.decisions?.length);
         const trailing = timeline.find(row => row.kind === 'text' && row.steps.some(step => step.final)) ?? timeline.at(-1);
-        // Prose before the next action belongs to Activity. The current/final
-        // trailing response belongs to Conversation, never both surfaces.
+        // Keep progress visible throughout the turn; fold it into Activity
+        // only once the completed answer is available.
         if (activityOnly) return timeline.filter(row => row !== trailing || row.kind !== 'text');
-        if (observation) return timeline;
+        if (observation || status !== 'done') return timeline;
         return timeline.filter(row => row.kind !== 'text' || row === trailing);
-    }, [steps, message.decisions, activityOnly, observation]);
+    }, [steps, message.decisions, activityOnly, observation, status]);
     const [activityNow, setActivityNow] = useState(Date.now);
     useEffect(() => {
         if (!readOnly) return;

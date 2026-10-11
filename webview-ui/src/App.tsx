@@ -1,3 +1,5 @@
+import { EngineScope, NativeConfiguration } from './components/EngineScope';
+import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
 import { BrowserPanel } from './components/BrowserPanel';
 import { collectAgentRuns } from './subagentView';
@@ -30,6 +32,7 @@ import type {
     McpServerPayload,
     McpServerView,
     ModelCapability,
+    ModelPingState,
     NotificationItem,
     OpenDiffEdit,
     SessionMeta,
@@ -47,6 +50,8 @@ import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep, toolCallFailed } fro
 import { CredentialsPage } from './components/CredentialsPage';
 import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
+import { EnginesPage } from './components/EnginesPage';
+import type { EngineSetupState, RuntimeSetupState, SetupPath } from './types';
 import { CapabilitiesPage, type CapabilityTab } from './components/CapabilitiesPage';
 import { Welcome } from './components/Welcome';
 import { UsagePage } from './components/UsagePage';
@@ -58,7 +63,7 @@ import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents';
+type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -84,6 +89,20 @@ export function App() {
     // showChat). Rendering the welcome here by default made it flash for a
     // few ms on every webview load before the host switched to the chat UI.
     const [screen, setScreen] = useState<Screen>('boot');
+    const [setupPath, setSetupPath] = useState<SetupPath | null>(null);
+    const [setupCanBack, setSetupCanBack] = useState(false);
+    const [setupCredentialId, setSetupCredentialId] = useState<string>();
+    const [setupState, setSetupState] = useState<RuntimeSetupState | null>(null);
+    const [setupRefresh, setSetupRefresh] = useState(0);
+    const setupRequestId = useRef('');
+    const setupScreenRef = useRef(false);
+    setupScreenRef.current = screen === 'welcome';
+    const previousInstallPhase = useRef<string>();
+    const [settingsEngine, setSettingsEngine] = useState<SetupEngine>('xratu');
+    const [nativeState, setNativeState] = useState<NativeSetupState | null>(null);
+    const [nativeRefresh, setNativeRefresh] = useState(0);
+    const nativeRequest = useRef<string | null>(null);
+    const [engineState, setEngineState] = useState<EngineSetupState | null>(null);
     const [chat, dispatch] = useReducer(reduceChat, undefined, createInitialChatState);
     /** Host-echoed current task list (user edits merged; null = none). The
      *  interactive checklist shows this over the newest update_task_list
@@ -146,12 +165,14 @@ export function App() {
         capabilities: Record<string, ModelCapability>;
     } | null>(null);
     const [selectedModel, setSelectedModel] = useState<string | null>(null);
+    const [modelPings, setModelPings] = useState<Record<string, ModelPingState>>({});
     // User's explicit per-model context-window overrides (mirrored from the
     // host's persisted map on every modelInfo).
     const [ctxOverrides, setCtxOverrides] = useState<Record<string, number>>({});
     // Per-model reasoning-effort levels (mirrored from the host's persisted
     // map on every modelInfo; a missing entry = Default).
     const [thinkingLevels, setThinkingLevels] = useState<Record<string, ThinkingLevel>>({});
+    const [nativeVariants, setNativeVariants] = useState<Record<string, string>>({});
     const [modelsRefreshing, setModelsRefreshing] = useState(false);
     const [extensionVersion, setExtensionVersion] = useState<string | null>(null);
     const [localRuntimes, setLocalRuntimes] = useState<DiscoveredLocalRuntime[]>([]);
@@ -220,6 +241,7 @@ export function App() {
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    useEffect(() => { setModelPings({}); }, [engineState?.active, currentSessionId]);
     const [currentBrowserSessionId, setCurrentBrowserSessionId] = useState<string | null>(null);
     const [sessionsOpen, setSessionsOpen] = useState(false);
     const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -269,6 +291,28 @@ export function App() {
     }, []);
 
     const send = useCallback((msg: ToExtensionMessage) => postMessage(msg), []);
+    useEffect(() => {
+        if (screen !== 'welcome' || !setupPath) return;
+        const requestId = crypto.randomUUID();
+        setupRequestId.current = requestId;
+        setSetupState(null);
+        send({ type: 'setupGetState', requestId, engine: setupPath === 'free' ? 'opencode' : 'xratu', path: setupPath, credentialId: setupCredentialId, onboarding: true });
+        return () => { setupRequestId.current = ''; send({ type: 'setupCancel' }); };
+    }, [screen, setupPath, setupCredentialId, setupRefresh, send]);
+    useEffect(() => { setSettingsEngine(engineState?.active ?? 'xratu'); }, [engineState?.active, screen]);
+    useEffect(() => {
+        if (settingsEngine !== 'opencode' || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
+        const requestId = crypto.randomUUID();
+        nativeRequest.current = requestId;
+        setNativeState(null);
+        send({ type: 'nativeGetState', requestId });
+        return () => { nativeRequest.current = null; send({ type: 'nativeCancel' }); };
+    }, [screen, settingsEngine, nativeRefresh, send]);
+    useEffect(() => {
+        if (setupScreenRef.current && previousInstallPhase.current === 'installing' && engineState?.phase === 'ready') setSetupRefresh((value) => value + 1);
+        previousInstallPhase.current = engineState?.phase;
+    }, [engineState?.phase]);
+
 
     /** Monotonic search request id + the latest issued one, so a slow response
      *  for an abandoned query OR scope is dropped instead of flashing stale
@@ -317,7 +361,7 @@ export function App() {
      *  still running; the host injects at the next round boundary, so the
      *  bubble must wait for that. Keyed by the steerId echoed back by the
      *  host, with the webview's own attachments (image previews intact). */
-    const pendingSteers = useRef(new Map<string, { value: string; attachments: AttachmentMeta[] }>());
+    const pendingSteers = useRef(new Map<string, { value: string; attachments: AttachmentMeta[]; rawAttachments: ComposerAttachment[] }>());
     const steerSeq = useRef(0);
     /** Mirror of the pending map for RENDERING: a compact "queued" chip while
      *  the steer waits for the current tool call to finish. The ref stays the
@@ -701,6 +745,9 @@ export function App() {
                     setExtensionVersion(msg.details?.version ?? null);
                     break;
                 case 'showWelcome':
+                    setSetupPath(msg.path ?? null);
+                    setSetupCanBack(msg.canBack ?? false);
+                    setSetupCredentialId(undefined);
                     setScreen('welcome');
                     break;
                 case 'showChat':
@@ -779,8 +826,18 @@ export function App() {
                     setVisionCapable(msg.visionCapable ?? null);
                     if (msg.overrides) setCtxOverrides(msg.overrides);
                     setThinkingLevels(msg.thinkingLevels ?? {});
+                    setNativeVariants(msg.nativeVariants ?? {});
                     setByokHint(false);
                     setByokError(null);
+                    break;
+                case 'nativeSetupState':
+                    if (msg.state.requestId === nativeRequest.current) setNativeState(msg.state);
+                    break;
+                case 'runtimeSetupState':
+                    if (msg.state.requestId === setupRequestId.current) setSetupState(msg.state);
+                    break;
+                case 'modelPing':
+                    setModelPings((previous) => ({ ...previous, [msg.model]: msg.state }));
                     break;
                 case 'clipboardResult':
                     if (msg.requestId === 'oauth-device-code' || msg.requestId === 'oauth-browser-url') {
@@ -828,7 +885,10 @@ export function App() {
                 case 'composerError':
                     // A steer rejected during validation never reaches the
                     // queue - drop its held bubble + chip so it cannot render.
-                    if (msg.steerId) releasePendingSteer(msg.steerId);
+                    if (msg.steerId) {
+                        const pending = releasePendingSteer(msg.steerId);
+                        if (pending) setComposerRestore({ value: pending.value, attachments: pending.rawAttachments });
+                    }
                     setComposerError((prev) => ({ id: (prev?.id ?? 0) + 1, value: msg.value ?? '', valueKey: msg.valueKey, params: msg.params }));
                     break;
                 case 'byokSetupHint':
@@ -861,7 +921,8 @@ export function App() {
                     setActiveCredentialId(msg.credentials.find((c) => c.active)?.id ?? null);
                     break;
                 case 'credentialsSaved':
-                    if (msg.returnToChat) setScreen('chat');
+                    if (setupScreenRef.current) { if (msg.credentialId) setSetupCredentialId(msg.credentialId); setSetupRefresh((value) => value + 1); }
+                    else if (msg.returnToChat) setScreen('chat');
                     setByokError(null);
                     break;
                 case 'localModelsDiscovered':
@@ -869,6 +930,14 @@ export function App() {
                     break;
                 case 'openSettings':
                     setScreen('settings');
+                    break;
+                case 'openEngines':
+                    setScreen('engines');
+                    send({ type: 'enginesGetState' });
+                    break;
+                case 'enginesState':
+                    setEngineState(msg.state);
+                    if (msg.state.active === 'opencode') setByokHint(false);
                     break;
                 case 'notification':
                     setNotifications((prev) => [...prev, { id: msg.id, kind: msg.kind, valueKey: msg.valueKey, params: msg.params, actions: msg.actions }]);
@@ -878,6 +947,7 @@ export function App() {
                     setLocaleState(msg.locale);
                     break;
                 case 'runtimePreferences':
+                    if (setupScreenRef.current) setSetupRefresh((value) => value + 1);
                     setOffline(msg.offline);
                     setErrorExplanations(msg.errorExplanations);
                     break;
@@ -956,7 +1026,7 @@ export function App() {
                 // round boundary) and confirms via `steerApplied`, so the
                 // timeline is not split while the model is still busy.
                 const steerId = `steer-${Date.now()}-${steerSeq.current++}`;
-                pendingSteers.current.set(steerId, { value, attachments: toAttachmentMeta(attachments) });
+                pendingSteers.current.set(steerId, { value, attachments: toAttachmentMeta(attachments), rawAttachments: attachments });
                 setQueuedSteers((prev) => [...prev, {
                     id: steerId,
                     label: value || attachments.map((a) => a.name).join(', '),
@@ -1145,11 +1215,13 @@ export function App() {
 
 
     const checkpointSha = activeReviewSha ?? newestCheckpoint ?? null;
-    const activeSection: SettingsSection = screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : 'settings';
+    const activeSection: SettingsSection = screen === 'engines' ? 'engines' : screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : 'settings';
     const openSection = (section: SettingsSection) => {
         setSessionsOpen(false);
         if (section === 'providers') {
             setCredReturnTo('chat'); setScreen('credentials'); send({ type: 'openCredentials' });
+        } else if (section === 'engines') {
+            setScreen('engines'); send({ type: 'enginesGetState' });
         } else if (section === 'mcp' || section === 'marketplace' || section === 'skills') {
             setCapReturnTo('chat'); setCapabilityTab(section === 'mcp' ? 'servers' : section); setScreen('capabilities');
         } else if (section === 'usage') {
@@ -1162,20 +1234,22 @@ export function App() {
         setSurfaceTab('conversation'); setScreen('chat'); setInjectedText({ id: Date.now(), text, autoSend: false });
     };
     let overlay: JSX.Element | null = null;
+    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} />;
 
     if (screen === 'agents') {
         overlay = <AgentsPage profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
     }
 
-    if (screen === 'credentials') {
-        overlay = (
+    const renderCredentials = (embedded?: 'provider' | 'local') => (
                 <CredentialsPage
+                    embedded={embedded}
+                    native={!embedded && settingsEngine === 'opencode' ? { state: nativeState, send, refresh: () => setNativeRefresh((value) => value + 1) } : undefined}
                     key={credNonce}
                     reason={credReason}
                     error={byokError}
                     currentUrl={credUrl}
-                    activeCredentialId={activeCredentialId}
-                    initialOpenCard={credOpenCard}
+                    activeCredentialId={embedded ? setupCredentialId ?? setupState?.credentialId ?? activeCredentialId : activeCredentialId}
+                    initialOpenCard={embedded === 'local' ? 'local' : embedded === 'provider' ? 'byok' : credOpenCard}
                     offline={offline}
                     localModelOperation={localModelOperation}
                     benchmarks={benchmarks}
@@ -1194,12 +1268,12 @@ export function App() {
                         send({ type: 'listModels' });
                     }}
                     modelsRefreshing={modelsRefreshing}
-                    onSave={(base_url, api_key) => send({ type: 'saveLlmCredentials', base_url, api_key, returnToChat: savedCredentials.length === 0 })}
-                    onSelectCredential={(id) => send({ type: 'selectLlmCredential', id })}
+                    onSave={(base_url, api_key) => send({ type: 'saveLlmCredentials', base_url, api_key, returnToChat: !embedded && savedCredentials.length === 0 })}
+                    onSelectCredential={(id) => embedded ? setSetupCredentialId(id) : send({ type: 'selectLlmCredential', id })}
                     onDeleteCredential={(id) => send({ type: 'deleteLlmCredential', id })}
                     onUpdateCredential={(id, api_key) => send({ type: 'updateLlmCredential', id, api_key })}
                     onDiscoverLocalModels={startLocalScan}
-                    onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: savedCredentials.length === 0 })}
+                    onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: !embedded && savedCredentials.length === 0 })}
                     oauthState={oauthState}
             onOAuthSignIn={(providerId, method, credentialId) => { setOauthCopyResult(null); send({ type: 'oauthSignIn', providerId, method, credentialId }); }}
             onOAuthCopy={(value, requestId) => { setOauthCopyResult(null); send({ type: 'copyToClipboard', value, requestId }); }}
@@ -1209,8 +1283,8 @@ export function App() {
             onOAuthSignOut={(credentialId) => send({ type: 'oauthSignOut', credentialId })}
             onBack={() => setScreen(credReturnTo)}
                 />
-        );
-    }
+    );
+    if (screen === 'credentials') overlay = renderCredentials();
 
     if (screen === 'capabilities') {
         overlay = (
@@ -1276,6 +1350,7 @@ export function App() {
         };
         overlay = (
                 <ProxyPage
+                    nativeEngine={engineState?.active === 'opencode'}
                     onBack={() => setScreen(proxyReturnTo)}
                     state={proxyState}
                     candidates={proxyCandidates}
@@ -1316,6 +1391,7 @@ export function App() {
     if (screen === 'settings') {
         overlay = (
                 <SettingsPage
+                    nativeEngine={engineState?.active === 'opencode'}
                     onBack={() => setScreen('chat')}
                     error={byokError}
                     version={extensionVersion}
@@ -1372,6 +1448,10 @@ export function App() {
         );
     }
 
+    if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
+        if (settingsEngine === 'opencode' && screen !== 'credentials') overlay = <NativeConfiguration state={nativeState} section={screen === 'agents' ? 'agents' : capabilityTab} send={send} refresh={() => setNativeRefresh((value) => value + 1)} />;
+        overlay = <div className="scoped-page"><EngineScope engine={settingsEngine} onChange={setSettingsEngine} />{overlay}</div>;
+    }
     const taskControl = taskProgress && taskListView && (
                 <div className="task-list-chip-wrap">
                     <button
@@ -1405,6 +1485,18 @@ export function App() {
                 </div>
             );
 
+    if (screen === 'welcome') overlay = <Welcome
+        path={setupPath} state={setupState} engineState={engineState} canBack={setupCanBack}
+        localRuntimes={localRuntimes} localModelsScanning={localModelsScanning} localScanError={localScanError}
+        localModelOperation={localModelOperation} offline={offline} locale={locale}
+        credentials={renderCredentials(setupPath === 'local' ? 'local' : 'provider')}
+        onSetLocale={(value) => { setLocale(value); setLocaleState(value); send({ type: 'setLocale', locale: value }); }}
+        onChoose={(value) => { setSetupPath(value); setSetupCredentialId(undefined); setSetupState(null); }}
+        onBack={() => setScreen('chat')} onRetry={() => setSetupRefresh((value) => value + 1)}
+        onConnectRuntime={(runtime) => { setSetupCredentialId(undefined); send({ type: 'saveLlmCredentials', base_url: runtime.baseUrl, api_key: '', returnToChat: false }); }}
+        onRescan={startLocalScan} send={send}
+    />;
+
     const overlayOpen = overlay !== null;
 
     if (screen === 'boot') {
@@ -1413,30 +1505,6 @@ export function App() {
         return <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'} />;
     }
 
-    if (screen === 'welcome') {
-        return (
-            <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-                {offlineBanner}
-                <Welcome
-                    localRuntimes={localRuntimes}
-                    localModelsScanning={localModelsScanning}
-                    localScanError={localScanError}
-                    locale={locale}
-                    onSetLocale={(l) => {
-                        setLocale(l);
-                        setLocaleState(l);
-                        send({ type: 'setLocale', locale: l });
-                    }}
-                    onConnectRuntime={(rt) =>
-                        send({ type: 'saveLlmCredentials', base_url: rt.baseUrl, api_key: '', returnToChat: true })
-                    }
-                    onOpenCredentials={() => send({ type: 'openCredentials' })}
-                    onRescan={startLocalScan}
-                />
-                {banner}
-            </div>
-        );
-    }
 
     return (
         <>
@@ -1447,7 +1515,7 @@ export function App() {
             scroll position and mounted page survive the trip - and it drops the
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
-        <div className="app workbench" dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <div className={`app workbench${screen === 'welcome' ? ' setting-up' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             {offlineBanner}
             <Toolbar
                 conn={conn}
@@ -1517,6 +1585,7 @@ export function App() {
                 onOpenSettings={() => setScreen('settings')}
             />
             <div className="workbench-body">
+            {banner}
             <AgentNavigation.Provider value={observeAgent}><div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
             <main className={`work-surface show-${surfaceTab}${dock.wide && dock.sidePanels.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
                 onDragOver={(event) => {
@@ -1649,6 +1718,9 @@ export function App() {
                 models={modelInfo?.models ?? []}
                 modelDisplayNames={modelInfo?.displayNames}
                 modelCapabilities={modelInfo?.capabilities}
+                modelPings={modelPings}
+                engineLabel={t(engineState?.active === 'opencode' ? 'engineOpenCode' : 'engineXratu')}
+                onPingModel={(model, automatic) => send({ type: 'pingFreeModel', model, ...(automatic ? { automatic: true } : {}) })}
                 modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}
                 onSelectModel={(m) => {
@@ -1667,16 +1739,21 @@ export function App() {
                     });
                     send({ type: 'setContextWindowOverride', model: selectedModel, window: win });
                 }}
-                thinkingLevel={selectedModel ? thinkingLevels[selectedModel] ?? null : null}
+                thinkingLevel={selectedModel ? (engineState?.active === 'opencode' ? nativeVariants[selectedModel] : thinkingLevels[selectedModel]) ?? null : null}
                 onSetThinkingLevel={(level) => {
                     if (!selectedModel) return;
+                    if (engineState?.active === 'opencode') {
+                        setNativeVariants((previous) => { const next = { ...previous }; if (level) next[selectedModel] = level; else delete next[selectedModel]; return next; });
+                        send({ type: 'setNativeVariant', model: selectedModel, variant: level });
+                        return;
+                    }
                     setThinkingLevels((c) => {
                         const next = { ...c };
-                        if (level != null) next[selectedModel] = level;
+                        if (level != null) next[selectedModel] = level as ThinkingLevel;
                         else delete next[selectedModel];
                         return next;
                     });
-                    send({ type: 'setThinkingLevel', model: selectedModel, level });
+                    send({ type: 'setThinkingLevel', model: selectedModel, level: level as ThinkingLevel | null });
                 }}
                 modelVisionCapable={visionCapable}
                 restoreDraft={composerRestore}
@@ -1726,9 +1803,8 @@ export function App() {
             </main>
             </div>
             </AgentNavigation.Provider>
-            {overlayOpen && <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>}
+            {overlayOpen && (screen === 'welcome' ? <div className="setup-overlay">{overlay}</div> : <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>)}
         </div>
-        {banner}
         </div>
         </>
     );

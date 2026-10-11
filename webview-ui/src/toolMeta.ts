@@ -30,6 +30,7 @@ import {
 import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
+    { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
     { re: /^update_task_list$/, icon: ListChecks },
     { re: /^ask_user_question$/, icon: HelpCircle },
@@ -70,6 +71,7 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
 /** Persian labels for the builtin tool pills - shown RTL like the thinking
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
+    { re: /^opencode_/, key: 'toolOpenCode' },
     { re: /^browser_/, key: 'toolBrowser' },
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
     { re: /^process$/, key: 'toolProcess' },
