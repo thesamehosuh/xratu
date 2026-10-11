@@ -99,11 +99,22 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         const pane = page.locator('.messages');
         await expect.poll(async () => (await metrics(page)).distance).toBeLessThan(1);
         await pane.hover();
+        await pane.evaluate((el) => {
+            const target = el as HTMLElement & { wheelFinished?: Promise<void> };
+            target.wheelFinished = new Promise((resolve) => {
+                // A wheel call returns before compositor scrolling finishes.
+                // Observe scrollend for this gesture, not an earlier follow scroll.
+                target.addEventListener('wheel', () => {
+                    target.addEventListener('scrollend', () => resolve(), { once: true });
+                }, { once: true, passive: true });
+            });
+        });
         await page.mouse.wheel(0, -900);
         // Race stream updates against the browser's wheel/scroll delivery.
         for (let i = 0; i < 8; i++) await hostMessage(page, { type: 'chunk', value: 'More live output. '.repeat(30) });
         await expect(page.locator('.jump-btn')).toBeVisible();
         await expect.poll(async () => (await metrics(page)).distance).toBeGreaterThan(80);
+        await pane.evaluate((el) => (el as HTMLElement & { wheelFinished?: Promise<void> }).wheelFinished);
         const detached = await metrics(page);
         for (let i = 0; i < 8; i++) await hostMessage(page, { type: 'chunk', value: 'Still working. '.repeat(30) });
         expect((await metrics(page)).top).toBeCloseTo(detached.top, 0);
