@@ -244,15 +244,16 @@ Format is Cline-compatible: `command`/`args`/`env` for stdio, `url` for
 remote. Tools surface to the agent as `mcp__<server>__<tool>` and follow the
 same approval flow as built-ins.
 
-Fresh installs include DuckDuckGo plus **[Digikala](https://github.com/sepehr071/digikala-mcp),
+Fresh installs include DuckDuckGo. Add **[Digikala](https://github.com/sepehr071/digikala-mcp),
 [Torob](https://github.com/mmdju/torob-mcp) and
-[Divar](https://github.com/mmdju/divar-mcp)**, enabled by default. Iranian
+[Divar](https://github.com/mmdju/divar-mcp)** from the marketplace when you want them.
+These integrations require explicit opt-in before connecting or running local code. Iranian
 servers lead the curated marketplace list, and **Iranian** is the first tag
 filter. Digikala
 requires `uv`; Torob runs locally and requires Node.js and Git; Divar uses
 its hosted HTTP endpoint. Torob downloads and builds dependencies on its
-first launch; if that exceeds the connection timeout, refresh Servers once
-the install finishes. These unofficial integrations are read-only and
+first launch; its startup budget is two minutes. If installation cannot finish
+within that budget, install the pinned package separately before enabling it. These unofficial integrations are read-only and
 need no API keys. Existing config (including disabled or removed servers)
 is preserved; existing users can add them from the marketplace.
 

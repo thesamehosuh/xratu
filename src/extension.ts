@@ -7612,7 +7612,7 @@ export function activate(context: vscode.ExtensionContext) {
     // newly connect workspace-sourced servers.
     context.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() => {
-            void provider.reloadMcpFromDisk().catch((e) =>
+            void mcpConfigStore.seedDefaults().then(() => provider.reloadMcpFromDisk()).catch((e) =>
                 console.error('xratu: mcp trust-transition reload failed:', e));
             // Activation skipped the bundled-skills seed in Restricted Mode -
             // this transition is its only second chance in this window.

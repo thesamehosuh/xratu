@@ -85,6 +85,7 @@ interface Draft {
     url: string;
     headersText: string;
     timeoutText: string;
+    connectTimeoutMs?: number;
     autoApproveText: string;
     disabled: boolean;
 }
@@ -130,6 +131,7 @@ function draftFromView(v: McpServerView): Draft {
         cwd: v.cwd ?? '',
         url: v.url ?? '',
         headersText: v.headers ? JSON.stringify(v.headers, null, 2) : '',
+        connectTimeoutMs: v.connectTimeoutMs,
         timeoutText: v.timeoutMs != null ? String(v.timeoutMs) : '',
         autoApproveText: (v.autoApprove ?? []).join('\n'),
         disabled: !!v.disabled,
@@ -196,6 +198,7 @@ function draftToPayload(d: Draft): McpServerPayload | string {
         headers: d.type !== 'stdio' && Object.keys(headers).length ? headers : undefined,
         disabled: d.disabled || undefined,
         autoApprove: autoApprove.length ? autoApprove : undefined,
+        connectTimeoutMs: d.connectTimeoutMs,
         timeoutMs: timeout != null && Number.isFinite(timeout) && timeout >= 0 ? timeout : undefined,
     };
 }
@@ -332,6 +335,7 @@ function payloadFromInstall(name: string, install: MarketplaceInstall): McpServe
     return {
         name,
         type: 'stdio',
+        connectTimeoutMs: install.connectTimeoutMs,
         command: install.command,
         args: install.args.length ? install.args : undefined,
         env: install.env && Object.keys(install.env).length ? install.env : undefined,
@@ -540,6 +544,7 @@ export function CapabilitiesPage({
         d.name = uniqueName(entry.serverName);
         if (install && install.kind === 'stdio') {
             d.type = 'stdio';
+            d.connectTimeoutMs = install.connectTimeoutMs;
             d.command = install.command;
             d.argsText = install.args.join('\n');
             d.envText = install.env ? JSON.stringify(install.env, null, 2) : '';

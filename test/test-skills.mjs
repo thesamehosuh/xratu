@@ -406,6 +406,24 @@ const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the 
     }
 
     let threw = false;
+    const originalRead = fs.promises.readFile;
+    for (const change of ['edit', 'delete']) {
+        fs.rmSync(target, { force: true });
+        fs.writeFileSync(target, mdV1);
+        fs.promises.readFile = async (...args) => {
+            const bytes = await originalRead(...args);
+            if (args[0] === target) {
+                if (change === 'delete') fs.unlinkSync(target);
+                else fs.writeFileSync(target, mdUser);
+            }
+            return bytes;
+        };
+        try {
+            check(`update: late ${change} wins over the initial hash`,
+                await updateBundledSkillIfUntouched(root, 'upd-skill', mdV2, sha256Hex(mdV1)), 'skipped');
+            check(`update: late ${change} is preserved`, change === 'delete' ? fs.existsSync(target) : fs.readFileSync(target, 'utf8'), change === 'delete' ? false : mdUser);
+        } finally { fs.promises.readFile = originalRead; }
+    }
     try { await updateBundledSkillIfUntouched(root, '../evil', mdV2, 'x'); } catch { threw = true; }
     check('update: invalid dirName throws', threw, true);
 }

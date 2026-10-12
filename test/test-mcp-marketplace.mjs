@@ -366,7 +366,7 @@ check('curated: Iranian category contains all three servers', iranian.map((e) =>
 check('curated: Digikala pinned local package', iranian.find((e) => e.serverName === 'digikala').install,
     { kind: 'stdio', command: 'uvx', args: ['digikala-mcp==0.3.0'], runtime: 'python' });
 check('curated: Torob pinned local source', iranian.find((e) => e.serverName === 'torob').install,
-    { kind: 'stdio', command: 'npx', args: ['-y', 'npm@11.6.2', 'exec', '--yes', '--package=github:mmdju/torob-mcp#b8ffdca4110e8f35f9f617be57fa8cf9916aa968', '--', 'torob-mcp'], runtime: 'node' });
+    { kind: 'stdio', command: 'npx', args: ['-y', 'npm@11.6.2', 'exec', '--yes', '--package=github:mmdju/torob-mcp#b8ffdca4110e8f35f9f617be57fa8cf9916aa968', '--', 'torob-mcp'], runtime: 'node', connectTimeoutMs: 120000 });
 check('curated: Divar hosted transport', iranian.find((e) => e.serverName === 'divar').install,
     { kind: 'remote', type: 'streamableHttp', url: 'https://divar-mcp.mmdju2.workers.dev/mcp' });
 check('search: Iranian category is searchable offline', searchMarketplaceEntries(curated, 'iranian').length, 3);

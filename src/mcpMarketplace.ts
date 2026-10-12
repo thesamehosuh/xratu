@@ -49,6 +49,7 @@ export interface MarketplaceStdioInstall {
     env?: Record<string, string>;
     envVars?: MarketplaceEnvVar[];
     runtime: 'node' | 'python' | 'docker' | 'binary';
+    connectTimeoutMs?: number;
 }
 
 export interface MarketplaceRemoteInstall {
@@ -297,6 +298,8 @@ export function serverToInstall(server: Record<string, unknown>): MarketplaceIns
         args: args.slice(0, MARKETPLACE_LIMITS.args),
         env: Object.keys(env).length ? env : undefined,
         runtime: runtimeForCommand(command),
+        ...(typeof server.connectTimeoutMs === 'number' && Number.isFinite(server.connectTimeoutMs) && server.connectTimeoutMs > 0
+            ? { connectTimeoutMs: Math.min(120_000, server.connectTimeoutMs) } : {}),
     };
 }
 

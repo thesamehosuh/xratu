@@ -15,6 +15,7 @@
  * Run (after `npx tsc -p . --outDir out`):
  *   node test/test-mcp-tool-images.mjs
  */
+import assert from 'node:assert/strict';
 import { createRequire } from 'module';
 import Module from 'module';
 
@@ -40,6 +41,7 @@ Module._load = function (request, parent, isMain) {
 const require = createRequire(import.meta.url);
 const {
     mapMcpToolContent,
+    ExternalMcpManager,
 } = require('../out/externalMcp.js');
 const {
     toolResultContent,
@@ -498,3 +500,39 @@ console.log(failed === 0
     ? '\nall external-MCP image passthrough tests passed'
     : `\n${failed} FAILURE(S)`);
 process.exit(failed === 0 ? 0 : 1);
+// Tool discovery runs independent connections together but retains config order.
+{
+    const config = { servers: { first: {}, second: {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
+    const manager = new ExternalMcpManager(async () => config);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = [];
+    manager.getState = async name => {
+        started.push(name);
+        await gate;
+        return { name, client: { listTools: async () => ({ tools: [{ name: 'read', description: 'Remote instructions', inputSchema: {} }] }) } };
+    };
+    const listing = manager.listTools();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(started, ['first', 'second']);
+    release();
+    const tools = await listing;
+    assert.deepEqual(tools.map(tool => tool.serverName), ['first', 'second']);
+    assert.ok(tools.every(tool => tool.description.includes('untrusted external metadata') && !tool.autoApprove));
+    const retrying = new ExternalMcpManager(async () => config);
+    let attempts = 0;
+    retrying.connect = name => {
+        attempts++;
+        const pending = Promise.resolve(null);
+        retrying._states.set(name, pending);
+        return pending;
+    };
+    await retrying.getState('first', {}, 'global');
+    await retrying.getState('first', {}, 'global');
+    assert.equal(attempts, 1, 'failed connections do not retry on every turn');
+    await retrying.restart('first');
+    assert.equal(attempts, 2, 'manual restart bypasses cooldown');
+    await retrying.reload();
+    await retrying.getState('first', {}, 'global');
+    assert.equal(attempts, 3, 'config reload bypasses cooldown');
+}
