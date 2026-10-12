@@ -8,8 +8,9 @@ import { ReviewDiff } from './ReviewDiff';
 export interface ReviewTurn { sha: string; toSha?: string; number: number }
 const ignoreFiles = () => {};
 
-export function ChangesPanel({ turns = [], ...props }: {
+export function ChangesPanel({ turns = [], selectedNumber = null, ...props }: {
     turns?: ReviewTurn[];
+    selectedNumber?: number | null;
     sha: string | null;
     initialPath?: string | null;
     busy: boolean;
@@ -19,39 +20,45 @@ export function ChangesPanel({ turns = [], ...props }: {
     onFiles: (files: ReviewChange[]) => void;
 }) {
     const { sha, onCount, onFiles } = props;
-    const [counts, setCounts] = useState<Record<string, number>>({});
-    const [displayedSha, setDisplayedSha] = useState(sha);
-    const count = useCallback((sha: string, value: number) => setCounts(current => current[sha] === value ? current : { ...current, [sha]: value }), []);
+    const [counts, setCounts] = useState<Record<number, number>>({});
+    const [displayedNumber, setDisplayedNumber] = useState<number | null>(null);
+    const count = useCallback((number: number, value: number) => setCounts(current => current[number] === value ? current : { ...current, [number]: value }), []);
+    const reviews = useMemo(() => {
+        const entries = turns.filter(turn => !turn.toSha || turn.toSha !== turn.sha);
+        if (sha && !entries.some(turn => turn.sha === sha)) entries.push({ sha, number: 0 });
+        return entries;
+    }, [turns, sha]);
+    const incoming = selectedNumber !== null
+        ? reviews.find(turn => turn.number === selectedNumber)
+        : [...reviews].reverse().find(turn => turn.sha === sha);
+    const incomingNumber = incoming?.number ?? null;
     useEffect(() => {
         // A new checkpoint alone must not fold the diff the user is reading.
-        if (sha && counts[sha] > 0) setDisplayedSha(sha);
+        if (incomingNumber !== null && counts[incomingNumber] > 0) setDisplayedNumber(incomingNumber);
         if (!sha) onFiles([]);
-    }, [sha, counts, onFiles]);
-    const reviews = turns.filter(turn => !turn.toSha || turn.toSha !== turn.sha);
-    if (props.sha && !reviews.some(turn => turn.sha === props.sha)) reviews.push({ sha: props.sha, number: 0 });
-    const currentSha = reviews.some(turn => turn.sha === displayedSha) ? displayedSha : props.sha;
-    const current = reviews.find(turn => turn.sha === currentSha);
-    const previous = reviews.filter(turn => turn.sha !== currentSha).reverse();
+    }, [incomingNumber, counts, sha, onFiles]);
+    const current = reviews.find(turn => turn.number === displayedNumber) ?? incoming;
+    const previous = reviews.filter(turn => turn.number !== current?.number).reverse();
     useEffect(() => {
-        onCount([...new Set([...turns.map(turn => turn.sha), ...(sha ? [sha] : [])])].reduce((sum, checkpoint) => sum + (counts[checkpoint] ?? 0), 0));
-    }, [counts, turns, sha, onCount]);
+        onCount(reviews.reduce((sum, turn) => sum + (counts[turn.number] ?? 0), 0));
+    }, [counts, reviews, onCount]);
     return <div className="changes-history review-scroll">
-        {!props.sha && <ChangeReview {...props} onFiles={ignoreFiles} />}
-        {[...(current ? [current] : []), ...previous].map((turn, index) => <ReviewTurnPanel key={`${props.sessionKey}-${turn.sha}`} turn={turn}
-            current={turn.sha === currentSha} incoming={turn.sha === props.sha} historyHeading={index === 1 && previous.some(item => counts[item.sha] > 0)}
-            initialPath={turn.sha === props.sha ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onFeedback={props.onFeedback} onCount={count} onFiles={props.onFiles} />)}
+        {!sha && <ChangeReview {...props} onFiles={ignoreFiles} />}
+        {[...(current ? [current] : []), ...previous].map((turn, index) => <ReviewTurnPanel key={`${props.sessionKey}-${turn.number}`} turn={turn}
+            current={turn.number === current?.number} incoming={turn.number === incomingNumber} historyHeading={index === 1 && previous.some(item => counts[item.number] > 0)}
+            initialPath={turn.number === incomingNumber ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onFeedback={props.onFeedback} onCount={count} onFiles={props.onFiles} />)}
     </div>;
 }
 
 function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath, busy, sessionKey, onFeedback, onCount, onFiles }: {
     turn: ReviewTurn; current: boolean; incoming: boolean; historyHeading: boolean; initialPath?: string | null; busy: boolean;
-    sessionKey: string; onFeedback: (text: string) => void; onCount: (sha: string, count: number) => void; onFiles: (files: ReviewChange[]) => void;
+    sessionKey: string; onFeedback: (text: string) => void; onCount: (number: number, count: number) => void; onFiles: (files: ReviewChange[]) => void;
 }) {
     const [count, setCount] = useState(0);
     const [expanded, setExpanded] = useState(false);
     const [files, setFiles] = useState<ReviewChange[]>([]);
     useEffect(() => { if (current) setExpanded(false); }, [current]);
-    const updateCount = useCallback((value: number) => { setCount(value); onCount(turn.sha, value); }, [turn.sha, onCount]);
+    const updateCount = useCallback((value: number) => { setCount(value); onCount(turn.number, value); }, [turn.number, onCount]);
     useEffect(() => { if (incoming) onFiles(files); }, [incoming, files, onFiles]);
     return <>
         {historyHeading && <h3 className="review-history-heading"><History size={14} />{t('surfacePreviousTurns')}</h3>}

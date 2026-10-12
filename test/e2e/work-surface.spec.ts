@@ -801,3 +801,44 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.review-turn .review-input')).toHaveValue('Keep my review note');
     });
 }
+
+for (const locale of ['en', 'fa']) {
+    test(`repeated checkpoint endpoints retain distinct review turns (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 900 });
+        await post(page, { type: 'locale', locale });
+        const thirdSha = 'c'.repeat(40);
+        for (const [index, cp] of [sha, otherSha, sha, thirdSha].entries()) {
+            await post(page, { type: 'restoreUser', value: `Turn ${index + 1}`, cp });
+            await post(page, { type: 'startResponse' });
+            await post(page, { type: 'fullResponse', persian: `Result ${index + 1}` });
+        }
+        const requests = (await sent(page)).filter(message => message.type === 'changesGetState');
+        for (const [from, to] of [[sha, otherSha], [otherSha, sha], [sha, thirdSha], [thirdSha, undefined]]) {
+            const request = requests.filter(message => message.sha === from && message.toSha === to).at(-1)!;
+            expect(request).toBeTruthy();
+            await post(page, { ...request, type: 'changesState', files: changes });
+        }
+        await page.locator('#surface-tab-changes').click();
+        await expect(page.locator('.review-turn')).toHaveCount(3);
+        const earlierA = page.locator('.review-turn').last();
+        const laterA = page.locator('.review-turn').first();
+        await earlierA.locator('summary').click();
+        const first = await latest(page, 'changeFileGet');
+        expect(first.toSha).toBe(otherSha);
+        await replyFile(page, 'first A result');
+        await expect(earlierA).toContainText('first A result');
+        await laterA.locator('summary').click();
+        const second = await latest(page, 'changeFileGet', first.requestId);
+        expect(second.toSha).toBe(thirdSha);
+        await replyFile(page, 'second A result');
+        await expect(laterA).toContainText('second A result');
+        await expect(earlierA).toContainText('first A result');
+        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('.outcome-review').nth(2).click();
+        await expect(page.locator('.review-current')).toContainText('second A result');
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('.outcome-review').first().click();
+        await expect(page.locator('.review-current')).toContainText('first A result');
+    });
+}

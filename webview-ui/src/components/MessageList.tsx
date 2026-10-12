@@ -24,7 +24,7 @@ interface MessageListProps {
     onEditMessage?: (userIndex: number, value: string) => void;
     /** Restore workspace files to a turn's shadow checkpoint. */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
-    onReviewChanges?: (sha: string, path?: string) => void;
+    onReviewChanges?: (sha: string, path?: string, turnNumber?: number) => void;
     onAskReview?: (text: string) => void;
     reviewSha?: string | null;
     reviewFiles?: ReviewChange[];
@@ -100,8 +100,11 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
     const userIndexOf = new Map<string, number>();
     let checkpoint: string | undefined;
     const checkpoints = new Map<string, string | undefined>();
+    let checkpointNumber = 0;
+    const checkpointNumbers = new Map<string, number>();
     for (const m of messages) {
-        if (m.role === 'user') checkpoint = m.cp;
+        if (m.role === 'user') { checkpoint = m.cp; if (m.cp) checkpointNumber++; }
+        checkpointNumbers.set(m.id, checkpointNumber);
         checkpoints.set(m.id, checkpoint);
         if (m.role === 'user') userIndexOf.set(m.id, userCount++);
     }
@@ -204,6 +207,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onReviewChanges={onReviewChanges}
                     onAskReview={onAskReview}
                     reviewSha={checkpoints.get(m.id)}
+                    reviewTurnNumber={checkpointNumbers.get(m.id)}
                     reviewFiles={checkpoints.get(m.id) === reviewSha ? reviewFiles : undefined}
                     onOpenDiff={onOpenDiff}
                     onBackgroundTerminal={onBackgroundTerminal}

@@ -219,6 +219,7 @@ export function App() {
     const agentRuns = useMemo(() => collectAgentRuns(chat.messages), [chat.messages]);
     const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
     const [changeCount, setChangeCount] = useState(0);
+    const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
     const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
     const reviewTurns = useMemo(() => {
         const turns = chat.messages.filter(message => message.role === 'user' && message.cp);
@@ -1088,7 +1089,8 @@ export function App() {
         (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
         [send]
     );
-    const handleReviewChanges = useCallback((sha: string, path?: string) => {
+    const handleReviewChanges = useCallback((sha: string, path?: string, turnNumber?: number) => {
+        setActiveReviewNumber(turnNumber ?? null);
         setReviewPath(path ?? null);
         setActiveReviewSha(sha);
         setSurfaceTab('changes');
@@ -1214,7 +1216,7 @@ export function App() {
         }
         return undefined;
     }, [chat.messages]);
-    useEffect(() => { setActiveReviewSha(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
+    useEffect(() => { setActiveReviewSha(null); setActiveReviewNumber(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
     useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId, setSurfaceTab]);
 
 
@@ -1803,7 +1805,7 @@ export function App() {
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
                 <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             </DockSidebar>
-            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
+            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
             </main>
             </div>
             </AgentNavigation.Provider>

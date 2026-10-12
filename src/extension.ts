@@ -1620,6 +1620,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const file = await readReviewFile(this._checkpoints, root, sha, filePath, toSha);
             if (open) {
                 if (file.kind !== 'text' || !openEditDiff(this._virtualDocuments, file.path, file.before, file.after)) {
+                    if (toSha !== undefined) throw new Error('Historical file cannot be opened as a text diff');
                     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
                 }
             } else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, file });
