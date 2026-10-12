@@ -188,7 +188,7 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels'];
+    const names = ['_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
     const sandbox = { AbortController, AbortSignal, EngineError, isFreeModel, path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
@@ -199,11 +199,13 @@ try {
     refreshHost._nativeVariants = () => ({});
     const modelUpdates = [];
     refreshHost._view = { webview: { postMessage: (message) => modelUpdates.push(message) } };
-    refreshHost._rememberModelForActiveCredential = async () => {};
+    const savedModels = new Map([['xratu.engineModel.opencode', 'opencode/removed-free']]);
+    refreshHost._globalState = { get: (key) => savedModels.get(key), update: async (key, value) => { if (value === undefined) savedModels.delete(key); else savedModels.set(key, value); } };
     let nativeCatalog = [{ id: 'paid', providerID: 'opencode', name: 'Paid model', variants: [], limit: { context: 128000 }, capabilities: { input: ['text'], tools: true }, cost: [{ input: 1, output: 1, cache: { read: 0, write: 0 } }] }];
     refreshHost._getOpenCodeEngine = async () => ({ models: async () => nativeCatalog });
     await refreshHost._fetchModels();
     assert.equal(refreshHost._selectedModel, null, 'a removed free model must not silently fall back to a paid model');
+    assert.equal(savedModels.has('xratu.engineModel.opencode'), false, 'clear the persisted native model so switching engines cannot restore a removed paid selection');
     assert.equal(modelUpdates.findLast((message) => message.type === 'modelInfo').selectedModel, '', 'clear the stale composer selection explicitly');
     refreshHost._selectedModel = null;
     await refreshHost._fetchModels();
@@ -211,6 +213,7 @@ try {
     nativeCatalog.push({ ...nativeCatalog[0], id: 'replacement-free', cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] });
     await refreshHost._fetchModels();
     assert.equal(refreshHost._selectedModel, 'opencode/replacement-free', 'verified free routes take precedence over paid catalog ordering');
+    assert.equal(savedModels.get('xratu.engineModel.opencode'), 'opencode/replacement-free');
     refreshHost._selectedModel = 'opencode/paid';
     await refreshHost._fetchModels();
     assert.equal(refreshHost._selectedModel, 'opencode/paid', 'keep an explicitly selected paid model');

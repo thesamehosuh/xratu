@@ -284,6 +284,7 @@ interface InputBarProps {
     /** Per-model context windows, shown as a compact badge. */
     modelWindows?: Record<string, number>;
     selectedModel?: string | null;
+    modelSelectionRequired?: boolean;
     onSelectModel?: (model: string) => void;
     onRefreshModels?: () => void;
     /** True while the host is re-fetching the model list (spin the button). */
@@ -354,6 +355,7 @@ export function InputBar({
     onPingModel,
     modelWindows,
     selectedModel,
+    modelSelectionRequired = false,
     onSelectModel,
     onRefreshModels,
     refreshing,
@@ -479,7 +481,7 @@ export function InputBar({
     // stop square only while the composer is EMPTY - the moment there is
     // text (or an attachment) to send it reverts to Send, so steering never
     // requires firing the cancel button by mistake.
-    const canSend = !!value.trim() || attachments.length > 0;
+    const canSend = !modelSelectionRequired && (!!value.trim() || attachments.length > 0);
     const stopping = busy && !canSend;
 
     const totalAttachBytes = useMemo(
@@ -497,8 +499,10 @@ export function InputBar({
     const sendBeatRef = useRef<number | null>(null);
     const injectedAppliedRef = useRef(onInjectedApplied);
     const sendRef = useRef(onSend);
+    const modelSelectionRequiredRef = useRef(modelSelectionRequired);
     injectedAppliedRef.current = onInjectedApplied;
     sendRef.current = onSend;
+    modelSelectionRequiredRef.current = modelSelectionRequired;
 
     const clearInjectionTimers = useCallback(() => {
         if (typeTimerRef.current != null) {
@@ -532,6 +536,7 @@ export function InputBar({
             sendBeatRef.current = window.setTimeout(() => {
                 sendBeatRef.current = null;
                 injectedAppliedRef.current?.();
+                if (modelSelectionRequiredRef.current) return;
                 sendRef.current(full, []);
                 setValue('');
             }, 450);
@@ -554,6 +559,7 @@ export function InputBar({
                 sendBeatRef.current = window.setTimeout(() => {
                     sendBeatRef.current = null;
                     injectedAppliedRef.current?.();
+                    if (modelSelectionRequiredRef.current) return;
                     sendRef.current(full, []);
                     setValue('');
                 }, 450);
@@ -797,6 +803,7 @@ export function InputBar({
     };
 
     const submit = () => {
+        if (modelSelectionRequired) return;
         const text = value.trim();
         // Attachments are a valid user turn even when no text is supplied.
         // No busy guard here: while a run streams, onSend QUEUES the turn
@@ -1282,7 +1289,7 @@ export function InputBar({
                             onClick={stopping ? onCancel : submit}
                             disabled={!stopping && !canSend}
                             aria-label={stopping ? t('stopAria') : editDraft ? t('editSave') : t('sendAria')}
-                            title={stopping ? t('stopTitle') : editDraft ? t('editSave') : t('sendTitle')}
+                            title={stopping ? t('stopTitle') : modelSelectionRequired ? t('engineModelMissing') : editDraft ? t('editSave') : t('sendTitle')}
                         >
                             {stopping ? <Square size={14} /> : editDraft ? <RefreshCw size={14} /> : <Send size={15} />}
                         </button>

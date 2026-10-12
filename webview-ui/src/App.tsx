@@ -1729,6 +1729,7 @@ export function App() {
                 onPingModel={(model, automatic) => send({ type: 'pingFreeModel', model, ...(automatic ? { automatic: true } : {}) })}
                 modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}
+                modelSelectionRequired={engineState?.active === 'opencode' && !selectedModel && !chat.busy}
                 onSelectModel={(m) => {
                     setSelectedModel(m);
                     send({ type: 'selectModel', value: m });

@@ -3248,8 +3248,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _rememberModelForActiveCredential(model: string | null): Promise<void> {
+        if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model ?? undefined); return; }
         if (!model) return;
-        if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model); return; }
         await this._secrets.store('xratu.selectedModel', model);
         const credId = await this._resolveActiveCredentialId();
         if (!credId) return;
