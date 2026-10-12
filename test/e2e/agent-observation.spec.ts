@@ -2,6 +2,16 @@ import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 const post = (page: Page, msg: Record<string, unknown>) => page.evaluate(message => window.postMessage(message, '*'), msg);
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> => page.evaluate(() => (window as unknown as {__xratuHostMessages:Array<Record<string,unknown>>}).__xratuHostMessages);
+const dragToSidebar = async (page: Page, selector: string) => {
+    const source = (await page.locator(selector).boundingBox())!;
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2 + 15, source.y + source.height / 2, { steps: 3 });
+    await expect(page.locator('.dock-sidebar.drag-target')).toBeVisible();
+    const destination = (await page.locator('.dock-tabs.side').boundingBox())!;
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + destination.height / 2, { steps: 5 });
+    await page.mouse.up();
+};
 const trace = (status = 'running', extra = {}) => ({taskId:'child-a',profile:'explore',description:'Trace session expiry',prompt:'Find expiry checks and their tests',model:'child-model',effort:'high',tools:['read_file','grep_search'],resumed:false,status,startedAt:Date.now()-3000,updatedAt:Date.now(),toolCalls:2,inputTokens:1234,outputTokens:123,entries:[
     {id:'intro',kind:'text',text:'Checking expiry before editing.',startedAt:Date.now()-3000,endedAt:Date.now()-2000},
     {id:'read',kind:'tool',tool:'read_file',text:JSON.stringify({path:'src/auth.ts'}),output:'[src/auth.ts - lines 38-40 of 100]\nexport function expired(token) {\n  return token.expiresAt < Date.now();\n}',startedAt:Date.now()-2000,endedAt:Date.now()-1000},
@@ -50,7 +60,7 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await page.locator('.approval-source button').click();
         await expect(panel).toBeVisible();
         if (width>900) {
-            await page.locator('#surface-tab-agents').dragTo(page.locator('.dock-tabs.side'));
+            await dragToSidebar(page, '#surface-tab-agents');
             await expect(panel).toHaveClass(/panel-side/);
             await expect(panel).toBeVisible();
             await page.locator('#surface-tab-conversation').click();
@@ -118,7 +128,7 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await page.locator('.background-task-detail:not(.panel-hidden) .background-log-bar .bg-job-copy').click();
         expect(await sent(page)).toContainEqual({type:'copyToClipboard',value:newer});
         if(width>900){
-            await page.locator('#surface-tab-background').dragTo(page.locator('.dock-tabs.side'));
+            await dragToSidebar(page, '#surface-tab-background');
             await expect(page.locator('.background-pane')).toHaveClass(/panel-side/);
             await expect(log).toHaveText(newer);
             await page.locator('#surface-tab-conversation').click();

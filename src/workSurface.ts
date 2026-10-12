@@ -44,7 +44,7 @@ export interface AgentProfileView {
 }
 
 interface ReviewStore {
-    diffCheckpoint(root: string, sha: string): Promise<ChangedFile[]>;
+    diffCheckpoint(root: string, sha: string, toSha?: string): Promise<ChangedFile[]>;
     readCheckpointFile(root: string, sha: string, file: string): Promise<string | null>;
 }
 
@@ -57,17 +57,24 @@ export function validateReviewCheckpoint(sha: unknown): asserts sha is string {
 }
 
 /** Only files in this checkpoint's change list may be requested by the UI. */
-export async function readReviewFile(store: ReviewStore, root: string, sha: unknown, file: unknown): Promise<ReviewFile> {
+export async function readReviewFile(store: ReviewStore, root: string, sha: unknown, file: unknown, toSha?: string): Promise<ReviewFile> {
     validateReviewCheckpoint(sha);
+    if (toSha !== undefined) validateReviewCheckpoint(toSha);
     if (typeof file !== 'string') throw new Error('Invalid file');
     sanitizePath(file, root);
-    const changes = await store.diffCheckpoint(root, sha);
+    const changes = await store.diffCheckpoint(root, sha, toSha);
     const change = changes.find((item) => item.path === file);
     if (!change) throw new Error('File is not part of this checkpoint');
     const empty = { path: file, before: '', after: '' };
     if (change.binary) return { ...empty, kind: 'binary' };
     const before = change.untracked ? '' : (await store.readCheckpointFile(root, sha, file)) ?? '';
     if (before.length > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
+    if (toSha) {
+        const after = (await store.readCheckpointFile(root, toSha, file)) ?? '';
+        if (after.length > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
+        if (before.includes('\0') || after.includes('\0')) return { ...empty, kind: 'binary' };
+        return { path: file, kind: 'text', before, after, hunks: computeDiffHunks(before, after) };
+    }
     let buffer: Buffer = Buffer.alloc(0);
     try {
         const target = sanitizePath(file, root);

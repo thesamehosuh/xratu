@@ -16,7 +16,7 @@ interface Props {
     dragging: SurfacePanel | null;
     onDrag: (panel: SurfacePanel | null) => void;
     onActivate: (panel: SurfacePanel) => void;
-    onMove: (panel: SurfacePanel, to: DockLocation) => void;
+    onMove: (panel: SurfacePanel, to: DockLocation, before?: SurfacePanel) => void;
     onReset: () => void;
 }
 
@@ -24,6 +24,42 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
     const [menu, setMenu] = useState<SurfacePanel | null>(null);
     const root = useRef<HTMLElement>(null);
     const trigger = useRef<HTMLButtonElement>(null);
+    const pointer = useRef<{ panel: SurfacePanel; x: number; y: number; moved: boolean } | null>(null);
+    const suppressClick = useRef(false);
+    useEffect(() => {
+        const move = (event: PointerEvent) => {
+            const gesture = pointer.current;
+            if (!gesture) return;
+            if (!gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 5) return;
+            gesture.moved = true; suppressClick.current = true;
+            onDrag(gesture.panel);
+        };
+        const finish = (event: PointerEvent) => {
+            const gesture = pointer.current;
+            pointer.current = null;
+            if (!gesture?.moved) return;
+            const target = document.elementFromPoint(event.clientX, event.clientY);
+            const nav = target?.closest<HTMLElement>('.dock-tabs');
+            const to = nav?.classList.contains('side') || target?.closest('.panel-side,.dock-sidebar') ? 'side' : target?.closest('.work-surface') ? 'main' : null;
+            const before = nav ? target?.closest<HTMLElement>('[data-panel]')?.dataset.panel as SurfacePanel | undefined : undefined;
+            if (to) onMove(gesture.panel, to, before);
+            onDrag(null);
+        };
+        const cancel = () => { pointer.current = null; onDrag(null); };
+        const key = (event: KeyboardEvent) => { if (event.key === 'Escape') cancel(); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', cancel);
+        window.addEventListener('blur', cancel);
+        window.addEventListener('keydown', key);
+        return () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', finish);
+            window.removeEventListener('pointercancel', cancel);
+            window.removeEventListener('blur', cancel);
+            window.removeEventListener('keydown', key);
+        };
+    }, [onDrag, onMove]);
     const [over, setOver] = useState(false);
     const destination = location === 'main' ? 'side' : 'main';
     useEffect(() => {
@@ -46,7 +82,8 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
         onDrop={(event) => {
             if (!accepts(event)) return;
             event.preventDefault(); event.stopPropagation(); const panel = event.dataTransfer.getData(PANEL_DRAG_TYPE);
-            if (SURFACE_PANELS.includes(panel as SurfacePanel) && panel === dragging) onMove(panel as SurfacePanel, location);
+            const before = (event.target as Element).closest<HTMLElement>('[data-panel]')?.dataset.panel as SurfacePanel | undefined;
+            if (SURFACE_PANELS.includes(panel as SurfacePanel) && panel === dragging) onMove(panel as SurfacePanel, location, before);
             setOver(false); onDrag(null);
         }}
         onKeyDown={(event) => {
@@ -74,8 +111,17 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             {panels.map((panel) => {
                 const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : panel === 'agents' ? Bot : panel === 'background' ? SquareTerminal : panel === 'browser' ? Globe : List;
                 return <button type="button" key={panel} data-panel={panel} id={`surface-tab-${panel}`} className={`surface-tab ${panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide}
-                    onDragStart={(event) => { event.dataTransfer.setData(PANEL_DRAG_TYPE, panel); event.dataTransfer.effectAllowed = 'move'; onDrag(panel); }}
-                    onDragEnd={() => onDrag(null)} onClick={() => onActivate(panel)}
+                    onPointerDown={event => {
+                        if (!wide || event.button !== 0) return;
+                        // Pointer dragging also works inside VS Code's embedded webview,
+                        // where native HTML drag delivery can be intercepted by the host.
+                        event.preventDefault(); event.currentTarget.focus();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        suppressClick.current = false;
+                        pointer.current = { panel, x: event.clientX, y: event.clientY, moved: false };
+                    }}
+                    onDragStart={(event) => { event.dataTransfer.setData(PANEL_DRAG_TYPE, panel); event.dataTransfer.setData('text/plain', panel); event.dataTransfer.effectAllowed = 'move'; onDrag(panel); }}
+                    onDragEnd={() => onDrag(null)} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } onActivate(panel); }}
                     onContextMenu={(event) => { if (wide) { event.preventDefault(); setMenu(panel); } }}>
                     <Icon size={13} /><span>{t(labels[panel])}</span>{panel === 'background' && backgroundCount > 0 && <span className="tab-count" dir="ltr">{backgroundCount}</span>}{panel === 'agents' && agentCount > 0 && <span className="tab-count" dir="ltr">{agentCount}</span>}{panel === 'changes' && count > 0 && <span className="tab-count" dir="ltr">{count}</span>}
                 </button>;

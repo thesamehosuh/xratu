@@ -1956,7 +1956,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, observation = false, reviewSha, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2177,7 +2177,7 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
                 </div>
             )}
 
-            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges} onAskReview={onAskReview} />}
+            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges ? (sha, path) => onReviewChanges(sha, path, reviewTurnNumber) : undefined} onAskReview={onAskReview} />}
 
             {showFooter && (
                 <div className="msg-footer">
@@ -2241,6 +2241,7 @@ interface MessageItemProps {
     activityOnly?: boolean;
     observation?: boolean;
     reviewSha?: string;
+    reviewTurnNumber?: number;
     reviewFiles?: ReviewChange[];
     onAskReview?: (text: string) => void;
     message: ChatMessage;
@@ -2258,7 +2259,7 @@ interface MessageItemProps {
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     /** Hunk-level review of everything changed since this turn's checkpoint
      *  (the host picks the file and the hunk, then opens the native diff). */
-    onReviewChanges?: (sha: string, path?: string) => void;
+    onReviewChanges?: (sha: string, path?: string, turnNumber?: number) => void;
     /** Open the native diff editor for a completed edit step (or group). */
     onOpenDiff?: OpenDiffHandler;
     /** Release the turn while a running terminal command keeps going. */
@@ -2292,6 +2293,7 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.activityOnly === b.activityOnly &&
     a.observation === b.observation &&
     a.reviewSha === b.reviewSha &&
+    a.reviewTurnNumber === b.reviewTurnNumber &&
     a.reviewFiles === b.reviewFiles &&
     a.onAskReview === b.onAskReview &&
     a.message === b.message &&

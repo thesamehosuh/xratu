@@ -1600,25 +1600,27 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    async _sendChangesState(sha: string, requestId: string): Promise<void> {
+    async _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void> {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
             validateReviewCheckpoint(sha);
+            if (toSha !== undefined) validateReviewCheckpoint(toSha);
             if (!root) throw new Error('No workspace');
-            const files = await this._checkpoints.diffCheckpoint(root, sha);
+            const files = await this._checkpoints.diffCheckpoint(root, sha, toSha);
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files });
         } catch {
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files: [], errorKey: root ? 'surfaceChangesFailed' : 'notifNoFolder' });
         }
     }
 
-    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false): Promise<void> {
+    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false, toSha?: string): Promise<void> {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
             if (!root) throw new Error('No workspace');
-            const file = await readReviewFile(this._checkpoints, root, sha, filePath);
+            const file = await readReviewFile(this._checkpoints, root, sha, filePath, toSha);
             if (open) {
                 if (file.kind !== 'text' || !openEditDiff(this._virtualDocuments, file.path, file.before, file.after)) {
+                    if (toSha !== undefined) throw new Error('Historical file cannot be opened as a text diff');
                     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));
                 }
             } else this._view?.webview.postMessage({ type: 'changeFileState', sha, requestId, file });
@@ -7394,6 +7396,7 @@ const BUNDLED_SKILLS: ReadonlyArray<readonly [string, string]> = [
     ['iran-connectivity-fallback', path.join('assets', 'skills', 'iran-connectivity-fallback', SKILL_FILE)],
     ['iran-dev-access', path.join('assets', 'skills', 'iran-dev-access', SKILL_FILE)],
     ['local-llm-low-ram', path.join('assets', 'skills', 'local-llm-low-ram', SKILL_FILE)],
+    ['iranian-marketplaces', path.join('assets', 'skills', 'iranian-marketplaces', SKILL_FILE)],
 ];
 
 /** Seed/update the bundled skills. Per-skill bookkeeping:
@@ -7458,7 +7461,7 @@ export function activate(context: vscode.ExtensionContext) {
     mcpConfigStoreInstance = mcpConfigStore;
     mcpMarketplaceInstance = new McpMarketplaceStore(context);
 
-    // Ship with the DuckDuckGo search MCP active (first run only - the seed
+    // Ship with default-enabled curated MCPs active (first run only - the seed
     // is skipped as soon as the global config file exists). Fire-and-forget:
     // the manager reloads configs on demand, and failures must never block
     // activation.
@@ -7615,7 +7618,7 @@ export function activate(context: vscode.ExtensionContext) {
     // newly connect workspace-sourced servers.
     context.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() => {
-            void provider.reloadMcpFromDisk().catch((e) =>
+            void mcpConfigStore.seedDefaults().then(() => provider.reloadMcpFromDisk()).catch((e) =>
                 console.error('xratu: mcp trust-transition reload failed:', e));
             // Activation skipped the bundled-skills seed in Restricted Mode -
             // this transition is its only second chance in this window.

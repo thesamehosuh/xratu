@@ -39,6 +39,22 @@ try {
         assert.deepEqual(file.hunks[0].removedLines, ['before']);
         assert.deepEqual(file.hunks[0].addedLines, ['after']);
     });
+    await test('historical diffs use both checkpoints and ignore later working-tree edits', async () => {
+        const end = 'b'.repeat(40);
+        await writeFile(path.join(root, 'changed.txt'), 'later edit');
+        const historical = {
+            diffCheckpoint: async (_root, from, to) => { assert.equal(from, SHA); assert.equal(to, end); return changes; },
+            readCheckpointFile: async (_root, sha) => sha === SHA ? 'before\n' : 'turn result\n',
+        };
+        const file = await readReviewFile(historical, root, SHA, 'changed.txt', end);
+        assert.equal(file.before, 'before\n');
+        assert.equal(file.after, 'turn result\n');
+        await assert.rejects(readReviewFile(historical, root, SHA, 'changed.txt', '--help'));
+        await assert.rejects(readReviewFile(historical, root, SHA, '../outside.txt', end));
+        assert.equal((await readReviewFile({ ...historical, readCheckpointFile: async (_root, sha) => sha === SHA ? '' : 'x'.repeat(REVIEW_FILE_LIMIT + 1) }, root, SHA, 'changed.txt', end)).kind, 'tooLarge');
+        assert.equal((await readReviewFile({ ...historical, readCheckpointFile: async () => 'a\0b' }, root, SHA, 'changed.txt', end)).kind, 'binary');
+        await writeFile(path.join(root, 'changed.txt'), 'after\n');
+    });
     await test('untracked files have an empty checkpoint side', async () => {
         const file = await readReviewFile({ ...store, diffCheckpoint: async () => [{ ...changes[0], untracked: true }], readCheckpointFile: async () => { throw new Error('must not read checkpoint'); } }, root, SHA, 'changed.txt');
         assert.equal(file.before, '');

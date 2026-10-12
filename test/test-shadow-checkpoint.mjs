@@ -234,6 +234,16 @@ try {
         (await store.diffCheckpoint(work, cleanBase)).length === 0,
         JSON.stringify(await store.diffCheckpoint(work, cleanBase)));
 
+
+    writeFileSync(join(work, 'review-base.txt'), 'later edit\n');
+    writeFileSync(join(work, 'review-later.txt'), 'outside the previous turn\n');
+    const historical = await store.diffCheckpoint(work, reviewBase, cleanBase);
+    ok('historical diff retains saved modifications and additions, excludes later edits',
+        historical.find(file => file.path === 'review-base.txt')?.added === 1
+        && historical.find(file => file.path === 'review-new.txt')?.added === 1
+        && !historical.some(file => file.path === 'review-later.txt'), JSON.stringify(historical));
+    ok('historical content is the saved result',
+        (await store.readCheckpointFile(work, cleanBase, 'review-base.txt')) === 'alpha\nCHANGED\n');
     // Git quotes tabs/newlines/quotes even with core.quotePath=false.
     const reviewNames = process.platform === 'win32'
         ? ['جلسه spaced.txt']

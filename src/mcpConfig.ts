@@ -17,6 +17,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { MCP_REGISTRY } from './mcpRegistry';
 
 export type McpTransportType = 'stdio' | 'websocket' | 'streamableHttp' | 'sse';
@@ -43,6 +44,8 @@ export interface ExternalServerConfig {
     autoApprove?: string[];
     /** Per-call timeout in ms (default 30000; 0 disables the timeout). */
     timeoutMs?: number;
+    /** Startup/handshake budget, capped at 120000 ms. */
+    connectTimeoutMs?: number;
 }
 
 export type McpConfigSource = 'global' | 'workspace' | 'legacy';
@@ -83,6 +86,7 @@ function readServerFile(filePath: string): Record<string, ExternalServerConfig> 
 }
 
 export class McpConfigStore {
+    private seedPending: Promise<void> | null = null;
     constructor(private readonly context: vscode.ExtensionContext) {}
 
     get globalPath(): string {
@@ -95,6 +99,7 @@ export class McpConfigStore {
     }
 
     async load(): Promise<LoadedMcpConfig> {
+        await this.seedPending;
         const servers: Record<string, ExternalServerConfig> = {};
         const sources: Record<string, McpConfigSource> = {};
         const wsPath = this.workspacePath;
@@ -156,37 +161,51 @@ export class McpConfigStore {
         };
     }
 
-    /** First-run default: ship with the DuckDuckGo search MCP active out of
-     *  the box (no API key, read-only tools). Seeds the global config file
+    /** First-run default: ship with the default-enabled curated servers
+     *  active out of the box (no API keys, read-only tools). Seeds the global
+     *  config file
      *  only when it does not exist yet - exclusive create, never clobbers an
      *  existing or concurrently created file. An emptied-but-present file is
      *  a user decision and is respected. Upgrades whose servers still live
      *  in the legacy `xratu.mcpServers` setting are skipped too: a seeded
      *  file would make load() ignore that fallback and silently drop the
      *  user's existing servers. */
-    async seedDefaults(): Promise<void> {
+    seedDefaults(): Promise<void> {
+        if (this.seedPending) return this.seedPending;
+        const pending = this.seedDefaultsNow().finally(() => { if (this.seedPending === pending) this.seedPending = null; });
+        this.seedPending = pending;
+        return pending;
+    }
+
+    private async seedDefaultsNow(): Promise<void> {
         if (fs.existsSync(this.globalPath)) return;
         if (vscode.workspace.isTrusted === false) return;
         const legacy = vscode.workspace.getConfiguration('xratu').get<Record<string, ExternalServerConfig>>('mcpServers');
         if (legacy && typeof legacy === 'object' && Object.keys(legacy).length > 0) return;
-        const ddg = MCP_REGISTRY.find((e) => e.id === 'ddg-search');
-        if (!ddg) return;
-        const { name, ...config } = ddg.server;
+        const servers: Record<string, ExternalServerConfig> = {};
+        for (const entry of MCP_REGISTRY) {
+            if (!entry.defaultEnabled) continue;
+            const { name, ...config } = entry.server;
+            servers[name] = config;
+        }
         await fs.promises.mkdir(path.dirname(this.globalPath), { recursive: true });
+        const temporary = path.join(path.dirname(this.globalPath), `mcp-${randomUUID()}.tmp`);
         try {
-            await fs.promises.writeFile(
-                this.globalPath,
-                JSON.stringify({ mcpServers: { [name]: config } }, null, 2) + '\n',
-                { encoding: 'utf-8', flag: 'wx' },
-            );
+            await fs.promises.writeFile(temporary, JSON.stringify({ mcpServers: servers }, null, 2) + '\n', { encoding: 'utf-8', flag: 'wx' });
+            // A same-directory hard link publishes complete bytes atomically,
+            // and refuses an existing config on Windows and POSIX alike.
+            await fs.promises.link(temporary, this.globalPath);
         } catch (err: unknown) {
             if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+        } finally {
+            await fs.promises.rm(temporary, { force: true });
         }
     }
 
     /** Write one target file. The other file is left untouched - a save to
      *  global never clobbers workspace overrides. */
     async save(target: McpSaveTarget, servers: Record<string, ExternalServerConfig>): Promise<void> {
+        await this.seedPending;
         const filePath = target === 'global' ? this.globalPath : this.workspacePath;
         if (!filePath) throw new Error('No workspace folder open - cannot save the workspace MCP config.');
         await fs.promises.mkdir(path.dirname(filePath), { recursive: true });

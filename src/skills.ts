@@ -531,8 +531,30 @@ export async function updateBundledSkillIfUntouched(
     } catch {
         return 'skipped';
     }
-    await fs.promises.writeFile(target, skillMd, { encoding: 'utf-8' });
-    return 'updated';
+    let descriptor: number;
+    try { descriptor = fs.openSync(target, 'r+'); } catch { return 'skipped'; }
+    try {
+        const confined = path.relative(fs.realpathSync(path.join(skillsRoot, dirName)), fs.realpathSync(target));
+        if (!confined || confined.startsWith('..') || path.isAbsolute(confined)) return 'skipped';
+        const opened = fs.fstatSync(descriptor);
+        const live = fs.statSync(target);
+        // Recheck immediately before writing, without an asynchronous gap.
+        // r+ never recreates a deleted file; a replaced inode is user-owned.
+        if (opened.dev !== live.dev || opened.ino !== live.ino
+            || sha256Hex(fs.readFileSync(descriptor, 'utf-8')) !== seededHash) return 'skipped';
+        const bytes = Buffer.from(skillMd, 'utf-8');
+        let written = 0;
+        while (written < bytes.length) {
+            const count = fs.writeSync(descriptor, bytes, written, bytes.length - written, written);
+            if (!count) throw new Error('Bundled skill write made no progress');
+            written += count;
+        }
+        fs.ftruncateSync(descriptor, bytes.length);
+        return 'updated';
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'skipped';
+        throw error;
+    } finally { fs.closeSync(descriptor); }
 }
 
 /** Read one bundled resource of a skill, scoped to the skill's directory:
