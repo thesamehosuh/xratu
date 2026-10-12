@@ -50,8 +50,9 @@ Providers, MCP, Skills, and Agents show which engine they configure. Browsing
 another engine's settings does not change the current conversation. OpenCode's
 provider view lists its saved and environment connections and supports simple
 SDK API-key and OAuth methods. Authentication methods with additional forms or
-commands still use OpenCode's own setup. Native MCP and skill lists are read-only;
-Xratu's enable switches do not control them. Native subagents remain unavailable.
+commands still use OpenCode's own setup. Native MCP and skill lists are read-only.
+MCP servers configured in Xratu are also available to OpenCode; manage those
+servers with the Xratu scope selected on the MCP page. Native subagents remain unavailable.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
 
@@ -88,6 +89,12 @@ decision cards, including multiple selections. Plan mode deterministically
 denies mutation and unknown tools. YOLO permits native tools without approval.
 Native steering is delivered at OpenCode's next step boundary. Shell commands
 stream output and expose background/stop controls in Xratu's Background panel.
+Cancel waits for native execution to stop, then the same conversation can continue.
+Enabled Xratu MCP servers, including the bundled defaults, are shared through
+an authenticated loopback bridge. Their transports, proxy routing, timeouts,
+images, and explicit auto-approval choices stay with Xratu. Changes apply on
+the next turn; shared MCP tools are denied in Plan mode. OpenCode keeps its
+native file and terminal tools and its separately configured MCP servers.
 OpenCode subagents and conversation rewind are not yet
 supported. File-only shadow checkpoint restore remains available. Offline
 mode blocks this engine because Xratu cannot enforce network isolation on the

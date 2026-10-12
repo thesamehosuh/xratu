@@ -10,6 +10,8 @@ import { OpenCodeServer } from './server';
 import { subscribeEvents } from './events';
 import { openCodePermissions } from './permissions';
 import { NativeShellMonitor, type NativeShellUpdate } from './shells';
+import { OpenCodeMcpBridge, type NativeMcpSource } from './mcpBridge';
+import { abortable } from '../../oauth/refreshLock';
 
 export class EngineError extends Error {
     constructor(readonly valueKey: string) { super(valueKey); }
@@ -39,13 +41,52 @@ export class OpenCodeEngine implements AgentEngine {
     private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage> };
     private shellMonitor?: NativeShellMonitor;
     private probing = false;
+    private readonly mcpBridge?: OpenCodeMcpBridge;
+    private readonly mcpRegistrations = new WeakMap<OpenCodeClient, Map<string, { fingerprint: string; enabled: boolean }>>();
+    private mcpSync: Promise<void> = Promise.resolve();
     observeShells(sessionID: string, workspace: string, emit: (update: NativeShellUpdate) => void): void {
         this.shellMonitor ??= new NativeShellMonitor(async () => (await this.server.connect()).client, emit);
         this.shellMonitor.watch(sessionID, workspace);
     }
     backgroundJobs() { return this.shellMonitor?.views() ?? []; }
     stopShell(jobID: string): Promise<boolean> { return this.shellMonitor?.stop(jobID) ?? Promise.resolve(false); }
-    constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>) { this.server = server ?? new OpenCodeServer(binary, env); }
+    constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>, private readonly mcpSource?: NativeMcpSource) {
+        this.server = server ?? new OpenCodeServer(binary, env);
+        if (mcpSource) this.mcpBridge = new OpenCodeMcpBridge(mcpSource);
+    }
+    private async syncMcp(client: OpenCodeClient, workspace: string, signal: AbortSignal): Promise<void> {
+        const bridge = this.mcpBridge;
+        const source = this.mcpSource;
+        if (!bridge || !source || this.active) return;
+        const sync = this.mcpSync.catch(() => undefined).then(async () => {
+            signal.throwIfAborted();
+            const tools = await abortable(source.listTools(), signal);
+            if (this.active) return;
+            signal.throwIfAborted();
+            const fingerprint = JSON.stringify([workspace, tools]);
+            let registrations = this.mcpRegistrations.get(client);
+            if (!registrations) { registrations = new Map(); this.mcpRegistrations.set(client, registrations); }
+            const previous = registrations.get(workspace);
+            bridge.setTools(tools);
+            if (previous?.fingerprint === fingerprint) return;
+            const location = { directory: workspace };
+            if (tools.length) {
+                const connection = await bridge.connect();
+                // Runtime registration never writes OpenCode configuration or credentials.
+                await client.mcp.add({ server: bridge.name, location, config: { type: 'remote', ...connection, oauth: false, codemode: false } }, { signal });
+                // Initial Location startup connects asynchronously; explicitly connect
+                // so the first model request includes the shared tool catalog.
+                await client.mcp.connect({ server: bridge.name, location }, { signal });
+                const registered = (await client.mcp.list({ location }, { signal })).data.find((entry) => entry.name === bridge.name);
+                if (registered?.status.status !== 'connected') throw new EngineError('engineMcpBridgeFailed');
+            } else if (previous?.enabled) {
+                await client.mcp.remove({ server: bridge.name, location }, { signal });
+            }
+            registrations.set(workspace, { fingerprint, enabled: tools.length > 0 });
+        });
+        this.mcpSync = sync;
+        await abortable(sync, signal);
+    }
     async models(workspace: string, signal = AbortSignal.timeout(30_000)) {
         const { client } = await this.server.connect();
         // First location initialization can return before providers are ready.
@@ -58,6 +99,7 @@ export class OpenCodeEngine implements AgentEngine {
     }
     async configuration(workspace: string, signal: AbortSignal) {
         const { client } = await this.server.connect();
+        await this.syncMcp(client, workspace, signal);
         const input = { location: { directory: workspace } };
         const [integrations, servers, skills] = await Promise.all([
             client.integration.list(input, { signal }), client.mcp.list(input, { signal }), client.skill.list(input, { signal }),
@@ -69,7 +111,7 @@ export class OpenCodeEngine implements AgentEngine {
                 oauth: entry.methods.filter((method) => method.type === 'oauth' && (!method.form || !Object.keys(method.form).length)).map((method) => ({ id: 'id' in method ? method.id : '', label: 'label' in method ? method.label ?? '' : '' })),
                 connections: entry.connections.map((connection) => ({ label: connection.type === 'env' ? connection.name : connection.label, source: connection.type, needsAuth: connection.status?.status === 'needs_auth' })),
             })),
-            servers: servers.data.map((server) => ({ name: server.name, status: server.status.status })),
+            servers: servers.data.map((server) => ({ name: server.name === this.mcpBridge?.name ? 'Xratu' : server.name, status: server.status.status })),
             skills: skills.data.map((skill) => ({ name: skill.name, description: skill.description, path: skill.path })),
         };
     }
@@ -143,13 +185,19 @@ export class OpenCodeEngine implements AgentEngine {
         yield { type: 'status', value: 'connecting' };
         const { client, baseUrl, headers } = await this.server.connect();
         turn.signal.throwIfAborted();
+        await this.syncMcp(client, turn.workspace, turn.signal);
         const options = { signal: turn.signal };
         const catalogModel = turn.variant ? (await this.models(turn.workspace, turn.signal)).find((entry) => `${entry.providerID}/${entry.id}` === turn.model) : undefined;
         const variant = catalogModel?.variants.some((entry) => entry.id === turn.variant) ? turn.variant : 'default';
         const model = { providerID: turn.model.slice(0, slash), id: turn.model.slice(slash + 1), variant };
         // Keep the native tool catalog while refusing every request. Free
         // models require OpenCode's harness, including its tool definitions.
-        const permissions = this.probing ? [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'subagent', resource: '*', effect: 'deny' as const }] : openCodePermissions(turn.plan, turn.yolo);
+        const permissions = this.probing ? [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'subagent', resource: '*', effect: 'deny' as const }] : [
+            ...openCodePermissions(turn.plan, turn.yolo),
+            ...(!turn.plan ? (this.mcpBridge?.trustedActions() ?? []).map((action) => ({ action, resource: '*', effect: 'allow' as const })) : []),
+        ];
+        const mcpNames = this.mcpBridge?.toolNames();
+        const displayToolName = (name: string) => mcpNames?.get(name) ?? toolName(name);
         let sessionID = turn.session?.nativeSessionId;
         if (sessionID) {
             try {
@@ -171,6 +219,7 @@ export class OpenCodeEngine implements AgentEngine {
         const streamController = new AbortController();
         const abort = () => streamController.abort(turn.signal.reason);
         turn.signal.addEventListener('abort', abort, { once: true });
+        if (turn.signal.aborted) abort();
         const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
         const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>() };
         let text = '';
@@ -178,6 +227,7 @@ export class OpenCodeEngine implements AgentEngine {
         let completed = false;
         let executionStarted = false;
         let heldSuccess = false;
+        this.mcpBridge?.activate(sessionID, turn.plan, turn.signal);
         try {
             const stream = await subscribeEvents(baseUrl, headers, streamController.signal);
             await client.session.prompt({ sessionID, text: [turn.context, turn.prompt].filter(Boolean).join('\n\n'), ...(turn.attachments?.length ? { files: turn.attachments.map((image) => ({ name: image.name, uri: `data:${image.mimeType};base64,${image.dataBase64}` })) } : {}) }, options);
@@ -217,7 +267,7 @@ export class OpenCodeEngine implements AgentEngine {
                         if (typeof data.delta === 'string') { reasoning += data.delta; yield { type: 'thinking', value: reasoning }; }
                         break;
                     case 'session.tool.input.started':
-                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: toolName(data.name), input: {} });
+                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {} });
                         break;
                     case 'session.tool.called': {
                         const id = String(data.id);
@@ -248,8 +298,8 @@ export class OpenCodeEngine implements AgentEngine {
                         const source = data.source as { type?: string; id?: string } | undefined;
                         const id = source?.type === 'tool' && source.id ? source.id : approvalId;
                         const args = { action: data.action, resources: data.resources, ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}) };
-                        const name = toolName(String(data.action));
-                        const decision = turn.plan ? {} : await host.approvals.requestApproval(approvalId, [{ id, name, arguments: args, argumentsJson: JSON.stringify(args) }]);
+                        const name = displayToolName(String(data.action));
+                        const decision = turn.plan ? {} : await abortable(host.approvals.requestApproval(approvalId, [{ id, name, arguments: args, argumentsJson: JSON.stringify(args) }]), turn.signal);
                         await client.permission.reply({ sessionID, requestID: String(data.id), decision: decision[id] ? 'once' : 'reject' }, options);
                         break;
                     }
@@ -276,11 +326,23 @@ export class OpenCodeEngine implements AgentEngine {
             }
         } finally {
             if (this.active === active) this.active = undefined;
+            this.mcpBridge?.deactivate(sessionID);
             for (const message of active.steers.values()) host.onSteerRejected?.(message.steerId);
             turn.signal.removeEventListener('abort', abort);
             streamController.abort();
             // Interrupt also on a broken stream: never leave a native agent running unseen.
-            if (!completed) await client.session.interrupt({ sessionID }, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+            if (!completed) {
+                try {
+                    await client.session.interrupt({ sessionID, resume: false }, { signal: AbortSignal.timeout(5000) });
+                    // interrupt acknowledges before native finalizers and the terminal event.
+                    // Keep this turn claimed until settlement; a new prompt must not race it.
+                    await client.session.wait({ sessionID }, { signal: AbortSignal.timeout(30_000) });
+                } catch {
+                    // A stuck runtime cannot keep running unseen or poison the next turn.
+                    // Native session identity/history survives the managed server restart.
+                    await this.server.dispose();
+                }
+            }
         }
     }
     private async answerForm(client: OpenCodeClient, form: FormInfo1, host: EngineHost, signal: AbortSignal): Promise<void> {
@@ -289,7 +351,7 @@ export class OpenCodeEngine implements AgentEngine {
             for (const field of form.fields) {
                 if (field.type === 'external' || field.hidden || field.when?.length) throw new EngineError('engineFormUnsupported');
                 const options = field.type === 'string' || field.type === 'multiselect' ? field.options ?? [] : [];
-                const outcome = await host.questions.ask({ header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', minItems: field.type === 'multiselect' ? field.minItems : undefined, maxItems: field.type === 'multiselect' ? field.maxItems : undefined, allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) });
+                const outcome = await abortable(host.questions.ask({ header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', minItems: field.type === 'multiselect' ? field.minItems : undefined, maxItems: field.type === 'multiselect' ? field.maxItems : undefined, allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) }), signal);
                 signal.throwIfAborted();
                 if (outcome.kind === 'dismissed') { await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal }); return; }
                 const value = outcome.kind === 'selected' ? options.find((option) => option.label === outcome.label)?.value ?? outcome.label : outcome.text;
@@ -314,5 +376,9 @@ export class OpenCodeEngine implements AgentEngine {
             throw error;
         }
     }
-    dispose(): Promise<void> { this.shellMonitor?.dispose(); this.shellMonitor = undefined; return this.server.dispose(); }
+    async dispose(): Promise<void> {
+        this.shellMonitor?.dispose(); this.shellMonitor = undefined;
+        await this.server.dispose();
+        await this.mcpBridge?.dispose();
+    }
 }
