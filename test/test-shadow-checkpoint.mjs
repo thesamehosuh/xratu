@@ -39,6 +39,15 @@ try {
     writeFileSync(join(work, 'a.txt'), 'one\n');
     const sha1 = await store.createCheckpoint(work, 'baseline');
     ok('baseline checkpoint returned a sha', /^[0-9a-f]{6,}$/.test(sha1), sha1);
+    const fullSha = await store.resolveCheckpoint(work, sha1);
+    ok('resolve returns an existing full commit', /^[a-f0-9]{40}$/.test(fullSha) && fullSha.startsWith(sha1));
+    for (const invalid of ['--all', 'HEAD', 'a'.repeat(41), '0000000']) {
+        let rejected = false;
+        try { await store.resolveCheckpoint(work, invalid); } catch { rejected = true; }
+        ok(`resolve rejects invalid or missing target ${invalid}`, rejected);
+    }
+    ok('resolve never edits the workspace', readFileSync(join(work, 'a.txt'), 'utf-8') === 'one\n');
+
 
     // --- restore no-op: nothing changed ---
     const noop = await store.restoreCheckpoint(work, sha1);

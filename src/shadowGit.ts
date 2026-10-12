@@ -354,6 +354,16 @@ export class ShadowCheckpointStore {
         return shortSha(head.stdout.trim());
     }
 
+    /** Resolve an existing shadow commit without initializing storage or
+     *  touching workspace files. User confirmation must name a real target. */
+    async resolveCheckpoint(workspaceRoot: string, sha: string): Promise<string> {
+        if (!/^[a-f0-9]{7,40}$/i.test(sha)) throw new Error('Invalid checkpoint');
+        const result = await this.gitAsync(['rev-parse', '--verify', `${sha}^{commit}`], workspaceRoot);
+        const resolved = result.stdout.trim();
+        if (result.code !== 0 || !/^[a-f0-9]{40}$/i.test(resolved)) throw new Error('Checkpoint not found');
+        return resolved;
+    }
+
     async restoreCheckpoint(workspaceRoot: string, sha: string): Promise<RestoreResult> {
         return this._serialized(() => this._restoreInner(workspaceRoot, sha));
     }

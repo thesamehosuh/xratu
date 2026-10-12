@@ -843,3 +843,31 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.review-current')).toContainText('first A result');
     });
 }
+
+for (const locale of ['en', 'fa']) {
+    for (const width of [420, 1080]) {
+        test(`checkpoint restore scope and recoverable rejection (${locale}, ${width}px)`, async ({ page }, testInfo) => {
+            await page.setViewportSize({ width, height: 900 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'restoreUser', value: 'Update the workspace', cp: sha });
+            await page.locator('.composer-input').fill('Keep this draft');
+            await post(page, { type: 'notification', id: 'restore-confirm', kind: 'warning', valueKey: 'checkpointScopeConfirm',
+                actions: ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'] });
+            await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'whole workspace' : 'کل پوشه کاری');
+            await expect(page.locator('.notif-action')).toHaveCount(3);
+            await page.screenshot({ path: testInfo.outputPath('restore-confirm.png') });
+            await page.locator('.notif-action').first().click();
+            await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-confirm')?.action).toBe('checkpointScopeFiles');
+            for (const [key, text] of [
+                ['checkpointActionStale', locale === 'en' ? 'request restore again' : 'دوباره از گفتگوی فعلی'],
+                ['checkpointBackgroundBusy', locale === 'en' ? 'Stop it from Background' : 'از بخش پس زمینه'],
+            ]) {
+                await post(page, { type: 'notification', id: key, kind: 'warning', valueKey: key });
+                await expect(page.locator('.notif-copy')).toContainText(text);
+                await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+                await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
+                await page.locator('.notif-close').click();
+            }
+        });
+    }
+}

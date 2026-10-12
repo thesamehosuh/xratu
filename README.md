@@ -144,6 +144,9 @@ under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
   **Review changes** button or **Changes** to inspect files inline and open
   the full native diff. Restore a snapshot from the Command Palette with
   **Xratu: Restore Checkpoint…**. Your real git repo is never touched.
+  Restore affects the whole workspace and preserves a safety snapshot. A stale
+  session/turn confirmation is rejected. Stop workspace background processes
+  from Background before restoring; files-only restore keeps the conversation.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
   Cline-compatible files-based config.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)
