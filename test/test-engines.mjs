@@ -7,17 +7,24 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { OpenCode } from '@opencode/client';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-engines-'));
 const bundle = join(root, 'engine.cjs');
-await build({ stdin: { contents: "export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
+await build({ stdin: { contents: "export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
 const require = createRequire(import.meta.url);
-const { OpenCodeEngine, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
+const { OpenCodeEngine, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
 
-async function harness(mode = 'complete') {
+async function harness(mode = 'complete', mcpSource) {
     let stream;
     let subscribed = false;
     const requests = [];
+    let prompts = 0;
+    let stopping = false;
+    let settlement;
+    let disposed = false;
+    const nativeServers = new Map();
     const emit = (type, data) => stream.write(`data: ${JSON.stringify({ type, data })}\r\n\r\n`);
     const finish = () => {
         emit('session.text.delta', { sessionID: 'native-1', delta: 'OK' });
@@ -40,15 +47,34 @@ async function harness(mode = 'complete') {
         const json = (value) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: value })); };
         const integration = { id: 'openrouter', name: 'OpenRouter', methods: [{ type: 'key' }, { type: 'oauth', id: 'browser', label: 'Sign in' }], connections: [{ type: 'env', name: 'OPENROUTER_API_KEY', unexpectedSecret: 'must-not-render' }, { type: 'credential', id: 'cred-1', label: 'Saved account', method: 'key', value: { key: 'must-not-render' } }] };
         if (req.method === 'GET' && req.url.startsWith('/api/integration')) { json(req.url.split('?')[0] === '/api/integration' ? [integration] : integration); return; }
-        if (req.method === 'GET' && req.url.startsWith('/api/mcp')) { json([{ name: 'native-mcp', status: { status: 'connected' }, configuration: { key: 'must-not-render' } }]); return; }
+        if (req.method === 'GET' && req.url.startsWith('/api/mcp')) { json([{ name: 'native-mcp', status: { status: 'connected' }, configuration: { key: 'must-not-render' } }, ...nativeServers.values()]); return; }
+        if (req.url.startsWith('/api/experimental/mcp/')) {
+            const name = decodeURIComponent(req.url.split('?')[0].split('/')[4]);
+            if (req.method === 'PUT') nativeServers.set(name, { name, status: { status: mode === 'mcpFailed' ? 'failed' : 'connected' } });
+            if (req.method === 'DELETE') nativeServers.delete(name);
+            res.writeHead(204).end(); return;
+        }
         if (req.method === 'GET' && req.url.startsWith('/api/skill')) { json([{ id: 'skill-1', name: 'Native skill', path: 'skill.md', content: 'must-not-render' }]); return; }
         if (req.url.startsWith('/api/model')) { json([
             { id: 'big-pickle', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
             { id: 'paid-model', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 1, output: 1, cache: { read: 0, write: 0 } }] },
         ]); return; }
         if (req.url === '/api/session' || (req.method === 'GET' && req.url === '/api/session/native-1')) { json({ id: 'native-1', location: { directory: root } }); return; }
+        if (req.url.split('?')[0].endsWith('/interrupt')) {
+            stopping = true;
+            settlement = new Promise((resolve) => setTimeout(() => { stopping = false; resolve(); }, 80));
+            json({ interrupted: true });
+            return;
+        }
+        if (req.url.endsWith('/wait')) {
+            if (mode === 'cancelCleanupFailure') { res.writeHead(500).end(); return; }
+            await settlement;
+            res.writeHead(204).end();
+            return;
+        }
         if (req.url.endsWith('/prompt')) {
             assert.ok(subscribed, 'subscribe before prompt');
+            assert.equal(stopping, false, 'new prompts must wait for native cancellation settlement');
             json({ id: 'inbox-1' });
             if (body.delivery === 'steer') {
                 assert.ok(body.id.startsWith('msg_xratu_'));
@@ -57,6 +83,7 @@ async function harness(mode = 'complete') {
                 if (mode !== 'steerCancel') { emit('session.execution.started', { sessionID: 'native-1' }); finish(); }
                 return;
             }
+            const prompt = ++prompts;
             setImmediate(() => {
                 emit('session.execution.succeeded', { sessionID: 'native-1' }); // stale terminal before the new execution
                 emit('session.execution.started', { sessionID: 'native-1' });
@@ -69,9 +96,9 @@ async function harness(mode = 'complete') {
                 emit('session.text.delta', { sessionID: 'another-session', delta: 'must not leak' });
                 emit('session.tool.input.started', { sessionID: 'native-1', id: 'call-1', name: 'shell' });
                 emit('session.tool.called', { sessionID: 'native-1', id: 'call-1', input: { command: 'echo test' } });
-                if (mode === 'complete' || mode === 'plan') emit('permission.asked', { sessionID: 'native-1', id: 'permission-1', action: 'shell', resources: ['echo test'], source: { type: 'tool', id: 'call-1' } });
+                if (mode === 'complete' || mode === 'plan' || (mode === 'cancelGate' && prompt === 1)) emit('permission.asked', { sessionID: 'native-1', id: 'permission-1', action: 'shell', resources: ['echo test'], source: { type: 'tool', id: 'call-1' } });
                 if (mode === 'failed') emit('session.execution.failed', { sessionID: 'native-1', error: { type: 'provider', message: 'Provider failed' } });
-                if (mode === 'resume') finish();
+                if (mode === 'resume' || (mode.startsWith('cancel') && prompt > 1)) finish();
             });
             return;
         }
@@ -84,8 +111,9 @@ async function harness(mode = 'complete') {
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client: OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' } }) }), dispose: async () => {} });
-    return { engine, requests, close: async () => { stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
+    const client = OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' } });
+    const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client }), dispose: async () => { disposed = true; stopping = false; } }, mcpSource);
+    return { engine, requests, wasDisposed: () => disposed, close: async () => { await engine.dispose(); stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
 const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
@@ -119,7 +147,7 @@ try {
                     if (mode === 'steer') assert.deepEqual(events.find((event) => event.type === 'steer'), { type: 'steer', text: 'Change direction', steerId: 'steer-ui-1' });
                     else assert.deepEqual(rejected, ['steer-ui-1']);
                     assert.equal(await test.engine.steer({ text: 'After settlement' }), false);
-                    assert.ok(!test.requests.some((request) => request.path.endsWith('/interrupt')));
+                    assert.ok(!test.requests.some((request) => request.path.split('?')[0].endsWith('/interrupt')));
                 } else if (mode !== 'resume') {
                     assert.equal(test.requests.find((request) => request.path.includes('/permission/') && request.path.endsWith('/reply')).body.decision, mode === 'plan' ? 'reject' : 'once');
                     assert.deepEqual(test.requests.find((request) => request.path.includes('/form/') && request.path.endsWith('/reply')).body.answer, { choices: ['one', 'two'] });
@@ -128,10 +156,115 @@ try {
                     assert.ok(test.requests.some((request) => request.path.endsWith('/model')));
                 }
             }
-            if (mode === 'failed' || mode === 'cancel') assert.ok(test.requests.some((request) => request.path.endsWith('/interrupt')), 'interrupt the native agent after cancellation or failure');
+            if (mode === 'failed' || mode === 'cancel') assert.ok(test.requests.some((request) => request.path.split('?')[0].endsWith('/interrupt')), 'interrupt the native agent after cancellation or failure');
             console.log(`ok OpenCode ${mode}`);
         } finally { await test.close(); }
     }
+    for (const mode of ['cancelResume', 'cancelCleanupFailure']) {
+        const test = await harness(mode);
+        try {
+            let session;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const controller = new AbortController();
+                await assert.rejects(async () => {
+                    for await (const event of test.engine.runTurn({ ...baseTurn, session, signal: controller.signal }, { ...host, onSession: async (ref) => { session = ref; } })) {
+                        if (event.type === 'toolCall') controller.abort();
+                    }
+                }, { name: 'AbortError' });
+                const events = [];
+                for await (const event of test.engine.runTurn({ ...baseTurn, session, signal: AbortSignal.timeout(5000) }, host)) events.push(event);
+                assert.equal(events.at(-1).value, 'done', 'cancelled native session remains usable');
+            }
+            assert.equal(test.requests.filter((request) => request.method === 'POST' && request.path === '/api/session').length, 1, 'native history and session identity survive cancellation');
+            assert.equal(test.wasDisposed(), mode === 'cancelCleanupFailure', 'restart only when native cleanup fails');
+            assert.ok(test.requests.some((request) => request.path === '/api/session/native-1/interrupt?resume=false'));
+            console.log(`ok OpenCode repeated ${mode}`);
+        } finally { await test.close(); }
+    }
+    for (const gate of ['approval', 'question']) {
+        const test = await harness('cancelGate');
+        try {
+            const controller = new AbortController();
+            let session;
+            const pending = () => { controller.abort(); return new Promise(() => {}); };
+            const gatedHost = { ...host, onSession: async (ref) => { session = ref; },
+                ...(gate === 'approval' ? { approvals: { requestApproval: pending } } : { questions: { ask: pending } }),
+            };
+            await assert.rejects(async () => {
+                for await (const _event of test.engine.runTurn({ ...baseTurn, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }, gatedHost)) { /* drain */ }
+            }, { name: 'AbortError' });
+            const events = [];
+            for await (const event of test.engine.runTurn({ ...baseTurn, session, signal: AbortSignal.timeout(5000) }, host)) events.push(event);
+            assert.equal(events.at(-1).value, 'done', 'cancel releases an unanswered native decision');
+            console.log(`ok OpenCode cancel during pending ${gate}`);
+        } finally { await test.close(); }
+    }
+    const mcpTools = [{ name: 'mcp__docs__lookup', serverName: 'docs', originalName: 'lookup', description: 'Find documentation', inputSchema: { type: 'object', properties: {} }, autoApprove: true }];
+    const mcpCalls = [];
+    let currentTools = mcpTools;
+    const mcpSource = { listTools: async () => currentTools, callTool: async (name, args, signal) => {
+        mcpCalls.push({ name, args, signal });
+        return { text: 'Documentation', images: [{ mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }] };
+    } };
+    const bridge = new OpenCodeMcpBridge(mcpSource);
+    const mcpClient = new Client({ name: 'native-test', version: '1.0.0' });
+    try {
+        bridge.setTools(mcpTools);
+        const connection = await bridge.connect();
+        assert.equal(new URL(connection.url).hostname, '127.0.0.1');
+        assert.equal((await fetch(connection.url, { method: 'POST' })).status, 403);
+        assert.equal((await fetch(connection.url, { method: 'POST', headers: { ...connection.headers, Origin: 'https://attacker.example' } })).status, 403);
+        assert.equal((await fetch(connection.url, { method: 'POST', headers: connection.headers, body: 'x'.repeat(4 * 1024 * 1024 + 1) })).status, 413, 'bridge bounds incoming payloads');
+        await mcpClient.connect(new StreamableHTTPClientTransport(new URL(connection.url), { requestInit: { headers: connection.headers } }));
+        assert.equal((await mcpClient.listTools()).tools[0].name, mcpTools[0].name);
+        const call = () => mcpClient.callTool({ name: mcpTools[0].name, arguments: { query: 'test' }, _meta: { 'ai.opencode/sessionID': 'native-1' } });
+        assert.equal((await call()).isError, true, 'unbound sessions cannot invoke tools');
+        const controller = new AbortController();
+        bridge.activate('native-1', true, controller.signal);
+        assert.equal((await call()).isError, true, 'Plan rejects MCP execution structurally');
+        bridge.activate('native-1', false, controller.signal);
+        const result = await call();
+        assert.deepEqual(result.content, [{ type: 'text', text: 'Documentation' }, { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }]);
+        assert.equal(mcpCalls[0].signal, controller.signal, 'native cancellation reaches the real MCP request');
+        controller.abort();
+        assert.equal((await call()).isError, true, 'cancelled turns cannot invoke tools');
+        assert.equal(mcpCalls.length, 1);
+    } finally { await mcpClient.close(); await bridge.dispose(); }
+    console.log('ok real MCP handshake, discovery, images, loopback auth, Plan and session isolation');
+    const namesBridge = new OpenCodeMcpBridge(mcpSource);
+    namesBridge.setTools([
+        { ...mcpTools[0], name: 'mcp__foo.bar__lookup', autoApprove: true },
+        { ...mcpTools[0], name: 'mcp__foo_bar__lookup', autoApprove: false },
+        { ...mcpTools[0], name: `mcp__${'long'.repeat(20)}__lookup` },
+    ]);
+    assert.equal(namesBridge.toolNames().size, 3, 'normalization cannot merge different servers');
+    assert.ok([...namesBridge.toolNames().keys()].every((name) => name.length <= 64));
+    assert.equal(namesBridge.trustedActions().length, 2, 'trust cannot transfer across normalized name collisions');
+    console.log('ok native MCP name limits and collision-safe approval identity');
+    const sharedMcp = await harness('resume', mcpSource);
+    try {
+        await sharedMcp.engine.configuration(root, AbortSignal.timeout(5000));
+        await sharedMcp.engine.configuration(root, AbortSignal.timeout(5000));
+        const registrations = () => sharedMcp.requests.filter((request) => request.method === 'PUT' && request.path.startsWith('/api/experimental/mcp/'));
+        assert.equal(registrations().length, 1, 'unchanged MCP catalogs are not reconnected');
+        const registration = registrations()[0];
+        assert.equal(registration.body.config.codemode, false, 'native MCP permissions must not hide inside execute');
+        assert.equal(registration.body.config.oauth, false);
+        for await (const _event of sharedMcp.engine.runTurn({ ...baseTurn, signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
+        const creation = sharedMcp.requests.find((request) => request.method === 'POST' && request.path === '/api/session');
+        const action = `${decodeURIComponent(registration.path.split('?')[0].split('/').at(-1))}_${mcpTools[0].name}`;
+        assert.ok(creation.body.permissions.some((rule) => rule.action === action && rule.effect === 'allow'), 'explicit Xratu autoApprove is preserved');
+        currentTools = [];
+        await sharedMcp.engine.configuration(root, AbortSignal.timeout(5000));
+        assert.ok(sharedMcp.requests.some((request) => request.method === 'DELETE' && request.path.startsWith('/api/experimental/mcp/')), 'disabled/removed Xratu servers leave the native catalog');
+    } finally { await sharedMcp.close(); }
+    console.log('ok runtime MCP registration, unchanged catalogs, trusted tools and removal');
+    currentTools = mcpTools;
+    const failedMcp = await harness('mcpFailed', mcpSource);
+    try {
+        await assert.rejects(failedMcp.engine.configuration(root, AbortSignal.timeout(5000)), (error) => error instanceof EngineError && error.valueKey === 'engineMcpBridgeFailed');
+        assert.ok(!failedMcp.requests.some((request) => request.path.endsWith('/prompt')), 'a failed bridge is surfaced before starting a tool-less turn');
+    } finally { await failedMcp.close(); }
     for (const mode of ['ping', 'pingLimited']) {
         const test = await harness(mode);
         try {
@@ -455,4 +588,8 @@ try {
         assert.deepEqual(await readdir(installRoot), [], 'failed installs leave no active runtime or staging');
     } finally { globalThis.fetch = originalFetch; }
     console.log('ok Plan gating, platform selection, and installer integrity');
+    if (process.env.XRATU_TEST_OPENCODE_BINARY) {
+        const { checkOpenCodeRuntime } = await import('./opencode-runtime-fixture.mjs');
+        await checkOpenCodeRuntime(OpenCodeEngine, root, process.env.XRATU_TEST_OPENCODE_BINARY);
+    }
 } finally { await rm(root, { recursive: true, force: true }); }
