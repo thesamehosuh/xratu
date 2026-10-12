@@ -734,7 +734,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             } else if (proxy.mode === 'off') {
                 for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
             }
-            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env);
+            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env, undefined, externalMcpInstance ?? undefined);
             this._openCodeEnvironmentKey = environmentKey;
             this._engines.register(this._openCodeEngine);
             await previous?.dispose();

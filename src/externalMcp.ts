@@ -79,10 +79,11 @@ export interface AggregatedTool {
 export interface ExternalToolResult {
     text: string;
     images: LocalToolImage[];
+    isError?: boolean;
 }
 
 function textResult(text: string): ExternalToolResult {
-    return { text, images: [] };
+    return { text, images: [], isError: true };
 }
 
 /** One MCP content block, as loosely as the wire allows. */
@@ -536,7 +537,8 @@ export class ExternalMcpManager {
     }
 
     /** Route a namespaced call. One transparent reconnect retry on stale clients. */
-    async callTool(namespaced: string, args: Record<string, unknown>): Promise<ExternalToolResult> {
+    async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ExternalToolResult> {
+        signal?.throwIfAborted();
         if (isOfflineMode()) return textResult('Error: external MCP is disabled in offline mode.');
         const rest = namespaced.startsWith(EXTERNAL_PREFIX)
             ? namespaced.slice(EXTERNAL_PREFIX.length)
@@ -561,6 +563,7 @@ export class ExternalMcpManager {
 
         for (let attempt = 0; attempt < 2; attempt++) {
             const state = await this.getState(serverName, cfg, source);
+            signal?.throwIfAborted();
             if (!state) {
                 return textResult(`Error: MCP server '${serverName}' is not reachable`);
             }
@@ -568,7 +571,7 @@ export class ExternalMcpManager {
                 const res = await state.client.callTool(
                     { name: toolName, arguments: args ?? {} },
                     undefined,
-                    timeoutMs > 0 ? { timeout: timeoutMs } : undefined,
+                    { ...(timeoutMs > 0 ? { timeout: timeoutMs } : {}), ...(signal ? { signal } : {}) },
                 );
                 if (res.isError) {
                     // Same defensive block handling as a success, TEXT ONLY.
@@ -582,6 +585,7 @@ export class ExternalMcpManager {
                 }
                 return mapMcpToolContent(res.content, toolName);
             } catch (e) {
+                signal?.throwIfAborted();
                 if (attempt === 0) {
                     // Stale connection - drop it so getState reconnects.
                     const pending = this._states.get(serverName);

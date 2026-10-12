@@ -70,8 +70,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
     { name: 'browser_take_screenshot', description: 'Take a screenshot', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     { name: 'browser_navigate', description: 'Navigate', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     { name: 'browser_explode', description: 'Malformed error payload', inputSchema: { type: 'object', properties: {} } },
+    { name: 'browser_slow', description: 'Wait for cancellation', inputSchema: { type: 'object', properties: {} } },
 ] }));
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    if (req.params.name === 'browser_slow') return new Promise(() => {});
     if (req.params.name === 'browser_take_screenshot') {
         // The exact block shape Playwright MCP / chrome-devtools MCP return.
         return { content: [
@@ -158,6 +160,16 @@ try {
     ok('it is labelled as a server error',
         /Error from MCP server/.test(exploded.text), exploded.text);
     eq_ok('an error payload returns no images', exploded.images.length, 0);
+    ok('the bridge can preserve the MCP error flag', exploded.isError === true);
+
+    const controller = new AbortController();
+    const slow = manager.callTool('mcp__shot__browser_slow', {}, controller.signal);
+    setTimeout(() => controller.abort(), 50);
+    let cancelled = false;
+    try { await slow; } catch (error) { cancelled = error.name === 'AbortError'; }
+    ok('native cancellation aborts a real pending MCP request', cancelled);
+    const afterCancel = await call('mcp__shot__browser_navigate', {});
+    eq_ok('the same MCP connection works after cancellation', afterCancel.text, 'navigated');
 
     // An unreachable server must fail as text, never crash.
     const unreachable = await call('mcp__missing__tool', {});
