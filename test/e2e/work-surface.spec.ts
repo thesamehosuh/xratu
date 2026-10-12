@@ -12,6 +12,16 @@ const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
     }).toBe(true);
     return (await sent(page)).filter((m) => m.type === type).at(-1)!;
 };
+const dragToSidebar = async (page: Page, selector: string) => {
+    const source = (await page.locator(selector).boundingBox())!;
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2 + 15, source.y + source.height / 2, { steps: 3 });
+    await expect(page.locator('.dock-sidebar.drag-target')).toBeVisible();
+    const destination = (await page.locator('.dock-tabs.side').boundingBox())!;
+    await page.mouse.move(destination.x + destination.width / 2, destination.y + destination.height / 2, { steps: 5 });
+    await page.mouse.up();
+};
 const changes = [
     { path: 'src/first.ts', added: 1, removed: 1, binary: false },
     { path: 'src/second.ts', added: 1, removed: 0, binary: false, untracked: true },
@@ -21,8 +31,8 @@ const replyFile = async (page: Page, after = 'new', afterRequestId?: unknown) =>
     await post(page, { ...request, file: { path: request.path, kind: 'text', before: 'old', after,
         hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: after.split('\n').length, removedLines: ['old'], addedLines: after.split('\n') }] }, type: 'changeFileState' });
 };
-const openReview = async (page: Page) => {
-    await post(page, { type: 'restoreUser', value: 'Fix this', cp: sha });
+const openReview = async (page: Page, prompt = 'Fix this') => {
+    await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
     if (await page.locator('#surface-tab-changes').isVisible()) await page.locator('#surface-tab-changes').click();
@@ -50,6 +60,7 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'locale', locale });
         await page.locator('.composer-input').fill('Keep my draft');
         await page.evaluate(() => Object.assign(window, { __xratuUiState: { anotherPreference: 'preserved' } }));
+        await openReview(page);
         const handle = page.locator('.review-resize');
         const box = await handle.boundingBox();
         expect(box).not.toBeNull();
@@ -60,7 +71,7 @@ for (const locale of ['en', 'fa']) {
         await page.mouse.up();
         await expect(handle).toHaveAttribute('aria-valuenow', '470');
         const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: Record<string, unknown> }).__xratuUiState);
-        expect(saved).toEqual({ anotherPreference: 'preserved', reviewSidebarWidth: 470 });
+        expect(saved).toMatchObject({ anotherPreference: 'preserved', reviewSidebarWidth: 470 });
         await handle.focus();
         await page.keyboard.press('Home');
         await expect(handle).toHaveAttribute('aria-valuenow', '260');
@@ -74,6 +85,7 @@ for (const locale of ['en', 'fa']) {
         await page.addInitScript((state) => Object.assign(window, { __xratuUiState: state }), saved);
         await page.reload();
         await post(page, { type: 'showChat' });
+        await openReview(page);
         await expect(handle).toHaveAttribute('aria-valuenow', '470');
     });
 }
@@ -159,8 +171,11 @@ test('review responses reject old checkpoints and settled requests do not time o
     await post(page, { type: 'restoreUser', value: 'First', cp: sha });
     const previous = await latest(page, 'changesGetState');
     await post(page, { type: 'restoreUser', value: 'Second', cp: otherSha });
-    await expect.poll(async () => (await latest(page, 'changesGetState')).sha).toBe(otherSha);
-    const current = await latest(page, 'changesGetState');
+    await expect.poll(async () => (await sent(page)).some(m => m.type === 'changesGetState' && m.sha === otherSha)).toBe(true);
+    const requests = (await sent(page)).filter(m => m.type === 'changesGetState');
+    const current = requests.find(m => m.sha === otherSha)!;
+    const historical = requests.find(m => m.sha === sha && m.toSha === otherSha)!;
+    await post(page, { ...historical, type: 'changesState', files: [] });
     await post(page, { ...previous, type: 'changesState', files: [{ ...changes[0], path: 'stale.ts' }] });
     await post(page, { ...current, type: 'changesState', files: changes });
     await page.locator('#surface-tab-changes').click();
@@ -294,9 +309,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
 }
 
 test('background jobs remain available when switching work surfaces', async ({ page }) => {
+    await openReview(page);
     await post(page, { type: 'backgroundJobs', jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }] });
     for (const name of ['Changes', 'Activity', 'Conversation']) {
-        await page.getByRole('tab', { name, exact: true }).click();
+        await page.locator(`#surface-tab-${name.toLowerCase()}`).click();
         await expect(page.locator('#surface-tab-background')).toBeVisible();
     }
     await page.locator('#surface-tab-background').click();
@@ -385,10 +401,10 @@ for (const locale of ['en', 'fa']) {
         await page.setViewportSize({ width: 1280, height: 900 });
         await post(page, { type: 'locale', locale });
         await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
-        await post(page, { type: 'restoreUser', value: 'Keep this conversation' });
+        await openReview(page, 'Keep this conversation');
         await page.locator('.composer-input').fill('Keep this draft');
         await page.locator('.composer-input').evaluate((el) => { (el as HTMLElement).dataset.retained = 'yes'; });
-        await page.locator('#surface-tab-conversation').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-conversation');
         await page.locator('#surface-tab-browser').click();
         await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
         await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
@@ -399,7 +415,7 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
         await expect(page.locator('.conversation-panel .chat-stage')).toBeVisible();
         await expect(page.locator('.conversation-panel .msg.user')).toBeVisible();
-        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-changes');
         await page.locator('#surface-tab-conversation').click();
         await page.locator('#surface-tab-browser').click();
         for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
@@ -442,8 +458,8 @@ for (const locale of ['en', 'fa']) {
         await page.keyboard.press('Escape');
         await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
         await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
-        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
-        await page.locator('#surface-tab-browser').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-activity');
+        await dragToSidebar(page, '#surface-tab-browser');
         await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(0);
         await expect(page.locator('.dock-tabs.main .dock-drop-label')).toBeVisible();
         await expect(page.locator('#surface-tab-browser')).toBeFocused();
@@ -462,7 +478,7 @@ for (const locale of ['en', 'fa']) {
         await page.locator('.composer-input').fill('A draft that survives docking');
         await page.locator('.review-input').fill('Keep this review note');
         await page.locator('.review-footer button').last().click();
-        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-activity');
         await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
         await expect(page.locator('.dock-tabs.main #surface-tab-activity')).toHaveCount(0);
         await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
@@ -495,6 +511,7 @@ for (const locale of ['en', 'fa']) {
         await page.reload();
         await post(page, { type: 'showChat' });
         await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toBeVisible();
+        await openReview(page);
         await expect(page.locator('.dock-tabs.main #surface-tab-changes')).toBeVisible();
         await page.setViewportSize({ width: 420, height: 900 });
         await expect(page.locator('.dock-sidebar')).toBeHidden();
@@ -508,6 +525,7 @@ for (const locale of ['en', 'fa']) {
     test(`panel placement is keyboard accessible, resettable and keeps hidden controls unfocusable (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 1080, height: 900 });
         await post(page, { type: 'locale', locale });
+        await openReview(page);
         await expect(page.locator('.dock-tabs.main .dock-layout-button')).toBeVisible();
         await expect(page.locator('.app')).toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
         await page.locator('#surface-tab-activity').focus();
@@ -539,7 +557,7 @@ test('side-by-side Activity keeps live task controls unique and review opens the
     await post(page, { type: 'toolCall', tool: 'update_task_list', args: '{"tasks":[{"id":"one","label":"Current task","status":"in_progress"}]}', callId: 'tasks' });
     await post(page, { type: 'toolResult', tool: 'update_task_list', output: 'Task list updated', callId: 'tasks' });
     await post(page, { type: 'taskListState', tasks: [{ id: 'one', label: 'Current task', status: 'in_progress' }] });
-    await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+    await dragToSidebar(page, '#surface-tab-activity');
     await expect(page.locator('.task-list-inline')).toHaveCount(2);
     expect(await page.locator('[id]').evaluateAll((nodes) => {
         const ids = nodes.map((node) => node.id);
@@ -564,7 +582,7 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'toolCall', tool: 'run_terminal_command', args: '{"command":"npm test"}', callId: 'cmd' });
         await post(page, { type: 'needsApproval', approval_id: 'approval', approvals: [{ tool_call_id: 'cmd', tool_name: 'run_terminal_command', args: { command: 'npm test' } }] });
-        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-activity');
         await expect(page.locator('.activity-pane details.step')).toBeVisible();
         await expect(page.locator('.activity-pane .approval-card')).toHaveCount(0);
         await expect(page.locator('.transcript-pane .approval-card')).toBeVisible();
@@ -584,7 +602,7 @@ for (const locale of ['en', 'fa']) {
             await post(page, { type: 'toolResult', tool, output: `Result ${i}`, callId: `call-${i}` });
         };
         for (let i = 0; i < 24; i++) await add(i);
-        await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.side'));
+        await dragToSidebar(page, '#surface-tab-activity');
         const pane = page.locator('.activity-pane');
         const bottom = () => pane.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
         await expect.poll(bottom).toBeLessThan(2);
@@ -619,6 +637,9 @@ test('review diffs omit patch metadata, grow taller and stay bounded in the main
     await replyFile(page, 'Long source line\n'.repeat(100), file.requestId);
     await expect.poll(() => page.locator('.review-diff').evaluate((el) => el.clientHeight)).toBeGreaterThan(500);
     await expect(page.locator('.review-diff')).not.toContainText('@@');
+    await expect(page.locator('.review-diff')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('.review-diff')).toHaveCSS('border-top-width', '0px');
+    await expect(page.locator('.review-diff')).toHaveCSS('border-radius', '0px');
     await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
     const review = await page.locator('.changes-review').boundingBox();
     expect(review!.width).toBeLessThanOrEqual(980);
@@ -628,7 +649,8 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
     test(`progress stays in chat until completion, then folds into Activity (${locale}, segments=${segments})`, async ({ page }) => {
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
-        await post(page, { type: 'restoreUser', value: 'Check authentication' });
+        await openReview(page, 'Check authentication');
+        await page.locator('#surface-tab-conversation').click();
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'chunk', value: 'I will inspect the validation path.' });
         const chat = page.locator('.transcript-pane');
@@ -660,5 +682,122 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
         await expect(page.locator('.composer-input')).toBeHidden();
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
+        await expect(page.locator('.dock-sidebar')).toBeHidden();
+        await post(page, { type: 'restoreUser', value: 'First edit', cp: sha });
+        const first = await latest(page, 'changesGetState');
+        await post(page, { ...first, type: 'changesState', files: [] });
+        await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
+        await page.evaluate(() => window.postMessage({ type: 'toolResult', tool: 'write_file', output: 'Written', callId: 'write' }, '*'));
+        const changed = await latest(page, 'changesGetState', first.requestId);
+        await post(page, { ...changed, type: 'changesState', files: changes });
+        await expect(page.locator('#surface-tab-changes')).toBeVisible();
+        await replyFile(page, 'first result');
+        await post(page, { type: 'restoreUser', value: 'Second edit', cp: otherSha });
+        await expect.poll(async () => (await sent(page)).filter(m => m.type === 'changesGetState' && m.sha === sha && m.toSha === otherSha).length).toBe(1);
+        const requests = (await sent(page)).filter(m => m.type === 'changesGetState');
+        const historical = requests.find(m => m.sha === sha && m.toSha === otherSha)!;
+        const current = requests.filter(m => m.sha === otherSha).at(-1)!;
+        await post(page, { ...current, type: 'changesState', files: [] });
+        await expect(page.locator('.review-current .review-diff')).toContainText('first result');
+        await expect(page.locator('.review-current .review-input')).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
+        await post(page, { ...current, type: 'changesState', files: changes });
+        await post(page, { ...historical, type: 'changesState', files: [changes[0]] });
+        await page.locator('#surface-tab-changes').click();
+        const turn = page.locator('.review-turn');
+        await expect(turn).toHaveCount(1);
+        await expect(turn).not.toHaveAttribute('open');
+        await expect(turn).toContainText(locale === 'en' ? 'Show changes' : 'نمایش تغییرات');
+        await expect(turn).not.toContainText('First edit');
+        const lastFile = await latest(page, 'changeFileGet');
+        await turn.locator('summary').click();
+        const file = await latest(page, 'changeFileGet', lastFile.requestId);
+        expect(file.toSha).toBe(otherSha);
+        await replyFile(page, 'first result');
+        await expect(turn.locator('.review-diff')).toContainText('first result');
+        await turn.locator('.review-input').fill('Saved turn note');
+        await turn.locator('summary').click();
+        await turn.locator('summary').click();
+        await expect(turn.locator('.review-input')).toHaveValue('Saved turn note');
+        await post(page, { type: 'truncateFromUser', userIndex: 0 });
+        await expect(page.locator('.review-turn')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
+    });
+}
+
+for (const locale of ['en', 'fa']) {
+    test(`tabs reorder and drop on panel bodies with pointer dragging (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await page.locator('#surface-tab-browser').dragTo(page.locator('#surface-tab-conversation'));
+        await expect(page.locator('.dock-tabs.main [role=tab]').first()).toHaveAttribute('data-panel', 'browser');
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('.composer-input').fill('Keep draft');
+        const source = (await page.locator('#surface-tab-activity').boundingBox())!;
+        await page.mouse.move(source.x + 10, source.y + 10);
+        await page.mouse.down();
+        await page.mouse.move(source.x + 25, source.y + 10, { steps: 3 });
+        const target = (await page.locator('.dock-sidebar.drag-target').boundingBox())!;
+        await page.mouse.move(target.x + 80, target.y + 200, { steps: 5 });
+        await page.mouse.up();
+        await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.chat-stage'));
+        await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep draft');
+        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
+    });
+}
+
+test('reused checkpoints keep the latest diff live without an empty previous-turn entry', async ({ page }) => {
+    await openReview(page);
+    await post(page, { type: 'restoreUser', value: 'Another turn with the same checkpoint', cp: sha });
+    await post(page, { type: 'toolResult', tool: 'write_file', output: 'Written', callId: 'next-write' });
+    const previous = (await sent(page)).filter(m => m.type === 'changesGetState').at(-1)!;
+    const request = await latest(page, 'changesGetState', previous.requestId);
+    expect(request.toSha).toBeUndefined();
+    await post(page, { ...request, type: 'changesState', files: changes });
+    await expect(page.locator('#surface-tab-changes')).toBeVisible();
+    await expect(page.locator('.review-turn')).toHaveCount(0);
+});
+
+for (const locale of ['en', 'fa']) {
+    test(`the active diff stays open until the next turn produces changes (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1080, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        const note = page.locator('.review-current .review-input');
+        await expect(note).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
+        await note.fill('Keep my review note');
+        await post(page, { type: 'restoreUser', value: 'Second turn', cp: otherSha });
+        await expect(page.locator('.review-current .review-diff')).toContainText('new');
+        await expect(page.locator('.review-current .review-input')).toHaveValue('Keep my review note');
+        await expect.poll(async () => (await sent(page)).some(m => m.type === 'changesGetState' && m.sha === otherSha)).toBe(true);
+        const requests = (await sent(page)).filter(m => m.type === 'changesGetState');
+        const current = requests.find(m => m.sha === otherSha)!;
+        const frozen = requests.find(m => m.sha === sha && m.toSha === otherSha)!;
+        await post(page, { ...frozen, type: 'changesState', files: changes });
+        await post(page, { ...current, type: 'changesState', files: [] });
+        await expect(page.locator('.review-current .review-diff')).toContainText('new');
+        await expect(page.locator('.review-turn[open]')).toHaveCount(0);
+        await post(page, { type: 'toolResult', tool: 'write_file', output: 'Written', callId: 'new-write' });
+        const updated = await latest(page, 'changesGetState', current.requestId);
+        expect(updated.sha).toBe(otherSha);
+        await post(page, { ...updated, type: 'changesState', files: changes });
+        await expect(page.locator('.review-turn')).toBeVisible();
+        await expect(page.locator('.review-turn')).not.toHaveAttribute('open');
+        const file = await latest(page, 'changeFileGet');
+        expect(file.sha).toBe(otherSha);
+        await replyFile(page, 'second result');
+        await expect(page.locator('.review-current .review-diff')).toContainText('second result');
+        await page.locator('.review-turn > summary').click();
+        await expect(page.locator('.review-turn .review-input')).toHaveValue('Keep my review note');
     });
 }

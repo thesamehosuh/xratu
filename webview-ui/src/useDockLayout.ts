@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { SURFACE_PANELS, defaultDockLayout, movePanel, readDockLayout, type DockLocation, type SurfacePanel } from './dockLayout';
 import { getWebviewState, patchWebviewState } from './vscode';
 
-export function useDockLayout(agentsAvailable = false, backgroundAvailable = false) {
+export function useDockLayout(agentsAvailable = false, backgroundAvailable = false, changesAvailable = true) {
     const [layout, setLayout] = useState(() => readDockLayout(getWebviewState().surfaceLayout));
     const [wide, setWide] = useState(() => window.matchMedia('(min-width: 860px)').matches);
     const [narrowActive, setNarrowActive] = useState<SurfacePanel>('conversation');
@@ -42,12 +42,12 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
             return next;
         });
     }, []);
-    const move = (panel: SurfacePanel, location: DockLocation) => {
+    const move = (panel: SurfacePanel, location: DockLocation, before?: SurfacePanel) => {
         if (!wide) return;
-        if (layout[location].includes(panel)) { setDragging(null); return; }
+        if (layout[location].includes(panel) && !before) { setDragging(null); return; }
         movedTab.current = panel;
         setLayout((current) => {
-            const next = movePanel(current, panel, location);
+            const next = movePanel(current, panel, location, before);
             patchWebviewState({ surfaceLayout: next });
             return next;
         });
@@ -58,7 +58,7 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
         setLayout(next); setNarrowActive('conversation'); setDragging(null);
         patchWebviewState({ surfaceLayout: next });
     };
-    const available = (panel: SurfacePanel) => panel === 'agents' ? agentsAvailable : panel === 'background' ? backgroundAvailable : true;
+    const available = (panel: SurfacePanel) => panel === 'changes' ? changesAvailable : panel === 'agents' ? agentsAvailable : panel === 'background' ? backgroundAvailable : true;
     const mainPanels = layout.main.filter(available);
     const sidePanels = layout.side.filter(available);
     const allPanels = SURFACE_PANELS.filter(available);

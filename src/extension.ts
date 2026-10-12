@@ -1600,23 +1600,24 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    async _sendChangesState(sha: string, requestId: string): Promise<void> {
+    async _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void> {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
             validateReviewCheckpoint(sha);
+            if (toSha !== undefined) validateReviewCheckpoint(toSha);
             if (!root) throw new Error('No workspace');
-            const files = await this._checkpoints.diffCheckpoint(root, sha);
+            const files = await this._checkpoints.diffCheckpoint(root, sha, toSha);
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files });
         } catch {
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files: [], errorKey: root ? 'surfaceChangesFailed' : 'notifNoFolder' });
         }
     }
 
-    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false): Promise<void> {
+    async _sendChangeFile(sha: string, filePath: string, requestId: string, open = false, toSha?: string): Promise<void> {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
             if (!root) throw new Error('No workspace');
-            const file = await readReviewFile(this._checkpoints, root, sha, filePath);
+            const file = await readReviewFile(this._checkpoints, root, sha, filePath, toSha);
             if (open) {
                 if (file.kind !== 'text' || !openEditDiff(this._virtualDocuments, file.path, file.before, file.after)) {
                     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(sanitizePath(filePath, root)));

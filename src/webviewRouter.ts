@@ -58,8 +58,8 @@ export interface WebviewMessageHost {
     _browserVisible(sessionId: string, browserId: string, visible: boolean): void;
     _browserAck(sessionId: string, browserId: string, frameId: number): void;
     _completeWebviewStartup(): void;
-    _sendChangesState(sha: string, requestId: string): Promise<void>;
-    _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean): Promise<void>;
+    _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void>;
+    _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean, toSha?: string): Promise<void>;
     _sendAgentsState(): Promise<void>;
     _openAgentFile(name: string, source: string): Promise<void>;
     manageAgentFiles(): Promise<void>;
@@ -199,13 +199,13 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     if (typeof data.sessionId === 'string' && typeof data.browserId === 'string' && Number.isInteger(data.frameId)) host._browserAck(data.sessionId, data.browserId, data.frameId);
                     break;
                 case 'changesGetState':
-                    if (typeof data.sha === 'string' && typeof data.requestId === 'string') await host._sendChangesState(data.sha, data.requestId);
+                    if (typeof data.sha === 'string' && typeof data.requestId === 'string') await host._sendChangesState(data.sha, data.requestId, data.toSha);
                     break;
                 case 'changeFileGet':
-                    if (typeof data.sha === 'string' && typeof data.path === 'string' && typeof data.requestId === 'string') await host._sendChangeFile(data.sha, data.path, data.requestId);
+                    if (typeof data.sha === 'string' && typeof data.path === 'string' && typeof data.requestId === 'string') await host._sendChangeFile(data.sha, data.path, data.requestId, false, data.toSha);
                     break;
                 case 'changeFileOpen':
-                    if (typeof data.sha === 'string' && typeof data.path === 'string') await host._sendChangeFile(data.sha, data.path, '', true);
+                    if (typeof data.sha === 'string' && typeof data.path === 'string') await host._sendChangeFile(data.sha, data.path, '', true, data.toSha);
                     break;
                 case 'agentsGetState':
                     await host._sendAgentsState();
