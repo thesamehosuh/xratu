@@ -702,6 +702,7 @@ export interface McpServerPayload {
     proxy?: ProxyRouteMode;
     autoApprove?: string[];
     timeoutMs?: number;
+    connectTimeoutMs?: number;
 }
 
 /** Config + live status for the MCP page's server list. */
@@ -749,6 +750,7 @@ export interface MarketplaceStdioInstall {
     env?: Record<string, string>;
     envVars?: MarketplaceEnvVar[];
     runtime: 'node' | 'python' | 'docker' | 'binary';
+    connectTimeoutMs?: number;
 }
 
 export interface MarketplaceRemoteInstall {

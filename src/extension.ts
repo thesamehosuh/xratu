@@ -7392,6 +7392,7 @@ const BUNDLED_SKILLS: ReadonlyArray<readonly [string, string]> = [
     ['iran-connectivity-fallback', path.join('assets', 'skills', 'iran-connectivity-fallback', SKILL_FILE)],
     ['iran-dev-access', path.join('assets', 'skills', 'iran-dev-access', SKILL_FILE)],
     ['local-llm-low-ram', path.join('assets', 'skills', 'local-llm-low-ram', SKILL_FILE)],
+    ['iranian-marketplaces', path.join('assets', 'skills', 'iranian-marketplaces', SKILL_FILE)],
 ];
 
 /** Seed/update the bundled skills. Per-skill bookkeeping:
@@ -7456,7 +7457,7 @@ export function activate(context: vscode.ExtensionContext) {
     mcpConfigStoreInstance = mcpConfigStore;
     mcpMarketplaceInstance = new McpMarketplaceStore(context);
 
-    // Ship with the DuckDuckGo search MCP active (first run only - the seed
+    // Ship with default-enabled curated MCPs active (first run only - the seed
     // is skipped as soon as the global config file exists). Fire-and-forget:
     // the manager reloads configs on demand, and failures must never block
     // activation.
@@ -7613,7 +7614,7 @@ export function activate(context: vscode.ExtensionContext) {
     // newly connect workspace-sourced servers.
     context.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() => {
-            void provider.reloadMcpFromDisk().catch((e) =>
+            void mcpConfigStore.seedDefaults().then(() => provider.reloadMcpFromDisk()).catch((e) =>
                 console.error('xratu: mcp trust-transition reload failed:', e));
             // Activation skipped the bundled-skills seed in Restricted Mode -
             // this transition is its only second chance in this window.

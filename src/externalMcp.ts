@@ -261,6 +261,7 @@ async function closeState(state: ServerState | null | undefined): Promise<void> 
 
 export class ExternalMcpManager {
     private _states = new Map<string, Promise<ServerState | null>>();
+    private _retryAfter = new Map<string, number>();
     private _connectingTransports = new Set<{ close: () => Promise<void>; pid?: number | null }>();
     private _statuses = new Map<string, ExternalServerStatus>();
     private _stopped = false;
@@ -277,6 +278,7 @@ export class ExternalMcpManager {
             } catch { /* already dead */ }
         }
         this._states.clear();
+        this._retryAfter.clear();
     }
 
     /** Drop cached clients + status memory so the next call reconnects from
@@ -291,6 +293,7 @@ export class ExternalMcpManager {
             } catch { /* already dead */ }
         }
         this._statuses.clear();
+        this._retryAfter.clear();
     }
 
     private async closeConnectingTransports(): Promise<void> {
@@ -306,6 +309,7 @@ export class ExternalMcpManager {
     /** Restart one server: drop its cached client and reconnect eagerly so
      *  the MCP page's status reflects the retry immediately. */
     async restart(name: string): Promise<void> {
+        this._retryAfter.delete(name);
         const pending = this._states.get(name);
         this._states.delete(name);
         try {
@@ -451,7 +455,10 @@ export class ExternalMcpManager {
                 const transport = built.transport as { close: () => Promise<void>; pid?: number | null };
                 this._connectingTransports.add(transport);
                 try {
-                    await client.connect(built.transport as never, { timeout: CONNECT_TIMEOUT_MS });
+                    const configuredTimeout = cfg.connectTimeoutMs;
+                    const timeout = typeof configuredTimeout === 'number' && Number.isFinite(configuredTimeout) && configuredTimeout > 0
+                        ? Math.min(120_000, configuredTimeout) : CONNECT_TIMEOUT_MS;
+                    await client.connect(built.transport as never, { timeout });
                 } finally {
                     this._connectingTransports.delete(transport);
                 }
@@ -477,6 +484,7 @@ export class ExternalMcpManager {
         if (this._stopped || cfg.disabled || isOfflineMode()) return null;
         let pending = this._states.get(name);
         if (!pending) {
+            if ((this._retryAfter.get(name) ?? 0) > Date.now()) return null;
             pending = this.connect(name, cfg, source);
         }
         const state = await pending;
@@ -485,10 +493,10 @@ export class ExternalMcpManager {
             this._states.delete(name);
             return null;
         }
-        if (!state) {
-            // Forget the failure so the next call retries (config may be fixed).
+        if (!state && this._states.get(name) === pending) {
             this._states.delete(name);
-        }
+            this._retryAfter.set(name, Date.now() + 30_000);
+        } else if (state) this._retryAfter.delete(name);
         return state;
     }
 
@@ -496,14 +504,14 @@ export class ExternalMcpManager {
     async listTools(): Promise<AggregatedTool[]> {
         if (isOfflineMode()) return [];
         const config = await this.loadConfig();
-        const out: AggregatedTool[] = [];
-        for (const [name, cfg] of Object.entries(config.servers)) {
-            if (cfg.disabled) continue;
+        const listings = await Promise.all(Object.entries(config.servers).map(async ([name, cfg]) => {
+            const out: AggregatedTool[] = [];
+            if (cfg.disabled) return out;
             const source = config.sources[name] ?? 'global';
             const auto = new Set(cfg.autoApprove ?? []);
             try {
                 const state = await this.getState(name, cfg, source);
-                if (!state) continue;
+                if (!state) return out;
                 const res = await state.client.listTools();
                 const tools = res.tools ?? [];
                 this._markStatus(name, { state: 'connected', toolCount: tools.length }, source);
@@ -512,7 +520,7 @@ export class ExternalMcpManager {
                         name: `${EXTERNAL_PREFIX}${name}__${t.name}`,
                         originalName: t.name,
                         serverName: name,
-                        description: `[mcp:${name}] ${t.description ?? ''}`.trim(),
+                        description: `[mcp:${name}; untrusted external metadata] ${t.description ?? ''}`.trim(),
                         inputSchema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
                         autoApprove: auto.has(t.name),
                     });
@@ -522,8 +530,9 @@ export class ExternalMcpManager {
                 console.error(`xratu: listTools failed for '${name}':`, e);
                 this._markStatus(name, { state: 'error', lastError: msg }, source);
             }
-        }
-        return out;
+            return out;
+        }));
+        return listings.flat();
     }
 
     /** Route a namespaced call. One transparent reconnect retry on stale clients. */

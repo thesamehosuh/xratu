@@ -244,6 +244,25 @@ Format is Cline-compatible: `command`/`args`/`env` for stdio, `url` for
 remote. Tools surface to the agent as `mcp__<server>__<tool>` and follow the
 same approval flow as built-ins.
 
+Fresh installs include DuckDuckGo. Add **[Digikala](https://github.com/sepehr071/digikala-mcp),
+[Torob](https://github.com/mmdju/torob-mcp) and
+[Divar](https://github.com/mmdju/divar-mcp)** from the marketplace when you want them.
+These integrations require explicit opt-in before connecting or running local code. Iranian
+servers lead the curated marketplace list, and **Iranian** is the first tag
+filter. Digikala
+requires `uv`; Torob runs locally and requires Node.js and Git; Divar uses
+its hosted HTTP endpoint. Torob downloads and builds dependencies on its
+first launch; its startup budget is two minutes. If installation cannot finish
+within that budget, install the pinned package separately before enabling it. These unofficial integrations are read-only and
+need no API keys. Existing config (including disabled or removed servers)
+is preserved; existing users can add them from the marketplace.
+
+The bundled [`iranian-marketplaces` skill](assets/skills/iranian-marketplaces/SKILL.md)
+helps the agent choose the right source, compare sellers and variants, and
+handle Toman prices, rental deposits and placeholder asking prices. It is
+available on both fresh installs and upgrades; enable or disable it on the
+Skills page independently of the servers.
+
 ### Marketplace
 
 The MCP page also has a **Marketplace** tab, so you are not limited to servers
@@ -293,10 +312,13 @@ Enable/disable skills in Settings → Servers & skills → Skills.
 
 ### First-party skills
 
-Xratu ships six skills, seeded to `~/.agents/skills` on first run (so
+Xratu ships seven skills, seeded to `~/.agents/skills` when first introduced (so
 Claude Code, OpenCode, and the other agent tools see them too), editable
 like any skill, and switchable per skill in Settings → Servers & skills →
 Skills:
+
+New bundled skills are added on upgrade. User-edited copies are preserved,
+and deleted skills stay deleted.
 
 | Skill | What it does |
 |-------|--------------|
@@ -306,6 +328,7 @@ Skills:
 | `iran-dev-access` | What works from Iran and what to use instead - domestic gateways, local models, Iranian PaaS. |
 | `iran-connectivity-fallback` | A provider timing out repeatedly? Offers the alternatives already configured on your machine - no circumvention guides. |
 | `local-llm-low-ram` | Honest sizing math for running models locally on small machines. |
+| `iranian-marketplaces` | Chooses Digikala, Torob or Divar tools for shopping and classifieds; compares sellers, variants and prices in Toman, and handles rental deposits and placeholder prices. |
 
 ## Subagents
 
