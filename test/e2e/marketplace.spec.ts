@@ -11,6 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { installVscodeTheme } from './vscodeTheme';
+import { curatedMarketplaceEntries } from '../../src/mcpMarketplace';
 
 const ENTRIES = [
     {
@@ -345,3 +346,35 @@ test.describe('marketplace visual contract', () => {
         });
     }
 });
+
+for (const locale of ['en', 'fa'] as const) {
+    for (const width of [420, 900]) {
+        test(`Iranian curated servers lead the list and filter in ${locale} at ${width}px`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await openMarketplace(page, locale);
+            const curated = curatedMarketplaceEntries();
+            // Deliberately put Iranian rows last: UI placement must survive host ranking.
+            const entries = [...curated.filter((e) => !e.tags.includes('iranian')),
+                ...curated.filter((e) => e.tags.includes('iranian'))];
+            // Busy catalogs must not push the Iranian chip past the twelve-tag limit.
+            entries.push(...Array.from({ length: 13 }, (_, i) => ({
+                ...ENTRIES[1], id: `remote:${i}`, tags: [`popular${i}`],
+            })));
+            await hostMessage(page, { ...MARKET_STATE, entries });
+            await expect(page.locator('.mp-row').first()).toContainText(locale === 'fa' ? 'دیوار' : 'Divar');
+            await expect(page.locator('.mp-row').nth(1)).toContainText(locale === 'fa' ? 'ترب' : 'Torob');
+            await expect(page.locator('.mp-row').nth(2)).toContainText(locale === 'fa' ? 'دیجی کالا' : 'Digikala');
+            await page.locator('.catalog-filters summary').click();
+            const tags = page.getByRole('group', { name: locale === 'fa' ? 'برچسب ها' : 'Tags' });
+            await expect(tags.getByRole('button').first()).toHaveText(locale === 'fa' ? 'ایرانی' : 'Iranian');
+            await tags.getByRole('button').first().click();
+            await expect(page.locator('.mp-row')).toHaveCount(3);
+            await expect(page.locator('.mp-row')).toContainText([
+                locale === 'fa' ? 'ایرانی' : 'Iranian',
+                locale === 'fa' ? 'ایرانی' : 'Iranian',
+                locale === 'fa' ? 'ایرانی' : 'Iranian',
+            ]);
+            expect((await sentMessages(page)).some((m) => m.type === 'mcpSaveServers')).toBe(false);
+        });
+    }
+}

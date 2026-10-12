@@ -734,7 +734,7 @@ export function curatedMarketplaceEntries(registry: McpRegistryEntry[] = MCP_REG
             nameKey: item.nameKey,
             descKey: item.descKey,
             description: '',
-            tags: [],
+            tags: [...(item.tags ?? [])],
             homepageUrl: safeHttpUrl(item.docsUrl),
             install,
             installConfidence: install ? ('curated' as const) : ('none' as const),

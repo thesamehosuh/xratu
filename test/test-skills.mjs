@@ -292,6 +292,20 @@ const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the 
 
 // --- ensureBundledSkill (first-run default seeding) ---
 {
+    // Exercise the shipped file through the real seeder and discovery path.
+    // Adding a new default must work for an existing skills directory too.
+    const root = path.join(tmpRoot, '.agents', 'skills');
+    const md = fs.readFileSync(new URL('../assets/skills/iranian-marketplaces/SKILL.md', import.meta.url), 'utf-8');
+    const parsed = parseSkillMd(md);
+    check('marketplaces: valid bundled skill name', parsed?.name, 'iranian-marketplaces');
+    check('marketplaces: creates new skill in existing install',
+        await ensureBundledSkill(root, 'iranian-marketplaces', md), 'created');
+    const found = discoverSkills({ homedir: tmpRoot }).find((s) => s.name === 'iranian-marketplaces');
+    check('marketplaces: discoverable globally', found?.source, 'global-agents');
+    check('marketplaces: description available to skill selection', found?.description, parsed.description);
+    check('marketplaces: full instructions readable', readSkillBody(found.dirPath), parsed.body);
+}
+{
     const root = path.join(tmpRoot, '.agents', 'skills');
     const md = '---\nname: natural-farsi\ndescription: Natural Persian writing rules\n---\n\nBody.\n';
     check('seed: creates folder + file', await ensureBundledSkill(root, 'natural-farsi', md), 'created');

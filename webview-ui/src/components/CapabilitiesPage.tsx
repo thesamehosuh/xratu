@@ -270,6 +270,7 @@ function marketSourceHint(source: MarketplaceSource): string {
 /** The tag vocabulary the catalogs use, mapped to our own translations. Ids
  *  stay the filter key (language-independent); only the label is localized. */
 const TAG_I18N_KEYS: Record<string, StringKey> = {
+    iranian: 'mcpTagIranian',
     productivity: 'mcpTagProductivity',
     marketing: 'mcpTagMarketing',
     research: 'mcpTagResearch',
@@ -316,7 +317,8 @@ function topTags(entries: MarketplaceEntry[], max = 12): string[] {
         for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
     return [...counts.entries()]
-        .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+        .sort((a, b) => Number(b[0] === 'iranian') - Number(a[0] === 'iranian')
+            || (b[1] - a[1]) || a[0].localeCompare(b[0]))
         .slice(0, max)
         .map(([tag]) => tag);
 }
@@ -905,7 +907,9 @@ export function CapabilitiesPage({
         const entries = marketplace?.entries ?? [];
         const matching = entries
             .filter((entry) => marketSource === 'all' || entry.source === marketSource)
-            .filter((entry) => !marketTag || entry.tags.includes(marketTag));
+            .filter((entry) => !marketTag || entry.tags.includes(marketTag))
+            .sort((a, b) => Number(b.source === 'curated' && b.tags.includes('iranian'))
+                - Number(a.source === 'curated' && a.tags.includes('iranian')));
         const rows = matching.slice(0, marketLimit);
         const hiddenRows = matching.length - rows.length;
         const tags = topTags(entries);
@@ -937,6 +941,7 @@ export function CapabilitiesPage({
                                 >
                                     {marketSourceLabel(entry.source)}
                                 </span>
+                                {entry.tags.includes('iranian') && <span className="mcp-badge">{t('mcpTagIranian')}</span>}
                                 {entry.verified && (
                                     <span className="mcp-badge verified">
                                         <ShieldCheck size={9} />

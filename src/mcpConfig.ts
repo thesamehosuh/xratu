@@ -156,8 +156,9 @@ export class McpConfigStore {
         };
     }
 
-    /** First-run default: ship with the DuckDuckGo search MCP active out of
-     *  the box (no API key, read-only tools). Seeds the global config file
+    /** First-run default: ship with the default-enabled curated servers
+     *  active out of the box (no API keys, read-only tools). Seeds the global
+     *  config file
      *  only when it does not exist yet - exclusive create, never clobbers an
      *  existing or concurrently created file. An emptied-but-present file is
      *  a user decision and is respected. Upgrades whose servers still live
@@ -169,14 +170,17 @@ export class McpConfigStore {
         if (vscode.workspace.isTrusted === false) return;
         const legacy = vscode.workspace.getConfiguration('xratu').get<Record<string, ExternalServerConfig>>('mcpServers');
         if (legacy && typeof legacy === 'object' && Object.keys(legacy).length > 0) return;
-        const ddg = MCP_REGISTRY.find((e) => e.id === 'ddg-search');
-        if (!ddg) return;
-        const { name, ...config } = ddg.server;
+        const servers: Record<string, ExternalServerConfig> = {};
+        for (const entry of MCP_REGISTRY) {
+            if (!entry.defaultEnabled) continue;
+            const { name, ...config } = entry.server;
+            servers[name] = config;
+        }
         await fs.promises.mkdir(path.dirname(this.globalPath), { recursive: true });
         try {
             await fs.promises.writeFile(
                 this.globalPath,
-                JSON.stringify({ mcpServers: { [name]: config } }, null, 2) + '\n',
+                JSON.stringify({ mcpServers: servers }, null, 2) + '\n',
                 { encoding: 'utf-8', flag: 'wx' },
             );
         } catch (err: unknown) {

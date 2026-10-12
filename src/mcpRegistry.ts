@@ -15,6 +15,9 @@ export interface McpRegistryEntry {
     nameKey: string;
     descKey: string;
     docsUrl?: string;
+    tags?: string[];
+    /** Seeded, enabled on fresh installs; existing config is never overwritten. */
+    defaultEnabled?: boolean;
     server: {
         name: string;
         command?: string;
@@ -26,6 +29,47 @@ export interface McpRegistryEntry {
 }
 
 export const MCP_REGISTRY: McpRegistryEntry[] = [
+    {
+        id: 'divar',
+        nameKey: 'mcpRegDivarName',
+        descKey: 'mcpRegDivarDesc',
+        docsUrl: 'https://github.com/mmdju/divar-mcp',
+        tags: ['iranian'],
+        defaultEnabled: true,
+        server: {
+            name: 'divar',
+            url: 'https://divar-mcp.mmdju2.workers.dev/mcp',
+        },
+    },
+    {
+        id: 'torob',
+        nameKey: 'mcpRegTorobName',
+        descKey: 'mcpRegTorobDesc',
+        docsUrl: 'https://github.com/mmdju/torob-mcp',
+        tags: ['iranian'],
+        defaultEnabled: true,
+        server: {
+            name: 'torob',
+            command: 'npx',
+            // Pin the installer too: npm 12's Git prepare path rejects its
+            // own allow-scripts argument before this server can build.
+            args: ['-y', 'npm@11.6.2', 'exec', '--yes',
+                '--package=github:mmdju/torob-mcp#b8ffdca4110e8f35f9f617be57fa8cf9916aa968', '--', 'torob-mcp'],
+        },
+    },
+    {
+        id: 'digikala',
+        nameKey: 'mcpRegDigikalaName',
+        descKey: 'mcpRegDigikalaDesc',
+        docsUrl: 'https://github.com/sepehr071/digikala-mcp',
+        tags: ['iranian'],
+        defaultEnabled: true,
+        server: {
+            name: 'digikala',
+            command: 'uvx',
+            args: ['digikala-mcp==0.3.0'],
+        },
+    },
     {
         id: 'context7',
         nameKey: 'mcpRegContext7Name',
@@ -40,6 +84,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
     },
     {
         id: 'ddg-search',
+        defaultEnabled: true,
         nameKey: 'mcpRegDdgName',
         descKey: 'mcpRegDdgDesc',
         docsUrl: 'https://github.com/nickclyde/duckduckgo-mcp-server',
