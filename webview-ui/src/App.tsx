@@ -218,7 +218,14 @@ export function App() {
     const [taskChipOpen, setTaskChipOpen] = useState(false);
     const agentRuns = useMemo(() => collectAgentRuns(chat.messages), [chat.messages]);
     const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0);
+    const [changeCount, setChangeCount] = useState(0);
+    const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
+    const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
+    const reviewTurns = useMemo(() => {
+        const turns = chat.messages.filter(message => message.role === 'user' && message.cp);
+        return turns.map((message, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.cp, number: index + 1 }));
+    }, [chat.messages]);
+    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0 || activeReviewSha !== null);
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
@@ -234,9 +241,7 @@ export function App() {
     const activityVisible = dock.mainActive === 'activity' || dock.sideActive === 'activity';
     const [activityOpened, setActivityOpened] = useState(false);
     useEffect(() => { if (activityVisible) setActivityOpened(true); }, [activityVisible]);
-    const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
     const [reviewPath, setReviewPath] = useState<string | null>(null);
-    const [changeCount, setChangeCount] = useState(0);
     const [reviewFiles, setReviewFiles] = useState<ReviewChange[]>([]);
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
@@ -1084,7 +1089,8 @@ export function App() {
         (userIndex: number, sha: string) => send({ type: 'restoreCheckpoint', userIndex, sha }),
         [send]
     );
-    const handleReviewChanges = useCallback((sha: string, path?: string) => {
+    const handleReviewChanges = useCallback((sha: string, path?: string, turnNumber?: number) => {
+        setActiveReviewNumber(turnNumber ?? null);
         setReviewPath(path ?? null);
         setActiveReviewSha(sha);
         setSurfaceTab('changes');
@@ -1210,7 +1216,7 @@ export function App() {
         }
         return undefined;
     }, [chat.messages]);
-    useEffect(() => { setActiveReviewSha(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
+    useEffect(() => { setActiveReviewSha(null); setActiveReviewNumber(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
     useEffect(() => { setSurfaceTab('conversation'); }, [currentSessionId, setSurfaceTab]);
 
 
@@ -1589,15 +1595,15 @@ export function App() {
             <AgentNavigation.Provider value={observeAgent}><div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
             <main className={`work-surface show-${surfaceTab}${dock.wide && dock.sidePanels.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
                 onDragOver={(event) => {
-                    if (dock.wide && dock.dragging && event.dataTransfer.types.includes(PANEL_DRAG_TYPE) && (event.target as Element).closest('.panel-side,.dock-sidebar')) {
+                    if (dock.wide && dock.dragging && event.dataTransfer.types.includes(PANEL_DRAG_TYPE) && (event.target as Element).closest('.panel-side,.dock-sidebar,.panel-main')) {
                         event.preventDefault(); event.dataTransfer.dropEffect = 'move';
                     }
                 }}
                 onDrop={(event) => {
-                    if (!dock.wide || !dock.dragging || !(event.target as Element).closest('.panel-side,.dock-sidebar')) return;
+                    if (!dock.wide || !dock.dragging || !(event.target as Element).closest('.panel-side,.dock-sidebar,.panel-main')) return;
                     const panel = event.dataTransfer.getData(PANEL_DRAG_TYPE);
                     if (panel !== dock.dragging) return;
-                    event.preventDefault(); dock.move(dock.dragging, 'side');
+                    event.preventDefault(); dock.move(dock.dragging, (event.target as Element).closest('.panel-side,.dock-sidebar') ? 'side' : 'main');
                 }}>
             <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             <div className={`conversation-panel ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
@@ -1799,7 +1805,7 @@ export function App() {
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
                 <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             </DockSidebar>
-            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
+            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
             </main>
             </div>
             </AgentNavigation.Provider>

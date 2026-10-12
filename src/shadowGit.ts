@@ -456,15 +456,15 @@ export class ShadowCheckpointStore {
         }).join('\n');
     }
 
-    /** One file the workspace changed between `fromSha` and the CURRENT
+    /** Files changed from `fromSha` to a saved checkpoint or the current
      *  working tree (the hunk-review surface reads this). Read-only - but
      *  serialized with snapshot/restore so it never samples a half-restored
      *  tree. */
-    async diffCheckpoint(workspaceRoot: string, fromSha: string): Promise<ChangedFile[]> {
+    async diffCheckpoint(workspaceRoot: string, fromSha: string, toSha?: string): Promise<ChangedFile[]> {
         return this._serialized(async () => {
             await this.ensureRepo(workspaceRoot);
             const numstat = await this.gitAsync(
-                [...this.repoConfigArgs(), 'diff', '--numstat', '-z', '--no-renames', fromSha, '--'],
+                [...this.repoConfigArgs(), 'diff', '--numstat', '-z', '--no-renames', fromSha, ...(toSha ? [toSha] : []), '--'],
                 workspaceRoot
             );
             if (numstat.code !== 0) {
@@ -491,7 +491,7 @@ export class ShadowCheckpointStore {
             // Files CREATED after the checkpoint are untracked in the shadow
             // index and invisible to `git diff` - the same blind spot that
             // once made restore silently no-op (see restoreCheckpoint).
-            const others = await this.gitAsync(
+            const others = toSha ? { code: 0, stdout: '' } : await this.gitAsync(
                 [...this.repoConfigArgs(), 'ls-files', '-z', '--others', '--exclude-standard'],
                 workspaceRoot
             );

@@ -58,9 +58,9 @@ export type ToExtensionMessage =
     | { type: 'browserCommand'; sessionId: string; browserId: string; command: BrowserCommand }
     | { type: 'browserVisible'; sessionId: string; browserId: string; visible: boolean }
     | { type: 'browserFrameAck'; sessionId: string; browserId: string; frameId: number }
-    | { type: 'changesGetState'; sha: string; requestId: string }
-    | { type: 'changeFileGet'; sha: string; path: string; requestId: string }
-    | { type: 'changeFileOpen'; sha: string; path: string }
+    | { type: 'changesGetState'; sha: string; toSha?: string; requestId: string }
+    | { type: 'changeFileGet'; sha: string; toSha?: string; path: string; requestId: string }
+    | { type: 'changeFileOpen'; sha: string; toSha?: string; path: string }
     | { type: 'agentsGetState' }
     | { type: 'agentsManage' }
     | { type: 'agentFileOpen'; name: string; source: AgentProfileView['source'] }

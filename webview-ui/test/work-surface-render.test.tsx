@@ -95,3 +95,8 @@ assert.doesNotMatch(renderToString(createElement(ReviewDiff, {file:{path:'a.ts',
 const lateThinking = { ...message, steps: [...message.steps.map(step => step.id === 'final' ? { ...step, final: true } : step), { id:'late-reasoning', kind:'thinking' as const, text:'Final reasoning bookkeeping' }] };
 assert.match(render(lateThinking), /Final answer/);
 assert.doesNotMatch(renderToString(createElement(ActivityTimeline, {messages:[lateThinking]})), /Final answer/);
+
+const reordered = movePanel(defaultDockLayout(), 'browser', 'main', 'conversation');
+assert.equal(reordered.main[0], 'browser');
+assert.equal(new Set([...reordered.main, ...reordered.side]).size, 6);
+assert.deepEqual(readDockLayout(reordered), reordered);

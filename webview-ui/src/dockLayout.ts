@@ -29,11 +29,13 @@ export function readDockLayout(value: unknown): DockLayout {
     };
 }
 
-export function movePanel(layout: DockLayout, panel: SurfacePanel, to: DockLocation): DockLayout {
-    if (layout[to].includes(panel)) return layout;
+export function movePanel(layout: DockLayout, panel: SurfacePanel, to: DockLocation, before?: SurfacePanel): DockLayout {
+    if (before === panel || (layout[to].includes(panel) && !before)) return layout;
     const main = layout.main.filter((id) => id !== panel);
     const side = layout.side.filter((id) => id !== panel);
-    (to === 'main' ? main : side).push(panel);
+    const destination = to === 'main' ? main : side;
+    const index = before ? destination.indexOf(before) : -1;
+    destination.splice(index < 0 ? destination.length : index, 0, panel);
     return {
         version: 1, main, side,
         mainActive: to === 'main' ? panel : layout.mainActive && main.includes(layout.mainActive) ? layout.mainActive : main[0] ?? null,
