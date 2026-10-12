@@ -822,8 +822,9 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.review-turn')).toHaveCount(3);
         const earlierA = page.locator('.review-turn').last();
         const laterA = page.locator('.review-turn').first();
+        const initialFileRequest = (await sent(page)).filter(message => message.type === 'changeFileGet').at(-1);
         await earlierA.locator('summary').click();
-        const first = await latest(page, 'changeFileGet');
+        const first = await latest(page, 'changeFileGet', initialFileRequest?.requestId);
         expect(first.toSha).toBe(otherSha);
         await replyFile(page, 'first A result');
         await expect(earlierA).toContainText('first A result');
