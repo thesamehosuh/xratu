@@ -65,6 +65,9 @@ and pick an OpenCode model. The free models work without an Xratu API key;
 their availability and rate limits are controlled by OpenCode.
 The model picker shows the provider after each name and defaults to **Free
 models only**. Turn that filter off to see paid models configured in OpenCode.
+If the selected model disappears, Xratu selects another verified free model.
+If none remain, choose a model explicitly; Xratu never automatically falls back
+to a paid model. An existing selection stays selected, including paid models.
 Opening the model picker checks every free model in parallel using small requests
 in separate temporary sessions. Results show availability or a rate limit with
 the check time. Recent onboarding checks are reused for 30 seconds. The check button beside each free model always lets you retry it manually.

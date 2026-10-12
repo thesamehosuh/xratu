@@ -88,6 +88,32 @@ for (const locale of ['en', 'fa'] as const) {
             expect(toast.y + toast.height).toBeLessThan(composerBefore.y);
             expect((await page.locator('.composer-input').boundingBox())!.y).toBe(composerBefore.y);
         });
+        test(`removed native model clears selection until a paid model is explicitly chosen (${locale}, ${width})`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 800 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'showChat' });
+            await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: true, busy: false } });
+            await post(page, { type: 'modelInfo', defaultModel: 'opencode/removed-free', selectedModel: 'opencode/removed-free', models: ['opencode/removed-free'], displayNames: { 'opencode/removed-free': 'Removed Free' }, capabilities: { 'opencode/removed-free': { provider: 'opencode', free: true } } });
+            await expect(page.locator('.picker-chip')).toContainText('Removed Free');
+            await post(page, { type: 'modelInfo', defaultModel: '', selectedModel: '', models: ['opencode/paid'], displayNames: { 'opencode/paid': 'Paid Model' }, capabilities: { 'opencode/paid': { provider: 'opencode', free: false } } });
+            await expect(page.locator('.picker-chip')).not.toContainText('Removed Free');
+            await expect(page.locator('.picker-chip')).not.toContainText('Paid Model');
+            await page.locator('.composer-input').fill('Keep this draft until I choose a model');
+            await expect(page.locator('.send-btn')).toBeDisabled();
+            await page.locator('.composer-input').press('Enter');
+            await expect(page.locator('.composer-input')).toHaveValue('Keep this draft until I choose a model');
+            expect((await sent(page)).some((message) => (message as { type: string }).type === 'askQuestion')).toBe(false);
+            await page.locator('.picker-chip').click();
+            await expect(page.getByRole('option')).toHaveCount(0);
+            expect((await sent(page)).some((message) => (message as { type: string }).type === 'selectModel')).toBe(false);
+            await page.locator('.model-free-filter').click();
+            await page.getByRole('option').click();
+            expect(await sent(page)).toContainEqual({ type: 'selectModel', value: 'opencode/paid' });
+            await expect(page.locator('.picker-chip')).toContainText('Paid Model');
+            await expect(page.locator('.send-btn')).toBeEnabled();
+            await page.locator('.send-btn').click();
+            expect(await sent(page)).toContainEqual({ type: 'askQuestion', value: 'Keep this draft until I choose a model', attachments: [] });
+        });
     }
 }
 

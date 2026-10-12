@@ -3248,8 +3248,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _rememberModelForActiveCredential(model: string | null): Promise<void> {
+        if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model ?? undefined); return; }
         if (!model) return;
-        if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model); return; }
         await this._secrets.store('xratu.selectedModel', model);
         const credId = await this._resolveActiveCredentialId();
         if (!credId) return;
@@ -4931,12 +4931,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const catalog = await engine.models(workspace);
                 if (this._activeEngine !== 'opencode' || epoch !== this._sessionEpoch) return false;
                 const models = catalog.map((model) => `${model.providerID}/${model.id}`);
-                if (!this._selectedModel || !models.includes(this._selectedModel)) this._selectedModel = models.find((id) => id === 'opencode/big-pickle') ?? models[0] ?? null;
+                if (!this._selectedModel || !models.includes(this._selectedModel)) {
+                    const freeModels = catalog.filter(isFreeModel);
+                    const fallback = freeModels.find((model) => model.providerID === 'opencode' && model.id === 'big-pickle') ?? freeModels[0];
+                    this._selectedModel = fallback ? `${fallback.providerID}/${fallback.id}` : null;
+                }
                 await this._rememberModelForActiveCredential(this._selectedModel);
                 const contextWindows = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.limit.context]));
                 this._nativeModelWindows = contextWindows;
                 this._nativeModelVariants = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.variants.map((variant) => variant.id).filter((id) => id !== 'default')]));
-                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: this._selectedModel ?? '', selectedModel: this._selectedModel ?? undefined, models, contextWindows, nativeVariants: this._nativeVariants(), capabilities: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, { provider: model.providerID, free: isFreeModel(model), variants: this._nativeModelVariants[`${model.providerID}/${model.id}`], noReasoning: !this._nativeModelVariants[`${model.providerID}/${model.id}`].length, vision: model.capabilities.input.includes('image'), noTools: !model.capabilities.tools }])), visionCapable: catalog.find((model) => `${model.providerID}/${model.id}` === this._selectedModel)?.capabilities.input.includes('image') ?? false, displayNames: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.name])) });
+                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: this._selectedModel ?? '', selectedModel: this._selectedModel ?? '', models, contextWindows, nativeVariants: this._nativeVariants(), capabilities: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, { provider: model.providerID, free: isFreeModel(model), variants: this._nativeModelVariants[`${model.providerID}/${model.id}`], noReasoning: !this._nativeModelVariants[`${model.providerID}/${model.id}`].length, vision: model.capabilities.input.includes('image'), noTools: !model.capabilities.tools }])), visionCapable: catalog.find((model) => `${model.providerID}/${model.id}` === this._selectedModel)?.capabilities.input.includes('image') ?? false, displayNames: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.name])) });
                 return models.length > 0;
             } catch (error) {
                 this._view.webview.postMessage({ type: 'modelInfo', defaultModel: '', models: [] });
