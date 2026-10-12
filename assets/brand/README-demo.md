@@ -5,9 +5,10 @@ It uses an illustrative issue-board project, synthetic agent/tool events,
 and captured browser frames. It does not run a model or benchmark an engine.
 No keys, account data, or user workspaces are involved.
 
-The opening shows all three setup paths. The coding workflow uses Xratu's
-built-in engine with a local model; it does not imply that OpenCode supports
-Xratu subagents.
+The opening follows Start free through OpenCode installation and free model
+selection. Installation and availability are simulated, not measured. The next
+scene explicitly switches to Xratu's built-in engine with a local model for the
+coding workflow; it does not imply that OpenCode supports Xratu subagents.
 
 ## Story and pacing
 
@@ -17,7 +18,7 @@ right. No subtitle or tagline. The actual webview occupies the remaining space.
 
 | Scene | Visible action | Reading time |
 | --- | --- | --- |
-| Connect | Show setup choices, then the current curated MCP marketplace | 1.7 seconds on setup; 2.2 seconds on the catalog |
+| Connect | Choose Start free, install OpenCode, show the free model picker | About 5 seconds including pointer movement and simulated progress |
 | Task | Type the request, then send it | 0.9 seconds after typing |
 | Agents | Stream the response, open a tool result, inspect the other agent | 1.8 and 1.4 seconds on the results |
 | Review | Approve the edit, inspect its diff, add a test, reopen the earlier turn | 2.5 seconds before approval; 1.7 seconds on the diff; 1.4 seconds on history |
@@ -25,11 +26,14 @@ right. No subtitle or tagline. The actual webview occupies the remaining space.
 | Browser | Drag Conversation into the sidebar, inspect the board, filter issues, type a follow-up | 1.4 seconds before search; 1.7 seconds on the result |
 
 Pointer movement leads each interaction. Docking uses the real drag/drop event
-handlers, with a moving tab preview and the sidebar drop highlight. Typing and response streaming are
-gradual. Holds follow meaningful changes rather than an equal delay per page.
-The timing lives in `test/e2e/readmeDemo.ts`; the total is roughly 48 seconds at 1.3× playback speed.
-The catalog comes from the repository's actual curated registry. Its Add buttons
-remain available; the demo does not install or connect third-party servers.
+handlers and the app's drop highlight. The browser opens before Conversation
+moves, keeping the main pane stable throughout the drop. There is no cloned
+floating tab. Changes is already visible in the wide sidebar, so no extra tab
+click is needed. After the scripted drop, the fixture clears synthetic tab
+focus so it does not leave a keyboard outline around a pointer action. Typing
+and response streaming are gradual. Holds follow
+meaningful changes rather than an equal delay per page. The timing lives in
+`test/e2e/readmeDemo.ts` and uses a shared 1.3× playback speed.
 
 ## Rebuild and preview
 

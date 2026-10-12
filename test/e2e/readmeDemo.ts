@@ -1,17 +1,15 @@
 /** Browser-only, opt-in demo fixture. Never imported by the extension or CI specs. */
 import { VSCODE_DARK_THEME_CSS } from './vscodeTheme';
 import type { FromExtensionMessage } from '../../webview-ui/src/types';
-import { curatedMarketplaceEntries } from '../../src/mcpMarketplace';
 
 type Envelope = { type: string; [key: string]: unknown };
 const locale = new URLSearchParams(location.search).get('locale') === 'fa' ? 'fa' : 'en';
 const inspect = new URLSearchParams(location.search).has('inspect');
 const copy = {
     en: {
-        titles: ['Engine and model', 'Describe the change', 'Inspect agent progress', 'Approve and review', 'Background terminal', 'Verify in the browser'],
+        titles: ['Start free with OpenCode', 'Built-in agent · local model', 'Inspect agent progress', 'Approve and review', 'Background terminal', 'Verify in the browser'],
         chapters: ['Connect', 'Task', 'Agents', 'Review', 'Terminal', 'Browser'],
         disclosure: 'Scripted demo · current Xratu UI',
-        marketplace: 'Choose tools from the marketplace',
         prompt: 'Add search to the issue board. Include tests and verify it in the browser.',
         plan: ['Inspect the board and existing tests', 'Add search and edge-case coverage', 'Verify the result in the browser'],
         thinking: 'I’ll trace the board component and test coverage in parallel, then propose a small patch.',
@@ -25,10 +23,9 @@ const copy = {
         draft: 'Check keyboard navigation, too.',
     },
     fa: {
-        titles: ['موتور و مدل', 'شرح تغییر', 'پیشرفت عامل ها', 'تایید و بررسی', 'ترمینال پس زمینه', 'بررسی توی مرورگر'],
+        titles: ['شروع رایگان با OpenCode', 'عامل داخلی · مدل محلی', 'پیشرفت عامل ها', 'تایید و بررسی', 'ترمینال پس زمینه', 'بررسی توی مرورگر'],
         chapters: ['اتصال', 'درخواست', 'عامل ها', 'بررسی', 'ترمینال', 'مرورگر'],
         disclosure: 'دموی سناریونویسی شده · رابط فعلی خراتو',
-        marketplace: 'انتخاب ابزار از فروشگاه',
         prompt: 'جستجو رو به فهرست کار ها اضافه کن. براش تست بنویس و نتیجه رو توی مرورگر بررسی کن.',
         plan: ['بررسی فهرست کار ها و تست های فعلی', 'اضافه کردن جستجو و تست حالت های خاص', 'بررسی نتیجه توی مرورگر'],
         thinking: 'کامپوننت و تست ها رو موازی بررسی میکنم، بعد یه تغییر کوچیک پیشنهاد میدم.',
@@ -68,6 +65,7 @@ let reviewReady = false;
 let followupReady = false;
 let filtered = false;
 let paced = false;
+let opencodeInstalled = false;
 const beats: { action: string; at: number }[] = [];
 const pause = (ms: number) => paced ? wait(ms) : Promise.resolve();
 const state: Record<string, unknown> = {};
@@ -110,32 +108,39 @@ async function drag(sourceSelector: string, targetSelector: string) {
     const target = await element(targetSelector);
     await point(source);
     const from = source.getBoundingClientRect();
-    const to = target.getBoundingClientRect();
     const dataTransfer = new DataTransfer();
     source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
     // Let React publish its dragging state before delivering dragover/drop.
     await wait(80);
-    const ghost = source.cloneNode(true) as HTMLElement;
-    ghost.removeAttribute('id');
-    ghost.style.direction = getComputedStyle(source).direction;
-    ghost.classList.add('demo-drag-ghost');
-    ghost.style.width = `${from.width}px`;
-    ghost.style.transform = `translate(${from.x}px, ${from.y}px)`;
-    document.body.appendChild(ghost);
-    await wait(30);
+    const to = target.getBoundingClientRect();
     const destination = { x: to.x + Math.min(to.width / 2, 100), y: to.y + to.height / 2 };
-    ghost.style.transform = `translate(${destination.x - from.width / 2}px, ${destination.y - from.height / 2}px)`;
     const cursor = document.querySelector<HTMLElement>('.demo-cursor')!;
-    cursor.style.transitionDuration = `${.7 / PLAYBACK_SPEED}s`;
-    cursor.style.transform = `translate(${destination.x}px, ${destination.y}px)`;
-    await wait(paced ? 650 : 30);
+    cursor.style.transition = 'none';
+    const start = { x: from.x + Math.min(from.width / 2, 70), y: from.y + from.height / 2 };
+    const duration = paced ? 700 / PLAYBACK_SPEED : 30;
+    await new Promise<void>(resolve => {
+        const began = performance.now();
+        const move = (now: number) => {
+            const progress = Math.min(1, (now - began) / duration);
+            const eased = progress * progress * (3 - 2 * progress);
+            cursor.style.transform = `translate(${start.x + (destination.x - start.x) * eased}px, ${start.y + (destination.y - start.y) * eased}px)`;
+            if (progress < 1) requestAnimationFrame(move); else resolve();
+        };
+        requestAnimationFrame(move);
+    });
     target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }));
     await wait(paced ? 220 : 30);
     target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
     source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
-    ghost.remove();
-    cursor.style.transitionDuration = '';
-    await until(() => document.querySelector(sourceSelector)?.closest('.dock-tabs.side'));
+    cursor.style.transition = '';
+    const moved = await until(() => {
+        const tab = document.querySelector<HTMLElement>(sourceSelector);
+        return tab?.closest('.dock-tabs.side') ? tab : null;
+    });
+    // Scripted DragEvents do not set the browser's pointer input modality.
+    // Clear the relocated tab's synthetic focus, leaving real keyboard focus
+    // behavior in the shipped component unchanged.
+    if (document.activeElement === moved) moved.blur();
     beats.push({ action: `drag ${sourceSelector} to ${targetSelector}`, at: performance.now() });
 }
 async function fill(selector: string, value: string, settle = true) {
@@ -167,8 +172,17 @@ async function frame() {
     await post({ type: 'browserFrame', frame: { sessionId: 'readme-demo', browserId: 'demo-browser', frameId: filtered ? 2 : 1, data, width: 760, height: 560 } });
 }
 async function reply(message: Envelope) {
-    if (message.type === 'mcpMarketplaceGetState') {
-        await post({ type: 'mcpMarketplaceState', query: '', entries: curatedMarketplaceEntries(), sources: [], status: 'cached', fetchedAt: null, error: null, liveSearch: false });
+    if (message.type === 'setupGetState' && message.path === 'free') {
+        if (!opencodeInstalled) await post({ type: 'enginesState', state: { active: 'xratu', phase: 'missing', customPath: '', installedByXratu: false, busy: false } });
+        await post({ type: 'runtimeSetupState', state: { requestId: String(message.requestId), engine: 'opencode', path: 'free', phase: opencodeInstalled ? 'ready' : 'install', models: opencodeInstalled ? [{ id: 'opencode/big-pickle', name: 'Big Pickle', provider: 'opencode', free: true, tools: true, availability: 'available', checkedAt: Date.now() }] : [] } });
+    } else if (message.type === 'engineInstall') {
+        const totalBytes = 96 * 1024 * 1024;
+        for (const progress of [0, .25, .6, 1]) {
+            await post({ type: 'enginesState', state: { active: 'xratu', phase: 'installing', customPath: '', installedByXratu: false, busy: false, downloadedBytes: Math.round(progress * totalBytes), totalBytes } });
+            await pause(350);
+        }
+        opencodeInstalled = true;
+        await post({ type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: true, busy: false } });
     } else if (message.type === 'changesGetState') {
         await post({ type: 'changesState', sha: String(message.sha), requestId: String(message.requestId), files: message.sha === nextSha ? followupReady ? [{ path: 'test/Board.test.tsx', added: 5, removed: 0, binary: false, untracked: false }] : [] : reviewReady ? [
             { path: 'src/Board.tsx', added: 9, removed: 1, binary: false, untracked: false },
@@ -197,7 +211,6 @@ style.textContent = VSCODE_DARK_THEME_CSS + `
 body{background:#0d1311!important;overflow:hidden}.demo-header,.demo-footer,.demo-controls{font-family:system-ui,sans-serif}.demo-header{height:78px;padding:25px 32px;color:#e6eee9}.demo-meta{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#7c958a}.demo-brand{display:flex;gap:10px;align-items:center;color:#e6eee9;font-size:18px;font-weight:650}.demo-brand img{width:26px;height:26px}.demo-scene{display:flex;align-items:center;gap:22px}#demo-title{font-size:15px;line-height:1.4;letter-spacing:0;margin:0;font-weight:400;color:#96a79d}.demo-window{margin:0 32px;border:1px solid #34483d;border-radius:12px;overflow:hidden;box-shadow:0 16px 50px #0005;height:calc(100vh - 144px);background:#181818}#root{height:100%}.app{height:100%!important}.demo-footer{padding:19px 32px;color:#768b7d;display:flex;align-items:center;justify-content:space-between;font-size:10px}#demo-chapters{display:flex;gap:20px}.demo-chapter{display:flex;gap:7px;align-items:center}.demo-chapter.active{color:#84dec2}.demo-chapter.done{color:#b2c7ba}.demo-number{font-size:9px}.demo-controls{position:fixed;inset-block-end:8px;inset-inline-end:48px;display:flex;gap:8px;color:#9eada4;font-size:11px}.demo-controls button{font:inherit;color:#b5d8c6;background:#192b22;border:1px solid #34483d;border-radius:5px;padding:5px 10px}.recording .demo-controls{visibility:hidden}.demo-header h1{transition:opacity ${.15 / PLAYBACK_SPEED}s ease,transform ${.15 / PLAYBACK_SPEED}s ease}.demo-header.changing h1{opacity:0;transform:translateY(5px)}.inspect .demo-header,.inspect .demo-footer,.inspect .demo-controls{display:none}.inspect .demo-window{height:100vh;margin:0;border:0;border-radius:0;box-shadow:none}@media(max-width:600px){.demo-header{padding:18px 20px;height:65px}#demo-title{font-size:12px}.demo-scene{gap:12px}.demo-window{margin:0 16px;height:calc(100vh - 140px)}.demo-footer{padding:17px 20px}#demo-chapters{gap:10px}.demo-number,#demo-disclosure{display:none}.demo-controls{inset-inline-end:20px}}@media(prefers-reduced-motion:reduce){.demo-header h1{transition:none}}
 `;
 style.textContent += `.demo-cursor{position:fixed;inset-block-start:0;inset-inline-start:0;z-index:9999;pointer-events:none;opacity:0;transform:translate(150px,150px);transition:transform ${.38 / PLAYBACK_SPEED}s cubic-bezier(.2,.65,.3,1),opacity .2s}.demo-cursor::before{content:"";position:absolute;inset:-10px;border:1px solid #81d7b5;border-radius:50%;opacity:0;transform:scale(.4);transition:transform .3s,opacity .3s}.demo-cursor.clicked::before{opacity:.65;transform:scale(1)}`;
-style.textContent += `.demo-drag-ghost{position:fixed;inset-block-start:0;inset-inline-start:0;z-index:9998;pointer-events:none;display:flex;align-items:center;gap:6px;padding:8px;color:#84dec2;background:#20372c;border:1px solid #537d67;border-radius:6px;box-shadow:0 5px 15px #0005;font:12px system-ui;transition:transform ${.7 / PLAYBACK_SPEED}s cubic-bezier(.2,.65,.3,1);opacity:.9}`;
 document.documentElement.appendChild(style);
 
 async function caption(index: number) {
@@ -221,17 +234,17 @@ async function step(index: number) {
     await caption(index === 4 ? 3 : index);
     if (index === 0) {
         await post({ type: 'showWelcome' });
+        if (paced) {
+            await pause(1400);
+            await click('.setup-path:first-child');
+            await element('.setup-install .primary-btn');
+            await pause(650);
+            await click('.setup-install .primary-btn');
+            await element('.setup-model');
+            await pause(1100);
+        }
     } else if (index === 1) {
         await post({ type: 'showChat' });
-        document.querySelector('#demo-title')!.textContent = copy.marketplace;
-        await click(locale === 'fa' ? '[title="سرور ها و مهارت ها"]' : '[title="Servers & Skills"]');
-        await post({ type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
-        await post({ type: 'skillsState', skills: [] });
-        await click('.page-sidebar .sidebar-item:nth-of-type(5)');
-        await element('.mp-row');
-        await pause(2800);
-        await click('.sidebar-back');
-        await caption(1);
         await post({ type: 'sessionState', id: 'readme-demo', title: 'Add issue search' });
         await post({ type: 'connectionStatus', status: 'connected' });
         await post({ type: 'modelInfo', defaultModel: 'qwen3-coder:30b', selectedModel: 'qwen3-coder:30b', models: ['qwen3-coder:30b'], displayNames: { 'qwen3-coder:30b': 'Qwen3 Coder · Ollama' }, contextWindows: { 'qwen3-coder:30b': 32768 } });
@@ -287,7 +300,8 @@ async function step(index: number) {
         await post({ type: 'taskListState', tasks: copy.plan.map((label, i) => ({ id: String(i), label, status: i < 2 ? 'completed' : 'in_progress' })) });
         await post({ type: 'fullResponse', persian: copy.result });
         await pause(1100);
-        await click('#surface-tab-changes');
+        // On wide layouts Changes already occupies the visible sidebar.
+        if (innerWidth <= 860) (await element('#surface-tab-changes')).click();
         // Checkpoint replies retain the request identities issued by the real UI.
         const request = hostMessages.filter(m => m.type === 'changesGetState').at(-1)!;
         await reply(request);
@@ -323,14 +337,13 @@ async function step(index: number) {
         await post({ type: 'backgroundJobOutput', jobId: 'dev', output: 'VITE ready in 284 ms\n\n  Local: http://localhost:5173/\n\n10:42:08 [vite] hot updated: /src/Board.tsx\nWatching for file changes…' });
         await pause(1800);
     } else if (index === 5) {
-        if (innerWidth > 860) {
-            await click('#surface-tab-conversation');
-            await drag('#surface-tab-conversation', '.dock-tabs.side');
-            await pause(350);
-        }
         await post({ type: 'browserState', state: { sessionId: 'readme-demo', browserId: 'demo-browser', status: 'ready', url: 'http://localhost:5173', title: 'Open Board', loading: false, viewport: { width: 760, height: 560 }, viewportMode: 'fixed' } });
         await frame();
         await click('#surface-tab-browser');
+        if (innerWidth > 860) {
+            await drag('#surface-tab-conversation', '.dock-tabs.side');
+            await pause(350);
+        }
         await pause(1800);
         await point(await element('.browser-viewport img'));
         filtered = true;
@@ -372,7 +385,6 @@ async function play() {
         for (let index = 0; index < 6; index++) {
             if (current !== run) return;
             await step(index);
-            if (index === 0) await pause(2200);
         }
         document.querySelector('.demo-cursor')?.setAttribute('style', 'opacity:0');
         document.querySelector('#demo-status')!.textContent = 'Complete';
