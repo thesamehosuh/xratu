@@ -20,7 +20,7 @@ own key, or use a local runtime. Xratu's built-in agent runs inside the extensio
 host; the OpenCode engine runs through its local CLI and SDK.
 
 <p align="center">
-  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu demo: chat, tool details, approvals, subagents, movable tabs, change review, and settings" />
+  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu walkthrough: setup choices, parallel agents, edit approval, checkpoint diffs, background terminal, and shared browser" />
 </p>
 
 ## Your keys. Your models. Your machine.
