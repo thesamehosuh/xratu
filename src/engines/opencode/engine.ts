@@ -227,13 +227,14 @@ export class OpenCodeEngine implements AgentEngine {
         const abort = () => streamController.abort(turn.signal.reason);
         turn.signal.addEventListener('abort', abort, { once: true });
         if (turn.signal.aborted) abort();
-        const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+        const calls = new Map<string, { name: string; input: Record<string, unknown>; nativeEdit?: boolean }>();
         const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>() };
         let text = '';
         let reasoning = '';
         let completed = false;
         let executionStarted = false;
         let heldSuccess = false;
+        let failedEdits = 0;
         this.mcpBridge?.activate(sessionID, turn.plan, turn.signal);
         try {
             const stream = await subscribeEvents(baseUrl, headers, streamController.signal);
@@ -275,7 +276,7 @@ export class OpenCodeEngine implements AgentEngine {
                         if (typeof data.delta === 'string') { reasoning += data.delta; yield { type: 'thinking', value: reasoning }; }
                         break;
                     case 'session.tool.input.started':
-                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {} });
+                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {}, nativeEdit: ['edit', 'write', 'apply_patch', 'multiedit'].includes(data.name) });
                         break;
                     case 'session.tool.called': {
                         const id = String(data.id);
@@ -294,11 +295,18 @@ export class OpenCodeEngine implements AgentEngine {
                     case 'session.tool.success':
                     case 'session.tool.failed': {
                         const id = String(data.id);
+                        const call = calls.get(id);
                         const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
                         if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
-                        yield { type: 'toolResult', id, tool: calls.get(id)?.name ?? 'opencode_tool', output: contentText(data.content) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError: event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0) };
+                        const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
+                        if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
+                        yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: contentText(data.content) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError };
                         calls.delete(id);
                         active.calls.delete(id);
+                        // Native tools own their arguments and retries. Stop a
+                        // failing edit loop through the normal interrupt/wait
+                        // cleanup rather than rewriting or replaying edits.
+                        if (failedEdits >= 3) throw new EngineError('engineRepeatedEditFailures');
                         break;
                     }
                     case 'permission.asked': {

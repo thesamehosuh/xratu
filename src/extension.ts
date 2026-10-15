@@ -4703,7 +4703,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             }
             else {
                 const detail = error instanceof Error ? error.message : String(error);
-                outcome.errorEvent = { error: detail };
+                outcome.errorEvent = error instanceof EngineError ? { error_key: error.valueKey } : { error: detail };
                 this._view?.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: detail });
             }
         } finally {
@@ -7231,7 +7231,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             displayEvents.push({ type: 'result', persian_explanation: partialText });
         }
         displayEvents.push(outcome.errorEvent
-            ? { type: 'result', error: outcome.errorEvent.error }
+            ? { type: 'result', ...(outcome.errorEvent.error_key ? { error_key: outcome.errorEvent.error_key } : { error: outcome.errorEvent.error }) }
             : { type: 'result', error_key: outcome.aborted ? 'requestCancelled' : 'localNoResponse' });
         this._history.push({ role: 'assistant', events: displayEvents, content: '' });
         while (this._localSteerQueue.length > 0) {

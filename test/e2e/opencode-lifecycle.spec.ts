@@ -15,6 +15,33 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+    test(`repeated OpenCode edit failures show recovery and release the composer (${locale}, ${width})`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        const state = { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false };
+        await post(page, { type: 'enginesState', state });
+        await post(page, { type: 'modelInfo', defaultModel: 'fixture/stub', selectedModel: 'fixture/stub', models: ['fixture/stub'] });
+        await page.locator('.composer-input').fill('Fix this file');
+        await page.locator('.send-btn').click();
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'enginesState', state: { ...state, busy: true } });
+        for (let index = 0; index < 3; index++) {
+            const callId = `failed-edit-${index}`;
+            await post(page, { type: 'toolCall', tool: 'edit_file', callId, args: JSON.stringify({ path: 'game/combat.py' }) });
+            await post(page, { type: 'toolResult', tool: 'edit_file', callId, output: 'No changes to apply: oldString and newString are identical.', isError: true });
+        }
+        await post(page, { type: 'error', valueKey: 'engineRepeatedEditFailures' });
+        await post(page, { type: 'enginesState', state });
+        await expect(page.locator('.msg-content.msg-text').filter({ hasText: locale === 'en' ? /OpenCode stopped after three consecutive/ : /OpenCode بعد از سه ویرایش ناموفق/ })).toBeVisible();
+        await expect(page.locator('.send-btn')).not.toHaveClass(/is-stop/);
+        await page.locator('.composer-input').fill('Continue with a corrected edit');
+        await expect(page.locator('.send-btn')).toBeEnabled();
+        await page.screenshot({ path: testInfo.outputPath('edit-failure-recovery.png') });
+        await page.locator('.send-btn').click();
+        expect(await sent(page)).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Continue with a corrected edit' }));
+    });
+
     test(`OpenCode sends code uploads and workspace references, including steers (${locale}, ${width})`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
