@@ -1934,7 +1934,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         if (!setupCompleted) await this._globalState.update('xratu.setupCompleted', true);
         if (setupPath) await this._globalState.update('xratu.setupPath', undefined);
-        await this._restoreLocalSession();
+        // webviewReady already holds the session transition queue while it
+        // reconciles the index and opens this screen. Re-entering that queue
+        // would leave startup (and Start chat) waiting on itself forever.
+        await this._restoreLocalSessionNow();
         this._restoreChatUI();
         // workspaceKind picks the empty-state suggestion set: the default chips
         // all assume an established project ("tour this codebase", "hunt for

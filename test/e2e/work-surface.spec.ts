@@ -826,10 +826,10 @@ for (const locale of ['en', 'fa']) {
             await post(page, { type: 'startResponse' });
             await post(page, { type: 'fullResponse', persian: `Result ${index + 1}` });
         }
-        const requests = (await sent(page)).filter(message => message.type === 'changesGetState');
         for (const [from, to] of [[sha, otherSha], [otherSha, sha], [sha, thirdSha], [thirdSha, undefined]]) {
+            await expect.poll(async () => (await sent(page)).some(message => message.type === 'changesGetState' && message.sha === from && message.toSha === to)).toBe(true);
+            const requests = (await sent(page)).filter(message => message.type === 'changesGetState');
             const request = requests.filter(message => message.sha === from && message.toSha === to).at(-1)!;
-            expect(request).toBeTruthy();
             await post(page, { ...request, type: 'changesState', files: changes });
         }
         await page.locator('#surface-tab-changes').click();

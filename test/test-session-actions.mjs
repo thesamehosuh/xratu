@@ -5,18 +5,23 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
+const { canStartSetup } = require('../out/engines/setup.js');
+const { EngineError } = require('../out/engines/types.js');
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
-const names = ['_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
+const names = ['_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
-const sandbox = { fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
+const sandbox = { EngineError, canStartSetup, isOfflineMode: () => false, classifyWorkspace: () => 'code', fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
     resolveSessionTitle: title => title, isSafeBranchName: branch => !branch.startsWith('-'),
     execFileAsync: async (...args) => { checkouts.push(args); },
     vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: path.resolve('workspace') } }] } } };
 vm.runInNewContext(ts.transpileModule(`class Host { ${members.map(n => n.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+const routerFile = ts.createSourceFile('webviewRouter.ts', readFileSync(new URL('../src/webviewRouter.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const router = routerFile.statements.find(n => ts.isFunctionDeclaration(n) && n.name.text === 'routeWebviewMessage');
+vm.runInNewContext(ts.transpileModule(router.getText(routerFile).replace('export function', 'function'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const snapshot = id => ({ sessionId: id, model: 'target-model', summary: null, title: id, workspace: path.resolve('workspace'), renamed: false, localHistory: [{ role: 'user', content: id }], uiHistory: [{ role: 'user', content: id }], totalCostUsd: 3 });
 function harness() {
@@ -258,6 +263,78 @@ liveRestore.host._localSessionStore.findCurrent = async () => { throw Error('mus
 await liveRestore.host._restoreLocalSession();
 intact(liveRestore);
 console.log('ok webview startup cannot erase an existing chat on load failure or replace a live run');
+
+async function within(promise) {
+    let timeout;
+    try {
+        return await Promise.race([promise, new Promise((_, reject) => {
+            timeout = setTimeout(() => reject(Error('webview startup deadlocked the session queue')), 1000);
+        })]);
+    } finally { clearTimeout(timeout); }
+}
+function startupHarness(credentials = []) {
+    const t = harness();
+    t.host._getSavedCredentials = async () => credentials;
+    t.host._sendSavedCredentials = t.host._sendOAuthState = async () => {};
+    t.host._localSessionStore.reconcile = async () => { t.events.push('reconcile'); };
+    t.host._localSessionStore.findCurrent = async () => null;
+    t.host._restoreChatUI = () => { t.events.push('restoreUI'); };
+    t.host._pushSessionState = t.host._pushEditorContext = t.host._pushTaskListState = t.host._resetLiveSegments = t.host._startConnectionPolling = t.host._sendTranscriptPrefs = t.host._sendRuntimePreferences = () => {};
+    t.host._resolveReplyLanguage = () => 'en';
+    t.host._fetchModels = async () => false;
+    t.host._secrets = { store: async () => {} };
+    t.host._sendEnginesState = async () => { t.host._engineSetup = { phase: 'ready' }; };
+    t.host._localSessionStore.create = async () => ({ id: 'new-chat' });
+    t.boot = () => {
+        const done = deferred();
+        t.host._completeWebviewStartup = () => done.resolve();
+        sandbox.routeWebviewMessage(t.host, { type: 'webviewReady' }, {});
+        return done.promise;
+    };
+    return t;
+}
+const boot = startupHarness([{ id: 'saved' }]), reconciling = deferred(), reconciled = deferred();
+boot.host._localSessionStore.findCurrent = async () => ({ id: 'B' });
+boot.host._localSessionStore.reconcile = async () => { reconciling.resolve(); await reconciled.promise; };
+const booted = boot.boot();
+await reconciling.promise;
+assert.equal(boot.host._sessionTransitionsPending, 1);
+const afterBoot = boot.host._serializeSessionTransition(async () => {
+    assert.ok(boot.messages.some(m => m.type === 'showChat'), 'startup must finish before the next transition');
+});
+reconciled.resolve();
+await within(Promise.all([booted, afterBoot]));
+assert.equal(boot.host._sessionTransitionsPending, 0);
+assert.equal(boot.host._sessionId, 'B');
+console.log('ok real webviewReady router and session restore use one queue slot without deadlock');
+
+const setupFolders = sandbox.vscode.workspace.workspaceFolders;
+sandbox.vscode.workspace.workspaceFolders = [{ uri: { fsPath: path.resolve('Terminal Game') } }];
+for (const setupPath of ['free', 'provider', 'local']) {
+    const credential = { id: 'saved', baseUrl: 'http://localhost:1234/v1', apiKey: '' };
+    const t = startupHarness(setupPath === 'free' ? [] : [credential]);
+    t.state.set('xratu.setupPath', setupPath);
+    await within(t.boot());
+    assert.equal(t.messages.at(-1).type, 'showWelcome');
+    const engine = setupPath === 'free' ? 'opencode' : 'xratu';
+    t.host._runtimeSetup = { requestId: setupPath, engine, path: setupPath, phase: 'ready', credentialId: credential.id,
+        models: [{ id: 'chosen', free: true, availability: 'available', checkedAt: Date.now() }] };
+    t.host._setupWorkspace = sandbox.vscode.workspace.workspaceFolders[0].uri.fsPath;
+    let restarted;
+    t.host._reloadWebviewChat = async () => { restarted = t.boot(); };
+    await within(t.host._setupComplete(setupPath, 'chosen'));
+    assert.ok(restarted, 'successful setup reloads the webview');
+    await within(restarted);
+    assert.equal(t.messages.at(-1).type, 'showChat');
+    assert.equal(t.host._sessionId, 'new-chat');
+    assert.equal(t.host._activeEngine, engine);
+    assert.equal(t.host._selectedModel, 'chosen');
+    assert.equal(t.state.get('xratu.setupCompleted'), true);
+    assert.equal(t.host._sessionTransitionsPending, 0);
+    assert.equal(t.host._setupStarting, false);
+}
+sandbox.vscode.workspace.workspaceFolders = setupFolders;
+console.log('ok Start chat completes free/provider/local setup through the real reload/startup queue');
 
 const deleteFailed = harness();
 let deleted = [];
