@@ -8,6 +8,9 @@ import { PullRequestError, pullRequestTarget, pullRequestKey, type PullRequestSe
 export interface PullRequestContext { sessionId: string; workspace: string }
 type Provider = Pick<GitHubPullRequests, 'read'>;
 const boundedSnapshot = (snapshot: PullRequestSnapshot): PullRequestSnapshot => ({ ...snapshot, commentCount: snapshot.comments.length, comments: snapshot.comments.slice(-50).map(comment => ({ ...comment, body: comment.body.slice(0, 1000) })) });
+const pruneWithdrawnDelivery = (state: PullRequestSession) => {
+    if (state.delivery && state.delivery.status !== 'running' && !state.delivery.ids.some(id => state.events.some(event => event.id === id))) delete state.delivery;
+};
 export class PullRequestService {
     private timer?: ReturnType<typeof setInterval>;
     private sweeping = false;
@@ -51,12 +54,20 @@ export class PullRequestService {
     }
     async unlink(context: PullRequestContext, value: unknown): Promise<void> {
         const key = pullRequestKey(pullRequestTarget(value));
-        await this.change(context, state => { state.links = state.links.filter(link => pullRequestKey(link) !== key); state.events = state.events.filter(event => event.key !== key); });
+        await this.change(context, state => { state.links = state.links.filter(link => pullRequestKey(link) !== key); state.events = state.events.filter(event => event.key !== key); pruneWithdrawnDelivery(state); });
     }
     async watch(context: PullRequestContext, value: unknown, resume?: PullRequestExecution): Promise<void> {
         if (isOfflineMode()) throw new PullRequestError('prOffline');
         const link = await this.link(context, value, 'agent');
-        if (link.watch) return;
+        if (link.watch) {
+            if (resume) await this.change(context, state => {
+                const current = state.links.find(item => pullRequestKey(item) === pullRequestKey(link));
+                if (!current?.watch || current.generation !== link.generation) throw new PullRequestError('prChangedDuringRead');
+                current.resume = resume;
+                current.generation = randomUUID();
+            });
+            return;
+        }
         const snapshot = await this.provider.read(link, context.workspace, this.abort.signal);
         if (snapshot.state !== 'open') throw new PullRequestError('prNotOpen');
         const now = new Date().toISOString();
@@ -76,6 +87,7 @@ export class PullRequestService {
             if (link) { delete link.watch; delete link.resume; link.generation = randomUUID(); }
             // Stop also withdraws queued automatic continuation for this PR.
             state.events = state.events.filter(event => event.key !== key);
+            pruneWithdrawnDelivery(state);
         });
     }
     async stop(context: PullRequestContext): Promise<void> {
@@ -170,6 +182,7 @@ export class PullRequestService {
         await this.change(context, state => {
             if (!state.delivery || state.delivery.ids.join() !== ids.join()) return;
             if (delivered) { state.events = state.events.filter(event => !ids.includes(event.id)); delete state.delivery; }
+            else if (!state.delivery.ids.some(id => state.events.some(event => event.id === id))) delete state.delivery;
             else state.delivery.status = 'failed';
         });
     }

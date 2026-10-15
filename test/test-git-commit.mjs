@@ -216,10 +216,11 @@ try {
         r.write('unrelated.txt', 'staged\n');
         r.git('add', 'unrelated.txt');
         const head = r.git('rev-parse', 'HEAD'), index = r.git('ls-files', '--stage');
-        for (const files of [['../outside.txt'], [42], [''], 'selected.txt']) {
+        for (const files of [['../outside.txt'], [42], [null], [{}], [true], [['selected.txt']], [''], ['   '], 'selected.txt']) {
             failed(await r.commit({ message: 'Invalid selection', files }));
             assert.equal(r.git('rev-parse', 'HEAD'), head);
             assert.equal(r.git('ls-files', '--stage'), index);
+            assert.equal(r.snapshots(), 0);
         }
     });
     console.log('\ngit-commit: all tests passed');

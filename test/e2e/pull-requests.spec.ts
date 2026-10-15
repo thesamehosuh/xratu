@@ -130,3 +130,23 @@ test('unlinking the last PR hides the panel and restores chat without losing its
     await expect(page.locator('.pr-panel')).toHaveCount(0);
     await expect(page.locator('.composer-input')).toHaveValue('Continue reviewing');
 });
+
+for (const refreshFirst of [true, false]) test(`focus refresh never supersedes a pending watch action (refresh first: ${refreshFirst})`, async ({ page }) => {
+    await openSession(page);
+    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
+    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await page.getByRole('button', { name: 'Watch', exact: true }).click();
+    const action = (await sent(page)).filter(message => message.type === 'pullRequestAction').at(-1)!;
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    const refresh = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').at(-1)!;
+    expect(refresh.requestId).not.toBe(action.requestId);
+    if (refreshFirst) {
+        await host(page, { type: 'pullRequestsState', sessionId: 'session-a', requestId: refresh.requestId, state: state([link]) });
+        await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeDisabled();
+    }
+    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', requestId: action.requestId, state: state([{ ...link, watch: watching }]) });
+    await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
+    if (!refreshFirst) await host(page, { type: 'pullRequestsState', sessionId: 'session-a', requestId: refresh.requestId, state: state([link]) });
+    await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
+    await expect(page.locator('.conversation-panel .pr-indicator-watch')).toBeVisible();
+});

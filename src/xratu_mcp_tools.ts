@@ -617,7 +617,8 @@ export async function handleExpansionTool(name: string, args: any, runtime: Expa
                 if (!message) return textResult('Error: commit message cannot be empty', true);
                 if (args.files !== undefined && !Array.isArray(args.files)) throw new Error('files must be an array of workspace paths');
                 const root = await fs.promises.realpath(runtime.workspaceRoot);
-                const files: string[] = args.stage_all ? [] : (args.files ?? []).map((file: string) => {
+                const files: string[] = args.stage_all ? [] : (args.files ?? []).map((file: unknown) => {
+                    if (typeof file !== 'string' || !file.trim()) throw new Error('files entries must be non-empty workspace paths');
                     full(runtime, file);
                     // Validate symlink containment, but keep the selected entry's
                     // spelling: committing a link must not select its target.

@@ -6018,7 +6018,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // session directories and eligible legacy snapshots are covered.
             await this._localSessionStore.reconcile(this._localWorkspaceKey());
             const all = await this._localSessionStore.list();
-            for (const state of await this._pullRequests.service.store.sessions()) await this._pullRequests.service.store.remove(state.sessionId, state.workspace);
+            const prStates = await this._pullRequests.service.store.sessions().catch(error => { diagnosticsChannel?.appendLine(`PR cleanup: ${String(error)}`); failed++; return []; });
+            for (const state of prStates) {
+                await this._pullRequests.service.store.remove(state.sessionId, state.workspace)
+                    .catch(error => { diagnosticsChannel?.appendLine(`PR cleanup: ${String(error)}`); failed++; });
+            }
             for (const meta of all) {
                 const ok = await this._localSessionStore.delete(meta.id);
                 if (!ok) failed++;
@@ -6210,7 +6214,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  every workspace; otherwise it is scoped to the current one. */
     async _listSessions(all: boolean): Promise<void> {
         const metas = await this._localSessionStore.list(all ? undefined : this._localWorkspaceKey());
-        const pr = new Map((await this._pullRequests.service.store.sessions()).map(state => [state.sessionId, state]));
+        const pr = new Map((await this._pullRequests.service.store.sessions().catch(error => { diagnosticsChannel?.appendLine(`PR session badges: ${String(error)}`); return []; })).map(state => [state.sessionId, state]));
         const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
         this._view?.webview.postMessage({ type: 'sessionList', items, currentId: this._sessionId });
     }
@@ -6218,7 +6222,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Full-text search across stored sessions (session-picker search box). */
     async _searchSessions(query: string, all: boolean, requestId?: number): Promise<void> {
         const metas = await this._localSessionStore.search(query, all ? undefined : this._localWorkspaceKey());
-        const pr = new Map((await this._pullRequests.service.store.sessions()).map(state => [state.sessionId, state]));
+        const pr = new Map((await this._pullRequests.service.store.sessions().catch(error => { diagnosticsChannel?.appendLine(`PR session badges: ${String(error)}`); return []; })).map(state => [state.sessionId, state]));
         const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
         this._view?.webview.postMessage({ type: 'sessionSearchResults', query, requestId, items });
     }
@@ -6415,8 +6419,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private async _deleteSessionNow(id: string): Promise<void> {
-        const prState = (await this._pullRequests.service.store.sessions()).find(state => state.sessionId === id);
-        if (prState) await this._pullRequests.service.store.remove(id, prState.workspace);
+        try {
+            const prState = (await this._pullRequests.service.store.sessions()).find(state => state.sessionId === id);
+            if (prState) await this._pullRequests.service.store.remove(id, prState.workspace);
+        } catch (error) { diagnosticsChannel?.appendLine(`PR cleanup: ${String(error)}`); }
         await this._localSessionStore.delete(id);
         if (this._taskListEdits[id]) {
             delete this._taskListEdits[id];

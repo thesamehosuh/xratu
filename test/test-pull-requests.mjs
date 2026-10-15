@@ -78,6 +78,70 @@ test('watching establishes a baseline instead of replaying existing comments or 
     assert.equal((await f.load()).events.length, 0);
 });
 
+test('re-watching refreshes execution identity without resetting the watch cursor or queued events', async () => {
+    for (const initial of [undefined, execution]) {
+        const f = await fixture();
+        await f.service.watch(context, target, initial);
+        f.update({ mergeability: 'conflicting' });
+        await f.service.sweep();
+        const before = await f.load(), reads = f.reads();
+        const next = { ...execution, model: 'model-b' };
+        await f.service.watch(context, target, next);
+        const updated = await f.load();
+        assert.deepEqual(updated.links[0].resume, next);
+        assert.deepEqual(updated.links[0].watch, before.links[0].watch);
+        assert.deepEqual(updated.events, before.events);
+        assert.equal(f.reads(), reads);
+        await f.service.watch(context, target);
+        assert.deepEqual((await f.load()).links[0].resume, next);
+    }
+});
+
+test('withdrawing all events releases failed/interrupted deliveries and lets another PR continue', async () => {
+    for (const cancel of ['unwatch', 'unlink']) for (const status of ['failed', 'interrupted', 'running']) {
+        const f = await fixture();
+        await f.service.watch(context, target, execution);
+        f.update({ mergeability: 'conflicting' });
+        await f.service.sweep();
+        const ids = (await f.load()).events.map(event => event.id);
+        await f.service.beginDelivery(context, ids);
+        if (status !== 'running') await f.store.update(context.sessionId, context.workspace, state => { state.delivery.status = status; });
+        await f.service[cancel](context, target);
+        assert.deepEqual((await f.load()).events, []);
+        assert.equal((await f.load()).delivery?.status, status === 'running' ? 'running' : undefined);
+        const second = target.replace('42', '43');
+        await f.service.watch(context, second, execution);
+        f.update({ mergeability: 'clean' });
+        await f.service.sweep();
+        f.update({ mergeability: 'conflicting' });
+        await f.service.sweep();
+        const nextIds = (await f.load()).events.map(event => event.id);
+        assert.ok(nextIds.length);
+        if (status === 'running') {
+            assert.deepEqual(await f.service.beginDelivery(context, nextIds), []);
+            await f.service.finishDelivery(context, ids, false);
+        }
+        assert.equal((await f.load()).delivery, undefined);
+        assert.equal((await f.service.beginDelivery(context, nextIds)).length, nextIds.length);
+    }
+});
+
+test('withdrawing only part of a failed delivery retains the remaining PR updates for explicit retry', async () => {
+    const f = await fixture(), second = target.replace('42', '43');
+    await f.service.watch(context, target, execution);
+    await f.service.watch(context, second, execution);
+    f.update({ mergeability: 'conflicting' });
+    await f.service.sweep();
+    const ids = (await f.load()).events.map(event => event.id);
+    await f.service.beginDelivery(context, ids);
+    await f.service.finishDelivery(context, ids, false);
+    await f.service.unwatch(context, target);
+    const state = await f.load();
+    assert.equal(state.events.length, 1);
+    assert.equal(state.events[0].url, second);
+    assert.equal(state.delivery.status, 'failed');
+});
+
 test('unwatch withdraws queued continuations and a late read cannot restart it', async () => {
     const f = await fixture();
     await f.service.watch(context, target, execution);

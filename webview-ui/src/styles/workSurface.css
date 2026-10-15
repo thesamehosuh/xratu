@@ -280,7 +280,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
     .compose-dock { --composer-inset:25px; }
     .toolbar,.surface-tabs { padding-inline:24px; }
 }
-@media(min-width:1180px) { .work-surface.has-sidebar { grid-template-columns:minmax(0,1fr) var(--review-width,330px); } .messages { padding-inline:45px; } }
+@media(min-width:1180px) { .messages { padding-inline:45px; } }
 @container(max-width:450px) {
     .conversation-panel .messages { padding-inline:18px; }
     .conversation-panel .compose-dock { --composer-inset:13px; }

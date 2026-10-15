@@ -14,7 +14,8 @@ const names = ['_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSes
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
-const sandbox = { EngineError, canStartSetup, isOfflineMode: () => false, classifyWorkspace: () => 'code', fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
+const diagnostics = [];
+const sandbox = { EngineError, canStartSetup, diagnosticsChannel: { appendLine: message => diagnostics.push(message) }, isOfflineMode: () => false, classifyWorkspace: () => 'code', fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
     resolveSessionTitle: title => title, isSafeBranchName: branch => !branch.startsWith('-'),
     execFileAsync: async (...args) => { checkouts.push(args); },
     vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: path.resolve('workspace') } }] } } };
@@ -363,6 +364,29 @@ assert.equal(clearing.host._sessionId, 'empty');
 assert.equal(clearing.host._history.length, 0);
 assert.equal(clearing.host._sessionTransitionsPending, 0);
 console.log('ok clear-all shares the transition queue and creates a fresh session without deadlocking');
+
+for (const failure of ['lookup', 'removal']) {
+    const t = harness(), removed = [], cleaned = [];
+    t.host._pullRequests.service.store.sessions = async () => {
+        if (failure === 'lookup') throw Error('PR lookup failed');
+        return [{ sessionId: 'A', workspace: 'workspace' }, { sessionId: 'B', workspace: 'workspace' }];
+    };
+    t.host._pullRequests.service.store.remove = async id => { cleaned.push(id); if (id === 'A') throw Error('PR lock busy'); };
+    t.host._localSessionStore.delete = async id => { removed.push(id); return true; };
+    await t.host._deleteSessionNow('A');
+    assert.deepEqual(removed, ['A']);
+    removed.length = 0; cleaned.length = 0;
+    t.host._localSessionStore.reconcile = async () => {};
+    t.host._localSessionStore.list = async () => [{ id: 'A' }, { id: 'B' }];
+    t.host._localSessionStore.create = async () => ({ id: 'empty' });
+    await t.host._clearAllSessions();
+    assert.deepEqual(removed, ['A', 'B']);
+    assert.equal(t.host._sessionId, 'empty');
+    if (failure === 'removal') assert.deepEqual(cleaned, ['A', 'B']);
+    assert.ok(t.messages.some(message => message.valueKey === 'clearHistoryIncomplete'));
+}
+assert.ok(diagnostics.some(message => message.includes('PR cleanup:')));
+console.log('ok PR metadata lookup/lock failures never block deleting transcripts or later cleanup');
 
 const admitted = harness(), attachmentCheck = deferred();
 Object.assign(admitted.host, { _pendingJobNotices: [], _localSteerQueue: [], _localTurnToken: 0 });
