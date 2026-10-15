@@ -26,6 +26,7 @@ import type { ExternalServerConfig, McpConfigStore, McpSaveTarget } from './mcpC
 import { isDir, isKnownSkillsPath, openSkillFile } from './skillsHost';
 import type { TaskListItem } from './taskList';
 import type { BrowserCommand } from './browserTypes';
+import type { PullRequestAction } from './pullRequests/controller';
 
 /** Payload vscode hands to webview.onDidReceiveMessage: typed any
  *  upstream - derived here so no local any annotation exists. */
@@ -40,6 +41,9 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _sendPullRequests(requestId?: string): Promise<void>;
+    _pullRequestAction(action: PullRequestAction, url: unknown, sessionId: string | null, requestId: string, autoResume?: boolean): Promise<void>;
+    _stopPullRequestWatches(): Promise<void>;
     _nativeGetState(requestId: string): Promise<void>;
     _cancelNativeSetup(): void;
     _nativeConnect(requestId: string, integrationID: string, methodID?: string, key?: string): Promise<void>;
@@ -343,6 +347,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     void host._killBackgroundJob(data.jobId);
                     break;
                 case 'cancelRequest':
+                    void host._stopPullRequestWatches?.();
                     // Stop a running terminal command NOW. The loop's
                     // abort only takes effect at a round boundary, so
                     // without this a long command keeps running (and
@@ -544,6 +549,14 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'gitStatusGetState':
                     await host._sendGitStatus();
+                    break;
+                case 'pullRequestsGetState':
+                    if (typeof data.requestId === 'string' && data.requestId.length <= 100) await host._sendPullRequests(data.requestId);
+                    break;
+                case 'pullRequestAction':
+                    if (typeof data.requestId === 'string' && data.requestId.length <= 100 && ['link', 'unlink', 'refresh', 'watch', 'unwatch', 'resume', 'dismiss'].includes(data.action)) {
+                        await host._pullRequestAction(data.action, data.url, typeof data.sessionId === 'string' ? data.sessionId : null, data.requestId, data.autoResume === true);
+                    }
                     break;
                 case 'gitBranchesGetState':
                     await host._sendGitBranches();

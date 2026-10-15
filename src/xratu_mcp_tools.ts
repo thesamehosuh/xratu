@@ -95,7 +95,7 @@ export const XRATU_EXPANSION_TOOLS = [
     tool('git_branch', 'List, create, delete, or switch Git branches.', {
         action: { type: 'string', enum: ['list', 'create', 'delete', 'switch'] }, name: { type: 'string' }, force: { type: 'boolean' },
     }, [], true),
-    tool('git_commit', 'Stage selected files or all changes and create a Git commit.', {
+    tool('git_commit', 'Commit the staged changes by default. With files, commit only those paths using their current working-tree contents and preserve unrelated staged changes. stage_all stages and commits all changes.', {
         message: { type: 'string', minLength: 1, maxLength: 500 }, files: { type: 'array', items: { type: 'string' }, maxItems: 200 }, stage_all: { type: 'boolean' },
     }, ['message'], true),
     tool('git_show_stash', 'List Git stashes or inspect one stash entry.', {
@@ -613,14 +613,33 @@ export async function handleExpansionTool(name: string, args: any, runtime: Expa
                 const r = await git(runtime, cmd); return textResult(r.code === 0 ? (r.stdout || `Branch ${action} succeeded.`) : `Git error: ${r.stderr || r.stdout}`, r.code !== 0);
             }
             case 'git_commit': {
-                await runtime.ensureTurnSnapshot(runtime.workspaceRoot, 'before git commit');
                 const message = String(args.message || '').trim();
                 if (!message) return textResult('Error: commit message cannot be empty', true);
-                if (args.stage_all) { await git(runtime, ['add', '-A']); }
-                else if (Array.isArray(args.files) && args.files.length) {
-                    for (const f of args.files) await git(runtime, ['add', '--', String(f)]);
+                if (args.files !== undefined && !Array.isArray(args.files)) throw new Error('files must be an array of workspace paths');
+                const root = await fs.promises.realpath(runtime.workspaceRoot);
+                const files: string[] = args.stage_all ? [] : (args.files ?? []).map((file: unknown) => {
+                    if (typeof file !== 'string' || !file.trim()) throw new Error('files entries must be non-empty workspace paths');
+                    full(runtime, file);
+                    // Validate symlink containment, but keep the selected entry's
+                    // spelling: committing a link must not select its target.
+                    return path.resolve(root, file);
+                });
+                await runtime.ensureTurnSnapshot(runtime.workspaceRoot, 'before git commit');
+                const existing: string[] = [];
+                for (const file of files) {
+                    try { await fs.promises.lstat(file); existing.push(file); }
+                    catch (error) {
+                        // --only handles tracked deletions, including ones
+                        // already removed from the index. Missing unknown paths
+                        // are rejected by git commit before it writes a commit.
+                        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                    }
                 }
-                const r = await git(runtime, ['commit', '-m', message]);
+                if (args.stage_all || existing.length) {
+                    const staged = await git(runtime, ['--literal-pathspecs', 'add', '-A', ...(args.stage_all ? [] : ['--', ...existing])]);
+                    if (staged.code !== 0) return textResult(`Git error: ${staged.stderr || staged.stdout}`, true);
+                }
+                const r = await git(runtime, ['--literal-pathspecs', 'commit', '-m', message, ...(files.length ? ['--only', '--', ...files] : [])]);
                 return textResult(r.code === 0 ? (r.stdout || 'Committed.') : `Git error: ${r.stderr || r.stdout}`, r.code !== 0);
             }
             case 'git_show_stash': {

@@ -63,6 +63,7 @@ for (const locale of ['en', 'fa']) {
         await page.evaluate(() => Object.assign(window, { __xratuUiState: { anotherPreference: 'preserved' } }));
         await openReview(page);
         const handle = page.locator('.review-resize');
+        const initialWidth = Number(await handle.getAttribute('aria-valuenow'));
         const box = await handle.boundingBox();
         expect(box).not.toBeNull();
         const x = box!.x + box!.width / 2;
@@ -70,9 +71,9 @@ for (const locale of ['en', 'fa']) {
         await page.mouse.down();
         await page.mouse.move(x + (locale === 'fa' ? 120 : -120), box!.y + 80, { steps: 8 });
         await page.mouse.up();
-        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+        await expect(handle).toHaveAttribute('aria-valuenow', String(initialWidth + 120));
         const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: Record<string, unknown> }).__xratuUiState);
-        expect(saved).toMatchObject({ anotherPreference: 'preserved', reviewSidebarWidth: 470 });
+        expect(saved).toMatchObject({ anotherPreference: 'preserved', reviewSidebarWidth: initialWidth + 120 });
         await handle.focus();
         await page.keyboard.press('Home');
         await expect(handle).toHaveAttribute('aria-valuenow', '260');
@@ -87,7 +88,7 @@ for (const locale of ['en', 'fa']) {
         await page.reload();
         await post(page, { type: 'showChat' });
         await openReview(page);
-        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+        await expect(handle).toHaveAttribute('aria-valuenow', String(initialWidth + 120));
     });
 }
 
@@ -700,7 +701,7 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
 }
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }) => {
+    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
         await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
@@ -714,6 +715,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await post(page, { ...changed, type: 'changesState', files: changes });
         await expect(page.locator('#surface-tab-changes')).toBeVisible();
         await replyFile(page, 'first result');
+        await page.locator('#surface-tab-changes').click();
+        await expect(page.locator('.review-current .review-diff')).toBeVisible();
+        await expect(page.locator('.review-head h2')).toHaveCount(0);
+        await page.screenshot({ animations: 'disabled', path: info.outputPath(`changes-${locale}-${width}.png`) });
         await post(page, { type: 'restoreUser', value: 'Second edit', cp: otherSha });
         await expect.poll(async () => (await sent(page)).filter(m => m.type === 'changesGetState' && m.sha === sha && m.toSha === otherSha).length).toBe(1);
         const requests = (await sent(page)).filter(m => m.type === 'changesGetState');

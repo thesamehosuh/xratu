@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, History, Check, ExternalLink, FileDiff, FileText, MessageSquarePlus, RefreshCw, Send, TriangleAlert } from 'lucide-react';
+import { ChevronDown, History, Check, ExternalLink, FileText, MessageSquarePlus, RefreshCw, Send, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -181,14 +181,13 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         onFeedback(`${selected}\n${comment.trim()}`); setComment('');
     };
     return <section className="changes-review" hidden={!expanded} aria-label={t('surfaceChanges')}>
-        <header className="review-head"><FileDiff size={13} /><h2>{t('surfaceReview')}</h2><span className="review-count" dir="ltr">{files.length}</span>
+        <div className="review-head"><span>{t('surfaceSinceCheckpoint')}</span>{!!files.length && <span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span>}
             <button type="button" className="icon-btn" onClick={refresh} aria-label={t('surfaceRefresh')} disabled={!sha || loading}><RefreshCw size={12} /></button>
-        </header>
+        </div>
         <div className="review-body">
             {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} />{tOrRaw(errorKey)}<button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
             {!errorKey && !files.length && <p className="review-empty">{loading ? t('working') : t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p>}
             {!!files.length && <>
-                <div className="review-summary"><span>{t('surfaceSinceCheckpoint')}</span><span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span></div>
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={selected === change.path} onClick={() => setSelected(change.path)}>
                     <FileText size={12} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
                 </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>

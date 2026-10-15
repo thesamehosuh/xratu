@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { Bot, CodeXml, Globe, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, RotateCcw, SquareTerminal } from 'lucide-react';
+import { Bot, CodeXml, GitPullRequest, Globe, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, RotateCcw, SquareTerminal } from 'lucide-react';
 import { SURFACE_PANELS, type DockLocation, type SurfacePanel } from '../dockLayout';
 import { getLocale, t } from '../i18n';
 
 export const PANEL_DRAG_TYPE = 'application/x-xratu-panel';
-const labels = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity', agents: 'surfaceAgentRuns', background: 'surfaceBackground', browser: 'surfaceBrowser' } as const;
+const labels = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity', agents: 'surfaceAgentRuns', background: 'surfaceBackground', browser: 'surfaceBrowser', pullRequests: 'prTitle' } as const;
 interface Props {
     location: DockLocation;
     panels: SurfacePanel[];
@@ -109,7 +109,7 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
         }}>
         <div className="dock-tab-list" role="tablist">
             {panels.map((panel) => {
-                const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : panel === 'agents' ? Bot : panel === 'background' ? SquareTerminal : panel === 'browser' ? Globe : List;
+                const Icon = panel === 'conversation' ? MessageSquare : panel === 'changes' ? CodeXml : panel === 'agents' ? Bot : panel === 'background' ? SquareTerminal : panel === 'browser' ? Globe : panel === 'pullRequests' ? GitPullRequest : List;
                 return <button type="button" key={panel} data-panel={panel} id={`surface-tab-${panel}`} className={`surface-tab ${panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide}
                     onPointerDown={event => {
                         if (!wide || event.button !== 0) return;

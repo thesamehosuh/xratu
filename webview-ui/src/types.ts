@@ -5,6 +5,8 @@ import type { RuntimeSetupState, SetupEngine, SetupPath } from '../../src/engine
 export type { RuntimeSetupState, SetupPath } from '../../src/engines/setup';
 import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
 import type { BrowserCommand, BrowserFrame, BrowserState } from '../../src/browserTypes';
+import type { PullRequestView } from '../../src/pullRequests/types';
+import type { PullRequestAction } from '../../src/pullRequests/controller';
 export type { SubagentTrace } from '../../src/subagentObservation';
 import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
@@ -147,6 +149,8 @@ export type ToExtensionMessage =
     | { type: 'mcpMarketplaceDetect'; id: string }
     /** Refresh the git status line under the composer. */
     | { type: 'gitStatusGetState' }
+    | { type: 'pullRequestsGetState'; requestId: string }
+    | { type: 'pullRequestAction'; action: PullRequestAction; url?: string; sessionId: string | null; requestId: string; autoResume?: boolean }
     /** Branch picker: request the local branch list. */
     | { type: 'gitBranchesGetState' }
     /** Branch picker: switch the workspace to `branch`. The host validates it
@@ -356,6 +360,8 @@ export interface ModelPingState {
 }
 
 export interface SessionMeta {
+    prPending?: number;
+    prWatching?: number;
     id: string;
     title: string;
     workspace: string;
@@ -379,6 +385,7 @@ export type FromExtensionMessage =
     | { type: 'enginesState'; state: EngineSetupState }
     | { type: 'openEngines' }
     | { type: 'openBrowser' }
+    | { type: 'openPullRequests' }
     | { type: 'browserState'; state: BrowserState }
     | { type: 'browserFrame'; frame: BrowserFrame }
     | { type: 'browserActionError'; sessionId: string; browserId: string; errorKey: string; detail: string }
@@ -544,6 +551,7 @@ export type FromExtensionMessage =
      *  git status for the line under the composer (`isRepo: false` outside a
      *  repository, where the line renders nothing). */
     | { type: 'gitStatusState'; status: GitStatusSummary; root: string | null }
+    | { type: 'pullRequestsState'; sessionId: string | null; requestId?: string; state: PullRequestView; errorKey?: string; detail?: string }
     /** Response to gitBranchesGetState - local branches + the current one. */
     | { type: 'gitBranchesState'; branches: string[]; current: string | null }
     /** Host-echoed current task list (user override merged; null when the

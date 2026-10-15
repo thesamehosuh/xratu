@@ -20,6 +20,7 @@ export function getUiLocale(): UiLocale {
 }
 
 const STRINGS: Record<string, { fa: string; en: string }> = {
+    prMonitorPrompt: { fa: "خبر جدیدی برای PR های این گفتگو رسیده. طبق درخواست قبلیم بررسیش کن.", en: "There are updates on this conversation’s pull requests. Review them according to my existing task." },
     engineRewindUnsupported: { fa: "ویرایش پیام های قبلی در موتور OpenCode فعلا پشتیبانی نمیشه. یک گفتگوی تازه بساز.", en: "Editing past messages is not supported by the OpenCode engine yet. Start a new conversation." },
     engineSteerUnsupported: { fa: "برای فرستادن پیام بعدی به OpenCode صبر کن اجرا تموم بشه یا لغوش کن.", en: "Wait for OpenCode to finish, or cancel the run, before sending another message." },
     engineBackgroundFailed: { fa: "انتقال دستور به پس زمینه انجام نشد: {detail}", en: "Could not background the command: {detail}" },

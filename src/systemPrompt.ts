@@ -1,3 +1,5 @@
+import { PULL_REQUEST_AGENT_INSTRUCTIONS } from './pullRequests/tools';
+
 // Canonical system prompt for the local agent runtime. Hand-maintained. Keep
 // it free of audience and product-name directives: the ONE declared exception
 // is the reply-language block below - it is a first-class input
@@ -106,6 +108,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
         "- `ask_user_question` shows the user a decision card (2-4 options, one recommended) and returns their pick. Use it for genuine user-owned choices (preferences, tradeoffs, ambiguous direction) instead of asking a multiple-choice question in prose; never for permission requests, and never for what you can decide or verify yourself.",
     ];
+    if (!inputs.planMode) parts.push('', PULL_REQUEST_AGENT_INSTRUCTIONS);
     if (inputs.replyLanguage === 'fa') {
         parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
         if (inputs.farsiSkill) {
