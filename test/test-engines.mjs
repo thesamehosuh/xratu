@@ -511,7 +511,7 @@ try {
     startupHost._view = { webview: { postMessage: (message) => startupMessages.push(message) } };
     startupHost._activeEngine = 'xratu';
     startupHost._getSavedCredentials = async () => [];
-    startupHost._sendSavedCredentials = startupHost._sendOAuthState = startupHost._restoreLocalSession = async () => {};
+    startupHost._sendSavedCredentials = startupHost._sendOAuthState = startupHost._restoreLocalSessionNow = async () => {};
     startupHost._restoreChatUI = startupHost._pushSessionState = () => {};
     startupHost._cancelSetup = () => {};
     startupHost._fetchModels = async () => false;
