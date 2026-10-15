@@ -67,6 +67,10 @@ denies mutation and unknown tools. YOLO permits native tools without approval.
 Native steering is delivered at OpenCode's next step boundary. Shell commands
 stream output and expose background/stop controls in Xratu's Background panel.
 Cancel waits for native execution to stop, then the same conversation can continue.
+Three consecutive failed native file edits stop the run, including in YOLO mode.
+Check the tool errors or choose another model before continuing the same chat.
+A successful tool result or a non-edit tool breaks the failure streak. Earlier
+changes stay in place; this does not repair malformed edits or roll them back.
 Code/text uploads and `@` references are saved as local attachment snapshots
 and passed to OpenCode as files, including during steering. They keep their
 full contents instead of the built-in engine's 24,000-character preview.

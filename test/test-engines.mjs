@@ -13,9 +13,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-engines-'));
 const bundle = join(root, 'engine.cjs');
-await build({ stdin: { contents: "export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
+await build({ stdin: { contents: "export { trimDisplayEvent } from './src/local/eventBounds'; export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
 const require = createRequire(import.meta.url);
-const { OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
+const { trimDisplayEvent, OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
 
 async function harness(mode = 'complete', mcpSource) {
     let stream;
@@ -93,6 +93,21 @@ async function harness(mode = 'complete', mcpSource) {
                     else finish();
                     return;
                 }
+                if (['editFailures', 'editRecovery', 'readFailures', 'externalEditFailures'].includes(mode)) {
+                    if (prompt > 1) { finish(); return; }
+                    const operations = mode === 'editRecovery'
+                        ? ['edit', 'edit', 'read', 'edit', 'edit', 'write', 'edit', 'edit']
+                        : Array(18).fill(mode === 'readFailures' ? 'read' : mode === 'externalEditFailures' ? 'external_edit' : 'edit');
+                    operations.forEach((name, index) => {
+                        const id = `edit-${index}`;
+                        const success = mode === 'editRecovery' && ['read', 'write'].includes(name);
+                        emit('session.tool.input.started', { sessionID: 'native-1', id, name });
+                        emit('session.tool.called', { sessionID: 'native-1', id, input: { path: 'game/combat.py\noldString:\n...', oldString: 'unchanged', newString: 'unchanged' } });
+                        emit(success ? 'session.tool.success' : 'session.tool.failed', { sessionID: 'native-1', id, error: { message: index < 4 ? 'ENAMETOOLONG: name too long' : 'No changes to apply: oldString and newString are identical.' } });
+                    });
+                    finish();
+                    return;
+                }
                 emit('new.server.event', { unknown: true });
                 emit('session.text.delta', { sessionID: 'another-session', delta: 'must not leak' });
                 emit('session.tool.input.started', { sessionID: 'native-1', id: 'call-1', name: 'shell' });
@@ -119,6 +134,32 @@ async function harness(mode = 'complete', mcpSource) {
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
 const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
 try {
+    const edits = await harness('editFailures');
+    try {
+        const events = [];
+        let ref;
+        await assert.rejects(async () => {
+            for await (const event of edits.engine.runTurn({ ...baseTurn, yolo: true, signal: AbortSignal.timeout(5000) }, { ...host, onSession: async session => { ref = session; } })) events.push(event);
+        }, error => error instanceof EngineError && error.valueKey === 'engineRepeatedEditFailures');
+        assert.equal(events.filter(event => event.type === 'toolResult' && event.isError).length, 3, 'surface three native edit failures before stopping the loop');
+        assert.ok(!events.some(event => event.type === 'status' && event.value === 'done'), 'a stopped edit loop cannot report success');
+        assert.ok(edits.requests.some(request => request.path.split('?')[0].endsWith('/interrupt') && new URL(request.path, 'http://localhost').searchParams.get('resume') === 'false'));
+        assert.ok(edits.requests.some(request => request.path.endsWith('/wait')), 'wait for native settlement before another turn');
+        assert.equal(edits.wasDisposed(), false, 'a settled native session stays available');
+        const resumed = [];
+        for await (const event of edits.engine.runTurn({ ...baseTurn, session: ref, signal: AbortSignal.timeout(5000) }, host)) resumed.push(event);
+        assert.equal(resumed.at(-1).value, 'done', 'the same native conversation can continue after an explicit new prompt');
+    } finally { await edits.close(); }
+    for (const mode of ['editRecovery', 'readFailures', 'externalEditFailures']) {
+        const recovery = await harness(mode);
+        try {
+            const events = [];
+            for await (const event of recovery.engine.runTurn({ ...baseTurn, signal: AbortSignal.timeout(5000) }, host)) events.push(event);
+            assert.equal(events.at(-1).value, 'done', mode);
+            assert.ok(!recovery.requests.some(request => request.path.split('?')[0].endsWith('/interrupt')), 'successful recovery and unrelated tools must not trigger the native edit stop');
+        } finally { await recovery.close(); }
+    }
+    console.log('ok native edit failures stop, settle and resume; successful recovery and unrelated tools remain usable');
     const codeText = '// code\n'.repeat(6000) + 'const ATTACHMENT_TAIL = "complete";';
     const codeAttachment = { name: 'C:\\outside\\..\\src\\sample.ts', mimeType: 'text/plain', dataBase64: Buffer.from(codeText).toString('base64') };
     const store = new OpenCodeAttachmentStore(join(root, 'attachment-store # نمونه'));
@@ -346,9 +387,9 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_runOpenCodeAgent', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeTurn = await harness('cancelResume');
     try {
@@ -385,6 +426,40 @@ try {
         assert.equal(messages.length, terminalCount, 'an old session cancellation cannot terminate the new view');
         console.log('ok real host cancellation publishes terminal UI state and allows repeated same-session continuation');
     } finally { await nativeTurn.close(); }
+    const failedTurn = await harness('editFailures');
+    try {
+        const failedHost = new sandbox.Host();
+        const messages = [], events = [];
+        Object.assign(failedHost, {
+            _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(), _localSteerQueue: [],
+            _view: { webview: { postMessage: message => messages.push(message) } },
+            _getOpenCodeEngine: async () => failedTurn.engine, _nativeVariants: () => ({}),
+            _postEngineState: () => {}, _persistLocalSession: async () => {}, _observeNativeShells: () => {},
+            _handleLocalAgentEvent: event => events.push(event),
+        });
+        const stopped = await failedHost._runOpenCodeAgent('Fix this file', '');
+        assert.equal(stopped.errorEvent.error_key, 'engineRepeatedEditFailures');
+        assert.ok(messages.some(message => message.type === 'error' && message.valueKey === 'engineRepeatedEditFailures'), 'the real host releases the UI with a localized terminal error');
+        assert.equal(events.filter(event => event.type === 'toolResult' && event.isError).length, 3);
+        assert.equal(failedHost._runInFlight, false);
+        assert.equal(failedHost._nativeTurnActive, false);
+        assert.equal(failedHost._abortControllers.size, 0);
+        failedHost._history = [];
+        failedHost._localHistory = [];
+        failedHost._pushLocalHistory = row => failedHost._localHistory.push(row);
+        failedHost._commitUnfinishedLocalTurn('Fix this file', undefined, undefined, { ...stopped, events: [] }, false, '[interrupted]');
+        const restored = failedHost._history.at(-1).events.at(-1);
+        assert.equal(restored.error_key, 'engineRepeatedEditFailures', 'the recovery key survives history persistence');
+        failedHost._displayAssistantResponse(restored);
+        assert.equal(messages.at(-1).valueKey, 'engineRepeatedEditFailures', 'replay resolves the same localized error');
+        failedHost._commitUnfinishedLocalTurn('Provider failure', undefined, undefined, { events: [], errorEvent: { error: 'Raw provider message' } }, false, '[interrupted]');
+        assert.equal(failedHost._history.at(-1).events.at(-1).error, 'Raw provider message');
+        const sessionID = failedHost._engineSession.nativeSessionId;
+        await failedHost._runOpenCodeAgent('Continue with a corrected edit', '');
+        assert.equal(failedHost._engineSession.nativeSessionId, sessionID);
+        assert.equal(events.at(-1).value, 'done');
+    } finally { await failedTurn.close(); }
+    console.log('ok repeated native edit failures release the host/UI and preserve same-session continuation');
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;
