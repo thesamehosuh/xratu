@@ -357,7 +357,8 @@ export interface LocalApprovalGate {
 
 /** A user message steered into a LIVE run (typed while it streams). Text
  *  attachments arrive already fenced into `text` by the host; images ride
- *  raw and are encoded with the run's current image format. */
+ *  raw and are encoded with the run's current image format. Native engines
+ *  receive the original bytes for every file instead, for native staging. */
 export interface LocalSteerMessage {
     text: string;
     attachments?: LocalImageAttachment[];

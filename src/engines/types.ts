@@ -22,6 +22,7 @@ export interface EngineTurn {
     plan: boolean;
     yolo: boolean;
     context?: string;
+    /** Built-in turns carry images; native turns also stage text/code files. */
     attachments?: LocalImageAttachment[];
     session?: EngineSessionRef;
     localRequest?: LocalAgentRequest;

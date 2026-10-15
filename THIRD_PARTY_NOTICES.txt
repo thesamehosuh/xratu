@@ -3,6 +3,7 @@ Third-party notices for Xratu
 T3 Code — https://github.com/pingdotgg/t3code
 Reference commit: ec80933ac8cd02fec5c97b342462ccc9567cdb1e
 Adapted: OpenCode2Server.ts, OpenCode2Client.ts, v2/adapter.ts,
+v2/textGeneration.ts, provider-core/server/attachmentPrompt.ts,
 CodexInstallation.ts, and provider readiness/setup state patterns.
 Xratu adapts these patterns to its VS Code host, Promise SDK and decision cards.
 

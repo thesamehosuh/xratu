@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import vm from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { OpenCode } from '@opencode/client';
@@ -12,9 +13,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-engines-'));
 const bundle = join(root, 'engine.cjs');
-await build({ stdin: { contents: "export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
+await build({ stdin: { contents: "export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
 const require = createRequire(import.meta.url);
-const { OpenCodeEngine, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
+const { OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
 
 async function harness(mode = 'complete', mcpSource) {
     let stream;
@@ -112,12 +113,32 @@ async function harness(mode = 'complete', mcpSource) {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const client = OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' } });
-    const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client }), dispose: async () => { disposed = true; stopping = false; } }, mcpSource);
+    const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client }), dispose: async () => { disposed = true; stopping = false; } }, mcpSource, join(root, 'attachments # نمونه'));
     return { engine, requests, wasDisposed: () => disposed, close: async () => { await engine.dispose(); stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
 const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
 try {
+    const codeText = '// code\n'.repeat(6000) + 'const ATTACHMENT_TAIL = "complete";';
+    const codeAttachment = { name: 'C:\\outside\\..\\src\\sample.ts', mimeType: 'text/plain', dataBase64: Buffer.from(codeText).toString('base64') };
+    const store = new OpenCodeAttachmentStore(join(root, 'attachment-store # نمونه'));
+    const prepared = await store.prepare('../native-session', 'Read this', [codeAttachment], new AbortController().signal);
+    const savedPath = fileURLToPath(prepared.files[0].uri);
+    assert.equal(await readFile(savedPath, 'utf8'), codeText, 'store all code bytes beyond the inline-text cap');
+    assert.ok(savedPath.startsWith(join(root, 'attachment-store # نمونه') + require('node:path').sep), 'untrusted session and file names cannot escape storage');
+    assert.ok(prepared.text.includes(JSON.stringify(savedPath)));
+    assert.equal(prepared.files[0].name, codeAttachment.name);
+    const reloaded = await new OpenCodeAttachmentStore(join(root, 'attachment-store # نمونه')).prepare('../native-session', 'Again', [codeAttachment], new AbortController().signal);
+    assert.equal(reloaded.files[0].uri, prepared.files[0].uri, 'native attachment references survive store recreation');
+    const aborted = new AbortController(); aborted.abort();
+    await assert.rejects(store.prepare('other-session', '', [codeAttachment], aborted.signal), { name: 'AbortError' });
+    console.log('ok full native attachment snapshots, safe Windows names, file URL encoding, reload and cancellation');
+    const attachedTurn = await harness('resume');
+    try {
+        for await (const _event of attachedTurn.engine.runTurn({ ...baseTurn, attachments: [codeAttachment], signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
+        const prompt = attachedTurn.requests.find((request) => request.path.endsWith('/prompt')).body;
+        assert.equal(await readFile(fileURLToPath(prompt.files[0].uri), 'utf8'), codeText, 'text attachments reach the native prompt as readable files');
+    } finally { await attachedTurn.close(); }
     for (const mode of ['complete', 'plan', 'resume', 'failed', 'cancel', 'steer', 'steerCancel']) {
         const test = await harness(mode);
         try {
@@ -130,7 +151,7 @@ try {
                 const events = [];
                 for await (const event of test.engine.runTurn(turn, { ...host, onSteerRejected: (id) => rejected.push(id), onSession: async (ref) => { session = ref; } })) {
                     events.push(event);
-                    if (mode.startsWith('steer') && event.type === 'toolCall') assert.equal(await test.engine.steer({ text: 'Change direction', steerId: 'steer-ui-1' }), true);
+                    if (mode.startsWith('steer') && event.type === 'toolCall') assert.equal(await test.engine.steer({ text: 'Change direction', attachments: [codeAttachment], steerId: 'steer-ui-1' }), true);
                 }
                 return events;
             };
@@ -144,7 +165,11 @@ try {
                 if (mode !== 'steerCancel') assert.equal(events.find((event) => event.type === 'usage').usage.promptTokens, 33);
                 if (mode.startsWith('steer')) {
                     assert.equal(events.filter((event) => event.type === 'assistantMessage').length, 1);
-                    if (mode === 'steer') assert.deepEqual(events.find((event) => event.type === 'steer'), { type: 'steer', text: 'Change direction', steerId: 'steer-ui-1' });
+                    if (mode === 'steer') {
+                        assert.deepEqual(events.find((event) => event.type === 'steer'), { type: 'steer', text: 'Change direction', attachments: [codeAttachment], steerId: 'steer-ui-1' });
+                        const steer = test.requests.find((request) => request.body?.delivery === 'steer').body;
+                        assert.equal(await readFile(fileURLToPath(steer.files[0].uri), 'utf8'), codeText, 'steers stage complete code files too');
+                    }
                     else assert.deepEqual(rejected, ['steer-ui-1']);
                     assert.equal(await test.engine.steer({ text: 'After settlement' }), false);
                     assert.ok(!test.requests.some((request) => request.path.split('?')[0].endsWith('/interrupt')));
@@ -321,10 +346,45 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_runOpenCodeAgent', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { AbortController, AbortSignal, EngineError, isFreeModel, path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    const nativeTurn = await harness('cancelResume');
+    try {
+        const nativeHost = new sandbox.Host();
+        const messages = [];
+        Object.assign(nativeHost, {
+            _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(), _localSteerQueue: [],
+            _view: { webview: { postMessage: (message) => messages.push(message) } },
+            _getOpenCodeEngine: async () => nativeTurn.engine, _nativeVariants: () => ({}),
+            _postEngineState: () => {}, _persistLocalSession: async () => {}, _observeNativeShells: () => {},
+        });
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const controller = new AbortController();
+            nativeHost._handleLocalAgentEvent = (event) => { if (event.type === 'toolCall') controller.abort(); };
+            const cancelled = await nativeHost._runOpenCodeAgent('Stop this', '', undefined, controller);
+            assert.equal(cancelled.aborted, true);
+            assert.equal(messages.filter((message) => message.type === 'error' && message.valueKey === 'requestCancelled').length, attempt + 1, 'real host cancellation must send the terminal envelope that releases webview typing and tool spinners');
+            assert.equal(nativeHost._runInFlight, false);
+            assert.equal(nativeHost._nativeTurnActive, false);
+            assert.equal(nativeHost._abortControllers.size, 0);
+            const events = [];
+            nativeHost._handleLocalAgentEvent = (event) => events.push(event);
+            await nativeHost._runOpenCodeAgent('Continue', '');
+            assert.equal(events.at(-1).value, 'done', 'the real host can continue the same native session');
+        }
+        nativeHost._handleLocalAgentEvent = () => {};
+        await nativeHost._runOpenCodeAgent('Read the attached code', '', [codeAttachment]);
+        const nativePrompt = nativeTurn.requests.filter((request) => request.path.endsWith('/prompt')).at(-1).body;
+        assert.equal(await readFile(fileURLToPath(nativePrompt.files[0].uri), 'utf8'), codeText, 'the host forwards code attachment bytes instead of dropping them with an image-only filter');
+        const terminalCount = messages.length;
+        const stale = new AbortController();
+        nativeHost._handleLocalAgentEvent = (event) => { if (event.type === 'toolCall') { nativeHost._sessionEpoch++; stale.abort(); } };
+        assert.equal((await nativeHost._runOpenCodeAgent('Old session', '', undefined, stale)).aborted, true);
+        assert.equal(messages.length, terminalCount, 'an old session cancellation cannot terminate the new view');
+        console.log('ok real host cancellation publishes terminal UI state and allows repeated same-session continuation');
+    } finally { await nativeTurn.close(); }
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;
