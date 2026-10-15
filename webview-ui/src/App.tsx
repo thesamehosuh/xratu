@@ -277,6 +277,7 @@ export function App() {
     /** Branch picker: local branches (null until the host answers) + open state. */
     const [gitBranches, setGitBranches] = useState<string[] | null>(null);
     const [gitPickerOpen, setGitPickerOpen] = useState(false);
+    useEffect(() => { if (chat.busy) setGitPickerOpen(false); }, [chat.busy]);
 
     // Local-scan cosmetics: probing runtimes can finish near-instantly, so
     // keep the spinner alive for at least ~1s - a flashing spinner looks
@@ -1773,7 +1774,7 @@ export function App() {
                 onCancelEdit={() => setEditDraft(null)}
                 workspaceFiles={workspaceFiles}
                 onRequestFiles={() => send({ type: 'requestFileList' })}
-                branchPicker={gitPickerOpen ? (
+                branchPicker={gitPickerOpen && !chat.busy ? (
                     <BranchPicker
                         branches={gitBranches}
                         current={gitStatus?.branch ?? null}
@@ -1790,6 +1791,7 @@ export function App() {
             <GitStatusBar
                 status={gitStatus}
                 root={gitRoot}
+                disabled={chat.busy}
                 onOpenPicker={() => {
                     // The line is both the opener and the closer; the list request
                     // is cheap and keeps the branches fresh whenever it opens.

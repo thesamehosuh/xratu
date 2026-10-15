@@ -147,6 +147,10 @@ under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
   Restore affects the whole workspace and preserves a safety snapshot. A stale
   session/turn confirmation is rejected. Stop workspace background processes
   from Background before restoring; files-only restore keeps the conversation.
+  A missing or unreadable session leaves the current chat intact. Branch
+  checkout waits until runs and session actions finish. Edits/resends and
+  session deletion use the same transaction queue; a failed new-chat creation
+  keeps the previous conversation.
 - **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
   Cline-compatible files-based config.
 - **Agent Skills** - the open [agentskills.io](https://agentskills.io)

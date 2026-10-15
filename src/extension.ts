@@ -624,19 +624,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 if (this._runtimeSetup?.requestId !== requestId) return;
                 if (!canStartSetup(this._runtimeSetup, model)) { reject(); return; }
                 await this._persistLocalSession();
-                this._activeEngine = state.engine;
                 await this._globalState.update('xratu.activeEngine', state.engine);
                 if (credential) {
                     await this._globalState.update('xratu.activeLlmCredentialId', credential.id);
                     await this._secrets.store('xratu.llmBaseUrl', credential.baseUrl);
                     await this._secrets.store('xratu.llmApiKey', credential.apiKey);
                 }
-                this._selectedModel = model;
-                await this._rememberModelForActiveCredential(model);
                 await this._globalState.update('xratu.setupCompleted', true);
                 await this._globalState.update('xratu.setupPath', undefined);
+                if (await this._clearHistoryNow({ engineId: state.engine, model }) === false) { reject('sessionCreateFailed'); return; }
+                await this._rememberModelForActiveCredential(model);
                 this._cancelSetup();
-                await this._clearHistoryNow();
                 this._postEngineState();
             });
         } catch (error) {
@@ -719,13 +717,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         await this._serializeSessionTransition(async () => {
             if (this._localRunActive) return;
             await this._persistLocalSession();
-            this._activeEngine = id;
             await this._globalState.update('xratu.activeEngine', id);
             await this._globalState.update('xratu.setupCompleted', true);
             await this._globalState.update('xratu.setupPath', undefined);
             this._cancelSetup();
-            this._selectedModel = id === 'opencode' ? this._globalState.get<string>('xratu.engineModel.opencode') ?? null : null;
-            await this._clearHistoryNow();
+            const model = id === 'opencode' ? this._globalState.get<string>('xratu.engineModel.opencode') ?? null : null;
+            if (await this._clearHistoryNow({ engineId: id, model }) === false) return;
             this._postEngineState();
             if (needsCredentials) this._startupPage.open(() => { void this._setLlmCredentials(undefined, 'byok'); });
         });
@@ -751,12 +748,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await previous?.dispose();
         }
         return this._openCodeEngine;
-    }
-    private async _restoreEngine(session?: EngineSessionRef): Promise<void> {
-        this._engineSession = session;
-        this._activeEngine = session?.engineId ?? 'xratu';
-        await this._globalState.update('xratu.activeEngine', this._activeEngine);
-        this._postEngineState();
     }
     public static readonly viewType = 'xratu-chat-view';
     _view?: vscode.WebviewView;
@@ -1780,23 +1771,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private _checkpointRestoreActive = false;
 
-    private _captureCheckpointAction(userIndex?: number, sha?: string): CheckpointActionContext | undefined {
+    private _captureCheckpointAction(userIndex?: number, sha?: string, allowConversationOnly = false): CheckpointActionContext | undefined {
         if (userIndex !== undefined && !this._view) return;
-        if (this._checkpointRestoreActive || this._localRunActive || this._abortControllers.size > 0) {
+        if (this._checkpointRestoreActive || this._sessionTransitionsPending > 0 || this._localRunActive || this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchBusy');
             return;
         }
-        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!root) { this.notifyBanner('error', 'notifNoFolder'); return; }
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        if (!root && !allowConversationOnly) { this.notifyBanner('error', 'notifNoFolder'); return; }
         const index = userIndex === undefined ? -1 : this._findUserEntry(userIndex);
         const turn = index >= 0 ? this._history[index] : undefined;
-        if (userIndex !== undefined && (!Number.isSafeInteger(userIndex) || userIndex < 0 || !turn?.cp || turn.cp !== sha)) {
+        if (userIndex !== undefined && (!Number.isSafeInteger(userIndex) || userIndex < 0 || !turn || (!allowConversationOnly && (!turn.cp || turn.cp !== sha)))) {
             this.notifyBanner('warning', 'checkpointTurnGone');
             return;
         }
         try {
             return Object.freeze({ sessionId: this._sessionId, ephemeralSessionId: this._ephemeralSessionId,
-                epoch: this._sessionEpoch, workspace: fs.realpathSync(root), root, engine: this._activeEngine,
+                epoch: this._sessionEpoch, workspace: root ? fs.realpathSync(root) : '', root, engine: this._activeEngine,
                 turn, checkpoint: turn?.cp });
         } catch {
             this.notifyBanner('warning', 'checkpointActionStale');
@@ -1804,7 +1795,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private _checkpointActionCurrent(context: CheckpointActionContext, userIndex?: number): boolean {
-        let workspace: string | undefined;
+        let workspace: string | undefined = '';
         try {
             const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             if (root) workspace = fs.realpathSync(root);
@@ -1821,7 +1812,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('warning', 'sessionSwitchBusy');
             return false;
         }
-        const jobs = [...backgroundJobViews(), ...(this._openCodeEngine?.backgroundJobs() ?? [])];
+        const jobs = context.root ? [...backgroundJobViews(), ...(this._openCodeEngine?.backgroundJobs() ?? [])] : [];
         const writer = jobs.some(job => {
             if (!job.running) return false;
             try {
@@ -2067,68 +2058,54 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
-        if (this._checkpointRestoreActive) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
         if (this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
-        if (!this._view || this._abortControllers.size > 0) return;
-
-        let targetIdx = this._findUserEntry(userIndex);
-        const entry = targetIdx >= 0 ? this._history[targetIdx] : undefined;
-
-        const text = (newText ?? entry?.content ?? '').trim();
-        // Attachment-only edits are valid (the composer allows them) - the
-        // warning fires only when there is nothing to resend at all.
-        if (!text && !(attachments && attachments.length > 0)) {
-            this.notifyBanner('warning', 'notifRewindNoText');
-            return;
-        }
-
-        // 1. Workspace files back to this turn's pre-prompt state. Prefer
-        // THIS turn's checkpoint; fall back to the newest one recorded before
-        // it (restored-from-server sessions carry no per-turn shas). The
-        // store safety-snapshots the CURRENT state either way.
-        const folder = vscode.workspace.workspaceFolders?.[0];
-        let baseSha = entry?.cp;
-        if (folder && !baseSha && targetIdx > 0) {
-            for (let i = targetIdx - 1; i >= 0; i--) {
-                if (this._history[i].cp) { baseSha = this._history[i].cp; break; }
-            }
-        }
-        if (folder && baseSha) {
-            try {
-                await this._checkpoints.restoreCheckpoint(folder.uri.fsPath, baseSha);
-            } catch (e) {
-                // Empty seed = the workspace was empty at this turn's start;
-                // there is nothing meaningful to restore, so rewind the chat
-                // history anyway instead of failing the edit. (Restoring TO
-                // the seed would wipe files added since - skip it entirely.)
-                if (e instanceof EmptySeedError) {
-                    baseSha = undefined;
-                } else {
-                    this.notifyBanner('error', 'notifCpRestoreFailed', {
-                        error: e instanceof Error ? e.message : String(e)
-                    });
-                    return;
+        const context = this._captureCheckpointAction(userIndex, undefined, true);
+        if (!context) return;
+        const text = (newText ?? context.turn?.content ?? '').trim();
+        if (!text && !attachments?.length) { this.notifyBanner('warning', 'notifRewindNoText'); return; }
+        let run: Promise<void> | undefined;
+        await this._serializeSessionTransition(async () => {
+            if (!this._checkpointActionCurrent(context, userIndex)) return;
+            const targetIdx = this._findUserEntry(userIndex);
+            // Legacy turns without their own checkpoint use the closest earlier
+            // one, preserving the existing conversation-only fallback.
+            let baseSha = context.checkpoint;
+            if (context.root && !baseSha) {
+                for (let i = targetIdx - 1; i >= 0; i--) {
+                    if (this._history[i].cp) { baseSha = this._history[i].cp; break; }
                 }
             }
-        }
-        // No checkpoint for this turn - only chat history rewinds; silent.
-
-        // Rewind BOTH ledgers in place.
-        this._approvalCloseItems = {};
-        if (targetIdx >= 0) {
-            this._history = this._history.slice(0, targetIdx);
-        }
-        this._truncateLocalHistoryAt(userIndex);
-        this._dropOrphanedTaskListEdit();
-        this._view.webview.postMessage({ type: 'truncateFromUser', userIndex });
-        this._view.webview.postMessage({ type: 'restoreUser', value: text });
-        await this._persistLocalSession();
-
-        // Re-send through the normal chat path. Skip its pre-send capture:
-        // after a restore the tree matches baseSha, so a fresh commit would
-        // record the SAFETY snapshot (post-edit state) as this turn's
-        // baseline and corrupt future rewinds.
-        await this._handleChatRequest(text, attachments?.length ? attachments : undefined, { baseSha: folder && baseSha ? baseSha : undefined });
+            this._checkpointRestoreActive = true;
+            try {
+                if (context.root && baseSha) {
+                    validateReviewCheckpoint(baseSha);
+                    baseSha = await this._checkpoints.resolveCheckpoint(context.root, baseSha);
+                    if (!this._checkpointActionCurrent(context, userIndex)) return;
+                    try { await this._checkpoints.restoreCheckpoint(context.root, baseSha); }
+                    catch (e) {
+                        // Empty seed still refuses to erase new files; only the
+                        // conversation rewinds, as it did before this guard.
+                        if (e instanceof EmptySeedError) baseSha = undefined;
+                        else throw e;
+                    }
+                }
+                this._approvalCloseItems = {};
+                this._history = this._history.slice(0, targetIdx);
+                this._truncateLocalHistoryAt(userIndex);
+                this._dropOrphanedTaskListEdit();
+                this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
+                this._view?.webview.postMessage({ type: 'restoreUser', value: text });
+                await this._persistLocalSession();
+                this._checkpointRestoreActive = false;
+                // Claim the resend synchronously inside admission, but release
+                // the queue before awaiting inference so switches can cancel it.
+                run = this._handleChatRequest(text, attachments?.length ? attachments : undefined,
+                    { baseSha: context.root ? baseSha : undefined, admittedEpoch: context.epoch });
+            } catch (e) {
+                this.notifyBanner('error', 'notifCpRestoreFailed', { error: e instanceof Error ? e.message : String(e) });
+            } finally { this._checkpointRestoreActive = false; }
+        });
+        await run;
     }
 
     /** Saved provider credentials live in VS Code SecretStorage. The webview only
@@ -5460,10 +5437,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  would overwrite local changes (no -f here, deliberately), and a failure
      *  is REPORTED - a picker that silently does nothing reads as broken. */
     async _gitCheckout(branch: string): Promise<void> {
-        if (this._checkpointRestoreActive) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
+        const busy = () => this._checkpointRestoreActive || this._localRunActive || this._abortControllers.size > 0;
+        if (busy() || this._sessionTransitionsPending > 0) { this.notifyBanner('warning', 'gitCheckoutBusy'); return; }
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (root && isSafeBranchName(branch) && this._gitBranches.includes(branch)) {
+        if (!root || !isSafeBranchName(branch) || !this._gitBranches.includes(branch)) return;
+        const workspace = this._sessionWorkspaceIdentity();
+        if (workspace === null) { this.notifyBanner('warning', 'gitCheckoutBusy'); return; }
+        await this._serializeSessionTransition(async () => {
+            // Recheck at admission; a run or folder switch could have happened
+            // before this callback obtained the queue slot.
+            if (busy() || workspace !== this._sessionWorkspaceIdentity() || !this._gitBranches.includes(branch)) {
+                this.notifyBanner('warning', 'gitCheckoutBusy');
+                return;
+            }
             try {
                 await execFileAsync('git', ['-C', root, 'checkout', branch], {
                     timeout: 15_000,
@@ -5477,9 +5464,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     .filter(Boolean)[0] ?? '';
                 this.notifyBanner('error', 'gitCheckoutFailed', { error: detail.slice(0, 200) });
             }
-        }
-        await this._sendGitStatus();
-        await this._sendGitBranches();
+            await this._sendGitStatus();
+            await this._sendGitBranches();
+        });
     }
 
     /** Push the MCP page's complete view: merged config + live statuses.
@@ -5919,30 +5906,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  and deletion failures are counted, not fatal - the clear proceeds
      *  with an honest error afterward. */
     async _clearAllSessions(): Promise<void> {
+        await this._serializeSessionTransition(() => this._clearAllSessionsNow());
+    }
+
+    private async _clearAllSessionsNow(): Promise<void> {
         this._cancelActiveRequests();
-        this._sessionEpoch++;
+        if (!(await this._waitForSessionSettlement())) {
+            this._view?.webview.postMessage({ type: 'error', valueKey: 'clearHistoryBusy' });
+            return;
+        }
         // Mirror the run-loop finally: a pending partial flush must not fire
         // against a session we are about to invalidate and delete.
         this._localPendingTurn = null;
         if (this._localPartialTimer) {
             clearTimeout(this._localPartialTimer);
             this._localPartialTimer = null;
-        }
-        // The abort above is asynchronous - the run loop unwinds on a later
-        // event. Await its settlement so the fresh session is not exposed
-        // while the dead run can still write, and a steer aimed at the old
-        // run cannot fall into the epoch-drop path unanswered. If the run
-        // refuses to settle, ABORT the clear: proceeding from here would
-        // recreate exactly the race this flow exists to prevent.
-        if (this._localRunSettled) {
-            const settled = await Promise.race([
-                this._localRunSettled,
-                new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
-            ]);
-            if (settled === false) {
-                this._view?.webview.postMessage({ type: 'error', valueKey: 'clearHistoryBusy' });
-                return;
-            }
         }
         this._sessionEpoch++;
         this._resetSessionLedgers();
@@ -5965,7 +5943,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // with the sessions, before the fresh empty one is created.
         this._taskListEdits = {};
         await this._saveTaskListEdits();
-        await this.clearHistory();
+        await this._clearHistoryNow();
         if (failed > 0) {
             this._view?.webview.postMessage({
                 type: 'error',
@@ -6158,9 +6136,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  the webview message handler - serialize them so a stale load/create
      *  cannot overwrite a newer transition's session state. */
     private _sessionTransitionQueue: Promise<unknown> = Promise.resolve();
+    private _sessionTransitionsPending = 0;
 
     _serializeSessionTransition<T>(fn: () => Promise<T>): Promise<T> {
-        const run = this._sessionTransitionQueue.then(fn, fn);
+        // Count admission synchronously: checkout and sends must also see
+        // transitions waiting for the previous action's queue slot.
+        this._sessionTransitionsPending++;
+        const run = this._sessionTransitionQueue.then(fn, fn).finally(() => { this._sessionTransitionsPending--; });
         this._sessionTransitionQueue = run.catch(() => undefined);
         return run;
     }
@@ -6173,33 +6155,80 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return this._serializeSessionTransition(() => this._openSessionNow(id));
     }
 
-    private async _openSessionNow(id: string): Promise<void> {
-        this._cancelActiveRequests();
-        // The abort above is asynchronous - await the dead run's settlement
-        // so buffered events and its throttled save cannot render into, or
-        // persist over, the session we are about to expose. A run that
-        // refuses to settle ABORTS the switch: proceeding would let its
-        // events write into the new session.
-        if (this._localRunSettled) {
-            const settled = await Promise.race([
-                this._localRunSettled,
-                new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
-            ]);
-            if (settled === false) {
-                this.notifyBanner('warning', 'sessionSwitchBusy');
-                return;
-            }
-        }
-        this._sessionEpoch++;
-        this._resetSessionLedgers();
+    private _sessionWorkspaceIdentity(): string | null {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try { return root ? fs.realpathSync(root) : ''; }
+        catch { return null; }
+    }
 
-        const snapshot = await this._localSessionStore.load(id);
-        if (!snapshot) {
-            this.notifyBanner('warning', 'sessionLoadFailed');
+    private async _loadSessionForAdoption(id: string): Promise<Awaited<ReturnType<LocalSessionStore['load']>>> {
+        try {
+            const snapshot = await this._localSessionStore.load(id);
+            const ledger = (rows: unknown) => Array.isArray(rows) && rows.every((row: unknown) => {
+                if (!row || typeof row !== 'object') return false;
+                const value = row as Record<string, unknown>;
+                return typeof value.role === 'string' && (value.content == null || typeof value.content === 'string') &&
+                    (value.events == null || (Array.isArray(value.events) && value.events.every(event => event && typeof event === 'object'))) &&
+                    (value.tool_calls == null || (Array.isArray(value.tool_calls) && value.tool_calls.every(call => call && typeof call === 'object')));
+            });
+            const pending = snapshot?.pendingTurn;
+            const validPending = pending == null || (typeof pending === 'object' && !Array.isArray(pending) &&
+                (pending.prompt == null || typeof pending.prompt === 'string') &&
+                (pending.text == null || typeof pending.text === 'string') &&
+                (pending.thinking == null || typeof pending.thinking === 'string') &&
+                (pending.events == null || (Array.isArray(pending.events) && pending.events.every(event => event && typeof event === 'object'))));
+            if (validPending && snapshot?.sessionId === id && ledger(snapshot.localHistory) && ledger(snapshot.uiHistory) &&
+                typeof snapshot.workspace === 'string' && (snapshot.title == null || typeof snapshot.title === 'string') &&
+                (snapshot.model == null || typeof snapshot.model === 'string') &&
+                (snapshot.summary == null || typeof snapshot.summary === 'string')) return snapshot;
+        } catch { /* An unreadable target must leave the current conversation intact. */ }
+        this.notifyBanner('warning', 'sessionLoadFailed');
+        return null;
+    }
+
+    private async _waitForSessionSettlement(): Promise<boolean> {
+        if (!this._localRunSettled) return true;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            return await Promise.race([
+                this._localRunSettled.then(() => true),
+                new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5000); }),
+            ]);
+        } finally { if (timer !== undefined) clearTimeout(timer); }
+    }
+
+    private async _openSessionNow(id: string): Promise<void> {
+        const epoch = this._sessionEpoch;
+        const sessionId = this._sessionId;
+        const engineAtEntry = this._activeEngine;
+        const workspace = this._sessionWorkspaceIdentity();
+        if (workspace === null) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
+        const current = () => epoch === this._sessionEpoch && sessionId === this._sessionId && engineAtEntry === this._activeEngine && workspace === this._sessionWorkspaceIdentity();
+        let snapshot = await this._loadSessionForAdoption(id);
+        if (!snapshot) return;
+        if (!current()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
+        this._cancelActiveRequests();
+        // Cancellation can finish a partial turn and persist a newer snapshot.
+        // Keep the old ledgers until that settlement and target revalidation.
+        if (!(await this._waitForSessionSettlement())) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
+        if (!current()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
+        snapshot = await this._loadSessionForAdoption(id);
+        if (!snapshot) return;
+        if (!current() || this._localRunActive || this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
+        // Persist the engine preference before replacing any in-memory state.
+        // A storage failure cannot leave half of the target session adopted.
+        const engine = snapshot.engineSession?.engineId ?? 'xratu';
+        try { await this._globalState.update('xratu.activeEngine', engine); }
+        catch { this.notifyBanner('warning', 'sessionLoadFailed'); return; }
+        if (!current()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
+        this._sessionEpoch++;
+        this._resetSessionLedgers();
+        this._activeEngine = engine;
+        this._engineSession = snapshot.engineSession;
         this._sessionId = snapshot.sessionId;
-        await this._restoreEngine(snapshot.engineSession);
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
@@ -6220,8 +6249,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._selectedModel = snapshot.model;
             void this._rememberModelForActiveCredential(snapshot.model);
         }
-        await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
-        await this._persistLocalSession();
+        this._postEngineState();
+        try {
+            await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
+            await this._persistLocalSession();
+        } catch { this.notifyBanner('warning', 'sessionSaveFailed'); }
         await this._reloadWebviewChat();
     }
 
@@ -6229,39 +6261,45 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  "clear history" - which DESTROYED the conversation; multi-session
      *  keeps it and creates a fresh one instead. */
     public clearHistory(): Promise<void> {
-        return this._serializeSessionTransition(() => this._clearHistoryNow());
+        return this._serializeSessionTransition(async () => { await this._clearHistoryNow(); });
     }
 
-    private async _clearHistoryNow() {
-        // A live stream must die WITH the session: without this, the zombie
-        // run keeps consuming events and writes its result (or its cancel
-        // bookkeeping) into the freshly created session.
+    private async _clearHistoryNow(replacement?: { engineId: EngineId; model: string | null }): Promise<boolean> {
+        const epoch = this._sessionEpoch;
+        const workspace = this._localWorkspaceKey();
+        const identity = this._sessionWorkspaceIdentity();
+        if (identity === null) { this.notifyBanner('warning', 'sessionSwitchStale'); return false; }
         this._cancelActiveRequests();
-        // Same settlement wait as _openSession - a run that refuses to
-        // settle ABORTS the switch instead of racing the fresh session.
-        if (this._localRunSettled) {
-            const settled = await Promise.race([
-                this._localRunSettled,
-                new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
-            ]);
-            if (settled === false) {
-                this._view?.webview.postMessage({ type: 'error', valueKey: 'clearHistoryBusy' });
-                return;
-            }
+        if (!(await this._waitForSessionSettlement())) {
+            this._view?.webview.postMessage({ type: 'error', valueKey: 'clearHistoryBusy' });
+            return false;
+        }
+        if (epoch !== this._sessionEpoch || identity !== this._sessionWorkspaceIdentity()) {
+            this.notifyBanner('warning', 'sessionSwitchStale');
+            return false;
+        }
+        let meta;
+        try { meta = await this._localSessionStore.create(workspace); }
+        catch { this.notifyBanner('warning', 'sessionCreateFailed'); return false; }
+        if (epoch !== this._sessionEpoch || identity !== this._sessionWorkspaceIdentity()) {
+            await this._localSessionStore.delete(meta.id);
+            this.notifyBanner('warning', 'sessionSwitchStale');
+            return false;
         }
         this._sessionEpoch++;
-        this._resetSessionLedgers();
-
-        try {
-            const meta = await this._localSessionStore.create(this._localWorkspaceKey());
-            this._sessionId = meta.id;
-            this._sessionTitle = null;
-        } catch (e) {
-            console.error('xratu: create local session failed', e);
+        if (replacement) {
+            this._activeEngine = replacement.engineId;
+            this._selectedModel = replacement.model;
         }
-        await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
-        await this._persistLocalSession();
+        this._resetSessionLedgers();
+        this._sessionId = meta.id;
+        this._sessionTitle = null;
+        try {
+            await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
+            await this._persistLocalSession();
+        } catch { this.notifyBanner('warning', 'sessionSaveFailed'); }
         await this._reloadWebviewChat();
+        return true;
     }
 
     /** Rename a session (picker inline edit); persists in the local store. */
@@ -6279,15 +6317,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Hard-delete a session (picker context action; the webview confirms).
      *  Deleting the OPEN session falls back to a fresh empty one. */
     async _deleteSession(id: string): Promise<void> {
+        await this._serializeSessionTransition(async () => {
+            if (id === this._sessionId && !(await this._clearHistoryNow())) return;
+            await this._deleteSessionNow(id);
+        });
+    }
+
+    private async _deleteSessionNow(id: string): Promise<void> {
         await this._localSessionStore.delete(id);
         if (this._taskListEdits[id]) {
             delete this._taskListEdits[id];
             void this._saveTaskListEdits().catch((e) =>
                 console.error('xratu: task list edit persist failed:', e));
-        }
-        if (id === this._sessionId) {
-            await this.clearHistory();
-            return;
         }
         await this._listSessions(false);
     }
@@ -6295,41 +6336,32 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Reopen the last-active LOCAL session for this workspace (or the
      *  preferred id already held in memory). Empty result = clean slate. */
     private async _restoreLocalSession(): Promise<void> {
+        await this._serializeSessionTransition(() => this._restoreLocalSessionNow());
+    }
+
+    private async _restoreLocalSessionNow(): Promise<void> {
+        if (this._localRunActive) return;
+        const epoch = this._sessionEpoch;
+        const workspace = this._sessionWorkspaceIdentity();
+        if (workspace === null) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
         const preferred = this._sessionId ?? this._globalState.get<string>(this._lastSessionStateKey());
         const meta = await this._localSessionStore.findCurrent(this._localWorkspaceKey(), preferred);
-        if (!meta) {
-            this._forgetSubagentRuns();
-            this._sessionId = null;
-            this._ephemeralSessionId = null;
-            this._history = [];
-            this._localHistory = [];
-            this._localEvictedUserTurns = 0;
-            this._localReplayUserTurns = null;
-            this._compactionRunReplayBase = null;
-            this._localRulesSnapshot.reset();
-            this._sessionSummary = null;
-            this._sessionTitle = null;
-            this._sessionCost = { USD: 0, IRT: 0 };
-            this._resetSessionUsage();
+        if (!meta) return;
+        const snapshot = await this._loadSessionForAdoption(meta.id);
+        if (!snapshot) return;
+        if (epoch !== this._sessionEpoch || workspace !== this._sessionWorkspaceIdentity() || this._localRunActive) {
+            this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
-        const snapshot = await this._localSessionStore.load(meta.id);
-        if (!snapshot) {
-            this._forgetSubagentRuns();
-            this._sessionId = null;
-            this._ephemeralSessionId = null;
-            this._history = [];
-            this._localHistory = [];
-            this._localEvictedUserTurns = 0;
-            this._localReplayUserTurns = null;
-            this._compactionRunReplayBase = null;
-            this._localRulesSnapshot.reset();
-            this._sessionSummary = null;
-            this._sessionTitle = null;
-            this._sessionCost = { USD: 0, IRT: 0 };
-            this._resetSessionUsage();
+        const engine = snapshot.engineSession?.engineId ?? 'xratu';
+        try { await this._globalState.update('xratu.activeEngine', engine); }
+        catch { this.notifyBanner('warning', 'sessionLoadFailed'); return; }
+        if (epoch !== this._sessionEpoch || workspace !== this._sessionWorkspaceIdentity()) {
+            this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
+        this._engineSession = snapshot.engineSession;
+        this._activeEngine = engine;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
@@ -6345,7 +6377,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._ephemeralSessionId = null;
         }
         this._sessionId = snapshot.sessionId;
-        await this._restoreEngine(snapshot.engineSession);
+        this._postEngineState();
         // Cumulative spend survives a rewind (tokens were already spent).
         this._sessionCost = {
             USD: snapshot.totalCostUsd ?? 0,
@@ -6793,9 +6825,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
 
-    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void> {
+    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number }): Promise<void> {
         if (!this._view) { return; }
-        if (this._checkpointRestoreActive) {
+        if (opts?.admittedEpoch !== undefined && opts.admittedEpoch !== this._sessionEpoch) {
+            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
+            return;
+        }
+        if (this._checkpointRestoreActive || (this._sessionTransitionsPending > 0 && opts?.admittedEpoch !== this._sessionEpoch)) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchBusy', prompt, attachments });
             return;
         }

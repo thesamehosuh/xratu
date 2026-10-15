@@ -288,7 +288,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         await post(page, { type: 'taskListState', tasks: [{ id: 'one', label: 'Current task', status: 'in_progress' }] });
         for (const [trigger, selector] of [
             ['.picker-chip', '.model-pop'], ['.tok-meter', '.ctx-menu'], ['[data-policy=mode]', '.composer-policy-menu'],
-            ['[data-policy=approval]', '.composer-policy-menu'], ['.attach-btn', '.attach-menu'], ['.task-list-chip', '.task-list-chip-menu'], ['.git-status', '.branch-pop'],
+            ['[data-policy=approval]', '.composer-policy-menu'], ['.attach-btn', '.attach-menu'], ['.task-list-chip', '.task-list-chip-menu'],
         ]) {
             await page.locator(trigger).click();
             const menu = page.locator(selector);
@@ -306,6 +306,19 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         }
         expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
         await expect(page.locator('.send-btn.is-stop')).toBeVisible();
+        await expect(page.locator('.git-status')).toBeDisabled();
+        await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+        await page.locator('.git-status').click();
+        const branches = page.locator('.branch-pop');
+        await expect(branches).toBeVisible();
+        const branchBox = await branches.boundingBox();
+        expect(branchBox!.x).toBeGreaterThanOrEqual(0);
+        expect(branchBox!.x + branchBox!.width).toBeLessThanOrEqual(width + 1);
+        expect(branchBox!.y).toBeGreaterThanOrEqual(0);
+        expect(branchBox!.y + branchBox!.height).toBeLessThanOrEqual(641);
+        await page.keyboard.press('Escape');
+        await expect(branches).toHaveCount(0);
+        expect((await sent(page)).some(m => m.type === 'cancelRequest')).toBe(false);
     });
 }
 
@@ -869,6 +882,44 @@ for (const locale of ['en', 'fa']) {
                 await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
                 await page.locator('.notif-close').click();
             }
+        });
+    }
+}
+
+for (const locale of ['en', 'fa']) {
+    for (const width of [420, 1080]) {
+        test(`branch checkout is unavailable during a run (${locale}, ${width}px)`, async ({ page }, testInfo) => {
+            await page.setViewportSize({ width, height: 900 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'gitStatusState', root: 'workspace', status: { isRepo: true, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
+            await page.locator('.composer-input').fill('Keep this draft');
+            await page.locator('.git-status').click();
+            await post(page, { type: 'gitBranchesState', branches: ['main', 'next'], current: 'main' });
+            await expect(page.locator('.branch-pop')).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath('branch-before.png') });
+            await post(page, { type: 'startResponse' });
+            await expect(page.locator('.git-status')).toBeDisabled();
+            await expect(page.locator('.branch-pop')).toHaveCount(0);
+            await post(page, { type: 'notification', id: 'branch-busy', kind: 'warning', valueKey: 'gitCheckoutBusy' });
+            await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'session action' : 'کار گفتگو');
+            await page.screenshot({ path: testInfo.outputPath('branch-busy.png') });
+            await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+            expect((await sent(page)).filter(message => message.type === 'gitCheckout')).toHaveLength(0);
+            await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+            await expect(page.locator('.git-status')).toBeEnabled();
+            await expect(page.locator('.branch-pop')).toHaveCount(0);
+            await page.locator('.notif-close').click();
+            await post(page, { type: 'sessionState', id: 'A', title: 'Current conversation' });
+            await post(page, { type: 'restoreUser', value: 'Previous task', cp: sha });
+            for (const key of ['sessionLoadFailed', 'sessionCreateFailed', 'sessionSwitchStale']) {
+                await post(page, { type: 'notification', id: key, kind: 'warning', valueKey: key });
+                await expect(page.locator('.notif-copy')).not.toHaveText(key);
+                await expect(page.getByText('Previous task', { exact: true })).toBeVisible();
+                await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+                await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
+                await page.locator('.notif-close').click();
+            }
+
         });
     }
 }
