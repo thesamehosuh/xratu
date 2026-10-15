@@ -1,8 +1,10 @@
 import { useCallback, useLayoutEffect, useRef, type ComponentProps } from 'react';
 import { ActivityTimeline } from './MessageItem';
+import { PullRequestIndicator } from './PullRequestIndicator';
+import type { PullRequestView } from '../../../src/pullRequests/types';
 
 /** Follow new activity until the reader scrolls away; docking retains that choice. */
-export function ActivityPanel({ visible, panelClass, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string }) {
+export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullRequests, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; pullRequests?: PullRequestView; onOpenPullRequests?: () => void }) {
     const pane = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
@@ -25,6 +27,6 @@ export function ActivityPanel({ visible, panelClass, ...props }: ComponentProps<
             const element = pane.current;
             if (visible && element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
         }}>
-        <div ref={content}><ActivityTimeline {...props} /></div>
+        <div ref={content}>{pullRequests && onOpenPullRequests && <PullRequestIndicator state={pullRequests} onOpen={onOpenPullRequests} />}<ActivityTimeline {...props} /></div>
     </div>;
 }

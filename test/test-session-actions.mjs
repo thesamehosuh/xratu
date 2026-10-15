@@ -26,6 +26,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const snapshot = id => ({ sessionId: id, model: 'target-model', summary: null, title: id, workspace: path.resolve('workspace'), renamed: false, localHistory: [{ role: 'user', content: id }], uiHistory: [{ role: 'user', content: id }], totalCostUsd: 3 });
 function harness() {
     const host = new sandbox.Host(), notices = [], messages = [], state = new Map(), events = [];
+    host._pullRequests = { resume: async () => {}, service: { store: { sessions: async () => [], remove: async () => {} } } };
     Object.assign(host, { _sessionEpoch: 10, _sessionId: 'A', _sessionTitle: 'A title', _activeEngine: 'xratu', _history: [{ role: 'user', content: 'A history' }], _localHistory: [{ role: 'user', content: 'A ledger' }], _selectedModel: 'A model', _sessionCost: { USD: 9, IRT: 0 }, _sessionSummary: 'A summary', _localRunActive: false, _abortControllers: new Map(), _gitBranches: ['main', 'next'] });
     host._view = { webview: { postMessage: msg => messages.push(msg) } };
     host.notifyBanner = (...args) => notices.push(args);

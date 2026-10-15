@@ -16,6 +16,7 @@ import {
     FolderOpen,
     FolderTree,
     GitBranch,
+    GitPullRequest,
     Globe,
     HelpCircle,
     ListChecks,
@@ -30,6 +31,7 @@ import {
 import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
+    { re: /^(link|unlink|watch|unwatch|get)_pull_request$|^list_thread_pull_requests$/, icon: GitPullRequest },
     { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
     { re: /^update_task_list$/, icon: ListChecks },
@@ -71,6 +73,11 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
 /** Persian labels for the builtin tool pills - shown RTL like the thinking
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
+    { re: /^link_pull_request$/, key: 'prLink' },
+    { re: /^unlink_pull_request$/, key: 'prUnlink' },
+    { re: /^watch_pull_request$/, key: 'prWatch' },
+    { re: /^unwatch_pull_request$/, key: 'prUnwatch' },
+    { re: /^get_pull_request$|^list_thread_pull_requests$/, key: 'prTitle' },
     { re: /^opencode_/, key: 'toolOpenCode' },
     { re: /^browser_/, key: 'toolBrowser' },
     { re: /^run_terminal_command$/, key: 'toolTerminal' },

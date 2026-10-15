@@ -48,7 +48,7 @@ export const SUBAGENT_TOOL_NAME = 'task';
  *  A nested run must not reach them even if a profile allow-lists them -
  *  the checklist is the parent's plan artifact and plan mode is the user's
  *  gate, both meaningless (and dangerous) one level down. */
-export const SESSION_CONTROL_TOOLS = new Set(['update_task_list', 'exit_plan_mode']);
+export const SESSION_CONTROL_TOOLS = new Set(['update_task_list', 'exit_plan_mode', 'link_pull_request', 'unlink_pull_request', 'watch_pull_request', 'unwatch_pull_request']);
 
 /** Default child loop budget. The parent loop is unlimited by design; a
  *  delegated task must be FINITE - a runaway child cannot be steered or

@@ -2,7 +2,6 @@
 .background-layout { display:flex; flex-direction:column; height:100%; min-height:0; }
 .background-task-list { flex:0 0 auto; min-width:0; padding:10px 12px; border-block-end:1px solid var(--page-line); }
 .background-task-list > header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:24px; margin-block-end:5px; }
-.bg-jobs-title { font-size:11px; color:var(--vscode-descriptionForeground); }
 .bg-jobs-stopall { display:flex; align-items:center; gap:5px; font:inherit; font-size:10px; padding:3px 5px; border:0; background:transparent; border-radius:4px; color:var(--vscode-descriptionForeground); white-space:nowrap; }
 .bg-jobs-stopall:hover { color:var(--vscode-errorForeground); background:var(--xratu-error-faint); }
 .background-task-items { max-height:134px; overflow:auto; scrollbar-width:thin; }
