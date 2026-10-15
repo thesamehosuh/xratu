@@ -93,6 +93,11 @@ denies mutation and unknown tools. YOLO permits native tools without approval.
 Native steering is delivered at OpenCode's next step boundary. Shell commands
 stream output and expose background/stop controls in Xratu's Background panel.
 Cancel waits for native execution to stop, then the same conversation can continue.
+Code/text uploads and `@` references are saved as local attachment snapshots
+and passed to OpenCode as files, including during steering. They keep their
+full contents instead of the built-in engine's 24,000-character preview.
+Snapshots remain in Xratu's local storage so native history can read them
+after a restart; workspace references still pass Xratu's path validation.
 Enabled Xratu MCP servers, including the bundled defaults, are shared through
 an authenticated loopback bridge. Their transports, proxy routing, timeouts,
 images, and explicit auto-approval choices stay with Xratu. Changes apply on

@@ -734,7 +734,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             } else if (proxy.mode === 'off') {
                 for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
             }
-            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env, undefined, externalMcpInstance ?? undefined);
+            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env, undefined, externalMcpInstance ?? undefined, path.join(this._storagePath, 'opencode-attachments'));
             this._openCodeEnvironmentKey = environmentKey;
             this._engines.register(this._openCodeEngine);
             await previous?.dispose();
@@ -865,10 +865,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  per turn it rewrote the cacheable prefix on every active-file change
      *  (see `RulesSnapshot`). */
     private _localRulesSnapshot = new RulesSnapshot();
-    /** Steered user messages waiting to join the LIVE local run. Entries
-     *  carry the PROCESSED payload (refs resolved, PDFs extracted, text
-     *  attachments fenced into `text`); `carryAttachments` holds image-only
-     *  attachments for a potential follow-up turn. */
+    /** Steered user messages waiting to join the LIVE run. Built-in text
+     *  attachments are fenced into `text`; native runs retain every file's
+     *  bytes for staging, including in a potential follow-up turn. */
     private _localSteerQueue: Array<{
         text: string;
         images?: LocalImageAttachment[];
@@ -4006,7 +4005,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             .map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 }));
         if (this._activeEngine === 'opencode') {
             try {
-                const accepted = await this._openCodeEngine?.steer({ text: buildLocalUserText(text, sendAttachments), attachments: images, steerId });
+                const accepted = await this._openCodeEngine?.steer({ text, attachments: sendAttachments, steerId });
                 if (accepted) return;
                 if (!this._localRunActive) {
                     this._confirmSteer(steerId, 'turn');
@@ -4018,15 +4017,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 return;
             }
         }
+        const native = this._activeEngine === 'opencode';
+        const queuedAttachments = native ? sendAttachments : images;
         this._localSteerQueue.push({
-            text: buildLocalUserText(text, sendAttachments),
-            ...(images?.length ? { images } : {}),
+            text: native ? text : buildLocalUserText(text, sendAttachments),
+            ...(queuedAttachments?.length ? { images: queuedAttachments } : {}),
             ...(sendAttachments?.length ? {
                 meta: sendAttachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size })),
-                // Follow-up-turn carry: images only - text attachments are
-                // already fenced into `text` and must not be duplicated.
+                // Built-in text is already fenced; native turns need every
+                // attachment's bytes so their tools can read the full file.
                 carryAttachments: sendAttachments
-                    .filter((a) => isImageAttachment(a.mimeType))
+                    .filter((a) => native || isImageAttachment(a.mimeType))
                     .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
             } : {}),
             ...(steerId ? { steerId } : {}),
@@ -4626,6 +4627,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private async _runOpenCodeAgent(prompt: string, rulesContext: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean): Promise<StreamOutcome> {
+        const epoch = this._sessionEpoch;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
         this._abortControllers.set('chat', controller);
@@ -4648,7 +4650,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
             const engine = await this._getOpenCodeEngine();
             this._nativeTurnActive = true;
-            const agent = engine.runTurn({ prompt: buildLocalUserText(prompt, attachments), context: rulesContext, model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments: attachments?.filter((a) => isImageAttachment(a.mimeType)).map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 })) }, {
+            const agent = engine.runTurn({ prompt, context: rulesContext, model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
                 questions: { ask: (question) => this._requestLocalDecision(question) },
                 onSession: async (session) => { this._engineSession = session; this._observeNativeShells(engine, session.nativeSessionId!, workspace); await this._persistLocalSession(); },
@@ -4657,7 +4659,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             });
             for await (const event of agent) this._handleLocalAgentEvent(event, outcome);
         } catch (error) {
-            if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) outcome.aborted = true;
+            if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+                outcome.aborted = true;
+                if (epoch === this._sessionEpoch) {
+                    this._view?.webview.postMessage({ type: 'error', valueKey: 'requestCancelled' });
+                }
+            }
             else {
                 const detail = error instanceof Error ? error.message : String(error);
                 outcome.errorEvent = { error: detail };

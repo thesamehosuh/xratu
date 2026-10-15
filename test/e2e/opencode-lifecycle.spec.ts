@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
+import type { ComposerAttachment } from '../../webview-ui/src/types';
 
 async function post(page: Page, message: object) { await page.evaluate((value) => window.postMessage(value, '*'), message); }
-async function sent(page: Page) { return page.evaluate(() => (window as unknown as { __xratuHostMessages: { type: string; value?: string; requestId?: string }[] }).__xratuHostMessages); }
+async function sent(page: Page) { return page.evaluate(() => (window as unknown as { __xratuHostMessages: { type: string; value?: string; requestId?: string; attachments?: ComposerAttachment[] }[] }).__xratuHostMessages); }
 
 test.beforeEach(async ({ page }) => {
     await installVscodeTheme(page);
@@ -14,6 +15,35 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+    test(`OpenCode sends code uploads and workspace references, including steers (${locale}, ${width})`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+        await post(page, { type: 'modelInfo', defaultModel: 'fixture/stub', selectedModel: 'fixture/stub', models: ['fixture/stub'] });
+        const code = '// full attached code\n'.repeat(1500) + 'const ATTACHMENT_TAIL = true;';
+        await page.locator('input[type="file"]').setInputFiles({ name: 'sample.ts', mimeType: 'text/plain', buffer: Buffer.from(code) });
+        await expect(page.locator('.attach-chip')).toContainText('sample.ts');
+        await page.locator('.composer-input').fill('@src');
+        await post(page, { type: 'fileList', files: ['src/reference.ts'] });
+        await page.locator('.mention-pop .mention-item').filter({ hasText: 'reference.ts' }).click();
+        await expect(page.locator('.attach-chip')).toHaveCount(2);
+        if (process.env.XRATU_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('code-attachments.png') });
+        await page.locator('.send-btn').click();
+        const request = (await sent(page)).findLast((message) => message.type === 'askQuestion')!;
+        expect(request.attachments).toHaveLength(2);
+        expect(Buffer.from(request.attachments![0].dataBase64, 'base64').toString()).toBe(code);
+        expect(request.attachments![1].path).toBe('src/reference.ts');
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'chunk', value: 'Reading the files' });
+        await page.locator('input[type="file"]').setInputFiles({ name: 'follow-up.txt', mimeType: 'text/plain', buffer: Buffer.from('STEER_ATTACHMENT') });
+        await expect(page.locator('.attach-chip')).toContainText('follow-up.txt');
+        await page.locator('.composer-input').fill('Read this too');
+        await page.locator('.send-btn').click();
+        const steer = (await sent(page)).findLast((message) => message.type === 'steerRun')!;
+        expect(Buffer.from(steer.attachments![0].dataBase64, 'base64').toString()).toBe('STEER_ATTACHMENT');
+    });
+
     test(`OpenCode cancellation releases the composer and shared MCPs retain their scope (${locale}, ${width})`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
