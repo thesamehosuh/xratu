@@ -35,7 +35,8 @@ const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
-    if (await page.locator('#surface-tab-changes').isVisible()) await page.locator('#surface-tab-changes').click();
+    await expect(page.locator('#surface-tab-changes')).toBeVisible();
+    await page.locator('#surface-tab-changes').click();
     await replyFile(page);
     await expect(page.locator('.review-diff')).toBeVisible();
 };
