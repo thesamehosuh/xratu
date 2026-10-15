@@ -630,6 +630,7 @@ export class LocalSessionStore {
         try {
             const raw = await fs.readFile(path.join(this.sessionDir(id), 'snapshot.json'), 'utf8');
             const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
             return {
                 sessionId: id,
                 title: parsed?.title ?? null,

@@ -11,7 +11,7 @@ const root = mkdtempSync(path.join(tmpdir(), 'xratu-restore-actions-'));
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-const names = ['_gitCheckout', '_rewindAndResend', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_handleChatRequest'];
+const names = ['_gitCheckout', '_rewindAndResend', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
 const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
@@ -158,6 +158,48 @@ try {
         assert.equal(t.truncations.length, 0);
     }
     console.log('ok palette restores without a webview and stale palette confirmations perform zero writes');
+
+    const editing = harness(), editEntered = deferred(), editFinish = deferred();
+    editing.host._checkpoints.restoreCheckpoint = async (...args) => { editing.restores.push(args); editEntered.resolve(); await editFinish.promise; return { changed: true, sha, safety: 'safe' }; };
+    const sends = [];
+    editing.host._handleChatRequest = async (text, attachments, opts) => sends.push({ text, attachments, opts, session: editing.host._sessionId });
+    const edit = editing.host._rewindAndResend(0, 'Edited prompt');
+    await editEntered.promise;
+    let editSwitched = false;
+    const editSwitch = editing.host._serializeSessionTransition(async () => {
+        editSwitched = true;
+        editing.host._sessionId = 'B';
+        editing.host._sessionEpoch++;
+        editing.host._history = [{ role: 'user', content: 'B' }];
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(editSwitched, false, 'switch must wait for an in-progress edit restore and rewind');
+    editFinish.resolve();
+    await Promise.all([edit, editSwitch]);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].session, 'A', 'resend starts under the original session before releasing the queue');
+    assert.equal(editing.host._history[0].content, 'B');
+    console.log('ok delayed edit restore, ledger rewind and resend cannot interleave with session replacement');
+
+    for (const mode of ['invalid-turn', 'background', 'missing-commit', 'empty-seed', 'no-workspace', 'legacy-turn']) {
+        const t = harness();
+        const resends = [];
+        t.host._handleChatRequest = async (text, attachments, opts) => resends.push({ text, attachments, opts });
+        if (mode === 'background') jobs = [{ running: true, cwd: root }];
+        if (mode === 'missing-commit') t.host._checkpoints.resolveCheckpoint = async () => { throw Error('deleted'); };
+        if (mode === 'empty-seed') t.host._checkpoints.restoreCheckpoint = async () => { throw new EmptySeedError(); };
+        if (mode === 'no-workspace') sandbox.vscode.workspace.workspaceFolders = [];
+        if (mode === 'legacy-turn') delete t.host._history[0].cp;
+        await t.host._rewindAndResend(mode === 'invalid-turn' ? 9 : 0, 'Edited');
+        const rejected = ['invalid-turn', 'background', 'missing-commit'].includes(mode);
+        assert.equal(t.truncations.length, rejected ? 0 : 1);
+        assert.equal(resends.length, rejected ? 0 : 1);
+        if (['empty-seed', 'no-workspace', 'legacy-turn'].includes(mode)) assert.equal(resends[0].opts.baseSha, undefined);
+        jobs = [];
+        sandbox.vscode.workspace.workspaceFolders = [{ uri: { fsPath: root } }];
+    }
+    console.log('ok edit rejects stale targets and writers while preserving empty-seed, no-workspace and legacy-turn policy');
 
     const storage = mkdtempSync(path.join(tmpdir(), 'xratu-action-storage-'));
     try {

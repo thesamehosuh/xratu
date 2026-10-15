@@ -53,11 +53,13 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(page.locator('.composer-input')).toHaveValue('existing draft');
         await post(page, { type: 'showWelcome', path: 'free', canBack: true });
         await state(page, { phase: 'ready', models: [available()] });
+        await page.screenshot({ path: test.info().outputPath('onboarding-ready.png') });
         await page.locator('.setup-start').click();
         const current = await request(page);
         expect(await messages(page)).toContainEqual({ type: 'setupComplete', requestId: current.requestId, model: 'opencode/free' });
         await post(page, { type: 'showChat' });
         await expect(page.locator('.onboarding')).toHaveCount(0);
+        await page.screenshot({ path: test.info().outputPath('onboarding-chat.png') });
     });
 }
 

@@ -470,7 +470,13 @@ try {
     switchHost._postEngineState = () => {};
     switchHost._cancelSetup = () => {};
     let chatStarted = false;
-    switchHost._clearHistoryNow = async () => { chatStarted = true; assert.equal(state.get('xratu.setupPath'), undefined, 'unfinished setup must not hijack a configured engine switch'); };
+    switchHost._clearHistoryNow = async (replacement) => {
+        chatStarted = true;
+        assert.equal(state.get('xratu.setupPath'), undefined, 'unfinished setup must not hijack a configured engine switch');
+        switchHost._activeEngine = replacement.engineId;
+        switchHost._selectedModel = replacement.model;
+        return true;
+    };
     switchHost._openSetup = async () => { throw new Error('configured engine must open chat'); };
     await switchHost._engineSelect('xratu');
     assert.equal(chatStarted, true);
@@ -493,6 +499,10 @@ try {
     assert.equal(switchHost._activeEngine, 'opencode');
     assert.equal(switchHost._selectedModel, 'opencode/big-pickle');
     assert.equal(state.get('xratu.setupPath'), undefined);
+    switchHost._clearHistoryNow = async () => false;
+    await switchHost._engineSelect('xratu');
+    assert.equal(switchHost._activeEngine, 'opencode', 'failed target creation leaves the prior engine selected');
+    assert.equal(switchHost._selectedModel, 'opencode/big-pickle');
 
     const startupHost = new sandbox.Host();
     const startupState = new Map();
@@ -501,7 +511,7 @@ try {
     startupHost._view = { webview: { postMessage: (message) => startupMessages.push(message) } };
     startupHost._activeEngine = 'xratu';
     startupHost._getSavedCredentials = async () => [];
-    startupHost._sendSavedCredentials = startupHost._sendOAuthState = startupHost._restoreLocalSession = async () => {};
+    startupHost._sendSavedCredentials = startupHost._sendOAuthState = startupHost._restoreLocalSessionNow = async () => {};
     startupHost._restoreChatUI = startupHost._pushSessionState = () => {};
     startupHost._cancelSetup = () => {};
     startupHost._fetchModels = async () => false;
