@@ -315,6 +315,17 @@ const EDIT_SNAPSHOT_MAX_ENTRIES = 60;
  *  the practical ceiling before the diff editor itself stops being useful. */
 const REVIEW_MAX_CHARS = 1_000_000;
 
+interface CheckpointActionContext {
+    readonly sessionId: string | null;
+    readonly ephemeralSessionId: string | null;
+    readonly epoch: number;
+    readonly workspace: string;
+    readonly root: string;
+    readonly engine: string;
+    readonly turn?: HistoryMessage;
+    readonly checkpoint?: string;
+}
+
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
     private _browserPanelVisible = false;
     private readonly _browser = new BrowserController({
@@ -1548,18 +1559,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Interactive rollback: pick a shadow checkpoint and restore files to it. */
     public async restoreCheckpointFlow(): Promise<void> {
-        const folder = vscode.workspace.workspaceFolders?.[0];
-        if (!folder) {
-            this.notifyBanner('error', 'notifNoFolder');
-            return;
-        }
+        const context = this._captureCheckpointAction();
+        if (!context) return;
         // listCheckpoints throws when the shadow store cannot be initialized (git
         // missing, unwritable storage). Callers `void` this flow, so an
         // uncaught throw became an unhandled rejection and the restore button
         // silently did nothing - the palette path surfaced the same failure.
         let listing: string;
         try {
-            listing = await this._checkpoints.listCheckpoints(folder.uri.fsPath, 20);
+            listing = await this._checkpoints.listCheckpoints(context.root, 20);
         } catch (e) {
             const error = e instanceof Error ? e.message : String(e);
             diagnosticsChannel?.appendLine(`xratu checkpoints - list failed: ${error}`);
@@ -1579,24 +1587,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             { placeHolder: ui('checkpointRestorePlaceholder') }
         );
         if (!picked) return;
+        let resolved: string;
+        try {
+            validateReviewCheckpoint(picked.sha);
+            resolved = await this._checkpoints.resolveCheckpoint(context.root, picked.sha);
+        } catch { this.notifyBanner('warning', 'checkpointTurnGone'); return; }
+        if (!this._checkpointActionCurrent(context)) return;
         const confirm = await this.confirmBanner(
             'notifRestoreConfirm',
             ['notifRestoreAction', 'notifCancel'],
             { target: picked.description }
         );
         if (confirm !== 'notifRestoreAction') return;
-        try {
-            const result = await this._checkpoints.restoreCheckpoint(folder.uri.fsPath, picked.sha);
-            // changed=false = workspace already matched the checkpoint -
-            // nothing was restored, so stay silent.
-            if (result.changed) {
-                this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
-            }
-        } catch (e) {
-            this.notifyBanner('error', 'notifRestoreFailed', {
-                error: e instanceof Error ? e.message : String(e)
-            });
-        }
+        await this._applyCheckpointRestore(context, resolved, false);
     }
 
     async _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void> {
@@ -1775,76 +1778,128 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
+    private _checkpointRestoreActive = false;
+
+    private _captureCheckpointAction(userIndex?: number, sha?: string): CheckpointActionContext | undefined {
+        if (userIndex !== undefined && !this._view) return;
+        if (this._checkpointRestoreActive || this._localRunActive || this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchBusy');
+            return;
+        }
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!root) { this.notifyBanner('error', 'notifNoFolder'); return; }
+        const index = userIndex === undefined ? -1 : this._findUserEntry(userIndex);
+        const turn = index >= 0 ? this._history[index] : undefined;
+        if (userIndex !== undefined && (!Number.isSafeInteger(userIndex) || userIndex < 0 || !turn?.cp || turn.cp !== sha)) {
+            this.notifyBanner('warning', 'checkpointTurnGone');
+            return;
+        }
+        try {
+            return Object.freeze({ sessionId: this._sessionId, ephemeralSessionId: this._ephemeralSessionId,
+                epoch: this._sessionEpoch, workspace: fs.realpathSync(root), root, engine: this._activeEngine,
+                turn, checkpoint: turn?.cp });
+        } catch {
+            this.notifyBanner('warning', 'checkpointActionStale');
+        }
+    }
+
+    private _checkpointActionCurrent(context: CheckpointActionContext, userIndex?: number): boolean {
+        let workspace: string | undefined;
+        try {
+            const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (root) workspace = fs.realpathSync(root);
+        } catch { /* A removed workspace invalidates the action. */ }
+        const index = userIndex === undefined ? -1 : this._findUserEntry(userIndex);
+        if (context.epoch !== this._sessionEpoch || context.sessionId !== this._sessionId ||
+            context.ephemeralSessionId !== this._ephemeralSessionId || context.engine !== this._activeEngine ||
+            context.workspace !== workspace || (userIndex !== undefined &&
+                (index < 0 || this._history[index] !== context.turn || this._history[index].cp !== context.checkpoint))) {
+            this.notifyBanner('warning', 'checkpointActionStale');
+            return false;
+        }
+        if (this._localRunActive || this._abortControllers.size > 0) {
+            this.notifyBanner('warning', 'sessionSwitchBusy');
+            return false;
+        }
+        const jobs = [...backgroundJobViews(), ...(this._openCodeEngine?.backgroundJobs() ?? [])];
+        const writer = jobs.some(job => {
+            if (!job.running) return false;
+            try {
+                const relative = path.relative(context.workspace, fs.realpathSync(job.cwd));
+                return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+            } catch { return true; }
+        });
+        if (writer) {
+            this.notifyBanner('warning', 'checkpointBackgroundBusy');
+            return false;
+        }
+        return true;
+    }
+
     /** Restore to a specific turn's checkpoint (the restore icon on a user
      *  bubble). Confirms the scope first - files only, or files plus a
      *  conversation rewind to before that turn - then reuses the same shadow
      *  restore + ledger truncation as edit/resend. */
     async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
-        if (!this._view) return;
-        if (this._abortControllers.size > 0) {
-            this.notifyBanner('warning', 'sessionSwitchBusy');
+        const context = this._captureCheckpointAction(userIndex, sha);
+        if (!context) return;
+        let resolved: string;
+        try {
+            validateReviewCheckpoint(sha);
+            resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
+        } catch {
+            this.notifyBanner('warning', 'checkpointTurnGone');
             return;
         }
-        const folder = vscode.workspace.workspaceFolders?.[0];
-        if (!folder) {
-            this.notifyBanner('error', 'notifNoFolder');
-            return;
-        }
-
+        if (!this._checkpointActionCurrent(context, userIndex)) return;
         const choice = await this.confirmBanner(
             'checkpointScopeConfirm',
             ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
         );
         if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
-        const rewindChat = choice === 'checkpointScopeFilesAndChat';
-        if (rewindChat && this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
+        await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
+    }
 
-        // The confirm is non-blocking: a run may have started (or the history
-        // changed) while it was open. Re-check before mutating anything.
-        if (this._abortControllers.size > 0) {
-            this.notifyBanner('warning', 'sessionSwitchBusy');
-            return;
-        }
-
-        let emptySeed = false;
-        try {
-            const result = await this._checkpoints.restoreCheckpoint(folder.uri.fsPath, sha);
-            if (result.changed) {
-                this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
-            }
-        } catch (e) {
-            // Empty seed = the workspace was empty at that turn's start.
-            // Restoring TO the seed would wipe files created since, so skip
-            // the file restore - but never silently.
-            if (e instanceof EmptySeedError) {
-                emptySeed = true;
-            } else {
-                this.notifyBanner('error', 'notifCpRestoreFailed', {
-                    error: e instanceof Error ? e.message : String(e),
-                });
+    private async _applyCheckpointRestore(context: CheckpointActionContext, sha: string, rewindChat: boolean, userIndex?: number): Promise<void> {
+        // Human confirmation never holds the queue. Once admitted, file writes
+        // and ledger persistence share the same queue as session replacement.
+        await this._serializeSessionTransition(async () => {
+            if (!this._checkpointActionCurrent(context, userIndex)) return;
+            if (rewindChat && context.engine === 'opencode') {
+                this.notifyBanner('warning', 'engineRewindUnsupported');
                 return;
             }
-        }
-
-        if (!rewindChat) {
-            if (emptySeed) this.notifyBanner('info', 'checkpointEmptySeed');
-            return;
-        }
-
-        // Re-resolve the turn: the index may be stale after the confirm.
-        const targetIdx = this._findUserEntry(userIndex);
-        if (targetIdx < 0) {
-            this.notifyBanner('warning', 'checkpointTurnGone');
-            return;
-        }
-        // Match _rewindAndResend: discard approval bookkeeping for the turns
-        // being removed, or it can later close timeline items that are gone.
-        this._approvalCloseItems = {};
-        this._history = this._history.slice(0, targetIdx);
-        this._truncateLocalHistoryAt(userIndex);
-        this._dropOrphanedTaskListEdit();
-        this._view.webview.postMessage({ type: 'truncateFromUser', userIndex });
-        await this._persistLocalSession();
+            this._checkpointRestoreActive = true;
+            try {
+                // Resolve again: a checkpoint may have disappeared while the
+                // confirmation was open. Neither resolution writes to the tree.
+                const resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
+                if (!this._checkpointActionCurrent(context, userIndex)) return;
+                let emptySeed = false;
+                try {
+                    const result = await this._checkpoints.restoreCheckpoint(context.root, resolved);
+                    if (result.changed) this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
+                } catch (e) {
+                    if (e instanceof EmptySeedError) emptySeed = true;
+                    else throw e;
+                }
+                if (!rewindChat) {
+                    if (emptySeed) this.notifyBanner('info', 'checkpointEmptySeed');
+                    return;
+                }
+                const targetIdx = this._findUserEntry(userIndex!);
+                this._approvalCloseItems = {};
+                this._history = this._history.slice(0, targetIdx);
+                this._truncateLocalHistoryAt(userIndex!);
+                this._dropOrphanedTaskListEdit();
+                this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
+                await this._persistLocalSession();
+            } catch (e) {
+                this.notifyBanner('error', 'notifCpRestoreFailed', { error: e instanceof Error ? e.message : String(e) });
+            } finally {
+                this._checkpointRestoreActive = false;
+            }
+        });
     }
 
     /** Read files via vscode.workspace.fs and hand them to the webview
@@ -2012,6 +2067,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
+        if (this._checkpointRestoreActive) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
         if (this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
         if (!this._view || this._abortControllers.size > 0) return;
 
@@ -5404,6 +5460,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  would overwrite local changes (no -f here, deliberately), and a failure
      *  is REPORTED - a picker that silently does nothing reads as broken. */
     async _gitCheckout(branch: string): Promise<void> {
+        if (this._checkpointRestoreActive) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (root && isSafeBranchName(branch) && this._gitBranches.includes(branch)) {
@@ -6738,6 +6795,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void> {
         if (!this._view) { return; }
+        if (this._checkpointRestoreActive) {
+            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchBusy', prompt, attachments });
+            return;
+        }
         if (this._modelManagementController || this._benchmarkController) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'localModelBusy', prompt, attachments });
             return;
