@@ -63,8 +63,19 @@ export class OpenCodeInstallation {
             return binary;
         } catch { return undefined; }
     }
-    /** Only this extension's managed binaries; native config/auth/history live elsewhere. */
-    async remove(): Promise<void> { await fs.rm(this.root, { recursive: true, force: true }); }
+    /** Retain runtimes referenced by saved chats; remove activation and unused files. */
+    async remove(preserveBinaries: readonly string[] = []): Promise<void> {
+        const identity = (file: string) => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
+        const preserved = new Set(preserveBinaries.map(identity));
+        if (!preserved.size) { await fs.rm(this.root, { recursive: true, force: true }); return; }
+        let entries;
+        try { entries = await fs.readdir(this.root, { withFileTypes: true }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+        for (const entry of entries) {
+            if (entry.isDirectory() && /^2\.\d+\.\d+$/.test(entry.name) && preserved.has(identity(this.binary(entry.name)))) continue;
+            await fs.rm(path.join(this.root, entry.name), { recursive: true, force: true });
+        }
+    }
     async install(signal: AbortSignal, progress: (downloaded: number, total?: number) => void, dispatcher?: unknown): Promise<string> {
         const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
         const release = OPENCODE_RELEASES[releaseTarget(process.platform, process.arch, process.platform === 'linux' && !report?.header?.glibcVersionRuntime)];

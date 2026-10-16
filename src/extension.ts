@@ -711,13 +711,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._postEngineState();
         try {
             await this._serializeSessionTransition(async () => {
+                if (this._activeEngine === 'opencode') await this._persistLocalSession();
+                const preserveBinaries: string[] = [];
+                // The managed installation is shared across every workspace.
+                for (const meta of await this._localSessionStore.list()) {
+                    const snapshot = await this._localSessionStore.load(meta.id);
+                    if (!snapshot) throw new EngineError('engineRemoveFailed');
+                    if (snapshot.engineSession?.engineId === 'opencode' && snapshot.engineSession.binaryPath) preserveBinaries.push(snapshot.engineSession.binaryPath);
+                }
                 if (this._activeEngine === 'opencode') {
-                    await this._persistLocalSession();
                     if (await this._clearHistoryNow({ engineId: 'xratu', model: null }) === false) throw new EngineError('sessionCreateFailed');
                     await this._globalState.update('xratu.activeEngine', 'xratu');
                 }
                 await this._resetOpenCodeEngine();
-                await this._engineInstallation().remove();
+                await this._engineInstallation().remove(preserveBinaries);
             });
         } catch (error) {
             this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineRemoveFailed', detail: error instanceof Error ? error.message : String(error) };

@@ -409,6 +409,7 @@ try {
             _persistLocalSession: async () => { operations.push('persist'); },
             _clearHistoryNow: async ({ engineId }) => { operations.push(`chat:${engineId}`); host._activeEngine = engineId; return true; },
             _globalState: { get: (key) => values.get(key), update: async (key, value) => { values.set(key, value); } },
+            _localSessionStore: { list: async () => [], load: async () => null },
             _engineInstallation: () => ({
                 managedBinary: async () => managed,
                 install: async () => { operations.push('install'); managed = join(root, OPENCODE_VERSION, 'opencode'); return managed; },
@@ -428,6 +429,21 @@ try {
     await removing.host._engineRemove();
     assert.deepEqual(removing.operations, ['persist', 'chat:xratu', 'dispose', 'remove']);
     assert.equal(removing.values.get('xratu.activeEngine'), 'xratu');
+    const saved = lifecycleHost();
+    const savedBinary = join(root, '2.0.26', 'opencode');
+    saved.host._localSessionStore = {
+        list: async (...args) => { assert.deepEqual(args, [], 'removal checks sessions in every workspace'); return [{ id: 'older-chat' }]; },
+        load: async () => ({ engineSession: { engineId: 'opencode', binaryPath: savedBinary } }),
+    };
+    let preserved;
+    saved.host._engineInstallation = () => ({ managedBinary: async () => undefined, remove: async (binaries) => { preserved = binaries; } });
+    await saved.host._engineRemove();
+    assert.deepEqual(Array.from(preserved), [savedBinary], 'removal preserves the exact saved runtime');
+    const unreadable = lifecycleHost();
+    unreadable.host._localSessionStore = { list: async () => [{ id: 'unreadable' }], load: async () => null };
+    await unreadable.host._engineRemove();
+    assert.deepEqual(unreadable.operations, ['persist'], 'unreadable session identity prevents destructive removal or switching chats');
+    assert.equal(unreadable.host._engineSetup.errorKey, 'engineRemoveFailed');
     for (const kind of ['busy', 'external', 'installing']) {
         const guarded = lifecycleHost();
         if (kind === 'busy') guarded.host._localRunActive = true;
@@ -813,6 +829,16 @@ try {
     assert.equal(openCodeUpdateAvailable('2.0.26'), true);
     assert.equal(openCodeUpdateAvailable(OPENCODE_VERSION), false);
     assert.equal(openCodeUpdateAvailable('2.0.100'), false, 'never downgrade a newer runtime');
+    const unusedVersion = join(managedRoot, '2.0.25');
+    await mkdir(unusedVersion);
+    await writeFile(join(unusedVersion, 'unused'), 'unused runtime');
+    await mkdir(join(managedRoot, '.staging-abandoned'));
+    await installation.remove([oldBinary, join(root, 'external', 'opencode')]);
+    assert.equal(await readFile(oldBinary, 'utf8'), 'old binary', 'saved sessions retain their exact runtime after removal');
+    assert.deepEqual(await readdir(managedRoot), ['2.0.26'], 'activation, unused runtimes and abandoned staging are removed');
+    assert.equal(await installation.managedBinary(), undefined);
+    await installation.remove([oldBinary]);
+    assert.equal(await readFile(oldBinary, 'utf8'), 'old binary', 'repeated removal preserves saved runtimes');
     await installation.remove();
     assert.equal(await installation.managedBinary(), undefined);
     assert.equal(await readFile(join(nativeHome, 'auth.json'), 'utf8'), 'native credentials stay here');
