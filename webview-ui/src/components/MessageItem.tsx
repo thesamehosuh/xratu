@@ -136,7 +136,8 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
 }) {
     const calls = group.rows.flatMap(rowCalls);
     const running = calls.some(call => !toolRowDone(call));
-    const [open, setOpen] = useAutoOpen((group.category === 'edit' && prefOn(prefs, 'edit')) || prefOn(prefs, 'thinking'));
+    const hasThinking = group.rows.some(row => row.kind === 'thinking');
+    const [open, setOpen] = useAutoOpen((group.category === 'edit' && prefOn(prefs, 'edit')) || (hasThinking && prefOn(prefs, 'thinking')));
     const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
         : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
         : calls.length === 1 ? t('txOneAction') : tf('surfaceActions', { count: String(calls.length) });

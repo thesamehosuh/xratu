@@ -25,6 +25,14 @@ assert.doesNotMatch(balanced, /private-reasoning-marker/);
 assert.match(balanced, /npm test/);
 assert.equal(JSON.stringify(message), original, 'display projection leaves recorded steps untouched');
 
+const expandedReasoning = render({ transcriptPrefs: { expand: {}, options: { reasoning: 'expanded' } } });
+const expandedGroups = [...expandedReasoning.matchAll(/<details class="step conversation-work-group[^>]*>/g)].map(match => match[0]);
+assert.equal(expandedGroups.length, 2);
+assert.match(expandedGroups[0], /open=""/, 'thinking opens its containing exploration group');
+assert.doesNotMatch(expandedGroups[1], /open=""/, 'thinking does not expand an unrelated edit group');
+const editsExpanded = render({ transcriptPrefs: { expand: { edit: true } } });
+assert.match(editsExpanded, /<details class="step conversation-work-group" open="">/, 'edit preference still expands edit groups');
+
 const activity = renderToString(createElement(ActivityTimeline, { messages: [message] }));
 assert.match(activity, /private-reasoning-marker/);
 assert.match(activity, /progress-marker/);
