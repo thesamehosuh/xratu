@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { strict as assert } from 'node:assert';
-import { ActivityTimeline, MessageItem } from '../src/components/MessageItem';
+import { ActivityTimeline, MessageItem, TASK_LIST_TOOL } from '../src/components/MessageItem';
 import { conversationPrefs, transcriptOptions } from '../src/transcriptPrefs';
 import { setLocale } from '../src/i18n';
 import type { ChatMessage, Step } from '../src/types';
@@ -70,6 +70,8 @@ const settledTurn = render({}, { ...message, steps: [call('settled-cmd', 'run_te
 assert.match(settledTurn, /class="working-row"/, 'a settled, grouped command still shows the live heartbeat');
 assert.doesNotMatch(balanced, /class="working-row"/, 'a row that is still spinning carries its own progress');
 assert.doesNotMatch(render({ transcriptPrefs: { expand: {}, options: { compactCompleted: false } } }, { ...message, status: 'done' as const, steps: [...commandSteps, text('final')] }), /class="working-row"/, 'a finished turn never shows the heartbeat');
+assert.doesNotMatch(render({}, { ...message, steps: [call('plan', TASK_LIST_TOOL, { result: undefined })] }), /class="working-row"/, 'a pending task list already draws its own spinner');
+assert.doesNotMatch(render({}, { ...message, steps: [call('settled-cmd', 'run_terminal_command')], decisions: [{ decision_id: 'q1', question: 'Which one?', options: [] }] }), /class="working-row"/, 'a turn parked on an unanswered question is not a working turn');
 const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage] }));
 assert.equal(groups(commandActivity), 0);
 assert.match(commandActivity, /lint result/);

@@ -2130,10 +2130,17 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
         !!lastRow &&
         lastRow.kind !== 'text' &&
         (lastRow.kind === 'thinking' ||
+            // A pending update_task_list already draws its own spinner in
+            // TaskListRow; without this the heartbeat doubles up with it.
+            (lastRow.kind === 'taskList' && !lastRow.step.result) ||
             (lastRow.kind === 'toolGroup'
                 ? lastRow.calls.some((c) => !toolRowDone(c))
                 : lastRow.kind === 'tool' && !toolRowDone(lastRow)));
-    const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
+    // A turn blocked on the reader is not a working turn. An unanswered
+    // decision is waiting on them, so a heartbeat beside it claims the agent
+    // is busy when it is actually parked.
+    const awaitingAnswer = !!message.decisions?.some((decision) => !decision.answered);
+    const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && !awaitingAnswer && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
     const showFooter = !readOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
     // User bubbles carry their own footer from the moment they appear; the
