@@ -5482,10 +5482,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             binaryPath: this._activeEngine === 'opencode' ? this._engineSession?.binaryPath ?? null : null };
     }
 
-    private async _runPullRequestUpdate(prompt: string, epoch: number, urls: string[], expected: PullRequestExecution, admit: () => boolean): Promise<boolean> {
+    private async _runPullRequestUpdate(prompt: string, epoch: number, urls: string[], expected: PullRequestExecution | null, admit: () => boolean): Promise<boolean> {
         const current = () => admit() && epoch === this._sessionEpoch && !this._localRunActive && !this._sessionTransitionsPending && !this._checkpointRestoreActive && !!this._view && !this._planMode && !isOfflineMode();
         if (!current()) return false;
-        if (!executionMatches(expected, await this._pullRequestExecution())) return false;
+        // No identity to pin (manual continuation without a resolvable branch)
+        // still runs under the admission checks above and below.
+        if (expected && !executionMatches(expected, await this._pullRequestExecution())) return false;
         // No await between the final admission check and the normal run gate.
         if (!current()) return false;
         const display = `${ui('prMonitorPrompt')}\n${urls.join('\n')}`;

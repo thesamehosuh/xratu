@@ -66,7 +66,7 @@ Install GitHub CLI and run
 authentication remains separate from GitHub API authentication.
 
 **Watch** checks for new failures, passing required checks, comments/reviews,
-and conflicts every two minutes while the VS Code extension host is running.
+and conflicts every 30 seconds while the VS Code extension host is running.
 Links, cursors, and pending updates survive reloads. Offline mode pauses reads;
 closing VS Code pauses monitoring. GitHub rate limits pause retries without
 ending a watch. Own-account comments are excluded to prevent reply loops.
@@ -75,7 +75,8 @@ Ask the agent to watch a PR to continue the owning conversation when updates
 arrive. You can also start or stop a watch from its details. This uses the selected model's
 budget and retains normal approvals. If the conversation is inactive, busy,
 or its branch, model, account, or engine changed, updates wait in its PR panel;
-the session picker shows pending updates. Interrupted continuations require
+the session picker shows pending updates, and **Review with agent** delivers
+them into the current context. Interrupted continuations require
 an explicit retry. **Stop watching**, **Unlink**, and the conversation's Stop
 action withdraw pending continuations. Close/merge, eight failed reads, or ten
 consecutive comment-only updates also end a watch.

@@ -22,6 +22,10 @@ const prompt = planMode => buildLocalSystemPrompt({ rulesContext: '', sessionSum
 assert.ok(prompt(false).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
 assert.ok(!prompt(true).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
 assert.ok(!buildSubagentSystemPrompt({ agentPrompt: 'Review', rulesContext: '', planMode: false }).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
+const watchTool = PULL_REQUEST_TOOLS.find(tool => tool.name === 'watch_pull_request');
+assert.ok(PULL_REQUEST_AGENT_INSTRUCTIONS.includes('unwatch_pull_request only when the PR task is finished or the user asks you to stop'));
+assert.ok(!PULL_REQUEST_AGENT_INSTRUCTIONS.includes('Before handing the work back, call unwatch_pull_request.'));
+assert.ok(!watchTool.description.includes('Stop watching before handing work back.'));
 for (const tool of PULL_REQUEST_TOOLS) assert.ok(names({}).has(tool.name));
 for (const name of PULL_REQUEST_MUTATIONS) {
     assert.equal(names({ plan: true }).has(name), false);
