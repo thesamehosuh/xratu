@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { strict as assert } from 'node:assert';
-import { ActivityTimeline, MessageItem } from '../src/components/MessageItem';
+import { ActivityTimeline, MessageItem, TASK_LIST_TOOL } from '../src/components/MessageItem';
 import { conversationPrefs, transcriptOptions } from '../src/transcriptPrefs';
 import { setLocale } from '../src/i18n';
 import type { ChatMessage, Step } from '../src/types';
@@ -70,6 +70,15 @@ assert.match(mixed, /4 actions/);
 assert.equal(groups(render({}, { ...message, steps: [call('status', 'git_status'), call('diff', 'git_diff')] })), 1, 'git calls group together');
 const mixedEditsExpanded = render({ transcriptPrefs: { expand: { edit: true } } }, { ...message, steps: [commandSteps[0], call('edit', 'apply_patch')] });
 assert.match(mixedEditsExpanded, /conversation-work-group" open=""/, 'mixed groups honor contained edit expansion');
+// The heartbeat belongs to the LIVE conversation, not only the read-only
+// views: a settled command group is finished, not running, so without it the
+// turn reads as stalled between a completed call and the next delta.
+const settledTurn = render({}, { ...message, steps: [call('settled-cmd', 'run_terminal_command')] });
+assert.match(settledTurn, /class="working-row"/, 'a settled, grouped command still shows the live heartbeat');
+assert.doesNotMatch(balanced, /class="working-row"/, 'a row that is still spinning carries its own progress');
+assert.doesNotMatch(render({ transcriptPrefs: { expand: {}, options: { compactCompleted: false } } }, { ...message, status: 'done' as const, steps: [...commandSteps, text('final')] }), /class="working-row"/, 'a finished turn never shows the heartbeat');
+assert.doesNotMatch(render({}, { ...message, steps: [call('plan', TASK_LIST_TOOL, { result: undefined })] }), /class="working-row"/, 'a pending task list already draws its own spinner');
+assert.doesNotMatch(render({}, { ...message, steps: [call('settled-cmd', 'run_terminal_command')], decisions: [{ decision_id: 'q1', question: 'Which one?', options: [] }] }), /class="working-row"/, 'a turn parked on an unanswered question is not a working turn');
 const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage] }));
 assert.equal(groups(commandActivity), 0);
 assert.match(commandActivity, /lint result/);
