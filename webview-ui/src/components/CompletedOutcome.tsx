@@ -1,38 +1,17 @@
-import { FileDiff, FileText, MessageSquarePlus, SquareTerminal } from 'lucide-react';
-import type { ReviewChange, Step } from '../types';
+import { FileDiff, FileText, MessageSquarePlus } from 'lucide-react';
+import type { ReviewChange } from '../types';
 import { t, tf } from '../i18n';
 
-/** Only host terminal results with an explicit exit status become check rows. */
-export function completedCommands(steps: Step[]): Array<{ id: string; command: string; exit: string }> {
-    return steps.flatMap((step) => {
-        if (step.kind !== 'toolCall' || step.tool !== 'run_terminal_command' || step.background) return [];
-        const exit = (step.backgroundOutcome?.output ?? step.result)?.match(/(?:^|\n)Exit code: (-?\d+)(?:\r?\n|$)/)?.[1];
-        if (exit === undefined) return [];
-        try {
-            const args = JSON.parse(step.text) as { command?: unknown };
-            return typeof args.command === 'string' ? [{ id: step.id, command: args.command, exit }] : [];
-        } catch { return []; }
-    });
-}
-
-export function CompletedOutcome({ steps, sha, files, onReview, onAskReview }: {
-    steps: Step[];
+export function CompletedOutcome({ sha, files, onReview, onAskReview }: {
     sha: string;
     files?: ReviewChange[];
     onReview?: (sha: string, path?: string) => void;
     onAskReview?: (text: string) => void;
 }) {
-    const commands = completedCommands(steps);
-    // `files` is only populated for the selected review turn (MessageList
-    // passes undefined for older turns). Hide the review buttons when the
-    // turn is positively known to have no diff; older turns keep theirs.
-    const noDiff = files !== undefined && files.length === 0;
-    if (!commands.length && noDiff) return null;
+    const hasDiff = !!files?.length;
+    if (!hasDiff) return null;
     return <div className="turn-outcome">
-        {!!commands.length && <div className="outcome-checks">{commands.map((item) => <div className={`outcome-check${item.exit !== '0' ? ' failed' : ''}`} key={item.id}>
-            <SquareTerminal size={12} /><code dir="ltr" title={item.command}>{item.command}</code><span dir="ltr">{tf('surfaceExitCode', { code: item.exit })}</span>
-        </div>)}</div>}
-        {!noDiff && <div className="outcome-actions">
+        {hasDiff && <div className="outcome-actions">
             {onReview && <button type="button" className="outcome-review" onClick={() => onReview(sha)}><FileDiff size={13} />{t('surfaceReview')}{!!files?.length && <span dir="ltr">{files.length}</span>}</button>}
             {onAskReview && <button type="button" onClick={() => onAskReview(files?.length ? tf('surfaceAskReviewPrompt', { files: files.map((file) => file.path).join(', ') }) : t('surfaceAskTurnReviewPrompt'))}><MessageSquarePlus size={13} />{t('surfaceAskReview')}</button>}
         </div>}

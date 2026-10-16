@@ -847,3 +847,17 @@ test('the fresh-workspace chips type a prompt with no {file} placeholder', async
     await page.locator('.chip-suggest').first().click();
     await expect(page.locator('.composer-input')).toHaveValue(/This folder is empty/);
 });
+
+test('automatic monitor wakes hide their user row and keep the response visible', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Watch the PR' });
+    await hostMessage(page, { type: 'restoreUser', value: 'PR monitor notification', hidden: true });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'chunk', value: 'I checked the new review.' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'I checked the new review.', renderedHtml: '<p>I checked the new review.</p>' });
+    await expect(page.locator('article.msg.user')).toHaveCount(1);
+    await expect(page.locator('.transcript-pane')).not.toContainText('PR monitor notification');
+    await expect(page.locator('.transcript-pane')).toContainText('I checked the new review.');
+    await expect(page.locator('.queued-steer-chip,.pr-indicator')).toHaveCount(0);
+});

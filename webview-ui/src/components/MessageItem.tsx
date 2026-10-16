@@ -110,7 +110,7 @@ function conversationRows(rows: Row[], options: TranscriptOptions): Conversation
             }
             const calls = rowCalls(row);
             const family = calls.length ? toolFamily(calls[0].call.tool) : undefined;
-            const protectedRow = calls.some(call => call.call.background || call.call.interrupted || toolRowFailed(call.call, call.result)) || family === 'subagent';
+            const protectedRow = calls.some(call => call.call.background || call.call.interrupted) || family === 'subagent';
             const category = options.detail === 'detailed' || protectedRow ? undefined
                 : family === 'read' || family === 'search' ? 'explore'
                 : family === 'edit' ? 'edit'
@@ -141,7 +141,8 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
     const running = calls.some(call => !toolRowDone(call));
     const edits = calls.filter(call => toolFamily(call.call.tool) === 'edit');
     const hasThinking = group.rows.some(row => row.kind === 'thinking');
-    const Icon = group.category === 'git' ? toolIcon('git_status') : ListChecks;
+    const currentCall = [...calls].reverse().find(call => !toolRowDone(call)) ?? calls.at(-1);
+    const Icon = currentCall ? toolIcon(currentCall.call.tool) : Brain;
     const [open, setOpen] = useAutoOpen((calls.some(call => toolFamily(call.call.tool) === 'edit') && prefOn(prefs, 'edit')) || (calls.some(call => toolFamily(call.call.tool) === 'terminal') && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
     const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
         : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
@@ -432,6 +433,10 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
         }
     }
     return rows;
+}
+
+export function hasActivity(messages: ChatMessage[]): boolean {
+    return messages.some(message => message.role === 'assistant' && activityRows(message.steps, !!message.decisions?.length, 'all', '').length > 0);
 }
 
 /** Filter the observation view after identifying the original final answer. */
@@ -2349,7 +2354,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                 </div>
             )}
 
-            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome steps={steps} sha={reviewSha} files={reviewFiles} onReview={onReviewChanges ? (sha, path) => onReviewChanges(sha, path, reviewTurnNumber) : undefined} onAskReview={onAskReview} />}
+            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome sha={reviewSha} files={reviewFiles} onReview={onReviewChanges ? (sha, path) => onReviewChanges(sha, path, reviewTurnNumber) : undefined} onAskReview={onAskReview} />}
 
             {showFooter && (
                 <div className="msg-footer">

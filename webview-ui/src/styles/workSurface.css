@@ -410,3 +410,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .changes-pane.panel-main .changes-history { max-width:980px; margin-inline:auto; }
 
 .review-input:placeholder-shown { direction:inherit; }
+
+.dock-layout-menu { max-height:min(70vh,540px); overflow-y:auto; }
+.dock-layout-menu [role="menuitem"] { justify-content:space-between; gap:12px; }
