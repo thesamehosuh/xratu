@@ -33,7 +33,12 @@ costs when Xratu pricing is edited.
 ## OpenCode inside Xratu
 
 Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x
-installation, or installs a verified standalone 2.0.26 binary with one click.
+installation, or installs a verified standalone 2.0.30 binary with one click.
+Managed installations offer **Update engine** when a newer verified release ships
+with Xratu, and **Remove engine**. Updating opens a fresh chat and keeps older
+binaries for saved sessions. Removal stops the managed runtime and switches chat
+to Xratu; OpenCode credentials, settings, and history are preserved. Update or
+remove a custom/PATH installation using its original installer.
 Node and npm are not required. Open a project folder, select **Use in new chat**,
 and pick an OpenCode model. The free models work without an Xratu API key;
 their availability and rate limits are controlled by OpenCode.

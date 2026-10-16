@@ -138,7 +138,8 @@ import { EngineRegistry } from './engines/registry';
 import { xratuEngine } from './engines/xratuEngine';
 import { EngineError, isFreeModel, OpenCodeEngine } from './engines/opencode/engine';
 import type { NativeShellUpdate } from './engines/opencode/shells';
-import { checkOpenCode, OpenCodeInstallation } from './engines/opencode/installation';
+import { checkOpenCode, openCodeUpdateAvailable, OpenCodeInstallation } from './engines/opencode/installation';
+import { openCodeEnvironment } from './engines/opencode/environment';
 import type { EngineId, EngineSessionRef, EngineSetupState } from './engines/types';
 import type { LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
@@ -669,10 +670,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._postEngineState();
         const managed = await this._engineInstallation().managedBinary();
         const binary = customPath || managed || 'opencode';
+        if (epoch !== this._engineCheckEpoch) return;
+        this._engineSetup = { ...this._engineSetup, installedByXratu: binary === managed, binaryPath: binary };
         try {
             const version = await checkOpenCode(binary);
             if (epoch !== this._engineCheckEpoch) return;
-            this._engineSetup = { ...this._engineSetup, phase: version.startsWith('2.') ? 'ready' : 'unsupported', version, binaryPath: binary, installedByXratu: binary === managed };
+            this._engineSetup = { ...this._engineSetup, phase: version.startsWith('2.') ? 'ready' : 'unsupported', version, updateAvailable: binary === managed && openCodeUpdateAvailable(version) };
         } catch (error) {
             if (epoch !== this._engineCheckEpoch) return;
             this._engineSetup = { ...this._engineSetup, phase: customPath ? 'failed' : 'missing', errorKey: customPath ? 'enginePathFailed' : undefined, detail: customPath ? String(error) : undefined };
@@ -688,28 +691,73 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         await this._sendEnginesState();
     }
     _engineCancelInstall(): void { this._engineInstallController?.abort(); }
-    async _engineInstall(): Promise<void> {
-        if (this._engineInstallController || this._localRunActive) return;
+    private async _resetOpenCodeEngine(): Promise<void> {
+        this._cancelSetup();
+        this._cancelNativeSetup();
+        this._cancelModelPings();
+        this._setupAvailability.clear();
+        const previous = this._openCodeEngine;
+        this._openCodeEngine = undefined;
+        this._openCodeEnvironmentKey = '';
+        await previous?.dispose();
+    }
+    async _engineRemove(): Promise<void> {
+        if (this._engineInstallController || this._localRunActive || this._setupStarting || !this._engineSetup.installedByXratu) return;
         const controller = new AbortController();
         this._engineInstallController = controller;
         ++this._engineCheckEpoch;
-        this._engineSetup = { ...this._engineSetup, phase: 'installing', errorKey: undefined, detail: undefined, downloadedBytes: 0, totalBytes: undefined };
+        this._engineSetup = { ...this._engineSetup, phase: 'removing', errorKey: undefined, detail: undefined };
         this._postEngineState();
-        let lastProgress = 0;
         try {
-            await this._engineInstallation().install(controller.signal, (downloadedBytes, totalBytes) => {
-                this._engineSetup = { ...this._engineSetup, downloadedBytes, totalBytes };
-                if (Date.now() - lastProgress > 150) { lastProgress = Date.now(); this._postEngineState(); }
-            }, getProxyDispatcher('https://registry.npmjs.org'));
-            await this._globalState.update('xratu.enginePath.opencode', '');
+            await this._serializeSessionTransition(async () => {
+                if (this._activeEngine === 'opencode') {
+                    await this._persistLocalSession();
+                    if (await this._clearHistoryNow({ engineId: 'xratu', model: null }) === false) throw new EngineError('sessionCreateFailed');
+                    await this._globalState.update('xratu.activeEngine', 'xratu');
+                }
+                await this._resetOpenCodeEngine();
+                await this._engineInstallation().remove();
+            });
         } catch (error) {
-            if (!controller.signal.aborted) this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineInstallFailed', detail: error instanceof Error ? error.message : String(error) };
+            this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineRemoveFailed', detail: error instanceof Error ? error.message : String(error) };
         } finally {
             await this._engineCheck;
             this._engineInstallController = undefined;
             if (this._engineSetup.phase === 'failed') this._postEngineState();
             else await this._sendEnginesState();
         }
+    }
+    async _engineInstall(): Promise<void> {
+        if (this._engineInstallController || this._localRunActive || this._setupStarting) return;
+        const controller = new AbortController();
+        this._engineInstallController = controller;
+        ++this._engineCheckEpoch;
+        this._engineSetup = { ...this._engineSetup, phase: 'installing', errorKey: undefined, detail: undefined, downloadedBytes: 0, totalBytes: undefined };
+        this._postEngineState();
+        await this._serializeSessionTransition(async () => {
+            let lastProgress = 0;
+            let installed = false;
+            try {
+                await this._resetOpenCodeEngine();
+                await this._engineInstallation().install(controller.signal, (downloadedBytes, totalBytes) => {
+                    this._engineSetup = { ...this._engineSetup, downloadedBytes, totalBytes };
+                    if (Date.now() - lastProgress > 150) { lastProgress = Date.now(); this._postEngineState(); }
+                }, getProxyDispatcher('https://registry.npmjs.org'));
+                await this._globalState.update('xratu.enginePath.opencode', '');
+                installed = true;
+            } catch (error) {
+                if (!controller.signal.aborted) this._engineSetup = { ...this._engineSetup, phase: 'failed', errorKey: 'engineInstallFailed', detail: error instanceof Error ? error.message : String(error) };
+            } finally {
+                await this._engineCheck;
+                this._engineInstallController = undefined;
+                if (this._engineSetup.phase === 'failed') this._postEngineState();
+                else await this._sendEnginesState();
+            }
+            if (installed && this._activeEngine === 'opencode') {
+                await this._persistLocalSession();
+                await this._clearHistoryNow({ engineId: 'opencode', model: this._selectedModel });
+            }
+        });
     }
     async _engineSelect(id: EngineId): Promise<void> {
         if (this._localRunActive || this._engineInstallController || id === this._activeEngine) return;
@@ -732,22 +780,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (needsCredentials) this._startupPage.open(() => { void this._setLlmCredentials(undefined, 'byok'); });
         });
     }
-    private async _getOpenCodeEngine(): Promise<OpenCodeEngine> {
+    private async _getOpenCodeEngine(sessionBinary?: string): Promise<OpenCodeEngine> {
         if (isOfflineMode()) throw new EngineError('engineOfflineUnsupported');
+        sessionBinary ??= this._activeEngine === 'opencode' ? this._engineSession?.binaryPath : undefined;
         await this._sendEnginesState();
-        if (this._engineSetup.phase !== 'ready' || !this._engineSetup.binaryPath) throw new EngineError('engineNotReady');
+        if (this._engineInstallController) throw new EngineError('engineNotReady');
+        if (!sessionBinary && (this._engineSetup.phase !== 'ready' || !this._engineSetup.binaryPath)) throw new EngineError('engineNotReady');
+        const binary = sessionBinary || this._engineSetup.binaryPath!;
+        // An update keeps earlier managed versions for saved native sessions.
+        // Resume their recorded runtime rather than silently changing identity.
+        if (sessionBinary && sessionBinary !== this._engineSetup.binaryPath && !(await checkOpenCode(sessionBinary)).startsWith('2.')) throw new EngineError('engineNotReady');
         const proxy = getProxyResolution();
         const environmentKey = JSON.stringify([proxy.mode, proxy.url, proxy.noProxy]);
-        if (this._openCodeEngine?.binary !== this._engineSetup.binaryPath || (!this._nativeTurnActive && this._openCodeEnvironmentKey !== environmentKey)) {
+        if (this._openCodeEngine?.binary !== binary || (!this._nativeTurnActive && this._openCodeEnvironmentKey !== environmentKey)) {
             const previous = this._openCodeEngine;
-            const env = { ...process.env };
-            if (proxy.url) {
-                env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = proxy.url;
-                env.NO_PROXY = env.no_proxy = ['127.0.0.1', 'localhost', '::1', proxy.noProxy].filter(Boolean).join(',');
-            } else if (proxy.mode === 'off') {
-                for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
-            }
-            this._openCodeEngine = new OpenCodeEngine(this._engineSetup.binaryPath, env, undefined, {
+            const env = openCodeEnvironment(process.env, proxy);
+            this._openCodeEngine = new OpenCodeEngine(binary, env, undefined, {
                 listTools: async () => [
                     ...await externalMcpInstance?.listTools() ?? [],
                     ...PULL_REQUEST_TOOLS.map(tool => ({ ...tool, originalName: tool.name, serverName: 'xratu', autoApprove: true })),
@@ -4723,7 +4771,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             if (!workspace) throw new EngineError('engineWorkspaceRequired');
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
-            const engine = await this._getOpenCodeEngine();
+            const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
             this._nativeTurnActive = true;
             const agent = engine.runTurn({ prompt, context: [rulesContext, !(planMode ?? this._planMode) && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },

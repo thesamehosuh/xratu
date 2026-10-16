@@ -27,11 +27,12 @@ export interface OpenDiffEdit {
 
 export interface EngineSetupState {
     active: 'xratu' | 'opencode';
-    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'failed';
+    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'removing' | 'failed';
     version?: string;
     binaryPath?: string;
     customPath: string;
     installedByXratu: boolean;
+    updateAvailable?: boolean;
     downloadedBytes?: number;
     totalBytes?: number;
     errorKey?: string;
@@ -53,6 +54,7 @@ export type ToExtensionMessage =
     | { type: 'enginesGetState' }
     | { type: 'engineSelect'; engine: 'xratu' | 'opencode' }
     | { type: 'engineInstall' }
+    | { type: 'engineRemove' }
     | { type: 'engineInstallCancel' }
     | { type: 'engineSetPath'; path: string }
     | { type: 'pingFreeModel'; model: string; automatic?: boolean }

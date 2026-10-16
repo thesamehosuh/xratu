@@ -55,6 +55,7 @@ export interface WebviewMessageHost {
     _sendEnginesState(): Promise<void>;
     _engineSelect(id: 'xratu' | 'opencode'): Promise<void>;
     _engineInstall(): Promise<void>;
+    _engineRemove(): Promise<void>;
     _engineCancelInstall(): void;
     _engineSetPath(value: string): Promise<void>;
     _sendBrowserState(): void;
@@ -189,6 +190,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'enginesGetState': await host._sendEnginesState(); break;
                 case 'engineSelect': if (data.engine === 'xratu' || data.engine === 'opencode') await host._engineSelect(data.engine); break;
                 case 'engineInstall': await host._engineInstall(); break;
+                case 'engineRemove': await host._engineRemove(); break;
                 case 'engineInstallCancel': host._engineCancelInstall(); break;
                 case 'engineSetPath': if (typeof data.path === 'string') await host._engineSetPath(data.path); break;
                 case 'browserGetState':

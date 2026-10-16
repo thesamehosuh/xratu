@@ -8,11 +8,21 @@ import * as tar from 'tar';
 import { killTree } from '../../tooling/processTree';
 import { proxyFetch } from '../../proxyFetch';
 import { OPENCODE_RELEASES, OPENCODE_VERSION } from './releases';
+import { openCodeEnvironment } from './environment';
+
+export function openCodeUpdateAvailable(version: string): boolean {
+    const current = version.split('.').map(Number);
+    const recommended = OPENCODE_VERSION.split('.').map(Number);
+    for (let index = 0; index < 3; index++) {
+        if (current[index] !== recommended[index]) return current[index] < recommended[index];
+    }
+    return false;
+}
 
 export function checkOpenCode(binary: string, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
         signal?.throwIfAborted();
-        const child = crossSpawn(binary, ['--version'], { windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = crossSpawn(binary, ['--version'], { env: openCodeEnvironment(process.env), windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
         let output = '';
         const abort = () => { void killTree(child.pid); finish(new Error('OpenCode version check cancelled')); };
         const timer = setTimeout(() => { void killTree(child.pid); finish(new Error('OpenCode version check timed out')); }, 15_000);
@@ -53,6 +63,8 @@ export class OpenCodeInstallation {
             return binary;
         } catch { return undefined; }
     }
+    /** Only this extension's managed binaries; native config/auth/history live elsewhere. */
+    async remove(): Promise<void> { await fs.rm(this.root, { recursive: true, force: true }); }
     async install(signal: AbortSignal, progress: (downloaded: number, total?: number) => void, dispatcher?: unknown): Promise<string> {
         const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
         const release = OPENCODE_RELEASES[releaseTarget(process.platform, process.arch, process.platform === 'linux' && !report?.header?.glibcVersionRuntime)];

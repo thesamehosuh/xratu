@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,12 +10,13 @@ import { build } from 'esbuild';
 import { OpenCode } from '@opencode/client';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-engines-'));
 const bundle = join(root, 'engine.cjs');
-await build({ stdin: { contents: "export { trimDisplayEvent } from './src/local/eventBounds'; export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
+await build({ stdin: { contents: "export { trimDisplayEvent } from './src/local/eventBounds'; export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/transport'; export * from './src/engines/opencode/environment'; export * from './src/engines/opencode/events'; export * from './src/engines/opencode/releases'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
 const require = createRequire(import.meta.url);
-const { trimDisplayEvent, OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
+const { openCodeEnvironment, openCodeFetch, subscribeEvents, openCodeUpdateAvailable, OPENCODE_VERSION, trimDisplayEvent, OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
 
 async function harness(mode = 'complete', mcpSource) {
     let stream;
@@ -387,10 +388,73 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    function lifecycleHost() {
+        const host = new sandbox.Host();
+        const operations = [];
+        const values = new Map();
+        let managed = join(root, '2.0.26', 'opencode');
+        Object.assign(host, {
+            _engineCheckEpoch: 0, _activeEngine: 'opencode', _selectedModel: 'opencode/big-pickle',
+            _engineSetup: { phase: 'ready', binaryPath: managed, installedByXratu: true },
+            _setupAvailability: new Map([['old', {}]]),
+            _cancelSetup: () => {}, _cancelNativeSetup: () => {}, _cancelModelPings: () => {},
+            _postEngineState: () => {}, _serializeSessionTransition: async (operation) => operation(),
+            _openCodeEngine: { dispose: async () => { operations.push('dispose'); } },
+            _persistLocalSession: async () => { operations.push('persist'); },
+            _clearHistoryNow: async ({ engineId }) => { operations.push(`chat:${engineId}`); host._activeEngine = engineId; return true; },
+            _globalState: { get: (key) => values.get(key), update: async (key, value) => { values.set(key, value); } },
+            _engineInstallation: () => ({
+                managedBinary: async () => managed,
+                install: async () => { operations.push('install'); managed = join(root, OPENCODE_VERSION, 'opencode'); return managed; },
+                remove: async () => { operations.push('remove'); managed = undefined; },
+            }),
+        });
+        return { host, operations, values };
+    }
+    const updating = lifecycleHost();
+    await updating.host._engineInstall();
+    assert.deepEqual(updating.operations, ['dispose', 'install', 'persist', 'chat:opencode']);
+    assert.equal(updating.host._engineInstallController, undefined);
+    assert.equal(updating.host._setupAvailability.size, 0);
+    assert.equal(updating.values.get('xratu.enginePath.opencode'), '');
+    const removing = lifecycleHost();
+    await removing.host._engineRemove();
+    assert.deepEqual(removing.operations, ['persist', 'chat:xratu', 'dispose', 'remove']);
+    assert.equal(removing.values.get('xratu.activeEngine'), 'xratu');
+    for (const kind of ['busy', 'external', 'installing']) {
+        const guarded = lifecycleHost();
+        if (kind === 'busy') guarded.host._localRunActive = true;
+        if (kind === 'external') guarded.host._engineSetup.installedByXratu = false;
+        if (kind === 'installing') guarded.host._engineInstallController = new AbortController();
+        await guarded.host._engineRemove();
+        assert.deepEqual(guarded.operations, [], `removal must reject ${kind} engines`);
+    }
+    for (const cancelled of [false, true]) {
+        const failed = lifecycleHost();
+        failed.host._engineInstallation = () => ({ managedBinary: async () => join(root, 'old'), install: async () => {
+            if (cancelled) failed.host._engineInstallController.abort();
+            throw new Error('download failed');
+        } });
+        await failed.host._engineInstall();
+        assert.deepEqual(failed.operations, ['dispose'], 'failed/cancelled updates keep the existing conversation');
+        assert.equal(failed.host._engineInstallController, undefined);
+        assert.equal(failed.host._engineSetup.phase, cancelled ? 'ready' : 'failed');
+    }
+    const resumed = lifecycleHost();
+    resumed.host._engineSetup = { phase: 'ready', binaryPath: join(root, 'new-opencode') };
+    resumed.host._sendEnginesState = async () => {};
+    resumed.host._engines = { register: () => {} };
+    resumed.host._storagePath = root;
+    const restoredBinary = join(root, 'old-opencode');
+    assert.equal((await resumed.host._getOpenCodeEngine(restoredBinary)).binary, restoredBinary, 'saved native sessions keep their binary identity after an update');
+    resumed.host._engineSession = { engineId: 'opencode', binaryPath: restoredBinary };
+    assert.equal((await resumed.host._getOpenCodeEngine()).binary, restoredBinary, 'model probes and settings cannot replace the runtime of a restored conversation');
+    await resumed.host._openCodeEngine.dispose();
+    console.log('ok update/removal lifecycle, runtime disposal, failure recovery, busy guards and saved-session identity');
     const nativeTurn = await harness('cancelResume');
     try {
         const nativeHost = new sandbox.Host();
@@ -734,8 +798,81 @@ try {
         assert.deepEqual(await readdir(installRoot), [], 'failed installs leave no active runtime or staging');
     } finally { globalThis.fetch = originalFetch; }
     console.log('ok Plan gating, platform selection, and installer integrity');
+    const nativeHome = join(root, 'native-home');
+    const managedRoot = join(nativeHome, 'managed');
+    const installation = new OpenCodeInstallation(managedRoot);
+    const oldBinary = join(managedRoot, '2.0.26', process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+    await mkdir(join(managedRoot, '2.0.26'), { recursive: true });
+    await writeFile(oldBinary, 'old binary');
+    await writeFile(join(managedRoot, 'active'), '\uFEFF2.0.26\r\n');
+    await writeFile(join(nativeHome, 'auth.json'), 'native credentials stay here');
+    assert.equal(await installation.managedBinary(), oldBinary, 'extension updates find the persisted binary, including a BOM/CRLF pointer');
+    assert.equal(openCodeUpdateAvailable('2.0.26'), true);
+    assert.equal(openCodeUpdateAvailable(OPENCODE_VERSION), false);
+    assert.equal(openCodeUpdateAvailable('2.0.100'), false, 'never downgrade a newer runtime');
+    await installation.remove();
+    assert.equal(await installation.managedBinary(), undefined);
+    assert.equal(await readFile(join(nativeHome, 'auth.json'), 'utf8'), 'native credentials stay here');
+    await installation.remove(); // Idempotent removal, including after a partial failure.
+    console.log('ok persisted managed runtimes, numeric updates and removal preserve native data');
+
+    const inherited = { HTTP_PROXY: 'http://old:1', all_proxy: 'http://old:2', NO_PROXY: 'internal', no_proxy: 'other', PATH: process.env.PATH };
+    for (const mode of ['off', 'custom', 'auto']) {
+        const env = openCodeEnvironment(inherited, { mode, url: mode === 'auto' ? 'http://new:3' : null, noProxy: 'configured' });
+        assert.equal(env.HTTP_PROXY, mode === 'auto' ? 'http://new:3' : undefined);
+        assert.equal(env.all_proxy, undefined);
+        assert.equal(env.NO_PROXY, env.no_proxy);
+        for (const host of ['127.0.0.1', 'localhost', '::1', 'configured']) assert.ok(env.NO_PROXY.split(',').includes(host));
+        assert.equal(env.PATH, inherited.PATH);
+        assert.ok(!env.NO_PROXY.includes('other'), 'configured bypasses override inherited lowercase entries');
+    }
+    assert.ok(openCodeEnvironment(inherited).NO_PROXY.includes('internal,other'));
+    assert.equal(inherited.HTTP_PROXY, 'http://old:1', 'do not mutate the extension host environment');
+    const requests = [];
+    const transportServer = createServer((request, response) => {
+        requests.push(request.url);
+        assert.equal(request.headers.authorization, 'Basic local-only');
+        if (request.url === '/api/event') {
+            response.writeHead(200, { 'content-type': 'text/event-stream' });
+            response.end('data: {"type":"local.ready","data":{"ok":true}}\n\n');
+        } else {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end('{"data":[]}');
+        }
+    });
+    await new Promise((resolve) => transportServer.listen(0, '127.0.0.1', resolve));
+    const originalDispatcher = getGlobalDispatcher();
+    const blockedDispatcher = new MockAgent();
+    blockedDispatcher.disableNetConnect();
+    try {
+        // Reproduce host proxy interception: global fetch denies EVERY request.
+        globalThis.fetch = async () => new Response('Forbidden by host proxy', { status: 403 });
+        setGlobalDispatcher(blockedDispatcher);
+        const baseUrl = `http://127.0.0.1:${transportServer.address().port}`;
+        const headers = { Authorization: 'Basic local-only' };
+        const brokenClient = OpenCode.make({ baseUrl, headers });
+        await assert.rejects(brokenClient.model.list({ location: { directory: root } }), /403/);
+        const client = OpenCode.make({ baseUrl, headers, fetch: openCodeFetch });
+        assert.deepEqual((await client.model.list({ location: { directory: root } })).data, []);
+        const stream = await subscribeEvents(baseUrl, headers, AbortSignal.timeout(5000));
+        for await (const event of stream) { assert.equal(event.type, 'local.ready'); break; }
+        assert.ok(requests.some((url) => url.startsWith('/api/model')));
+        assert.ok(requests.includes('/api/event'));
+        const cancelled = new AbortController();
+        cancelled.abort();
+        await assert.rejects(openCodeFetch(baseUrl, { signal: cancelled.signal }), { name: 'AbortError' });
+    } finally {
+        globalThis.fetch = originalFetch;
+        setGlobalDispatcher(originalDispatcher);
+        await blockedDispatcher.close();
+        transportServer.closeAllConnections();
+        await new Promise((resolve) => transportServer.close(resolve));
+    }
+    console.log('ok SDK and SSE bypass host proxy 403s with authenticated direct loopback requests');
     if (process.env.XRATU_TEST_OPENCODE_BINARY) {
         const { checkOpenCodeRuntime } = await import('./opencode-runtime-fixture.mjs');
-        await checkOpenCodeRuntime(OpenCodeEngine, root, process.env.XRATU_TEST_OPENCODE_BINARY);
+        globalThis.fetch = async () => new Response('Forbidden by host proxy', { status: 403 });
+        try { await checkOpenCodeRuntime(OpenCodeEngine, root, process.env.XRATU_TEST_OPENCODE_BINARY); }
+        finally { globalThis.fetch = originalFetch; }
     }
 } finally { await rm(root, { recursive: true, force: true }); }
