@@ -24,6 +24,47 @@ updates:
         dependency-type: production
         update-types:
           - patch
+    # Majors never auto-flow. Each ignore below is a real constraint, not
+    # tidiness:
+    #   - pdfjs-dist 5+ hard-requires DOMMatrix at module load, which does not
+    #     exist in the extension host (see src/pdfExtract.ts).
+    #   - eslint 10 and typescript 7 have no compatible tooling release yet
+    #     (eslint-plugin-react peers <=9.7; typescript-eslint peers <6.1), so a
+    #     grouped bump fails `npm ci` with ERESOLVE.
+    #   - react / vite majors move the whole webview build and deserve their
+    #     own verified PR.
+    # Delete a line to opt back in - deliberately, in a PR.
+    ignore:
+      - dependency-name: pdfjs-dist
+        update-types:
+          - version-update:semver-major
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      - dependency-name: eslint
+        update-types:
+          - version-update:semver-major
+      - dependency-name: react
+        update-types:
+          - version-update:semver-major
+      - dependency-name: react-dom
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/react"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/react-dom"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: vite
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@vitejs/plugin-react"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
