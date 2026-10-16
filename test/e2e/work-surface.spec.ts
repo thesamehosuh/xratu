@@ -31,6 +31,17 @@ const replyFile = async (page: Page, after = 'new', afterRequestId?: unknown) =>
     await post(page, { ...request, file: { path: request.path, kind: 'text', before: 'old', after,
         hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: after.split('\n').length, removedLines: ['old'], addedLines: after.split('\n') }] }, type: 'changeFileState' });
 };
+/** Answer the review pane's latest changes request until the turn's diff
+ *  (and its review button) lands. The pane re-requests on busy/revision
+ *  flips, so a one-shot reply can go stale. */
+const answerChangesUntilReview = async (page: Page) => {
+    await expect.poll(async () => {
+        const current = (await sent(page)).filter((m) => m.type === 'changesGetState').at(-1);
+        if (!current) return false;
+        await post(page, { ...current, type: 'changesState', files: changes });
+        return (await page.locator('.outcome-review').count()) > 0;
+    }).toBe(true);
+};
 const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
@@ -386,12 +397,7 @@ test('light themes retain readable teal labels', async ({ page }) => {
     await post(page, { type: 'restoreUser', value: 'Review this', cp: sha });
     await post(page, { type: 'startResponse' });
     await post(page, { type: 'fullResponse', persian: 'Finished' });
-    await expect.poll(async () => {
-        const state = (await sent(page)).filter((m) => m.type === 'changesGetState').at(-1);
-        if (!state) return false;
-        await post(page, { ...state, type: 'changesState', files: changes });
-        return (await page.locator('.outcome-review').count()) > 0;
-    }).toBe(true);
+    await answerChangesUntilReview(page);
     const colors = await page.locator('.outcome-review').evaluate((el) => ({ foreground: getComputedStyle(el).color, background: getComputedStyle(document.querySelector('.toolbar')!).backgroundColor }));
     const luminance = (color: string) => {
         const rgb = color.match(/[\d.]+/g)!.slice(0, 3).map((n) => Number(n) / 255).map((n) => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
@@ -585,15 +591,7 @@ test('side-by-side Activity keeps live task controls unique and review opens the
         return ids.filter((id, index) => ids.indexOf(id) !== index);
     })).toEqual([]);
     await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
-    // The review pane re-requests on busy/revision flips, so a one-shot
-    // reply can go stale: keep answering the latest request until the
-    // turn's diff (and its review button) lands.
-    await expect.poll(async () => {
-        const current = (await sent(page)).filter((m) => m.type === 'changesGetState').at(-1);
-        if (!current) return false;
-        await post(page, { ...current, type: 'changesState', files: changes });
-        return (await page.locator('.outcome-review').count()) > 0;
-    }).toBe(true);
+    await answerChangesUntilReview(page);
     await expect(page.locator('.outcome-review')).toBeVisible();
     await page.locator('.outcome-review').click();
     await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toHaveAttribute('aria-selected', 'true');
