@@ -63,6 +63,13 @@ assert.match(render({ transcriptPrefs: { expand: {}, options: { commands: 'expan
 assert.equal(groups(render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } }, commandMessage)), 0, 'detailed keeps individual commands');
 assert.equal(groups(render({}, { ...message, steps: [...commandSteps, failed, call('after-failure', 'run_terminal_command')] })), 2, 'failures split command groups');
 assert.equal(groups(render({}, { ...message, steps: [commandSteps[0], text('command-boundary'), commandSteps[1]] })), 2, 'prose splits command groups');
+// The heartbeat belongs to the LIVE conversation, not only the read-only
+// views: a settled command group is finished, not running, so without it the
+// turn reads as stalled between a completed call and the next delta.
+const settledTurn = render({}, { ...message, steps: [call('settled-cmd', 'run_terminal_command')] });
+assert.match(settledTurn, /class="working-row"/, 'a settled, grouped command still shows the live heartbeat');
+assert.doesNotMatch(balanced, /class="working-row"/, 'a row that is still spinning carries its own progress');
+assert.doesNotMatch(render({ transcriptPrefs: { expand: {}, options: { compactCompleted: false } } }, { ...message, status: 'done' as const, steps: [...commandSteps, text('final')] }), /class="working-row"/, 'a finished turn never shows the heartbeat');
 const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage] }));
 assert.equal(groups(commandActivity), 0);
 assert.match(commandActivity, /lint result/);

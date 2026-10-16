@@ -2202,7 +2202,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     {displayRows.map(row => row.kind === 'workGroup'
                         ? <ConversationWorkGroup key={row.key} group={row} renderRow={renderRow} prefs={displayPrefs} onOpenDiff={onOpenDiff} />
                         : renderRow(row))}
-                    {showWorking && readOnly && (
+                    {showWorking && (
                         <div className="working-row" aria-label={t('working')}>
                             <span className="step-status spinner" aria-hidden="true" />
                             <span>{t('working')}</span>
