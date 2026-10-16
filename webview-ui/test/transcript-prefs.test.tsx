@@ -237,8 +237,8 @@ ok(!exitHtml(0).includes('step-status'),
     'exit code 0 shows no tick at all');
 ok(exitHtml(0).includes('step-stat ok') && statText(exitHtml(0)).endsWith('0'),
     'and its readout stays green with the code');
-ok(!exitHtml(1).includes('step-status'),
-    'a non-zero exit shows no tick beside it either');
+ok(!exitHtml(1).includes('lucide-check') && exitHtml(1).includes('step-status err'),
+    'a non-zero exit shows a failure marker and never a success tick');
 ok(exitHtml(1).includes('step-stat d') && statText(exitHtml(1)).endsWith('1'),
     'a non-zero exit tints its own readout and keeps the code');
 // No exit code in the output at all -> still nothing. The tick meant nothing

@@ -14,6 +14,7 @@ import { mkdirSync } from 'node:fs';
 
 const OUT_DIR = 'dist-tests';
 const suites = [
+    { entry: 'webview-ui/test/conversation-activity.test.tsx', outfile: 'dist-tests/conversation-activity-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/agent-observation.test.tsx', outfile: 'dist-tests/agent-observation-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/work-surface-render.test.tsx', outfile: 'dist-tests/work-surface-render-test.cjs', jsx: 'automatic' },
     { entry: 'webview-ui/test/state.test.ts', outfile: 'dist-tests/webview-test.cjs' },

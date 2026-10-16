@@ -1,17 +1,28 @@
-import { useCallback, useLayoutEffect, useRef, type ComponentProps } from 'react';
-import { ActivityTimeline } from './MessageItem';
+import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
+import { ActivityTimeline, type ActivityFilter } from './MessageItem';
 import { PullRequestIndicator } from './PullRequestIndicator';
 import type { PullRequestView } from '../../../src/pullRequests/types';
+import { t } from '../i18n';
+import { Dropdown } from './Dropdown';
+import { transcriptOptions } from '../transcriptPrefs';
 
 /** Follow new activity until the reader scrolls away; docking retains that choice. */
-export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullRequests, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; pullRequests?: PullRequestView; onOpenPullRequests?: () => void }) {
+export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullRequests, sessionKey, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; pullRequests?: PullRequestView; onOpenPullRequests?: () => void; sessionKey?: string | null }) {
     const pane = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
+    const [filter, setFilter] = useState<ActivityFilter>('all');
+    const [search, setSearch] = useState('');
+    const options = transcriptOptions(props.transcriptPrefs);
     const follow = useCallback(() => {
         const element = pane.current;
-        if (visible && pinned.current && element) element.scrollTop = element.scrollHeight;
-    }, [visible]);
+        if (visible && options.followActivity && pinned.current && element) element.scrollTop = element.scrollHeight;
+    }, [visible, options.followActivity]);
+
+    useLayoutEffect(() => {
+        pinned.current = true;
+        setFilter('all'); setSearch('');
+    }, [sessionKey]);
 
     useLayoutEffect(() => { follow(); }, [follow, props.messages]);
     useLayoutEffect(() => {
@@ -27,6 +38,11 @@ export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullReq
             const element = pane.current;
             if (visible && element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
         }}>
-        <div ref={content}>{pullRequests && onOpenPullRequests && <PullRequestIndicator state={pullRequests} onOpen={onOpenPullRequests} />}<ActivityTimeline {...props} /></div>
+        <div className="activity-filters">
+            <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder={t('txSearchActivity')} aria-label={t('txSearchActivity')} />
+            <Dropdown label={t('txFilterActivity')} value={filter} onChange={value => setFilter(value as ActivityFilter)}
+                options={[{ value: 'all', label: t('txFilterAll') }, { value: 'tools', label: t('txFilterTools') }, { value: 'commands', label: t('miniCommands') }, { value: 'thinking', label: t('miniThinking') }, { value: 'failures', label: t('txFilterFailures') }]} />
+        </div>
+        <div ref={content}>{pullRequests && onOpenPullRequests && <PullRequestIndicator state={pullRequests} onOpen={onOpenPullRequests} />}<ActivityTimeline {...props} filter={filter} search={search} /></div>
     </div>;
 }

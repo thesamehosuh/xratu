@@ -129,7 +129,7 @@ interface StoredCredential {
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
-import { parseTranscriptPrefs, withTranscriptPref } from './transcriptPrefs';
+import { parseTranscriptPrefs, withTranscriptPref, withTranscriptOptions, emptyTranscriptPrefs } from './transcriptPrefs';
 import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics, type ChangedFile } from './shadowGit';
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
@@ -5908,6 +5908,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')),
             id,
             enabled,
+        );
+        await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(prefs));
+    }
+
+    async _setTranscriptOptions(options: unknown, reset = false): Promise<void> {
+        const prefs = reset ? emptyTranscriptPrefs() : withTranscriptOptions(
+            parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')), options,
         );
         await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(prefs));
     }

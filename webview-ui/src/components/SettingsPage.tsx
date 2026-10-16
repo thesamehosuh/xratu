@@ -9,8 +9,9 @@ import {
     MessageSquare,
     Trash2,
 } from 'lucide-react';
-import { getLocale, t } from '../i18n';
-import { prefOn, TRANSCRIPT_ROWS, type TranscriptPrefs } from '../transcriptPrefs';
+import { getLocale, t, type StringKey } from '../i18n';
+import { conversationPrefs, prefOn, transcriptOptions, type TranscriptOptions, type TranscriptPrefs } from '../transcriptPrefs';
+import { Dropdown } from './Dropdown';
 
 interface SettingsPageProps {
     nativeEngine?: boolean;
@@ -27,6 +28,8 @@ interface SettingsPageProps {
      *  merged blob back - the switch never renders ahead of it. */
     transcriptPrefs?: TranscriptPrefs;
     onSetTranscriptPref?: (id: string, enabled: boolean) => void;
+    onSetTranscriptOptions?: (options: Partial<TranscriptOptions>) => void;
+    onResetTranscriptPrefs?: () => void;
     onOpenCredentials?: () => void;
     /** Open the merged capabilities page (MCP servers + Agent Skills). */
     onOpenCapabilities?: () => void;
@@ -59,10 +62,25 @@ export function SettingsPage({
     onSetReplyLanguage,
     transcriptPrefs,
     onSetTranscriptPref,
+    onSetTranscriptOptions,
+    onResetTranscriptPrefs,
     onClearHistory,
     offline = false, errorExplanations = true, onSetOffline, onSetErrorExplanations, onOfflineHelp,
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
+    const options = transcriptOptions(transcriptPrefs);
+    const displayPrefs = conversationPrefs(transcriptPrefs);
+    function choice<K extends 'detail' | 'reasoning' | 'commands' | 'progress'>(id: K, label: StringKey, description: StringKey, choices: readonly [TranscriptOptions[K], StringKey][]) {
+        return <div className="settings-nav-row conversation-preference">
+            <label className="settings-nav-main" htmlFor={`tx-${id}`}><strong id={`tx-${id}-label`}>{t(label)}</strong><span id={`tx-${id}-hint`} className="preference-description">{t(description)}</span></label>
+            <Dropdown id={`tx-${id}`} label={t(label)} describedBy={`tx-${id}-hint`} value={String(options[id])}
+                options={choices.map(([value, key]) => ({ value: String(value), label: t(key) }))}
+                onChange={value => onSetTranscriptOptions?.({ [id]: value })} />
+        </div>;
+    }
+    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps', label: StringKey, description: StringKey) {
+        return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong><span className="preference-description" id={`tx-${id}-hint`}>{t(description)}</span></div><button type="button" className={`mcp-switch${options[id] ? ' on' : ''}`} role="switch" aria-checked={options[id]} aria-label={t(label)} aria-describedby={`tx-${id}-hint`} onClick={() => onSetTranscriptOptions?.({ [id]: !options[id] })}><span className="mcp-switch-knob" /></button></div>;
+    }
 
     return (
         <div className="settings-page preferences-page">
@@ -107,32 +125,21 @@ export function SettingsPage({
                         <div className="settings-section-icon" aria-hidden="true">
                             <Activity size={15} />
                         </div>
-                        <h3>{t('miniExpansion')}</h3>
+                        <h3>{t('surfaceConversation')}</h3>
                     </div>
-
-                    {TRANSCRIPT_ROWS.map(({ id, descKey }) => {
-                        const on = prefOn(transcriptPrefs, id);
-                        const label = t(id === 'edit' ? 'miniFiles' : id === 'terminal' ? 'miniCommands' : 'miniThinking');
-                        return (
-                            <div className="settings-nav-row" key={id}>
-                                <div className="settings-nav-main">
-                                    <strong>{label}</strong>
-                                    <PreferenceHelp text={t(descKey)} />
-                                </div>
-                                <button
-                                    type="button"
-                                    className={`mcp-switch${on ? ' on' : ''}`}
-                                    role="switch"
-                                    aria-checked={on}
-                                    aria-label={label}
-                                    title={label}
-                                    onClick={() => onSetTranscriptPref?.(id, !on)}
-                                >
-                                    <span className="mcp-switch-knob" />
-                                </button>
-                            </div>
-                        );
-                    })}
+                    {choice('detail', 'txDetail', 'txDetailDesc', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
+                    <p className="conversation-preview" role="status">{t(options.detail === 'minimal' ? 'txMinimalPreview' : options.detail === 'balanced' ? 'txBalancedPreview' : 'txDetailedPreview')}</p>
+                    <details className="conversation-advanced"><summary>{t('txAdvanced')}</summary>
+                        {choice('reasoning', 'miniThinking', 'txReasoningDesc', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
+                        <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong><span className="preference-description" id="tx-diffs-hint">{t('txDiffsDesc')}</span></label><Dropdown id="tx-diffs" label={t('miniFiles')} describedBy="tx-diffs-hint" value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>
+                        {choice('commands', 'miniCommands', 'txCommandsDesc', [['collapsed', 'txCollapsed'], ['errors', 'txOnFailure'], ['expanded', 'txExpanded']])}
+                        {choice('progress', 'txProgress', 'txProgressDesc', [['latest', 'txLatest'], ['all', 'txKeepAll']])}
+                        {toggle('compactCompleted', 'txCompactCompleted', 'txCompactCompletedDesc')}
+                        {toggle('followActivity', 'txFollowActivity', 'txFollowActivityDesc')}
+                        {toggle('timestamps', 'txTimestamps', 'txTimestampsDesc')}
+                    </details>
+                    <p className="preference-description">{t('txAlwaysVisible')}</p>
+                    <button type="button" className="settings-ghost-action conversation-reset" onClick={onResetTranscriptPrefs}>{t('txReset')}</button>
                 </section>
 
                 <section className="settings-card">

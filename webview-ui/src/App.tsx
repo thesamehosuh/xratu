@@ -1427,6 +1427,8 @@ export function App() {
                     }}
                     transcriptPrefs={transcriptPrefs}
                     onSetTranscriptPref={(id, enabled) => send({ type: 'transcriptSet', id, enabled })}
+                    onSetTranscriptOptions={options => send({ type: 'transcriptOptionsSet', options })}
+                    onResetTranscriptPrefs={() => send({ type: 'transcriptReset' })}
                     onOpenCredentials={() => {
                         setCredReturnTo('settings');
                         setScreen('credentials');
@@ -1809,7 +1811,7 @@ export function App() {
             />
             </div>
             </div>
-            {(activityVisible || activityOpened) && <ActivityPanel pullRequests={pullRequests.state} onOpenPullRequests={() => setSurfaceTab('pullRequests')} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
+            {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} pullRequests={pullRequests.state} onOpenPullRequests={() => setSurfaceTab('pullRequests')} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
             <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
