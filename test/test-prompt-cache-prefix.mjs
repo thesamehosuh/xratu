@@ -22,7 +22,7 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_LANGUAGE_AUTO, REPLY_VISIBLE_NARRATION, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
+const { buildNativeSystemContext, REPLY_CONCISE_FINAL, buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_LANGUAGE_AUTO, REPLY_VISIBLE_NARRATION, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -304,6 +304,12 @@ async function runSession({ turns, snapshot = null, root = '/ws' }) {
     const bare = buildLocalSystemPrompt({ ...inputs, replyLanguage: 'fa' });
     ok('fa without a skill body stays shape-stable', bare.includes(REPLY_LANGUAGE_FA) && !bare.includes('natural-farsi skill, preloaded'));
 }
+
+
+ok('built-in engine receives concise final-response guidance', buildLocalSystemPrompt({ rulesContext: '', sessionSummary: null, planMode: false, evictedUserTurns: 0 }).includes(REPLY_CONCISE_FINAL));
+ok('native engine receives concise final-response guidance', buildNativeSystemContext('project rules', false).includes(REPLY_CONCISE_FINAL));
+ok('native PR work watches pending checks and reviews', buildNativeSystemContext('project rules', false).includes('pending checks or reviews'));
+ok('native plan context does not advertise PR mutation tools', !buildNativeSystemContext('project rules', true).includes('watch_pull_request'));
 
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

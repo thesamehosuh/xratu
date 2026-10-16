@@ -14,13 +14,21 @@ export function usePullRequests(sessionId: string | null) {
     const id = useId(), sequence = useRef(0), latest = useRef('');
     const actions = useRef(new Set<string>());
     const timeout = useRef<ReturnType<typeof setTimeout>>();
-    const requestId = useCallback((action = false) => {
+    const refreshTimeout = useRef<ReturnType<typeof setTimeout>>();
+    const requestId = useCallback((action = false, background = false) => {
         const request = `${id}-${++sequence.current}`;
         if (action) actions.current.add(request);
         else latest.current = request;
+        if (background) {
+            clearTimeout(refreshTimeout.current);
+            refreshTimeout.current = setTimeout(() => {
+                if (latest.current === request) { latest.current = ''; setError({ key: 'prReadFailed' }); }
+            }, 50_000);
+            return request;
+        }
         setPending(true); setError(null);
         clearTimeout(timeout.current);
-        timeout.current = setTimeout(() => { setPending(false); setError({ key: 'prReadFailed' }); }, 50_000);
+        timeout.current = setTimeout(() => { actions.current.delete(request); setPending(actions.current.size > 0); setError({ key: 'prReadFailed' }); }, 50_000);
         return request;
     }, [id]);
     useEffect(() => {
@@ -31,16 +39,20 @@ export function usePullRequests(sessionId: string | null) {
             setSnapshot({ sessionId, state: message.state });
             if (message.requestId) {
                 // An action supersedes refreshes that began before it settled.
-                if (actions.current.delete(message.requestId)) latest.current = '';
+                if (actions.current.delete(message.requestId) || message.requestId === latest.current) { latest.current = ''; clearTimeout(refreshTimeout.current); }
                 if (!actions.current.size) { clearTimeout(timeout.current); setPending(false); }
                 setError(message.errorKey ? { key: message.errorKey, detail: message.detail } : null);
             } else if (message.errorKey) setError({ key: message.errorKey, detail: message.detail });
         };
-        const refresh = () => postMessage({ type: 'pullRequestsGetState', requestId: requestId() });
+        const refresh = () => {
+            if (actions.current.size) return;
+            postMessage({ type: 'pullRequestsGetState', requestId: requestId(false, true), refresh: !!sessionId });
+        };
+        const poll = window.setInterval(() => { if (!document.hidden && !latest.current) refresh(); }, 30_000);
         window.addEventListener('message', handler);
         window.addEventListener('focus', refresh);
         refresh();
-        return () => { window.removeEventListener('message', handler); window.removeEventListener('focus', refresh); clearTimeout(timeout.current); latest.current = ''; actions.current.clear(); };
+        return () => { window.removeEventListener('message', handler); window.removeEventListener('focus', refresh); clearTimeout(timeout.current); window.clearInterval(poll); clearTimeout(refreshTimeout.current); latest.current = ''; actions.current.clear(); };
     }, [sessionId, requestId]);
     const action = (action: PullRequestAction, url?: string) => postMessage({ type: 'pullRequestAction', action, url, sessionId, requestId: requestId(true), autoResume: true });
     return { state: snapshot.sessionId === sessionId ? snapshot.state : empty(), pending, error, action };

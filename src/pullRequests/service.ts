@@ -6,8 +6,10 @@ import { evaluatePullRequestWatch } from './watch';
 import { PullRequestError, pullRequestTarget, pullRequestKey, type PullRequestSession, type PullRequestExecution, type PullRequestSnapshot, type PullRequestLink, type PullRequestEvent } from './types';
 
 export interface PullRequestContext { sessionId: string; workspace: string }
+export const PULL_REQUEST_POLL_INTERVAL = 30_000;
+
 type Provider = Pick<GitHubPullRequests, 'read'>;
-const boundedSnapshot = (snapshot: PullRequestSnapshot): PullRequestSnapshot => ({ ...snapshot, commentCount: snapshot.comments.length, comments: snapshot.comments.slice(-50).map(comment => ({ ...comment, body: comment.body.slice(0, 1000) })) });
+const boundedSnapshot = (snapshot: PullRequestSnapshot): PullRequestSnapshot => ({ ...snapshot, commentCount: snapshot.commentCount ?? snapshot.comments.length, comments: snapshot.comments.slice(-50).map(comment => ({ ...comment, body: comment.body.slice(0, 1000) })) });
 const pruneWithdrawnDelivery = (state: PullRequestSession) => {
     if (state.delivery && state.delivery.status !== 'running' && !state.delivery.ids.some(id => state.events.some(event => event.id === id))) delete state.delivery;
 };
@@ -16,10 +18,19 @@ export class PullRequestService {
     private sweeping = false;
     private readonly abort = new AbortController();
     private rateLimitedUntil = 0;
+    private readonly reads = new Map<string, Promise<PullRequestSnapshot>>();
+    private read(link: PullRequestLink, workspace: string): Promise<PullRequestSnapshot> {
+        const key = `${workspace}\0${pullRequestKey(link)}`;
+        const pending = this.reads.get(key);
+        if (pending) return pending;
+        const read = this.provider.read(link, workspace, this.abort.signal).finally(() => { if (this.reads.get(key) === read) this.reads.delete(key); });
+        this.reads.set(key, read);
+        return read;
+    }
     constructor(readonly store: PullRequestStore, private readonly provider: Provider = new GitHubPullRequests(), private readonly changed: (context: PullRequestContext) => void = () => {}, private readonly diagnostic: (error: unknown) => void = console.error) {}
     start(): Promise<void> {
         if (this.timer) return Promise.resolve();
-        this.timer = setInterval(() => { void this.sweep().catch(this.diagnostic); }, 120_000);
+        this.timer = setInterval(() => { void this.sweep().catch(this.diagnostic); }, PULL_REQUEST_POLL_INTERVAL);
         this.timer.unref?.();
         // Recover an interrupted delivery visibly; never replay it silently.
         return this.recover().then(() => this.sweep());
@@ -68,7 +79,7 @@ export class PullRequestService {
             });
             return;
         }
-        const snapshot = await this.provider.read(link, context.workspace, this.abort.signal);
+        const snapshot = link.snapshot ?? await this.read(link, context.workspace);
         if (snapshot.state !== 'open') throw new PullRequestError('prNotOpen');
         const now = new Date().toISOString();
         const baseline = evaluatePullRequestWatch({ startedAt: now, headSha: snapshot.headSha, failedChecks: [], passed: false, passedChecks: [], remarksThrough: now, remarkIds: [], conflicting: false, wakes: 0 }, snapshot, []);
@@ -76,9 +87,24 @@ export class PullRequestService {
             const current = state.links.find(item => pullRequestKey(item) === pullRequestKey(link) && item.generation === link.generation);
             if (!current) throw new PullRequestError('prChangedDuringRead');
             current.snapshot = boundedSnapshot(snapshot);
-            current.generation = randomUUID(); current.watch = baseline.next; current.resume = resume;
+            current.generation = randomUUID(); current.watch = { ...baseline.next, initialChecksReported: true }; current.resume = resume;
             current.failures = 0; delete current.errorKey; delete current.errorDetail;
+            // Existing failures are actionable too: enabling Watch must not silently consume them.
+            const failures = baseline.changes.filter(change => change.kind === 'checks-failed' || change.kind === 'conflicting');
+            if (failures.length) {
+                if (state.events.length >= 32) throw new PullRequestError('prQueueFull');
+                state.events.push({ id: randomUUID(), key: pullRequestKey(current), url: current.url, number: current.number, createdAt: now, headSha: snapshot.headSha, changes: failures, resume });
+            }
         });
+    }
+    async refreshContext(context: PullRequestContext): Promise<void> {
+        if (isOfflineMode() || Date.now() < this.rateLimitedUntil) return;
+        const state = await this.store.load(context.sessionId, context.workspace);
+        for (const link of state.links) {
+            if (this.abort.signal.aborted || isOfflineMode() || Date.now() < this.rateLimitedUntil) return;
+            if (link.snapshot && link.snapshot.state !== 'open' && !link.watch) continue;
+            await this.refreshLink(context, link).catch(this.diagnostic);
+        }
     }
     async unwatch(context: PullRequestContext, value: unknown): Promise<void> {
         const key = pullRequestKey(pullRequestTarget(value));
@@ -106,14 +132,17 @@ export class PullRequestService {
     private async refreshLink(context: PullRequestContext, expected: PullRequestLink, read?: Promise<PullRequestSnapshot>): Promise<void> {
         if (isOfflineMode()) throw new PullRequestError('prOffline');
         try {
-            const snapshot = await (read ?? this.provider.read(expected, context.workspace, this.abort.signal));
+            const snapshot = await (read ?? this.read(expected, context.workspace));
             if (this.abort.signal.aborted) return;
             await this.change(context, state => {
                 const link = state.links.find(link => pullRequestKey(link) === pullRequestKey(expected) && link.generation === expected.generation);
                 if (!link) return;
                 link.snapshot = boundedSnapshot(snapshot); link.generation = randomUUID(); link.failures = 0; delete link.errorKey; delete link.errorDetail;
                 if (!link.watch) return;
-                const report = evaluatePullRequestWatch(link.watch, snapshot, snapshot.comments);
+                const pendingFailures = state.events.filter(event => event.key === pullRequestKey(link) && event.headSha === snapshot.headSha)
+                    .flatMap(event => event.changes.flatMap(change => change.kind === 'checks-failed' ? change.failed.map(check => check.name) : []));
+                const cursor = link.watch.initialChecksReported ? link.watch : { ...link.watch, failedChecks: pendingFailures };
+                const report = evaluatePullRequestWatch(cursor, snapshot, snapshot.comments);
                 const reason = snapshot.state !== 'open' ? snapshot.state : report.exhausted ? 'comment-limit' : undefined;
                 if (report.changes.length || reason) {
                     if (state.events.length >= 32) {
@@ -128,7 +157,7 @@ export class PullRequestService {
                     state.events.push({ id: randomUUID(), key: pullRequestKey(link), url: link.url, number: link.number, createdAt: new Date().toISOString(), headSha: snapshot.headSha, changes, reason, resume: link.resume, ...(omittedItems ? { omittedItems } : {}) });
                 }
                 if (reason) { delete link.watch; delete link.resume; }
-                else link.watch = report.next;
+                else link.watch = { ...report.next, initialChecksReported: true };
             });
         } catch (error) {
             if (this.abort.signal.aborted) return;
@@ -161,7 +190,7 @@ export class PullRequestService {
                         if (this.abort.signal.aborted || isOfflineMode() || Date.now() < this.rateLimitedUntil) return;
                         const key = `${context.workspace}\0${pullRequestKey(link)}`;
                         let read = reads.get(key);
-                        if (!read) { read = this.provider.read(link, context.workspace, this.abort.signal); reads.set(key, read); }
+                        if (!read) { read = this.read(link, context.workspace); reads.set(key, read); }
                         await this.refreshLink(context, link, read).catch(this.diagnostic);
                     }
                     if (state.events.length) this.changed(context);

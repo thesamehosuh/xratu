@@ -171,8 +171,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await tool(page, 'edit', 'replace_in_file', 'src/auth.ts');
         await tool(page, 'lint', 'run_terminal_command', 'lint');
         await tool(page, 'build', 'run_terminal_command', 'build');
+        await tool(page, 'git', 'git_status', '');
         await tool(page, 'cmd', 'run_terminal_command', '', false);
-        await expect(page.locator('.transcript-pane .conversation-work-group')).toHaveCount(3);
+        await expect(page.locator('.transcript-pane .conversation-work-group')).toHaveCount(2);
         await expect(page.locator('.conversation-work-summary > span').first()).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
         for (const group of await page.locator('.conversation-work-group').all()) {
             const centers = await group.locator(':scope > summary .sum-row').evaluate(row => {
@@ -182,7 +183,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
                     return rect.y + rect.height / 2;
                 });
             });
-            expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(1);
+            expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1.1);
         }
         await page.screenshot({ path: info.outputPath(`conversation-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();

@@ -389,7 +389,7 @@ try {
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
     const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeTurn = await harness('cancelResume');
     try {
@@ -419,6 +419,7 @@ try {
         await nativeHost._runOpenCodeAgent('Read the attached code', '', [codeAttachment]);
         const nativePrompt = nativeTurn.requests.filter((request) => request.path.endsWith('/prompt')).at(-1).body;
         assert.ok(JSON.stringify(nativePrompt).includes('Never ask the user to paste a PR into a form'), 'the real native host includes the agent-owned PR linking instructions');
+        assert.ok(JSON.stringify(nativePrompt).includes('Final responses: default to 1-3 short sentences'), 'the real native host forwards concise final-response guidance to OpenCode');
         assert.equal(await readFile(fileURLToPath(nativePrompt.files[0].uri), 'utf8'), codeText, 'the host forwards code attachment bytes instead of dropping them with an image-only filter');
         const terminalCount = messages.length;
         const stale = new AbortController();

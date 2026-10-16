@@ -70,12 +70,17 @@ test('cursor and event enqueue commit atomically and identical reads never dupli
     assert.equal((await f.load()).events.length, 1);
 });
 
-test('watching establishes a baseline instead of replaying existing comments or failed checks', async () => {
+test('watching queues existing failures once without replaying old comments', async () => {
     const f = await fixture();
     f.update({ checks: [{ name: 'Tests', status: 'failure', required: true, url: null }], comments: [{ id: 'old', createdAt: '2025-01-01T00:00:00Z', editedAt: null, author: { login: 'bot' }, body: 'old', url: null, path: null, reviewState: null }] });
     await f.service.watch(context, target);
     await f.service.sweep();
-    assert.equal((await f.load()).events.length, 0);
+    const state = await f.load();
+    assert.equal(state.events.length, 1);
+    assert.equal(state.events[0].changes.length, 1);
+    assert.equal(state.events[0].changes[0].kind, 'checks-failed');
+    await f.service.sweep();
+    assert.equal((await f.load()).events.length, 1);
 });
 
 test('re-watching refreshes execution identity without resetting the watch cursor or queued events', async () => {
@@ -502,4 +507,88 @@ test('GitHub reader paginates checks and consumes all REST activity pages', asyn
     assert.equal(result.mergeability, 'unknown');
     assert.equal(calls.length, 5);
     assert.ok(calls.filter(args => !args.includes('graphql')).every(args => args.includes('--paginate') && args.includes('--slurp')));
+});
+
+
+test('cached watch starts without waiting for GitHub and retains auto-resume for the existing failure', async () => {
+    const f = await fixture();
+    await f.service.link(context, target, 'user');
+    f.update({ checks: [{ name: 'Windows CI', status: 'failure', required: true, url: null }] });
+    await f.service.refresh(context, target);
+    const reads = f.reads();
+    f.fail(new PullRequestError('prReadFailed'));
+    await f.service.watch(context, target, execution);
+    assert.equal(f.reads(), reads);
+    const state = await f.load();
+    assert.ok(state.links[0].watch);
+    assert.deepEqual(state.events[0].resume, execution);
+    assert.equal(state.events[0].changes[0].failed[0].name, 'Windows CI');
+});
+
+test('foreground refresh reads open links even when they are not watched', async () => {
+    const f = await fixture();
+    await f.service.link(context, target, 'user');
+    await f.service.refreshContext(context);
+    f.update({ checks: [{ name: 'Windows CI', status: 'failure', required: true, url: null }] });
+    await f.service.refreshContext(context);
+    const state = await f.load();
+    assert.equal(state.links[0].snapshot.checks[0].status, 'failure');
+    assert.equal(state.links[0].watch, undefined);
+    assert.equal(state.events.length, 0);
+});
+
+
+test('clicking Watch wakes the current native session for an already failed Windows check', { timeout: 3000 }, async () => {
+    const f = await fixture();
+    const resumed = deferred(), release = deferred(), settled = deferred();
+    let started = false;
+    const native = { ...execution, engine: 'opencode', nativeSessionId: 'native-session', binaryPath: 'opencode' };
+    const identity = { ...context, epoch: 1, busy: false, plan: false };
+    const controller = new PullRequestController({
+        identity: () => identity, ensureSession: async () => {}, execution: async () => native,
+        run: async prompt => { started = true; resumed.resolve(prompt); await release.promise; return true; },
+        publish: message => { if (started && !message.state.events.length && !message.state.delivery) settled.resolve(); }, diagnostic: error => f.diagnostics.push(error),
+    }, f.storage, f.provider);
+    await controller.service.link(context, target, 'user');
+    f.update({ checks: [{ name: 'Windows CI', status: 'failure', required: true, url: null }] });
+    await controller.service.refresh(context, target);
+    await controller.action('watch', target, context.sessionId, 'watch-action', true);
+    const prompt = await resumed.promise;
+    assert.match(prompt, /Windows CI/);
+    assert.match(prompt, /checks-failed/);
+    await controller.service.refreshContext(context);
+    release.resolve();
+    await settled.promise;
+    assert.equal(f.diagnostics.length, 0);
+});
+
+
+test('restored legacy watches recover a swallowed baseline failure exactly once', async () => {
+    const f = await fixture();
+    await f.service.watch(context, target, execution);
+    f.update({ checks: [{ name: 'Windows CI', status: 'failure', required: true, url: null }] });
+    await f.store.update(context.sessionId, context.workspace, state => {
+        state.links[0].watch.failedChecks = ['Windows CI'];
+        delete state.links[0].watch.initialChecksReported;
+    });
+    const restored = new PullRequestService(new PullRequestStore(f.storage), f.provider);
+    await restored.sweep();
+    const state = await f.load();
+    assert.equal(state.events.length, 1);
+    assert.equal(state.events[0].changes[0].failed[0].name, 'Windows CI');
+    assert.deepEqual(state.events[0].resume, execution);
+    assert.equal(state.links[0].watch.initialChecksReported, true);
+    await restored.sweep();
+    assert.equal((await f.load()).events.length, 1);
+});
+
+
+test('legacy watch recovery preserves a failure that is already queued without duplicating it', async () => {
+    const f = await fixture();
+    await f.service.watch(context, target, execution);
+    f.update({ checks: [{ name: 'Windows CI', status: 'failure', required: true, url: null }] });
+    await f.service.sweep();
+    await f.store.update(context.sessionId, context.workspace, state => { delete state.links[0].watch.initialChecksReported; });
+    await f.service.sweep();
+    assert.equal((await f.load()).events.length, 1);
 });

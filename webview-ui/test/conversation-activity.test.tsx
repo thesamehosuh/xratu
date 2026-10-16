@@ -63,6 +63,13 @@ assert.match(render({ transcriptPrefs: { expand: {}, options: { commands: 'expan
 assert.equal(groups(render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } }, commandMessage)), 0, 'detailed keeps individual commands');
 assert.equal(groups(render({}, { ...message, steps: [...commandSteps, failed, call('after-failure', 'run_terminal_command')] })), 2, 'failures split command groups');
 assert.equal(groups(render({}, { ...message, steps: [commandSteps[0], text('command-boundary'), commandSteps[1]] })), 2, 'prose splits command groups');
+const mixed = render({}, { ...message, steps: [commandSteps[0], call('status', 'git_status'), call('read', 'read_file'), call('edit', 'apply_patch')] });
+assert.equal(groups(mixed), 1, 'balanced folds adjacent work across tool families');
+assert.match(mixed, /Worked/);
+assert.match(mixed, /4 actions/);
+assert.equal(groups(render({}, { ...message, steps: [call('status', 'git_status'), call('diff', 'git_diff')] })), 1, 'git calls group together');
+const mixedEditsExpanded = render({ transcriptPrefs: { expand: { edit: true } } }, { ...message, steps: [commandSteps[0], call('edit', 'apply_patch')] });
+assert.match(mixedEditsExpanded, /conversation-work-group" open=""/, 'mixed groups honor contained edit expansion');
 const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage] }));
 assert.equal(groups(commandActivity), 0);
 assert.match(commandActivity, /lint result/);

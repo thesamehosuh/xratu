@@ -5,6 +5,12 @@ import { PULL_REQUEST_AGENT_INSTRUCTIONS } from './pullRequests/tools';
 // is the reply-language block below - it is a first-class input
 // (`replyLanguage`), byte-stable like every other prompt input, not ad-hoc
 // text.
+export const REPLY_CONCISE_FINAL = "Final responses: default to 1-3 short sentences stating the outcome and any blocker or next step. Mention verification only when useful, in one short clause. Do not repeat progress updates, list files, recount commands, add headings, or offer to continue. Give more detail when the user asks for it or the task requires an explanation.";
+
+export function buildNativeSystemContext(rulesContext: string, planMode: boolean): string {
+    return [rulesContext, REPLY_CONCISE_FINAL, !planMode && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n');
+}
+
 export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and clear like a senior classmate. No emojis.\nAfter changing code, say briefly what changed (1-2 sentences) - never repeat the edited code and never mention internal tool names.\nBefore claiming victory, quickly verify your changes (re-read the edited file or run the relevant check) so your summary reflects reality.\nFor multi-step work you may maintain a visible checklist with `update_task_list` (complete list every call, exactly one item in_progress while executing) so the user can follow progress - useful for plan mode AND for any non-trivial execution you choose to track.";
 
 /** Reply-language directives. Exported so the prompt-cache suite can assert
@@ -100,6 +106,7 @@ export interface LocalSystemPromptInputs {
 export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string {
     const parts: string[] = [
         LOCAL_SYSTEM_PROMPT,
+        REPLY_CONCISE_FINAL,
         "",
         "Operational notes for local mode:",
         "- Attached images are part of the current request only.",

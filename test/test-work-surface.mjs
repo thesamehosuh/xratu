@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { test } from 'node:test';
 const require = createRequire(import.meta.url);
-const { readReviewFile, validateReviewCheckpoint, REVIEW_FILE_LIMIT, StartupPageIntent } = require('../out/workSurface.js');
+const { listReviewChanges, readReviewFile, validateReviewCheckpoint, REVIEW_FILE_LIMIT, StartupPageIntent } = require('../out/workSurface.js');
 const SHA = 'a'.repeat(40);
 const parent = await mkdtemp(path.join(os.tmpdir(), 'xratu-review-'));
 const root = path.join(parent, 'workspace');
@@ -29,6 +29,13 @@ try {
         assert.deepEqual(opened, ['providers', 'settings']);
         startup.complete();
         assert.deepEqual(opened, ['providers', 'settings', 'providers']);
+    });
+    await test('live changes include modification times without affecting historical snapshots', async () => {
+        await writeFile(path.join(root, 'changed.txt'), 'new text');
+        const live = await listReviewChanges(store, root, SHA);
+        assert.ok(live[0].modifiedAt > 0);
+        const historical = await listReviewChanges(store, root, SHA, SHA);
+        assert.equal(historical[0].modifiedAt, undefined);
     });
     await test('review reads a changed file and computes a real diff', async () => {
         await writeFile(path.join(root, 'changed.txt'), 'after\n');
