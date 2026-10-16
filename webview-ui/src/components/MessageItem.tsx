@@ -81,7 +81,7 @@ type Row =
     // live cards exist they render their own pill row.
     | { key: string; kind: 'decision'; steps: Step[] };
 
-type WorkGroup = { key: string; kind: 'workGroup'; category: 'explore' | 'edit' | 'work'; rows: Row[] };
+type WorkGroup = { key: string; kind: 'workGroup'; category: 'explore' | 'edit' | 'terminal' | 'work'; rows: Row[] };
 type ConversationRow = Row | WorkGroup;
 
 function rowCalls(row: Row): ToolRow[] {
@@ -114,6 +114,7 @@ function conversationRows(rows: Row[], options: TranscriptOptions): Conversation
             const category = options.detail === 'detailed' || protectedRow ? undefined
                 : family === 'read' || family === 'search' ? 'explore'
                 : family === 'edit' ? 'edit'
+                : family === 'terminal' && calls.every(toolRowDone) ? 'terminal'
                 : options.detail === 'minimal' && calls.length && calls.every(toolRowDone) ? 'work' : undefined;
             if (category) {
                 const key = options.detail === 'minimal' ? 'work' : category;
@@ -137,9 +138,10 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
     const calls = group.rows.flatMap(rowCalls);
     const running = calls.some(call => !toolRowDone(call));
     const hasThinking = group.rows.some(row => row.kind === 'thinking');
-    const [open, setOpen] = useAutoOpen((group.category === 'edit' && prefOn(prefs, 'edit')) || (hasThinking && prefOn(prefs, 'thinking')));
+    const [open, setOpen] = useAutoOpen((group.category === 'edit' && prefOn(prefs, 'edit')) || (group.category === 'terminal' && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
     const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
         : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
+        : group.category === 'terminal' ? t('txCommandsRan')
         : calls.length === 1 ? t('txOneAction') : tf('surfaceActions', { count: String(calls.length) });
     const reads = calls.filter(call => toolFamily(call.call.tool) === 'read').length;
     const searches = calls.filter(call => toolFamily(call.call.tool) === 'search').length;
@@ -149,6 +151,8 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
         if (searches) summary.push(searches === 1 ? t('txOneSearch') : tf('txSearchCount', { count: String(searches) }));
     } else if (group.category === 'edit') {
         summary.push(calls.length === 1 ? t('txOneEdit') : tf('txEditCount', { count: String(calls.length) }));
+    } else if (group.category === 'terminal') {
+        summary.push(calls.length === 1 ? t('txOneCommand') : tf('txCommandCount', { count: String(calls.length) }));
     }
     return <div className="conversation-work">
         <details className={`step conversation-work-group${running ? ' running' : ''}`} open={open} onToggle={event => setOpen(event.currentTarget.open)}>
