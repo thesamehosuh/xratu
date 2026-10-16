@@ -928,3 +928,25 @@ for (const locale of ['en', 'fa']) {
         });
     }
 }
+
+
+test('live changes follow the latest edited file and preserve a manual selection until another edit', async ({ page }) => {
+    await openReview(page);
+    const refresh = async (files: Array<Record<string, unknown>>) => {
+        const old = await latest(page, 'changesGetState');
+        await page.locator('.review-head').getByRole('button', { name: 'Refresh' }).click();
+        const request = await latest(page, 'changesGetState', old.requestId);
+        await post(page, { ...request, type: 'changesState', files });
+    };
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 2 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
+    await replyFile(page, 'second changed');
+    await page.locator('.review-file').filter({ hasText: 'src/first.ts' }).click();
+    await replyFile(page, 'first manually selected');
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 2 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/first.ts');
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 3 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
+    await replyFile(page, 'second changed again');
+    await expect(page.locator('.review-diff')).toContainText('second changed again');
+});

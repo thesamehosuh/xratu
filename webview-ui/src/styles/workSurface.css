@@ -42,7 +42,7 @@
 .pr-detail summary > svg { flex-shrink:0; color:var(--vscode-descriptionForeground); transition:transform .12s; }
 .pr-detail:not([open]) summary > svg { transform:rotate(-90deg); }
 .app[dir=rtl] .pr-detail:not([open]) summary > svg { transform:rotate(90deg); }
-.pr-detail summary > span { color:var(--vscode-descriptionForeground); margin-inline-start:auto; font-weight:400; }
+.pr-detail summary > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--vscode-descriptionForeground); margin-inline-start:auto; font-weight:400; }
 .pr-detail li { display:flex; align-items:baseline; gap:8px; padding-block:7px; font-size:12px; }
 .pr-detail li > a,.pr-detail li > span[dir=auto] { min-width:0; overflow-wrap:anywhere; color:var(--vscode-foreground); }
 .pr-detail li > span:last-child { margin-inline-start:auto; flex-shrink:0; color:var(--vscode-descriptionForeground); font-size:11px; }

@@ -2,7 +2,7 @@ import { setTimeout as nativeSetupDelay } from 'timers/promises';
 import type { NativeSetupState } from './engines/nativeSetup';
 import { readSubagentTrace, type SubagentApprovalSource } from './subagentObservation';
 import { canStartSetup, setupPhase, type RuntimeSetupState, type SetupEngine, type SetupPath } from './engines/setup';
-import { readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
+import { listReviewChanges, readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,7 +17,7 @@ import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
 import { BrowserController } from './browserController';
 import { PullRequestController, type PullRequestAction } from './pullRequests/controller';
 import { PullRequestError, executionMatches, type PullRequestExecution } from './pullRequests/types';
-import { PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS } from './pullRequests/tools';
+import { PULL_REQUEST_TOOLS } from './pullRequests/tools';
 import { GitHubPullRequests, runGitHubCommand } from './pullRequests/github';
 import type { BrowserCommand } from './browserTypes';
 import {
@@ -178,7 +178,7 @@ import {
 } from './local/modelMetadata';
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
-import { buildLocalSystemPrompt, buildSubagentSystemPrompt } from './systemPrompt';
+import { buildLocalSystemPrompt, buildSubagentSystemPrompt, buildNativeSystemContext } from './systemPrompt';
 import { IN_MEMORY_CONTENT_CAP, MAX_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
 import { boundOutcomeEvents, trimDisplayEvent } from './local/eventBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
@@ -1687,7 +1687,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             validateReviewCheckpoint(sha);
             if (toSha !== undefined) validateReviewCheckpoint(toSha);
             if (!root) throw new Error('No workspace');
-            const files = await this._checkpoints.diffCheckpoint(root, sha, toSha);
+            const files = await listReviewChanges(this._checkpoints, root, sha, toSha);
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files });
         } catch {
             this._view?.webview.postMessage({ type: 'changesState', sha, requestId, files: [], errorKey: root ? 'surfaceChangesFailed' : 'notifNoFolder' });
@@ -4774,7 +4774,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
             const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
             this._nativeTurnActive = true;
-            const agent = engine.runTurn({ prompt, context: [rulesContext, !(planMode ?? this._planMode) && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+            const agent = engine.runTurn({ prompt, context: buildNativeSystemContext(rulesContext, planMode ?? this._planMode), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
                 questions: { ask: (question) => this._requestLocalDecision(question) },
                 onSession: async (session) => { this._engineSession = session; this._observeNativeShells(engine, session.nativeSessionId!, workspace); await this._persistLocalSession(); },
@@ -5449,7 +5449,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  validates against, so a webview-supplied string never reaches git. */
     private _gitBranches: string[] = [];
 
-    _sendPullRequests(requestId?: string): Promise<void> { return this._pullRequests.send(requestId); }
+    _sendPullRequests(requestId?: string, refresh = false): Promise<void> { return refresh ? this._pullRequests.refresh(requestId) : this._pullRequests.send(requestId); }
     _pullRequestAction(action: PullRequestAction, url: unknown, sessionId: string | null, requestId: string, autoResume = false): Promise<void> {
         return this._pullRequests.action(action, url, sessionId, requestId, autoResume);
     }

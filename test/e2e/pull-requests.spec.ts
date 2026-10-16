@@ -74,6 +74,14 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await activityIndicator.locator('.pr-indicator-row').click();
         await expect(page.locator('.pr-panel')).toBeVisible();
         await expect(page.locator('.pr-row')).toContainText('Make session updates reliable');
+        const details = page.locator('.pr-detail');
+        await expect(details.nth(0)).not.toHaveAttribute('open');
+        await expect(details.nth(1)).not.toHaveAttribute('open');
+        await expect(details.nth(0).locator('summary')).toContainText(locale === 'en' ? '1 failed' : '1 ناموفق');
+        await expect(details.nth(1).locator('summary')).toContainText('reviewer');
+        await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-collapsed-${locale}-${width}.png`) });
+        await details.nth(0).locator('summary').click();
+        await details.nth(1).locator('summary').click();
         await expect(page.locator('.pr-check-dot.failure')).toBeVisible();
         await expect(page.locator('.pr-comments')).toContainText('<script>');
         await expect(page.locator('.pr-comments p')).toBeVisible();
@@ -149,4 +157,35 @@ for (const refreshFirst of [true, false]) test(`focus refresh never supersedes a
     if (!refreshFirst) await host(page, { type: 'pullRequestsState', sessionId: 'session-a', requestId: refresh.requestId, state: state([link]) });
     await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
     await expect(page.locator('.conversation-panel .pr-indicator-watch')).toBeVisible();
+});
+
+test('PR state refreshes remotely without disabling Watch during background reads', async ({ page }) => {
+    await page.clock.install();
+    await openSession(page);
+    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
+    await page.locator('.conversation-panel .pr-indicator-row').click();
+    const before = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
+    await page.clock.fastForward(30_000);
+    const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState');
+    expect(reads).toHaveLength(before + 1);
+    expect(reads.at(-1)).toMatchObject({ refresh: true });
+    await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeEnabled();
+    await reply(page, state([{ ...link, snapshot: { ...link.snapshot, checks: link.snapshot.checks.map(check => ({ ...check, status: 'success' })) } }]));
+    await expect(page.locator('.pr-detail').first().locator('summary')).toContainText('2 passed');
+});
+
+
+test('a timed-out watch action releases the controls and allows background refresh to recover', async ({ page }) => {
+    await page.clock.install();
+    await openSession(page);
+    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
+    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await page.getByRole('button', { name: 'Watch', exact: true }).click();
+    const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
+    await page.clock.fastForward(50_000);
+    await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeEnabled();
+    await page.clock.fastForward(30_000);
+    expect((await sent(page)).filter(message => message.type === 'pullRequestsGetState')).toHaveLength(reads + 1);
+    await reply(page, state([{ ...link, watch: watching }]));
+    await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
 });

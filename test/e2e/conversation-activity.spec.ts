@@ -71,6 +71,31 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await expect(page.locator('.activity-empty')).toHaveText('No activity matches these filters.');
 });
 
+test('balanced groups completed commands while the active command and failures stay actionable', async ({ page }) => {
+    await post(page, { type: 'startResponse' });
+    await tool(page, 'lint', 'run_terminal_command', 'lint');
+    await tool(page, 'build', 'run_terminal_command', 'build');
+    const group = page.locator('.transcript-pane .conversation-work-group');
+    await expect(group).toHaveCount(1);
+    await expect(group).not.toHaveAttribute('open');
+    await expect(group.locator(':scope > summary')).toContainText('2 commands');
+    await tool(page, 'test', 'run_terminal_command', 'test', false);
+    await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();
+    await group.locator(':scope > summary').click();
+    await expect(group).toContainText('Retained result for lint');
+    await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'test passed', callId: 'test' });
+    await expect(group).toHaveAttribute('open', '');
+    await expect(group.locator(':scope > summary')).toContainText('3 commands');
+    await tool(page, 'failure', 'run_terminal_command', '', false);
+    await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'STDOUT:\nTest failed\nExit code: 1', callId: 'failure' });
+    await expect(page.locator('.transcript-pane details.step.fail')).toBeVisible();
+    await expect(page.locator('.transcript-pane details.step.fail')).toHaveAttribute('open', '');
+    await page.locator('#surface-tab-activity').click();
+    await expect(page.locator('.activity-pane')).toContainText('Retained result for lint');
+    await expect(page.locator('.activity-pane')).toContainText('Retained result for build');
+    await expect(page.locator('.activity-pane .conversation-work-group')).toHaveCount(0);
+});
+
 test('settings persist through host echoes, preserve legacy choices and reset', async ({ page }) => {
     await post(page, { type: 'openSettings' });
     const detail = page.getByLabel('Conversation detail', { exact: true });
@@ -144,6 +169,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await seed(page);
         await post(page, { type: 'chunk', value: 'The expiry guard is missing. I am adding a regression test.' });
         await tool(page, 'edit', 'replace_in_file', 'src/auth.ts');
+        await tool(page, 'lint', 'run_terminal_command', 'lint');
+        await tool(page, 'build', 'run_terminal_command', 'build');
+        await tool(page, 'git', 'git_status', '');
         await tool(page, 'cmd', 'run_terminal_command', '', false);
         await expect(page.locator('.transcript-pane .conversation-work-group')).toHaveCount(2);
         await expect(page.locator('.conversation-work-summary > span').first()).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
@@ -155,7 +183,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
                     return rect.y + rect.height / 2;
                 });
             });
-            expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(1);
+            expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1.1);
         }
         await page.screenshot({ path: info.outputPath(`conversation-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();

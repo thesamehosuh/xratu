@@ -2,7 +2,8 @@
 .conversation-work { position:relative; }
 .conversation-work-group .step-group-body { padding-block:4px; }
 .conversation-work-group .step { margin-block:3px; }
-.conversation-work-group > summary .sum-row { min-height:24px; }
+.step > summary .sum-row { min-height:24px; line-height:20px; }
+.step > summary .sum-row > :is(.step-label,.step-cmd,.conversation-work-summary) { line-height:20px; transform:translateY(-1px); }
 .conversation-work-group > summary .step-label,.conversation-work-summary { display:flex; align-items:center; min-height:20px; line-height:20px; }
 .conversation-work-summary { gap:6px; min-width:0; margin-inline-start:auto; color:var(--vscode-descriptionForeground); font-size:inherit; }
 .conversation-work-summary > span { white-space:nowrap; unicode-bidi:isolate; }

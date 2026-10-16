@@ -91,6 +91,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const listRequest = useRef('');
     const fileRequest = useRef('');
     const loadedFile = useRef<ReviewFile | null>(null);
+    const previousFiles = useRef<ReviewChange[]>([]);
     const [files, setFiles] = useState<ReviewChange[]>([]);
     const [selected, setSelected] = useState<string | null>(null);
     const [file, setFile] = useState<ReviewFile | null>(null);
@@ -114,7 +115,18 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 setLoading(false);
                 setErrorKey(message.errorKey ?? null);
                 setFiles(message.files);
-                setSelected((current) => message.files.some((item) => item.path === current) ? current : message.files.find((item) => item.path === initialPath)?.path ?? message.files[0]?.path ?? null);
+                const previous = new Map(previousFiles.current.map(file => [file.path, file]));
+                const changed = message.files.filter(file => {
+                    const old = previous.get(file.path);
+                    return !old || old.modifiedAt !== file.modifiedAt || old.added !== file.added || old.removed !== file.removed || old.binary !== file.binary || old.untracked !== file.untracked;
+                });
+                const newest = [...changed].sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))[0]?.path;
+                setSelected(current => {
+                    if (!previous.size && initialPath && message.files.some(file => file.path === initialPath)) return initialPath;
+                    if (!toSha && newest) return newest;
+                    return message.files.some(file => file.path === current) ? current : message.files[0]?.path ?? null;
+                });
+                previousFiles.current = message.files;
                 onCount(message.files.length);
                 onFiles(message.files);
             } else if (message.type === 'changeFileState' && message.requestId === fileRequest.current && message.sha === sha) {
@@ -127,11 +139,11 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [onCount, onFiles, initialPath, sha]);
+    }, [onCount, onFiles, initialPath, sha, toSha]);
 
     useEffect(() => {
         setReviewed(new Map()); setComments(new Map()); setFiles([]); setSelected(null); setFile(null);
-        loadedFile.current = null;
+        loadedFile.current = null; previousFiles.current = [];
         listRequest.current = ''; fileRequest.current = '';
         setVisibleFiles(80);
         onCount(0); onFiles([]);

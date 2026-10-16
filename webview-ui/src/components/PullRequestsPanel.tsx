@@ -16,6 +16,16 @@ const checkLabels: Record<PullRequestCheck['status'], Parameters<typeof t>[0]> =
 const reasons = { closed: 'prWatchEnded_closed', merged: 'prWatchEnded_merged', unreadable: 'prWatchEnded_unreadable', 'comment-limit': 'prWatchEnded_commentLimit' } as const;
 const changes = { 'checks-failed': 'prEventsFailed', 'checks-passed': 'prEventsPassed', remarks: 'prEventsRemarks', conflicting: 'prEventsConflict' } as const;
 
+function checksSummary(checks: PullRequestCheck[]): string {
+    const counts = [
+        ['prChecksFailedCount', checks.filter(check => ['failure', 'cancelled', 'action-required'].includes(check.status)).length],
+        ['prChecksPendingCount', checks.filter(check => check.status === 'pending').length],
+        ['prChecksPassedCount', checks.filter(check => check.status === 'success').length],
+        ['prChecksOtherCount', checks.filter(check => ['skipped', 'neutral'].includes(check.status)).length],
+    ] as const;
+    return counts.filter(([, count]) => count > 0).map(([key, count]) => tf(key, { count: String(count) })).join(' · ') || t('prNoChecks');
+}
+
 export function PullRequestsPanel({ visible, panelClass, busy, state, pending, error, action }: {
     visible: boolean; panelClass: string; busy: boolean; state: PullRequestView; pending: boolean;
     error: { key: string; detail?: string } | null; action: (action: PullRequestAction, url?: string) => void;
@@ -59,11 +69,11 @@ export function PullRequestsPanel({ visible, panelClass, busy, state, pending, e
                     <div className="pr-watch-line"><button type="button" className={`pr-watch-toggle${link.watch ? ' watching' : ''}`} aria-label={watchLabel} title={`${watchLabel}. ${t('prMonitorHelp')}${!link.watch || link.resume ? ` ${t('prAutoResumeHelp')}` : ''}`} disabled={pending || (!link.watch && (state.offline || snapshot?.state !== 'open'))} onClick={() => action(link.watch ? 'unwatch' : 'watch', link.url)}>{link.watch ? <Eye size={14} /> : <EyeOff size={14} />}{t(link.watch ? 'prWatching' : 'prWatch')}</button></div>
                     {snapshot && <><p className="pr-branches" title={`${snapshot.headBranch} → ${snapshot.baseBranch}`}><GitBranch size={13} /><span dir="ltr">{snapshot.headBranch} → {snapshot.baseBranch}</span></p>
                         {snapshot.reviewDecision && <p className="pr-review"><MessageSquare size={13} />{tOrRaw(reviews[snapshot.reviewDecision] ?? snapshot.reviewDecision)}</p>}
-                        <details className="pr-detail" open><summary><ChevronDown size={13} />{t('prChecks')} <span dir="ltr">{snapshot.checks.filter(check => check.status === 'success').length}/{snapshot.checks.length}</span></summary>
+                        <details className="pr-detail"><summary><ChevronDown size={13} />{t('prChecks')} <span>{checksSummary(snapshot.checks)}</span></summary>
                             {!snapshot.checks.length && <p className="pr-help">{t('prNoChecks')}</p>}
                             <ul>{snapshot.checks.map((check, index) => <li key={`${check.name}-${index}`}><span className={`pr-check-dot ${check.status}`} aria-hidden="true" />{check.url ? <a href={check.url} target="_blank" rel="noreferrer" dir="auto">{check.name}</a> : <span dir="auto">{check.name}</span>}<span>{t(checkLabels[check.status])}{check.required ? ` · ${t('prRequired')}` : ''}</span></li>)}</ul>
                         </details>
-                        {snapshot.comments.length > 0 && <details className="pr-detail" open><summary><ChevronDown size={13} />{t('prComments')}<span dir="ltr">{snapshot.comments.length}</span></summary><ul className="pr-comments">{snapshot.comments.slice(-10).map(comment => <li key={comment.id}><a href={comment.url ?? link.url} target="_blank" rel="noreferrer" dir="ltr">{comment.author?.login ?? 'GitHub'}</a><p dir="auto">{comment.body}</p></li>)}</ul></details>}
+                        {snapshot.comments.length > 0 && <details className="pr-detail"><summary><ChevronDown size={13} />{t('prComments')}<span>{tf((snapshot.commentCount ?? snapshot.comments.length) === 1 ? 'prOneCommentSummary' : 'prCommentsSummary', { count: String(snapshot.commentCount ?? snapshot.comments.length), author: snapshot.comments.at(-1)?.author?.login ?? 'GitHub' })}</span></summary><ul className="pr-comments">{snapshot.comments.slice(-10).map(comment => <li key={comment.id}><a href={comment.url ?? link.url} target="_blank" rel="noreferrer" dir="ltr">{comment.author?.login ?? 'GitHub'}</a><p dir="auto">{comment.body}</p></li>)}</ul></details>}
                     </>}
                     {link.errorKey && <p className="pr-error" role="status">{tOrRaw(link.errorKey)}</p>}
                 </article>;
