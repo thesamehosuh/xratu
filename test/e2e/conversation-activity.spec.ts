@@ -59,9 +59,18 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await group.locator(':scope > summary').click();
     await expect(page.locator('.transcript-pane .conversation-activity-link')).toHaveCount(0);
     await page.locator('#surface-tab-activity').click();
+    // Pills mount their bodies on expand: open every closed pill so the
+    // retained results are in the DOM before asserting on them (the two
+    // consecutive reads share one grouped pill).
+    await expect(page.locator('.activity-pane details.step')).toHaveCount(3);
+    const closedActivity = page.locator('.activity-pane details.step:not([open]) > summary');
+    while (await closedActivity.count() > 0) await closedActivity.first().click();
     await expect(page.locator('.activity-pane')).toContainText('Retained result for test/auth.ts');
     await expect(page.locator('.activity-filters select')).toHaveCount(0);
     await pick(page, '.activity-filters .dropdown-trigger', 'Thinking');
+    const thinkPill = page.locator('.activity-timeline details.step');
+    await expect(thinkPill).toHaveCount(1);
+    if (!await thinkPill.evaluate((el) => (el as HTMLDetailsElement).open)) await thinkPill.locator(':scope > summary').click();
     await expect(page.locator('.activity-timeline')).toContainText('Trace the expiry guard.');
     await expect(page.locator('.activity-timeline')).not.toContainText('Retained result for');
     await pick(page, '.activity-filters .dropdown-trigger', 'All activity');
@@ -71,7 +80,7 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await expect(page.locator('.activity-empty')).toHaveText('No activity matches these filters.');
 });
 
-test('balanced groups completed commands while the active command and failures stay actionable', async ({ page }) => {
+test('balanced groups completed and failed commands while the active command stays actionable', async ({ page }) => {
     await post(page, { type: 'startResponse' });
     await tool(page, 'lint', 'run_terminal_command', 'lint');
     await tool(page, 'build', 'run_terminal_command', 'build');
@@ -82,6 +91,11 @@ test('balanced groups completed commands while the active command and failures s
     await tool(page, 'test', 'run_terminal_command', 'test', false);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();
     await group.locator(':scope > summary').click();
+    // Nested pills mount their bodies on expand too: wait for them, then
+    // open the ones that start closed.
+    await expect(group.locator('.step-group-body details.step')).toHaveCount(2);
+    const closedNested = group.locator('.step-group-body details.step:not([open]) > summary');
+    while (await closedNested.count() > 0) await closedNested.first().click();
     await expect(group).toContainText('Retained result for lint');
     await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'test passed', callId: 'test' });
     await expect(group).toHaveAttribute('open', '');
@@ -91,6 +105,9 @@ test('balanced groups completed commands while the active command and failures s
     await expect(page.locator('.transcript-pane details.step.fail')).toBeVisible();
     await expect(page.locator('.transcript-pane details.step.fail')).toHaveAttribute('open', '');
     await page.locator('#surface-tab-activity').click();
+    // The failed pill auto-opens; open the rest without toggling it shut.
+    const closedPane = page.locator('.activity-pane details.step:not([open]) > summary');
+    while (await closedPane.count() > 0) await closedPane.first().click();
     await expect(page.locator('.activity-pane')).toContainText('Retained result for lint');
     await expect(page.locator('.activity-pane')).toContainText('Retained result for build');
     await expect(page.locator('.activity-pane .conversation-work-group')).toHaveCount(0);
@@ -137,9 +154,11 @@ test('minimal keeps actionable failures, approvals and background controls visib
     await seed(page);
     await tool(page, 'cmd', 'run_terminal_command', '', false);
     await post(page, { type: 'toolResult', tool: 'run_terminal_command', callId: 'cmd', output: 'STDOUT:\nTest failed\nExit code: 1' });
-    const failure = page.locator('.transcript-pane details.step.fail');
-    await expect(failure).toHaveAttribute('open', '');
-    await expect(failure).toContainText('Test failed');
+    const group = page.locator('.transcript-pane .conversation-work-group').last();
+    await expect(group).not.toHaveAttribute('open');
+    await expect(page.locator('.transcript-pane details.step.fail')).toHaveCount(0);
+    await group.locator(':scope > summary').click();
+    await expect(group.locator('details.step.fail')).toContainText('Test failed');
     await tool(page, 'bg', 'run_terminal_command', '', false);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();
     await post(page, { type: 'needsApproval', approval_id: 'ap', approvals: [{ tool_call_id: 'bg', tool_name: 'run_terminal_command', args: { command: 'npm test' } }] });
@@ -159,7 +178,11 @@ test('Activity can disable following and timestamps without discarding the trace
     await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBe(0);
     await tool(page, 'later', 'read_file', 'later.ts');
     await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBe(0);
-    await expect(pane).toContainText('later.ts');
+    // The read pill has no auto-expand switch: its body mounts only on a
+    // manual toggle, so the arrival of the new turn is asserted on the pill
+    // count instead of its hidden result text (18 seeds + the later read,
+    // which folds into one pill with the preceding read).
+    await expect(pane.locator('details.step')).toHaveCount(18);
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
@@ -226,6 +249,11 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(group).not.toHaveAttribute('open');
         await expect(group.locator('summary').first()).toContainText(locale === 'en' ? 'Git diff' : 'تفاوت گیت');
         await group.locator('summary').first().click();
+        // Nested git pills have no auto-expand switch: open the closed ones
+        // so their bodies (paths, outputs) mount before asserting.
+        await expect(group.locator('.step-group-body details.step')).toHaveCount(2);
+        const closedGit = group.locator('.step-group-body details.step:not([open]) > summary');
+        while (await closedGit.count() > 0) await closedGit.first().click();
         await expect(group).toContainText('src/auth.ts');
         await page.screenshot({ path: info.outputPath('git-live.png'), animations: 'disabled' });
         await tool(page, 'server', 'run_terminal_command', '', false);
@@ -247,6 +275,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(summary.locator('.compact-step.failed')).toContainText('Server failed to bind');
         await page.screenshot({ path: info.outputPath('git-expanded.png'), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();
+        // The failed command auto-opens; open the rest without toggling it.
+        const closedGitActivity = page.locator('.activity-pane details.step:not([open]) > summary');
+        while (await closedGitActivity.count() > 0) await closedGitActivity.first().click();
         await expect(page.locator('.activity-pane')).toContainText('Retained result for src/auth.ts');
     });
 }
@@ -270,4 +301,16 @@ test('Git rows retain branch, revision and commit hints before and after complet
     await expect(summary).not.toHaveAttribute('open');
     await summary.locator('summary').click();
     for (const [, , hint] of operations) await expect(summary.locator('code').filter({ hasText: hint })).toHaveCount(1);
+});
+
+test('the action summary icon follows the running tool and failed reads stay folded', async ({ page }) => {
+    await post(page, { type: 'startResponse' });
+    await tool(page, 'read', 'read_file', 'src/a.ts', false);
+    const summary = page.locator('.conversation-work-group > summary');
+    await expect(summary.locator('.lucide-file-text')).toBeVisible();
+    await post(page, { type: 'toolResult', tool: 'read_file', callId: 'read', output: 'Error: file unavailable', isError: true });
+    await tool(page, 'search-next', 'grep_search', 'src', false);
+    await expect(summary.locator('.lucide-search')).toBeVisible();
+    await expect(page.locator('.conversation-work-group')).not.toHaveAttribute('open');
+    await expect(page.locator('.transcript-pane')).not.toContainText('Error: file unavailable');
 });

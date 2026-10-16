@@ -107,6 +107,11 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .surface-tab { display:flex; align-items:center; gap:6px; height:41px; padding:0; font-size:12px; color:var(--vscode-descriptionForeground); border:0; border-block-end:2px solid transparent; background:transparent; border-radius:0; }
 .surface-tab:hover { color:var(--vscode-foreground); }
 .surface-tab.active { border-block-end-color:var(--vscode-foreground); color:var(--vscode-foreground); }
+/* Clicking a tab moves DOM focus to it (roving tabindex), but the focused
+   tab is always the active one - the underline already marks selection, so
+   only the pointer-focus ring is dropped. Keyboard focus keeps its outline,
+   which is the one indicator that distinguishes a focused tab. */
+.surface-tab:focus:not(:focus-visible) { outline:none; }
 .tab-count { font-size:10px; border-radius:4px; padding:0 4px; color:var(--surface-accent); background:var(--xratu-accent-faint); }
 .work-surface { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:41px minmax(0,1fr) auto; min-height:0; flex:1; }
 .conversation-panel { display:flex; flex-direction:column; min-width:0; min-height:0; container-type:inline-size; }
@@ -405,3 +410,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .changes-pane.panel-main .changes-history { max-width:980px; margin-inline:auto; }
 
 .review-input:placeholder-shown { direction:inherit; }
+
+.dock-layout-menu { max-height:min(70vh,540px); overflow-y:auto; }
+.dock-layout-menu [role="menuitem"] { justify-content:space-between; gap:12px; }

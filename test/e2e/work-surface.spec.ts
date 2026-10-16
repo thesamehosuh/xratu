@@ -31,6 +31,17 @@ const replyFile = async (page: Page, after = 'new', afterRequestId?: unknown) =>
     await post(page, { ...request, file: { path: request.path, kind: 'text', before: 'old', after,
         hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: after.split('\n').length, removedLines: ['old'], addedLines: after.split('\n') }] }, type: 'changeFileState' });
 };
+/** Answer the review pane's latest changes request until the turn's diff
+ *  (and its review button) lands. The pane re-requests on busy/revision
+ *  flips, so a one-shot reply can go stale. */
+const answerChangesUntilReview = async (page: Page) => {
+    await expect.poll(async () => {
+        const current = (await sent(page)).filter((m) => m.type === 'changesGetState').at(-1);
+        if (!current) return false;
+        await post(page, { ...current, type: 'changesState', files: changes });
+        return (await page.locator('.outcome-review').count()) > 0;
+    }).toBe(true);
+};
 const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
@@ -53,6 +64,11 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
+    for (const panel of ['Activity', 'Browser']) {
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        await page.getByRole('menuitem', { name: `${panel} Main tabs`, exact: true }).click();
+    }
+    await page.locator('#surface-tab-conversation').click();
 });
 
 for (const locale of ['en', 'fa']) {
@@ -188,24 +204,18 @@ test('review responses reject old checkpoints and settled requests do not time o
     await expect(page.locator('.review-diff')).toBeVisible();
 });
 
-test('review comments belong to their file and feedback preserves unsent text without submitting', async ({ page }) => {
+test('ask for review names the selected file and preserves the composer draft', async ({ page }) => {
     await page.locator('.composer-input').fill('My existing draft');
     await openReview(page);
-    await page.locator('.review-input').fill('First file feedback');
-    await page.locator('.review-file').nth(1).click();
-    await expect(page.locator('.review-input')).toHaveValue('');
-    await page.locator('.review-input').fill('Second file feedback');
-    await page.locator('.review-file').first().click();
-    await expect(page.locator('.review-input')).toHaveValue('First file feedback');
-    await page.getByRole('button', { name: 'Send feedback', exact: true }).click();
-    await expect(page.locator('.composer-input')).toHaveValue('My existing draft\n\nsrc/first.ts\nFirst file feedback');
+    await expect(page.locator('.review-input')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toHaveCount(0);
+    await page.locator('.review-ask').click();
+    await expect(page.locator('.composer-input')).toHaveValue(/My existing draft[\s\S]*src\/first.ts/);
     expect((await sent(page)).some((m) => m.type === 'askQuestion')).toBe(false);
 });
 
-test('reviewed status expires when file content changes; the native diff gets the guarded checkpoint and path', async ({ page }) => {
+test('refresh keeps the diff visible and native editor access uses the guarded checkpoint and path', async ({ page }) => {
     await openReview(page);
-    await page.getByRole('button', { name: 'Mark reviewed', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Reviewed', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Open in editor', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'changeFileOpen', sha, path: changes[0].path });
     const previousList = await latest(page, 'changesGetState');
@@ -218,7 +228,7 @@ test('reviewed status expires when file content changes; the native diff gets th
     await expect(page.locator('.review-diff')).toContainText('new');
     await replyFile(page, 'changed again', previousFile.requestId);
     await expect(page.locator('.review-diff')).toContainText('changed again');
-    await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toBeVisible();
+    await expect(page.locator('.review-ask')).toBeVisible();
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
@@ -348,7 +358,6 @@ test('agent details surface both load problems and open only the discovered prof
 
 test('a session switch clears review notes and rejects the previous file response', async ({ page }) => {
     await openReview(page);
-    await page.locator('.review-input').fill('Only belongs to this session');
     const previousFile = await latest(page, 'changeFileGet');
     const previousList = await latest(page, 'changesGetState');
     await post(page, { type: 'sessionState', id: 'another-session', title: 'Another session' });
@@ -358,7 +367,6 @@ test('a session switch clears review notes and rejects the previous file respons
     await page.locator('#surface-tab-changes').click();
     await replyFile(page, 'new', previousFile.requestId);
     await post(page, { ...previousFile, type: 'changeFileState', errorKey: 'surfaceChangesFailed' });
-    await expect(page.locator('.review-input')).toHaveValue('');
     await expect(page.locator('.review-diff')).toBeVisible();
     await expect(page.locator('.changes-review [role="alert"]')).toHaveCount(0);
 });
@@ -373,7 +381,7 @@ test('large change lists reveal more files and binary files keep native editor a
     await expect(page.locator('.review-file')).toHaveCount(100);
     const file = await latest(page, 'changeFileGet');
     await post(page, { ...file, type: 'changeFileState', file: { path: file.path, kind: 'binary', before: '', after: '' } });
-    await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Open in editor', exact: true })).toBeEnabled();
     await expect(page.locator('.review-diff')).toHaveCount(0);
 });
@@ -386,6 +394,7 @@ test('light themes retain readable teal labels', async ({ page }) => {
     await post(page, { type: 'restoreUser', value: 'Review this', cp: sha });
     await post(page, { type: 'startResponse' });
     await post(page, { type: 'fullResponse', persian: 'Finished' });
+    await answerChangesUntilReview(page);
     const colors = await page.locator('.outcome-review').evaluate((el) => ({ foreground: getComputedStyle(el).color, background: getComputedStyle(document.querySelector('.toolbar')!).backgroundColor }));
     const luminance = (color: string) => {
         const rgb = color.match(/[\d.]+/g)!.slice(0, 3).map((n) => Number(n) / 255).map((n) => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
@@ -491,19 +500,13 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'locale', locale });
         await openReview(page);
         await page.locator('.composer-input').fill('A draft that survives docking');
-        await page.locator('.review-input').fill('Keep this review note');
-        await page.locator('.review-footer button').last().click();
         await dragToSidebar(page, '#surface-tab-activity');
         await expect(page.locator('.dock-tabs.side #surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
         await expect(page.locator('.dock-tabs.main #surface-tab-activity')).toHaveCount(0);
         await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
         await page.locator('.dock-tabs.side #surface-tab-changes').click();
-        await expect(page.locator('.review-input')).toHaveValue('Keep this review note');
-        await expect(page.locator('.review-footer button').last()).toHaveClass(/reviewed/);
         await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
         await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
-        await expect(page.locator('.review-input')).toHaveValue('Keep this review note');
-        await expect(page.locator('.review-footer button').last()).toHaveClass(/reviewed/);
         await expect(page.locator('.composer-input')).toHaveValue('A draft that survives docking');
         // Moving the last sidebar panel removes its column.
         await page.locator('.dock-tabs.side #surface-tab-activity').dragTo(page.locator('.dock-tabs.main'));
@@ -557,7 +560,7 @@ for (const locale of ['en', 'fa']) {
         await page.locator('.dock-tabs.side .dock-layout-button').click();
         await page.keyboard.press('End');
         await page.keyboard.press('Enter');
-        await expect(page.locator('.dock-tabs.main #surface-tab-activity')).toBeVisible();
+        await expect(page.locator('#surface-tab-activity')).toHaveCount(0);
         await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toBeVisible();
         await expect(page.locator('#surface-tab-conversation')).toBeFocused();
         await expect(page.locator('.activity-pane')).toBeHidden();
@@ -579,6 +582,7 @@ test('side-by-side Activity keeps live task controls unique and review opens the
         return ids.filter((id, index) => ids.indexOf(id) !== index);
     })).toEqual([]);
     await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+    await answerChangesUntilReview(page);
     await expect(page.locator('.outcome-review')).toBeVisible();
     await page.locator('.outcome-review').click();
     await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toHaveAttribute('aria-selected', 'true');
@@ -726,7 +730,6 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         const current = requests.filter(m => m.sha === otherSha).at(-1)!;
         await post(page, { ...current, type: 'changesState', files: [] });
         await expect(page.locator('.review-current .review-diff')).toContainText('first result');
-        await expect(page.locator('.review-current .review-input')).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
         await post(page, { ...current, type: 'changesState', files: changes });
         await post(page, { ...historical, type: 'changesState', files: [changes[0]] });
         await page.locator('#surface-tab-changes').click();
@@ -741,10 +744,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         expect(file.toSha).toBe(otherSha);
         await replyFile(page, 'first result');
         await expect(turn.locator('.review-diff')).toContainText('first result');
-        await turn.locator('.review-input').fill('Saved turn note');
         await turn.locator('summary').click();
         await turn.locator('summary').click();
-        await expect(turn.locator('.review-input')).toHaveValue('Saved turn note');
         await post(page, { type: 'truncateFromUser', userIndex: 0 });
         await expect(page.locator('.review-turn')).toHaveCount(0);
         await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
@@ -792,12 +793,8 @@ for (const locale of ['en', 'fa']) {
         await page.setViewportSize({ width: 1080, height: 800 });
         await post(page, { type: 'locale', locale });
         await openReview(page);
-        const note = page.locator('.review-current .review-input');
-        await expect(note).toHaveCSS('direction', locale === 'fa' ? 'rtl' : 'ltr');
-        await note.fill('Keep my review note');
         await post(page, { type: 'restoreUser', value: 'Second turn', cp: otherSha });
         await expect(page.locator('.review-current .review-diff')).toContainText('new');
-        await expect(page.locator('.review-current .review-input')).toHaveValue('Keep my review note');
         await expect.poll(async () => (await sent(page)).some(m => m.type === 'changesGetState' && m.sha === otherSha)).toBe(true);
         const requests = (await sent(page)).filter(m => m.type === 'changesGetState');
         const current = requests.find(m => m.sha === otherSha)!;
@@ -817,7 +814,6 @@ for (const locale of ['en', 'fa']) {
         await replyFile(page, 'second result');
         await expect(page.locator('.review-current .review-diff')).toContainText('second result');
         await page.locator('.review-turn > summary').click();
-        await expect(page.locator('.review-turn .review-input')).toHaveValue('Keep my review note');
     });
 }
 
@@ -949,4 +945,39 @@ test('live changes follow the latest edited file and preserve a manual selection
     await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
     await replyFile(page, 'second changed again');
     await expect(page.locator('.review-diff')).toContainText('second changed again');
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`empty tabs stay hidden and the panel picker opens any panel (${locale}, ${width})`, async ({ page }) => {
+        // Clear the explicitly opened legacy fixture tabs.
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        await page.getByRole('menuitem', { name: 'Reset layout', exact: true }).click();
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await expect(page.locator('[role="tab"]')).toHaveCount(1);
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        const picker = page.locator('.dock-layout-menu [role="menuitem"]');
+        // Browser is the sixth panel; wide windows offer main and sidebar destinations.
+        await picker.nth(width >= 860 ? 11 : 5).click();
+        await expect(page.locator('.browser-pane')).toBeVisible();
+        if (width >= 860) await expect(page.locator('.browser-pane')).toHaveClass(/panel-side/);
+        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    });
+}
+
+for (const locale of ['en', 'fa']) test(`assistant ask-review hides while the diff panel is visible (${locale})`, async ({ page }) => {
+    await post(page, { type: 'restoreUser', value: 'Edit the file', cp: sha });
+    await post(page, { type: 'startResponse' });
+    await post(page, { type: 'fullResponse', persian: 'Updated.', renderedHtml: '<p>Updated.</p>' });
+    await answerChangesUntilReview(page);
+    await post(page, { type: 'locale', locale });
+    await expect(page.locator('.outcome-actions button')).toHaveCount(2);
+    await page.setViewportSize({ width: 1080, height: 900 });
+    await expect(page.locator('.changes-pane')).toBeVisible();
+    await expect(page.locator('.outcome-actions button')).toHaveCount(1);
+    await expect(page.locator('.outcome-review')).toBeHidden();
+    await page.setViewportSize({ width: 420, height: 900 });
+    await expect(page.locator('.changes-pane')).toBeHidden();
+    await expect(page.locator('.outcome-actions button')).toHaveCount(2);
 });

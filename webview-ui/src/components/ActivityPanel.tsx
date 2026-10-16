@@ -1,13 +1,11 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import { ActivityTimeline, type ActivityFilter } from './MessageItem';
-import { PullRequestIndicator } from './PullRequestIndicator';
-import type { PullRequestView } from '../../../src/pullRequests/types';
 import { t } from '../i18n';
 import { Dropdown } from './Dropdown';
 import { transcriptOptions } from '../transcriptPrefs';
 
 /** Follow new activity until the reader scrolls away; docking retains that choice. */
-export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullRequests, sessionKey, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; pullRequests?: PullRequestView; onOpenPullRequests?: () => void; sessionKey?: string | null }) {
+export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; sessionKey?: string | null }) {
     const pane = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
@@ -43,6 +41,6 @@ export function ActivityPanel({ visible, panelClass, pullRequests, onOpenPullReq
             <Dropdown label={t('txFilterActivity')} value={filter} onChange={value => setFilter(value as ActivityFilter)}
                 options={[{ value: 'all', label: t('txFilterAll') }, { value: 'tools', label: t('txFilterTools') }, { value: 'commands', label: t('miniCommands') }, { value: 'thinking', label: t('miniThinking') }, { value: 'failures', label: t('txFilterFailures') }]} />
         </div>
-        <div ref={content}>{pullRequests && onOpenPullRequests && <PullRequestIndicator state={pullRequests} onOpen={onOpenPullRequests} />}<ActivityTimeline {...props} filter={filter} search={search} /></div>
+        <div ref={content}><ActivityTimeline {...props} filter={filter} search={search} /></div>
     </div>;
 }

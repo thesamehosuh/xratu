@@ -2,7 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { SURFACE_PANELS, defaultDockLayout, movePanel, readDockLayout, type DockLocation, type SurfacePanel } from './dockLayout';
 import { getWebviewState, patchWebviewState } from './vscode';
 
-export function useDockLayout(agentsAvailable = false, backgroundAvailable = false, changesAvailable = true, pullRequestsAvailable = false) {
+export function useDockLayout(agentsAvailable = false, backgroundAvailable = false, changesAvailable = true, pullRequestsAvailable = false, activityAvailable = true) {
+    const [opened, setOpened] = useState<Set<SurfacePanel>>(() => {
+        const saved = getWebviewState().surfaceOpenedPanels;
+        return new Set(Array.isArray(saved) ? saved.filter((panel): panel is SurfacePanel => SURFACE_PANELS.includes(panel)) : []);
+    });
+    useEffect(() => { patchWebviewState({ surfaceOpenedPanels: [...opened] }); }, [opened]);
     const [layout, setLayout] = useState(() => readDockLayout(getWebviewState().surfaceLayout));
     const [wide, setWide] = useState(() => window.matchMedia('(min-width: 860px)').matches);
     const [narrowActive, setNarrowActive] = useState<SurfacePanel>('conversation');
@@ -35,6 +40,7 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
         return () => media.removeEventListener('change', sync);
     }, []);
     const activate = useCallback((panel: SurfacePanel) => {
+        if (panel === 'browser' || panel === 'pullRequests') setOpened(current => new Set(current).add(panel));
         setNarrowActive(panel);
         setLayout((current) => {
             const next = { ...current, [current.side.includes(panel) ? 'sideActive' : 'mainActive']: panel };
@@ -42,6 +48,16 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
             return next;
         });
     }, []);
+    const open = (panel: SurfacePanel, location: DockLocation) => {
+        setOpened(current => new Set(current).add(panel));
+        setNarrowActive(panel);
+        setLayout(current => {
+            const moved = movePanel(current, panel, location);
+            const next = { ...moved, [location === 'main' ? 'mainActive' : 'sideActive']: panel };
+            patchWebviewState({ surfaceLayout: next });
+            return next;
+        });
+    };
     const move = (panel: SurfacePanel, location: DockLocation, before?: SurfacePanel) => {
         if (!wide) return;
         if (layout[location].includes(panel) && !before) { setDragging(null); return; }
@@ -55,10 +71,11 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     };
     const reset = () => {
         const next = defaultDockLayout();
+        setOpened(new Set());
         setLayout(next); setNarrowActive('conversation'); setDragging(null);
         patchWebviewState({ surfaceLayout: next });
     };
-    const available = (panel: SurfacePanel) => panel === 'changes' ? changesAvailable : panel === 'agents' ? agentsAvailable : panel === 'background' ? backgroundAvailable : panel === 'pullRequests' ? pullRequestsAvailable : true;
+    const available = (panel: SurfacePanel) => opened.has(panel) || (panel === 'changes' ? changesAvailable : panel === 'agents' ? agentsAvailable : panel === 'background' ? backgroundAvailable : panel === 'pullRequests' ? pullRequestsAvailable : panel === 'activity' ? activityAvailable : panel !== 'browser');
     const mainPanels = layout.main.filter(available);
     const sidePanels = layout.side.filter(available);
     const allPanels = SURFACE_PANELS.filter(available);
@@ -66,5 +83,5 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
     const mainActive = wide ? wanted && mainPanels.includes(wanted) ? wanted : mainPanels[0] ?? null : available(narrowActive) ? narrowActive : 'conversation';
     const sideActive = wide ? layout.sideActive && available(layout.sideActive) ? layout.sideActive : sidePanels[0] ?? null : null;
     const position = (panel: SurfacePanel) => `${wide && layout.side.includes(panel) ? 'panel-side' : 'panel-main'}${mainActive !== panel && sideActive !== panel ? ' panel-hidden' : ''}`;
-    return { layout, mainPanels, sidePanels, allPanels, wide, mainActive, sideActive, dragging, setDragging, activate, move, reset, position };
+    return { layout, mainPanels, sidePanels, allPanels, wide, mainActive, sideActive, dragging, setDragging, activate, move, open, reset, position };
 }

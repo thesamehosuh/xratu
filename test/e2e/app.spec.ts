@@ -318,6 +318,17 @@ test('the outcome reviews the turn checkpoint without extra message-footer actio
     await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'fullResponse', persian: 'Changes complete.', renderedHtml: '<p>Changes complete.</p>' });
+    // The turn's review buttons render once its diff is known: answer the
+    // review pane's request with an actual file list (re-requests on
+    // busy/revision flips can stale a one-shot reply, so retry until the
+    // button lands).
+    await expect.poll(async () => {
+        const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
+        const request = box.filter((message) => message.type === 'changesGetState').at(-1);
+        if (!request) return false;
+        await hostMessage(page, { ...request, type: 'changesState', files: [{ path: 'src/changed.ts', added: 3, removed: 1, binary: false, untracked: false }] });
+        return (await page.locator('.outcome-review').count()) > 0;
+    }).toBe(true);
     const review = page.locator('.outcome-review');
     await expect(review).toBeVisible();
     await expect(page.locator('.msg-footer button[aria-label="Review changes"]')).toHaveCount(0);
@@ -330,6 +341,24 @@ test('the outcome reviews the turn checkpoint without extra message-footer actio
     await page.setViewportSize({ width: 900, height: 900 });
     await expect(review).toBeHidden();
     await expect(page.locator('.changes-pane')).toBeVisible();
+});
+
+test('a turn with no diff shows no review buttons', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Nothing to change', cp: 'def5678' });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'Nothing changed.', renderedHtml: '<p>Nothing changed.</p>' });
+    await expect.poll(async () => {
+        const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
+        return box.some((message) => message.type === 'changesGetState');
+    }).toBe(true);
+    const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
+    const request = box.filter((message) => message.type === 'changesGetState').at(-1)!;
+    await hostMessage(page, { ...request, type: 'changesState', files: [] });
+    await expect(page.locator('.turn-outcome')).toHaveCount(0);
 });
 
 test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
@@ -667,6 +696,11 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     await page.locator('.composer-input').press('Enter');
     await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
     await expect(page.locator('.queued-steer-chip')).toContainText('also check b.txt');
+    // The chip column aligns with the composer card column.
+    const chipsBox = await page.locator('.queued-steers').boundingBox();
+    const composerBox = await page.locator('.composer').boundingBox();
+    expect(Math.abs(chipsBox!.x - composerBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(chipsBox!.width - composerBox!.width)).toBeLessThanOrEqual(1);
     expect(await page.locator('.msg.user').count()).toBe(userBefore);
     expect(await page.locator('.msg.assistant').count()).toBe(assistantBefore);
     expect(await page.locator('.msg.user.steered').count()).toBe(0);
@@ -723,6 +757,8 @@ test('the reasoning body stays LTR in fa - reasoning is always English', async (
         type: 'thinkingHtml',
         value: '<p>English reasoning that must not be reordered by the UI locale.</p>',
     });
+    // Thinking pills start collapsed and mount their body on expand.
+    await page.locator('.step-think > summary').click();
     const body = page.locator('.step-think-body');
     await expect(body).toHaveAttribute('dir', 'ltr');
     expect(await body.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
@@ -810,4 +846,18 @@ test('the fresh-workspace chips type a prompt with no {file} placeholder', async
     // "any" variant; the fresh set has no file variant at all.
     await page.locator('.chip-suggest').first().click();
     await expect(page.locator('.composer-input')).toHaveValue(/This folder is empty/);
+});
+
+test('automatic monitor wakes hide their user row and keep the response visible', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Watch the PR' });
+    await hostMessage(page, { type: 'restoreUser', value: 'PR monitor notification', hidden: true });
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'chunk', value: 'I checked the new review.' });
+    await hostMessage(page, { type: 'fullResponse', persian: 'I checked the new review.', renderedHtml: '<p>I checked the new review.</p>' });
+    await expect(page.locator('article.msg.user')).toHaveCount(1);
+    await expect(page.locator('.transcript-pane')).not.toContainText('PR monitor notification');
+    await expect(page.locator('.transcript-pane')).toContainText('I checked the new review.');
+    await expect(page.locator('.queued-steer-chip,.pr-indicator')).toHaveCount(0);
 });

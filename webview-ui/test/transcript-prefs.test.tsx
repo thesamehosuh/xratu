@@ -4,11 +4,12 @@
  *
  * Two things are pinned here:
  *  1. `prefOn` resolution - a stored flag wins, otherwise the row's own
- *     default, otherwise collapsed. The empty blob must therefore resolve to
- *     "diffs open, commands closed, reasoning closed" with no host
- *     round-trip, and a family with no row must never open itself.
+ *     default, otherwise collapsed. Every shipped row defaults to collapsed,
+ *     so the empty blob opens nothing with no host round-trip, and a family
+ *     with no row must never open itself.
  *  2. What the transcript actually does with it - every pill, including the
- *     reasoning one, seeded from its family's switch.
+ *     reasoning one, seeded from its family's switch, and a collapsed pill
+ *     mounts no body (summaries alone render) until it is expanded.
  *
  * `useAutoOpen`'s manual-toggle protection is NOT covered here: it is a
  * post-mount effect, and this harness only server-renders the first paint.
@@ -36,13 +37,14 @@ function eq(actual: unknown, expected: unknown, name: string): void {
 
 // --- prefOn: stored flag, then row default, then collapsed ----------------
 
-eq(prefOn(undefined, 'edit'), true, 'no prefs at all: diffs still auto-expand');
+eq(prefOn(undefined, 'edit'), false, 'no prefs at all: diffs stay collapsed too');
 eq(prefOn(undefined, 'terminal'), false, 'no prefs at all: commands stay collapsed');
 eq(prefOn(undefined, 'thinking'), false, 'no prefs at all: reasoning stays collapsed');
 eq(prefOn(EMPTY_TRANSCRIPT_PREFS, 'read'), false, 'a family with no row never auto-expands');
 
 const stored: TranscriptPrefs = { expand: { edit: false, terminal: true, thinking: true } };
-eq(prefOn(stored, 'edit'), false, 'a stored false overrides the row default');
+eq(prefOn(stored, 'edit'), false, 'a stored false keeps the pill collapsed');
+eq(prefOn({ expand: { edit: true } }, 'edit'), true, 'a stored true opens the pill');
 eq(prefOn(stored, 'terminal'), true, 'a stored true overrides the row default');
 eq(prefOn(stored, 'thinking'), true, 'reasoning can be switched on');
 eq(prefOn(stored, 'read'), false, 'an untouched id stays collapsed');
@@ -60,7 +62,7 @@ eq(coerceTranscriptPrefs({ expand: { edit: 'yes' } }), EMPTY_TRANSCRIPT_PREFS,
 
 eq(TRANSCRIPT_ROWS.map((r) => r.id), ['edit', 'terminal', 'thinking'],
     'the shipped rows, in display order');
-eq(TRANSCRIPT_ROWS.map((r) => r.defaultOn), [true, false, false], 'shipped defaults');
+eq(TRANSCRIPT_ROWS.map((r) => r.defaultOn), [false, false, false], 'shipped defaults');
 ok(TRANSCRIPT_ROWS.every((r) => r.labelKey && r.descKey), 'every row names both i18n keys');
 ok(new Set(TRANSCRIPT_ROWS.map((r) => r.id)).size === TRANSCRIPT_ROWS.length, 'row ids are unique');
 
@@ -102,8 +104,10 @@ function render(prefs?: TranscriptPrefs): string {
 
 const openCount = (html: string): number => (html.match(/<details[^>]*\sopen=""/g) ?? []).length;
 
-/** Is the pill that CONTAINS `marker` expanded? (SSR renders a closed pill's
- *  body too - the browser is what hides it - so only the tag can say.) */
+/** Is the pill that CONTAINS `marker` expanded? Null when the marker is not
+ *  mounted at all - a collapsed pill renders its summary row only, so only
+ *  an expanded pill's body can contain it (the browser is what used to hide
+ *  closed bodies; now they are not rendered until expanded). */
 function pillOpenFor(html: string, marker: string): boolean | null {
     const at = html.indexOf(marker);
     if (at < 0) return null;
@@ -112,36 +116,39 @@ function pillOpenFor(html: string, marker: string): boolean | null {
     return /\sopen=""/.test(html.slice(start, html.indexOf('>', start)));
 }
 
-// Defaults: the diff opens on its own; the command and the reasoning do not.
+// Defaults: every pill starts collapsed, and a collapsed pill mounts no
+// body - summaries alone render.
 let html = render();
-eq(openCount(html), 1, 'defaults: exactly one pill starts expanded');
-eq(pillOpenFor(html, 'src/a.ts'), true, 'defaults: the diff pill starts expanded');
-eq(pillOpenFor(html, 'npm-test-marker'), false, 'defaults: the command pill starts collapsed');
-eq(pillOpenFor(html, 'reasoning-marker'), false, 'defaults: the reasoning pill starts collapsed');
-ok(html.includes('pill-diff-line'), 'defaults: the diff body renders');
-ok(html.includes('detail-terminal') && html.includes('all good'), 'defaults: the command output body renders');
+eq(openCount(html), 0, 'defaults: nothing starts expanded');
+eq(pillOpenFor(html, 'src/a.ts'), null, 'defaults: the diff body is not mounted');
+eq(pillOpenFor(html, 'npm-test-marker'), false, 'defaults: the command summary renders collapsed');
+eq(pillOpenFor(html, 'reasoning-marker'), null, 'defaults: the reasoning body is not mounted');
+ok(!html.includes('pill-diff-line'), 'defaults: no diff rows mount');
+ok(!html.includes('detail-terminal'), 'defaults: no command output mounts');
 
-// Switching a family off closes the already-rendered pill (the switch is not a
-// mount-time-only seed).
+// Switching a family off keeps its already-unmounted pill closed.
 html = render({ expand: { edit: false } });
 eq(openCount(html), 0, 'auto-expand off: nothing starts expanded');
-ok(html.includes('pill-diff-line'), 'auto-expand off: the diff is still there, just closed');
+ok(!html.includes('pill-diff-line'), 'auto-expand off: the diff body stays unmounted');
 
 // Switching the reasoning on expands it like any other pill.
 html = render({ expand: { thinking: true } });
 eq(pillOpenFor(html, 'reasoning-marker'), true, 'reasoning on: the reasoning pill starts expanded');
 eq(pillOpenFor(html, 'npm-test-marker'), false, 'reasoning on: other pills are unaffected');
-eq(openCount(html), 2, 'reasoning on: the diff and the reasoning pill are open');
+eq(openCount(html), 1, 'reasoning on: only the reasoning pill is open');
+ok(!html.includes('pill-diff-line'), 'reasoning on: the diff body stays unmounted');
 
-// A switch never removes a row - it only decides how it starts.
+// A switch never removes a row - it only decides how it starts, and only an
+// expanded pill mounts its body.
 html = render({ expand: { terminal: true } });
-eq(openCount(html), 2, 'commands on: the command pill starts expanded');
-ok(html.includes('reasoning-marker'), 'a switch is expansion only: reasoning still renders');
-ok(html.includes('npm-test-marker'), 'a switch is expansion only: the command still renders');
+eq(openCount(html), 1, 'commands on: only the command pill starts expanded');
+ok(html.includes('npm-test-marker') && html.includes('all good'), 'commands on: the output mounts');
+ok(!html.includes('reasoning-marker'), 'commands on: reasoning stays unmounted');
 
 // Every family in the shipped rows resolves through the same code path.
 html = render({ expand: { edit: true } });
-eq(openCount(html), 1, 'edit on: only the diff (its default)');
+eq(openCount(html), 1, 'edit on: only the diff pill');
+ok(html.includes('pill-diff-line'), 'edit on: the diff mounts');
 html = render({ expand: { edit: false, terminal: true } });
 eq(openCount(html), 1, 'commands on with diffs off: only the command pill');
 
@@ -170,7 +177,7 @@ const createStep: Step = {
     result: 'created',
 };
 
-function renderStep(step: Step): string {
+function renderStep(step: Step, prefs?: TranscriptPrefs): string {
     const messages: ChatMessage[] = [{
         id: 'm1',
         role: 'assistant' as const,
@@ -182,6 +189,7 @@ function renderStep(step: Step): string {
     return renderToString(createElement(ActivityTimeline, {
         messages,
         firstVisible: 0,
+        transcriptPrefs: prefs,
     }));
 }
 
@@ -190,7 +198,7 @@ function renderStep(step: Step): string {
 const iconMarkup = (html: string): string =>
     /<svg[^>]*step-icon[^>]*>[\s\S]*?<\/svg>/.exec(html)?.[0] ?? '';
 
-const createHtml = renderStep(createStep);
+const createHtml = renderStep(createStep, { expand: { edit: true } });
 ok(createHtml.includes('src/new.ts') && createHtml.includes('edit-file-path'),
     'a create pill renders the same path header a patch pill does');
 eq((createHtml.match(/pill-diff-line/g) ?? []).length, 2,

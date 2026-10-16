@@ -50,6 +50,17 @@ try {
     checkTrue('model history never gains observation fields',!JSON.stringify(restoredChild.localHistory).includes('child-model'));
     await store.delete(observed.id);
 
+    const notification = await store.create(ws);
+    await store.save(notification.id, { workspace: ws, model: null, summary: null,
+        localHistory: [{ role: 'user', content: 'Automatic update' }],
+        uiHistory: [{ role: 'user', content: 'Automatic update', hidden: true }],
+        pendingTurn: { prompt: 'Automatic update', hidden: true, text: 'Checking', thinking: '', events: [] },
+    });
+    const restoredNotification = await store.load(notification.id);
+    check('monitor UI row remains hidden on restore', restoredNotification.uiHistory[0].hidden, true);
+    check('interrupted monitor wake remains hidden on restore', restoredNotification.pendingTurn.hidden, true);
+    await store.delete(notification.id);
+
     // 1. Fresh session: workspace label placeholder.
     const meta = await store.create(ws);
     check('create seeds workspace label', meta.title, 'fake-workspace');

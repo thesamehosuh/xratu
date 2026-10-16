@@ -65,6 +65,7 @@ import {
 import { sanitizePath } from './paths';
 import { ATTACH_MAX_BYTES, ATTACH_MAX_COUNT, ATTACH_MAX_TOTAL_BYTES, buildLocalUserText, isImageAttachment, isPdfAttachment, isTextAttachment, mimeFromFilename, resolveReferenceAttachments, validateHostAttachments } from './attachments';
 import type { AttachmentMeta, ComposerAttachment, HistoryMessage } from './chatViewTypes';
+import { displayHistoryForReplay } from './chatReplay';
 import { closeOpenFence, ensureShiki, md, mdLive } from './markdownRender';
 import { _sanitizeHtml } from './sanitizeHtml';
 import { collectProjectRules } from './projectRules';
@@ -1110,7 +1111,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
      *  turn (local mode has no server copy). Cleared in _runLocalAgent's
      *  finally; the ledgers alone are authoritative after that. */
-    private _localPendingTurn: { prompt: string; events: any[]; attachments?: AttachmentMeta[] } | null = null;
+    private _localPendingTurn: { hidden?: boolean; prompt: string; events: any[]; attachments?: AttachmentMeta[] } | null = null;
     private _localPartialTimer: ReturnType<typeof setTimeout> | null = null;
     readonly _localSessionStore: LocalSessionStore;
     /** Seq for in-app notification banners (replaces vscode.window toasts). */
@@ -4323,8 +4324,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         attachments?: ComposerAttachment[],
         existingController?: AbortController,
         planMode?: boolean,
+        hiddenPrompt?: boolean,
     ): Promise<StreamOutcome> {
-        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, rulesContext, attachments, existingController, planMode);
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, rulesContext, attachments, existingController, planMode, hiddenPrompt);
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
@@ -4395,6 +4397,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // `events` is held by reference and grows as the run streams - the
         // throttled snapshot below always captures the current tail.
         this._localPendingTurn = {
+            hidden: hiddenPrompt,
             prompt,
             events: outcome.events,
             ...(attachments?.length ? {
@@ -4757,7 +4760,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return outcome;
     }
 
-    private async _runOpenCodeAgent(prompt: string, rulesContext: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean): Promise<StreamOutcome> {
+    private async _runOpenCodeAgent(prompt: string, rulesContext: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean): Promise<StreamOutcome> {
         const epoch = this._sessionEpoch;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
@@ -4773,7 +4776,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._runNativeProvider = `opencode/${this._selectedModel?.split('/')[0] ?? 'unknown'}`;
         this._runSubscription = false;
         this._runCostCurrency = 'USD';
-        this._localPendingTurn = { prompt, events: outcome.events };
+        this._localPendingTurn = { prompt, events: outcome.events, hidden: hiddenPrompt };
         this._postEngineState();
         try {
             const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -5483,7 +5486,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private async _runPullRequestUpdate(prompt: string, epoch: number, urls: string[], expected: PullRequestExecution | null, admit: () => boolean): Promise<boolean> {
-        const current = () => admit() && epoch === this._sessionEpoch && !this._localRunActive && !this._sessionTransitionsPending && !this._checkpointRestoreActive && !!this._view && !this._planMode && !isOfflineMode();
+        const current = () => admit() && epoch === this._sessionEpoch && !this._localRunActive && !this._sessionTransitionsPending && !this._checkpointRestoreActive && !this._modelManagementController && !this._benchmarkController && !!this._view && !this._planMode && !isOfflineMode();
         if (!current()) return false;
         // No identity to pin (manual continuation without a resolvable branch)
         // still runs under the admission checks above and below.
@@ -5492,12 +5495,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!current()) return false;
         const display = `${ui('prMonitorPrompt')}\n${urls.join('\n')}`;
         const first = this._history.length;
-        this._view!.webview.postMessage({ type: 'restoreUser', value: display });
-        try { await this._handleChatRequest(prompt, undefined, { admittedEpoch: epoch }); }
+        this._view!.webview.postMessage({ type: 'restoreUser', value: display, hidden: true });
+        try { await this._handleChatRequest(prompt, undefined, { admittedEpoch: epoch, hiddenPrompt: true }); }
         finally {
             if (epoch === this._sessionEpoch) {
                 const row = this._history.slice(first).find(row => row.role === 'user' && row.content === prompt);
-                if (row) { row.content = display; await this._persistLocalSession(); }
+                if (row) { row.content = display; row.hidden = true; await this._persistLocalSession(); }
             }
         }
         return epoch === this._sessionEpoch && this._history.slice(first).some(row => row.role === 'user' && row.content === display);
@@ -6124,12 +6127,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private _restoreChatUI() {
         if (!this._view) return;
-        // Replay never streams chunks - any stale segment state from an
-        // errored turn must not leak into the replayed bubbles.
+        // Replay rebuilds text segments in event order. Clear any partial
+        // segment left by an errored live turn before starting.
         this._resetLiveSegments();
-        for (const msg of this._history) {
+        for (const msg of displayHistoryForReplay(this._history)) {
             if (msg.role === 'user') {
-                this._view.webview.postMessage({ type: 'restoreUser', value: msg.content, attachments: msg.attachments, cp: msg.cp });
+                this._view.webview.postMessage({ type: 'restoreUser', value: msg.content, attachments: msg.attachments, cp: msg.cp, hidden: msg.hidden });
             } else if (msg.role === 'assistant') {
                 if (Array.isArray(msg.events) && msg.events.length > 0) {
                     this._view.webview.postMessage({ type: 'startResponse' });
@@ -6155,6 +6158,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                                 callId: parsed.id ?? undefined,
                                 timestamp: parsed.timestamp,
                             });
+                        } else if (parsed.type === 'assistant_message' && parsed.content) {
+                            this._liveSegments.push(parsed.content);
+                            this._view.webview.postMessage({ type: 'chunk', value: parsed.content });
+                            this._view.webview.postMessage({ type: 'streamHtml', value: this._renderMarkdown(parsed.content) });
+                        } else if (parsed.type === 'steer_user') {
+                            this._view.webview.postMessage({ type: 'steerUser', value: parsed.text, attachments: parsed.attachments });
                         } else if (parsed.type === 'result') {
                             this._displayAssistantResponse(parsed);
                         }
@@ -6574,6 +6583,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._history.push({
                 role: 'user',
                 content: pt.prompt,
+                hidden: pt.hidden,
                 ...(pt.attachments?.length ? { attachments: pt.attachments } : {}),
             });
             // Steered user messages were real turns: mirror the success path so
@@ -6683,6 +6693,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 usageByHost: this._sessionUsageByHost,
                 pendingTurn: this._localPendingTurn ? {
                     prompt: this._localPendingTurn.prompt,
+                    hidden: this._localPendingTurn.hidden,
                     events: this._localPendingTurn.events,
                     text: this._localAccumulatedText,
                     thinking: this._localAccumulatedThinking,
@@ -6989,7 +7000,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
 
-    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number }): Promise<void> {
+    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean }): Promise<void> {
         if (!this._view) { return; }
         if (opts?.admittedEpoch !== undefined && opts.admittedEpoch !== this._sessionEpoch) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
@@ -7167,7 +7178,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
                 agentStarted = true;
-                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart);
+                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt);
                 this._endLiveMarkdown();
                 // Final pass over the run-lifetime ledger before either
                 // terminal path consumes it: a reasoning block (or carrier
@@ -7201,7 +7212,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // snapshot write (Windows AV locking local-sessions.json) must
                     // not silently drop the turn from the in-memory history too.
                     if (!opts?.steerCarry) {
-                        this._history.push({ role: "user", content: prompt, cp: prePromptSha, attachments: attachmentMeta });
+                        this._history.push({ role: "user", content: prompt, cp: prePromptSha, attachments: attachmentMeta, hidden: opts?.hiddenPrompt });
                     }
                     for (const event of outcome.events) {
                         if (event.type === 'steer_user') {
@@ -7242,7 +7253,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // the local model replays the tool/thinking context next turn,
                     // and edit/regenerate indexing stays aligned.
                     if (epoch === this._sessionEpoch) {
-                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[cancelled by user]');
+                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[cancelled by user]', opts?.hiddenPrompt);
                         await this._persistLocalSession().catch((e) => {
                             console.error('xratu: local session persist failed:', e);
                         });
@@ -7257,7 +7268,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // it. Commit exactly like a cancel, placeholder-answer dangling
                     // tool calls, keep the pre-prompt checkpoint shas, and persist.
                     if (epoch === this._sessionEpoch) {
-                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]');
+                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt);
                         await this._persistLocalSession().catch((e) => {
                             console.error('xratu: local session persist failed:', e);
                         });
@@ -7279,7 +7290,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // the webview rendered its user bubble, and a dropped row would
                 // desync edit/regenerate indexing. Then surface the error.
                 if (epoch === this._sessionEpoch) {
-                    this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]');
+                    this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt);
                     await this._persistLocalSession().catch((e) => {
                         console.error('xratu: local session persist failed:', e);
                     });
@@ -7343,9 +7354,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         outcome: StreamOutcome,
         steerCarry: boolean | undefined,
         toolPlaceholder: string,
+        hiddenPrompt?: boolean,
     ): void {
         if (!steerCarry) {
-            this._history.push({ role: 'user', content: prompt, cp: prePromptSha, attachments: attachmentMeta });
+            this._history.push({ role: 'user', content: prompt, cp: prePromptSha, attachments: attachmentMeta, hidden: hiddenPrompt });
             this._pushLocalHistory({ role: 'user', content: prompt });
         }
         for (const event of outcome.events) {

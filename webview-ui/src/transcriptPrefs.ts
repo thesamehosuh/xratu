@@ -67,14 +67,13 @@ export interface TranscriptRow {
 }
 
 /**
- * Diffs expand because the diff IS the payload the user came for. Commands
- * stay collapsed: a command line is long and scroll-heavy, and the summary
- * already carries the command plus its exit code. Reasoning stays collapsed
- * too - a thinking stream is the longest content in the transcript, so
- * expanding it on sight would bury the answer it is reasoning towards.
+ * Pills stay collapsed until the reader opens them: mounting every diff,
+ * output and reasoning stream up front froze long transcripts, so even
+ * edits (whose diff used to be the payload) start closed. The switches
+ * below opt back into auto-expand per family.
  */
 export const TRANSCRIPT_ROWS: readonly TranscriptRow[] = [
-    { id: 'edit', labelKey: 'txExpandEdits', descKey: 'txExpandEditsDesc', defaultOn: true },
+    { id: 'edit', labelKey: 'txExpandEdits', descKey: 'txExpandEditsDesc', defaultOn: false },
     { id: 'terminal', labelKey: 'txExpandCommands', descKey: 'txExpandCommandsDesc', defaultOn: false },
     { id: 'thinking', labelKey: 'txExpandThinking', descKey: 'txExpandThinkingDesc', defaultOn: false },
 ];

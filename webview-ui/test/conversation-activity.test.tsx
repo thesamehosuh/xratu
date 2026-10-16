@@ -33,14 +33,16 @@ assert.doesNotMatch(expandedGroups[1], /open=""/, 'thinking does not expand an u
 const editsExpanded = render({ transcriptPrefs: { expand: { edit: true } } });
 assert.match(editsExpanded, /<details class="step conversation-work-group" open="">/, 'edit preference still expands edit groups');
 
-const activity = renderToString(createElement(ActivityTimeline, { messages: [message] }));
+const activity = renderToString(createElement(ActivityTimeline, { messages: [message], transcriptPrefs: { expand: { thinking: true } } }));
 assert.match(activity, /private-reasoning-marker/);
 assert.match(activity, /progress-marker/);
 assert.equal(groups(activity), 0, 'Activity keeps the complete recorded trace');
 assert.doesNotMatch(balanced, /View in Activity/);
-assert.match(activity, /read-b result/);
+// Read pills have no auto-expand switch: their bodies mount only on a manual
+// toggle, so the trace keeps their summaries (both reads still render).
+assert.equal((activity.match(/Read file/g) ?? []).length, 2);
 
-const detailed = render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } });
+const detailed = render({ transcriptPrefs: { expand: { thinking: true }, options: { detail: 'detailed' } } });
 assert.equal(groups(detailed), 0);
 assert.match(detailed, /private-reasoning-marker/);
 const minimal = render({ transcriptPrefs: { expand: {}, options: { detail: 'minimal' } } }, { ...message, steps: [text('old-progress'), ...steps] });
@@ -61,7 +63,7 @@ assert.match(commands, /2 commands/);
 assert.doesNotMatch(commands, /conversation-work-group" open=""/);
 assert.match(render({ transcriptPrefs: { expand: {}, options: { commands: 'expanded' } } }, commandMessage), /conversation-work-group" open=""/, 'expanded commands opens the group');
 assert.equal(groups(render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } }, commandMessage)), 0, 'detailed keeps individual commands');
-assert.equal(groups(render({}, { ...message, steps: [...commandSteps, failed, call('after-failure', 'run_terminal_command')] })), 2, 'failures split command groups');
+assert.equal(groups(render({}, { ...message, steps: [...commandSteps, failed, call('after-failure', 'run_terminal_command')] })), 1, 'failures share command groups');
 assert.equal(groups(render({}, { ...message, steps: [commandSteps[0], text('command-boundary'), commandSteps[1]] })), 2, 'prose splits command groups');
 const mixed = render({}, { ...message, steps: [commandSteps[0], call('status', 'git_status'), call('read', 'read_file'), call('edit', 'apply_patch')] });
 assert.equal(groups(mixed), 1, 'balanced folds adjacent work across tool families');
@@ -79,13 +81,13 @@ assert.doesNotMatch(balanced, /class="working-row"/, 'a row that is still spinni
 assert.doesNotMatch(render({ transcriptPrefs: { expand: {}, options: { compactCompleted: false } } }, { ...message, status: 'done' as const, steps: [...commandSteps, text('final')] }), /class="working-row"/, 'a finished turn never shows the heartbeat');
 assert.doesNotMatch(render({}, { ...message, steps: [call('plan', TASK_LIST_TOOL, { result: undefined })] }), /class="working-row"/, 'a pending task list already draws its own spinner');
 assert.doesNotMatch(render({}, { ...message, steps: [call('settled-cmd', 'run_terminal_command')], decisions: [{ decision_id: 'q1', question: 'Which one?', options: [] }] }), /class="working-row"/, 'a turn parked on an unanswered question is not a working turn');
-const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage] }));
+const commandActivity = renderToString(createElement(ActivityTimeline, { messages: [commandMessage], transcriptPrefs: { expand: { terminal: true } } }));
 assert.equal(groups(commandActivity), 0);
 assert.match(commandActivity, /lint result/);
 assert.match(commandActivity, /build result/);
 const exceptional = render({ transcriptPrefs: { expand: {}, options: { detail: 'minimal' } } }, { ...message, steps: [steps[0], failed, call('background', 'run_terminal_command', { background: { jobId: 'job', byUser: true } }), call('child', 'task'), call('interrupted', 'read_file', { interrupted: true })] });
-assert.equal(groups(exceptional), 1, 'failures, processes, children and interrupted calls stay outside groups');
-assert.match(exceptional, /class="step fail" open=""/);
+assert.equal(groups(exceptional), 1, 'processes, children and interrupted calls stay outside groups');
+assert.doesNotMatch(exceptional, /class="step fail"/);
 
 const completed = { ...message, status: 'done' as const, steps: [...steps, text('final-answer')] };
 assert.match(render({}, completed), /class="completed-steps"/);
@@ -97,7 +99,7 @@ assert.doesNotMatch(noTimes, /class="activity-age"/);
 const errors = renderToString(createElement(ActivityTimeline, { messages: [{ ...message, steps: [...steps, failed] }], filter: 'failures' }));
 assert.match(errors, /failed-command/);
 assert.doesNotMatch(errors, /read-a|private-reasoning-marker/);
-const reasoning = renderToString(createElement(ActivityTimeline, { messages: [message], filter: 'thinking', search: 'PRIVATE-REASONING' }));
+const reasoning = renderToString(createElement(ActivityTimeline, { messages: [message], filter: 'thinking', search: 'PRIVATE-REASONING', transcriptPrefs: { expand: { thinking: true } } }));
 assert.match(reasoning, /private-reasoning-marker/);
 assert.doesNotMatch(reasoning, /read-a/);
 const progressSearch = renderToString(createElement(ActivityTimeline, { messages: [completed], search: 'progress-marker' }));

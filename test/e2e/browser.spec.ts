@@ -43,7 +43,7 @@ async function setup(page: Page, launchOptions: Parameters<typeof chromium.launc
     await page.goto('/');
     await post(page, { type: 'locale', locale }); await post(page, { type: 'showChat' });
     await post(page, { type: 'sessionState', id: 'browser-session', title: null });
-    await page.locator('#surface-tab-browser').click();
+    await post(page, { type: 'openBrowser' });
     return { controller, errors, settle: () => delivery };
 }
 
@@ -82,8 +82,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await expect.poll(() => controller.getState().viewport.width).toBe(390);
             await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(390);
             const box = JSON.parse((await controller.tool('browser-session', 'browser_evaluate', { expression: '(()=>{const r=document.querySelector("input").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()' })).output);
+            await page.locator('.browser-viewport img').scrollIntoViewIfNeeded();
             const pixels = await page.locator('.browser-viewport img').boundingBox();
-            await page.locator('.browser-viewport img').click({ position: { x: box.x * pixels!.width / 390, y: box.y * pixels!.width / 390 } });
+            await page.locator('.browser-viewport img').click({ position: { x: box.x * pixels!.width / 390, y: box.y * pixels!.height / 844 } });
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.activeElement.tagName' })).output).toBe('"INPUT"');
             await page.locator('.browser-keyboard').press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: '(()=>{const el=document.querySelector("input");return el.selectionStart===0 && el.selectionEnd===el.value.length})()' })).output).toBe('true');
@@ -92,7 +93,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await page.locator('.browser-keyboard').focus(); await page.locator('.browser-keyboard').press('Tab');
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.activeElement.tagName' })).output).toBe('"BUTTON"');
             if (width > 860) {
-                await page.locator('.dock-tabs.main .dock-layout-button').click();
+                await page.locator('#surface-tab-browser').press('Shift+F10');
+                await page.locator('.dock-layout-menu [role=menuitem]').first().click();
+                await expect(page.locator('.browser-pane')).toHaveClass(/panel-main/);
+                await page.locator('#surface-tab-browser').press('Shift+F10');
                 await page.locator('.dock-layout-menu [role=menuitem]').first().click();
                 await expect(page.locator('.browser-pane')).toHaveClass(/panel-side/);
                 await expect(page.locator('.browser-viewport img')).toBeVisible();

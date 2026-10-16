@@ -11,7 +11,6 @@ import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
 import { PullRequestsPanel } from './components/PullRequestsPanel';
-import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { usePullRequests } from './usePullRequests';
 import { useDockLayout } from './useDockLayout';
 import { ActivityPanel } from './components/ActivityPanel';
@@ -49,7 +48,7 @@ import type {
 import { createInitialChatState, reduceChat } from './state';
 import { Toolbar, type SessionsScope } from './components/Toolbar';
 import { MessageList } from './components/MessageList';
-import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep, toolCallFailed } from './components/MessageItem';
+import { TASK_LIST_TOOL, TaskListEditor, parseTaskListStep, toolCallFailed, hasActivity } from './components/MessageItem';
 import { CredentialsPage } from './components/CredentialsPage';
 import { InputBar } from './components/InputBar';
 import { SettingsPage } from './components/SettingsPage';
@@ -229,8 +228,15 @@ export function App() {
         return turns.map((message, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.cp, number: index + 1 }));
     }, [chat.messages]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const [turnFiles, setTurnFiles] = useState<{ session: string | null; files: Record<string, ReviewChange[]> }>({ session: null, files: {} });
+    const recordTurnFiles = useCallback((turn: { sha: string; toSha?: string }, files: ReviewChange[]) => {
+        const key = `${turn.sha}:${turn.toSha ?? ''}`;
+        setTurnFiles(current => current.session === currentSessionId && current.files[key] === files ? current : {
+            session: currentSessionId, files: { ...(current.session === currentSessionId ? current.files : {}), [key]: files },
+        });
+    }, [currentSessionId]);
     const pullRequests = usePullRequests(currentSessionId);
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0 || activeReviewSha !== null, pullRequests.state.links.length > 0);
+    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, false, hasActivity(chat.messages));
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
@@ -247,7 +253,10 @@ export function App() {
     const [activityOpened, setActivityOpened] = useState(false);
     useEffect(() => { if (activityVisible) setActivityOpened(true); }, [activityVisible]);
     const [reviewPath, setReviewPath] = useState<string | null>(null);
-    const [reviewFiles, setReviewFiles] = useState<ReviewChange[]>([]);
+    // The selected turn's diff, once the review pane reports it. `undefined`
+    // means not yet known (older turns always read as unknown) - only a
+    // positively-empty list hides the turn's review buttons.
+    const [reviewFiles, setReviewFiles] = useState<ReviewChange[] | undefined>(undefined);
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
     useEffect(() => { setModelPings({}); }, [engineState?.active, currentSessionId]);
@@ -1615,7 +1624,7 @@ export function App() {
                     if (panel !== dock.dragging) return;
                     event.preventDefault(); dock.move(dock.dragging, (event.target as Element).closest('.panel-side,.dock-sidebar') ? 'side' : 'main');
                 }}>
-            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onOpen={dock.open} />
             <div className={`conversation-panel ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
             <div className="chat-stage">
             <div className="transcript-pane">
@@ -1641,7 +1650,9 @@ export function App() {
                     onReviewChanges={handleReviewChanges}
                     onAskReview={addReviewFeedback}
                     reviewSha={checkpointSha}
+                    reviewPanelOpen={dock.mainActive === 'changes' || dock.sideActive === 'changes'}
                     reviewFiles={reviewFiles}
+                    turnFiles={turnFiles.session === currentSessionId ? turnFiles.files : undefined}
                     onOpenDiff={handleOpenDiff}
                     onBackgroundTerminal={handleBackgroundTerminal}
                     onKillBackground={handleKillBackground}
@@ -1665,7 +1676,6 @@ export function App() {
             </div>
             </div>
             <div className="compose-dock">
-            <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}
@@ -1811,15 +1821,15 @@ export function App() {
             />
             </div>
             </div>
-            {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} pullRequests={pullRequests.state} onOpenPullRequests={() => setSurfaceTab('pullRequests')} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
-            {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
+            {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
+            {dock.allPanels.includes('agents') && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
+            {dock.allPanels.includes('background') && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
             <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
-            {pullRequests.state.links.length > 0 && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} busy={chat.busy} />}
+            {(pullRequests.state.links.length > 0 || dock.allPanels.includes('pullRequests')) && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} busy={chat.busy} />}
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
-                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
+                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onOpen={dock.open} />
             </DockSidebar>
-            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} /></div>
+            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} onTurnFiles={recordTurnFiles} /></div>
             </main>
             </div>
             </AgentNavigation.Provider>
