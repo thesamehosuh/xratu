@@ -38,6 +38,10 @@ export class PullRequestController {
         if (before.epoch !== current.epoch || before.workspace !== current.workspace || !current.sessionId) throw new PullRequestError('prSessionRequired');
         return { sessionId: current.sessionId, workspace: current.workspace! };
     }
+    async refresh(requestId?: string): Promise<void> {
+        try { await this.service.refreshContext(await this.context()); await this.send(requestId); }
+        catch (error) { await this.send(requestId, error); }
+    }
     async send(requestId?: string, failure?: unknown): Promise<void> {
         const identity = this.host.identity();
         let state: PullRequestView = { links: [], events: [], offline: isOfflineMode() };
@@ -60,12 +64,20 @@ export class PullRequestController {
                 if (!isOfflineMode()) await this.service.refresh(context, link.url);
             } else if (action === 'unlink') { this.resumeGeneration++; await this.service.unlink(context, value); }
             else if (action === 'refresh') await this.service.refresh(context, value);
-            else if (action === 'watch') { await this.service.watch(context, value, autoResume ? await this.host.execution() : undefined); this.stoppedSessions.delete(context.sessionId); }
+            else if (action === 'watch') {
+                const before = this.host.identity();
+                const execution = autoResume ? await this.host.execution() : undefined;
+                const current = this.host.identity();
+                if (before.epoch !== current.epoch || current.sessionId !== context.sessionId || current.workspace !== context.workspace) throw new PullRequestError('prSessionRequired');
+                this.stoppedSessions.delete(context.sessionId);
+                await this.service.watch(context, value, execution);
+            }
             else if (action === 'unwatch') { this.resumeGeneration++; await this.service.unwatch(context, value); }
             else if (action === 'dismiss') await this.service.dismiss(context);
             else if (action === 'resume') await this.resume(true);
             else throw new PullRequestError('prInvalidAction');
             await this.send(requestId);
+            if (action === 'watch') void this.service.refresh(context, value).catch(this.host.diagnostic);
         } catch (error) { await this.send(requestId, error); }
     }
     readonly tool: PullRequestToolExecutor = async (name, args) => {
