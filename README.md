@@ -55,42 +55,6 @@ The built-in Xratu engine supports local models, subagents, and conversation
 rewind. OpenCode uses its own credentials and native sessions; subagents,
 conversation rewind, and offline mode are currently unavailable with that engine.
 
-## Pull requests
-
-The agent links PRs it creates or works on to the conversation. Linked PRs
-appear beside the composer and in Activity, showing check status and whether
-the agent is watching. Select an indicator to see checks and reviews in the
-**Pull requests** sidebar, which appears only after a PR is linked.
-Install GitHub CLI and run
-`gh auth login` first. This integration currently supports github.com; Git push
-authentication remains separate from GitHub API authentication.
-
-**Watch** checks for new failures, passing required checks, comments/reviews,
-and conflicts every 30 seconds while the VS Code extension host is running.
-Links, cursors, and pending updates survive reloads. Offline mode pauses reads;
-closing VS Code pauses monitoring. GitHub rate limits pause retries without
-ending a watch. Own-account comments are excluded to prevent reply loops.
-
-Ask the agent to watch a PR to continue the owning conversation when updates
-arrive. You can also start or stop a watch from its details. This uses the selected model's
-budget and retains normal approvals. If the conversation is inactive, busy,
-or its branch, model, account, or engine changed, updates wait in its PR panel;
-the session picker shows pending updates, and **Review with agent** delivers
-them into the current context. Interrupted continuations require
-an explicit retry. **Stop watching**, **Unlink**, and the conversation's Stop
-action withdraw pending continuations. Close/merge, eight failed reads, or ten
-consecutive comment-only updates also end a watch.
-
-Both engines expose `link_pull_request`, `unlink_pull_request`,
-`list_thread_pull_requests`, `get_pull_request`, `watch_pull_request`, and
-`unwatch_pull_request`. Agents link PRs they create using the link tool.
-Subagents can read PR state but cannot change links or watches; the parent
-conversation owns monitoring. PR tools do not merge or publish changes.
-
-For `git_commit`, `files` commits only the selected paths' current working-tree
-contents and preserves unrelated staged work. Without `files` or `stage_all`,
-it commits the existing staged index. Staging errors stop the operation.
-
 ## Approvals and privacy
 
 Edits, commands, and tool actions use approval controls. **YOLO mode removes
