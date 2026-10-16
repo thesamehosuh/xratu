@@ -83,6 +83,7 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
 }
 for (const locale of ['en','fa']) for (const width of [420,1080]) {
     test(`background jobs: handoff, output, failure, stop-all and read-only Activity (${locale}, ${width})`, async ({page}) => {
+        await post(page,{type:'transcriptPrefs',prefs:{expand:{terminal:true}}});
         await page.setViewportSize({width,height:900});await post(page,{type:'locale',locale});
         await page.locator('.composer-input').fill('Keep drafting while the server runs');
         await post(page,{type:'startResponse'});
@@ -96,13 +97,6 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await post(page,{type:'fullResponse',persian:'Server is running'});
         await post(page,{type:'backgroundJobOutput',jobId:'job',output:'Ready at http://localhost:5173\nHot reload connected'});
         const runningPill=page.locator('.transcript-pane details.step');
-        // A summary click can land mid-commit while the run streams (React
-        // re-applies the controlled `open` over the native toggle), so keep
-        // ensuring it is open until the live output mounts.
-        await expect.poll(async () => {
-            if (!await runningPill.evaluate((el) => (el as HTMLDetailsElement).open)) await runningPill.locator(':scope > summary').click();
-            return (await runningPill.locator('.detail-terminal .detail-output').count()) > 0;
-        }).toBe(true);
         await expect(runningPill.locator('.detail-terminal .detail-output')).toContainText('Hot reload connected');
         await expect(page.locator('.transcript-pane .completed-steps')).toHaveCount(0);
         await page.locator('#surface-tab-background').click();
@@ -153,13 +147,6 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await post(page,{type:'backgroundJobFinished',jobId:'job',status:'exited',exitCode:2,output:'Exit code: 2\nSTDOUT:\n(empty)\nSTDERR:\nPort already in use'});
         await post(page,{type:'backgroundJobs',jobs:[{jobId:'job',command:'npm run dev -- --host localhost --port 5173',running:false,status:'exited',exitCode:2,uptimeSeconds:66,output:'Port already in use'},{jobId:'watch',command:'npm run watch',running:true,uptimeSeconds:13}]});
         const pill=page.locator('.activity-pane details.step');
-        // Same convergence as above: the finished pill may auto-open a beat
-        // after the outcome lands, and a single click can be swallowed by an
-        // in-flight commit - converge on the exit badge itself.
-        await expect.poll(async () => {
-            if (!await pill.evaluate((el) => (el as HTMLDetailsElement).open)) await pill.locator(':scope > summary').click();
-            return (await pill.locator('.detail-exit').count()) > 0;
-        }).toBe(true);
         await expect(pill.locator('.detail-terminal .detail-output')).toHaveText('Port already in use');
         await expect(pill.locator('.detail-exit')).toContainText('2');
         await expect(page.locator('.bg-job')).toHaveCount(2);
