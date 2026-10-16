@@ -247,6 +247,11 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(group).not.toHaveAttribute('open');
         await expect(group.locator('summary').first()).toContainText(locale === 'en' ? 'Git diff' : 'تفاوت گیت');
         await group.locator('summary').first().click();
+        // Nested git pills have no auto-expand switch: open the closed ones
+        // so their bodies (paths, outputs) mount before asserting.
+        await expect(group.locator('.step-group-body details.step')).toHaveCount(2);
+        const closedGit = group.locator('.step-group-body details.step:not([open]) > summary');
+        while (await closedGit.count() > 0) await closedGit.first().click();
         await expect(group).toContainText('src/auth.ts');
         await page.screenshot({ path: info.outputPath('git-live.png'), animations: 'disabled' });
         await tool(page, 'server', 'run_terminal_command', '', false);
@@ -268,6 +273,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(summary.locator('.compact-step.failed')).toContainText('Server failed to bind');
         await page.screenshot({ path: info.outputPath('git-expanded.png'), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();
+        // The failed command auto-opens; open the rest without toggling it.
+        const closedGitActivity = page.locator('.activity-pane details.step:not([open]) > summary');
+        while (await closedGitActivity.count() > 0) await closedGitActivity.first().click();
         await expect(page.locator('.activity-pane')).toContainText('Retained result for src/auth.ts');
     });
 }
