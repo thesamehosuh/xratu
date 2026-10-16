@@ -54,21 +54,21 @@ assert.match(safeDiff, /&lt;img/);
 console.log('work-surface render: completed logs, retained activity, approvals, jobs, real exits, checkpoint ownership, and bounded diffs passed');
 
 // Corrupt saved layouts cannot hide or duplicate a panel.
-for (const saved of [null, {}, {version: 2}, {version: 1, main: ['conversation', 'activity'], side: ['activity']}, {version: 1, main: ['conversation', 'unknown'], side: ['changes']}]) {
+for (const saved of [null, {}, {version: 3}, {version: 1, main: ['conversation', 'activity'], side: ['activity']}, {version: 1, main: ['conversation', 'unknown'], side: ['changes']}]) {
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
 assert.deepEqual(layout.main, ['conversation', 'agents', 'background', 'browser']);
-assert.deepEqual(layout.side, ['changes', 'activity']);
+assert.deepEqual(layout.side, ['changes', 'pullRequests', 'activity']);
 assert.equal(layout.sideActive, 'activity');
 layout = movePanel(layout, 'changes', 'main');
 assert.equal(layout.mainActive, 'changes');
 layout = movePanel(layout, 'activity', 'main');
-assert.equal(layout.sideActive, null);
-assert.deepEqual(layout.side, []);
+assert.equal(layout.sideActive, 'pullRequests');
+assert.deepEqual(layout.side, ['pullRequests']);
 assert.deepEqual(readDockLayout(layout), layout);
 const conversationDocked = movePanel(layout, 'conversation', 'side');
-assert.deepEqual(conversationDocked.side, ['conversation']);
+assert.deepEqual(conversationDocked.side, ['pullRequests', 'conversation']);
 assert.equal(conversationDocked.mainActive, 'activity');
 assert.deepEqual(readDockLayout(conversationDocked), conversationDocked);
 assert.equal(readDockLayout({...conversationDocked, mainActive: 'conversation'}).mainActive, conversationDocked.main[0]);
@@ -83,6 +83,11 @@ assert.equal(readDockLayout({...layout, mainActive: 'unknown'}).mainActive, 'con
 const legacyLayout = readDockLayout({ version: 1, main: ['conversation', 'activity', 'agents', 'background'], side: ['changes'], mainActive: 'activity', sideActive: 'changes' });
 assert.equal(legacyLayout.mainActive, 'activity');
 assert.equal(legacyLayout.main.at(-1), 'browser');
+assert.deepEqual(legacyLayout.side, ['changes', 'pullRequests']);
+const previousPrLayout = readDockLayout({version: 1, main: ['conversation', 'activity', 'browser', 'pullRequests'], side: ['changes'], mainActive: 'conversation'});
+assert.ok(!previousPrLayout.main.includes('pullRequests'));
+assert.ok(previousPrLayout.side.includes('pullRequests'));
+assert.ok(readDockLayout(movePanel(previousPrLayout, 'pullRequests', 'main')).main.includes('pullRequests'));
 const browserDocked = movePanel(legacyLayout, 'browser', 'side');
 assert.deepEqual(readDockLayout(browserDocked), browserDocked);
 
@@ -98,5 +103,5 @@ assert.doesNotMatch(renderToString(createElement(ActivityTimeline, {messages:[la
 
 const reordered = movePanel(defaultDockLayout(), 'browser', 'main', 'conversation');
 assert.equal(reordered.main[0], 'browser');
-assert.equal(new Set([...reordered.main, ...reordered.side]).size, 6);
+assert.equal(new Set([...reordered.main, ...reordered.side]).size, 7);
 assert.deepEqual(readDockLayout(reordered), reordered);

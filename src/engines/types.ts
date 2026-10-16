@@ -44,11 +44,12 @@ export interface AgentEngine {
 
 export interface EngineSetupState {
     active: EngineId;
-    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'failed';
+    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'removing' | 'failed';
     version?: string;
     binaryPath?: string;
     customPath: string;
     installedByXratu: boolean;
+    updateAvailable?: boolean;
     downloadedBytes?: number;
     totalBytes?: number;
     errorKey?: string;

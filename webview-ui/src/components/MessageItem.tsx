@@ -40,7 +40,7 @@ import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 import { formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
 import { formatCost } from '../cost';
-import { prefOn, toolFamily, type TranscriptPrefs } from '../transcriptPrefs';
+import { conversationPrefs, prefOn, toolFamily, transcriptOptions, type TranscriptPrefs, type TranscriptOptions } from '../transcriptPrefs';
 
 /** Open the native diff editor for completed edit call(s). */
 type OpenDiffHandler = (edits: OpenDiffEdit[]) => void;
@@ -80,6 +80,109 @@ type Row =
     // one row (a turn may settle several). Present only on reload - while the
     // live cards exist they render their own pill row.
     | { key: string; kind: 'decision'; steps: Step[] };
+
+type WorkGroup = { key: string; kind: 'workGroup'; category: 'explore' | 'edit' | 'terminal' | 'git' | 'work'; rows: Row[] };
+type ConversationRow = Row | WorkGroup;
+
+function rowCalls(row: Row): ToolRow[] {
+    return row.kind === 'tool' ? [row] : row.kind === 'toolGroup' ? row.calls : [];
+}
+
+function rowStep(row: Row): Step | undefined {
+    if (row.kind === 'thinking' || row.kind === 'taskList') return row.step;
+    if (row.kind === 'tool') return row.call;
+    if (row.kind === 'toolGroup') return row.calls[0]?.call;
+    return row.steps[0];
+}
+
+/** Group only adjacent work; prose and actionable rows always end a group. */
+function conversationRows(rows: Row[], options: TranscriptOptions): ConversationRow[] {
+    const result: ConversationRow[] = [];
+    const latestText = [...rows].reverse().find(row => row.kind === 'text');
+    let group: WorkGroup | undefined;
+    for (const original of rows) {
+        const items: Row[] = original.kind === 'toolGroup'
+            ? original.calls.map(call => ({ ...call, kind: 'tool' })) : [original];
+        for (const row of items) {
+            if (row.kind === 'thinking') {
+                if (options.reasoning === 'activity') continue;
+                if (group) { group.rows.push(row); continue; }
+            }
+            const calls = rowCalls(row);
+            const family = calls.length ? toolFamily(calls[0].call.tool) : undefined;
+            const protectedRow = calls.some(call => call.call.background || call.call.interrupted || toolRowFailed(call.call, call.result)) || family === 'subagent';
+            const category = options.detail === 'detailed' || protectedRow ? undefined
+                : family === 'read' || family === 'search' ? 'explore'
+                : family === 'edit' ? 'edit'
+                : family === 'git' ? 'git'
+                : family === 'terminal' && calls.every(toolRowDone) ? 'terminal'
+                : options.detail === 'minimal' && calls.length && calls.every(toolRowDone) ? 'work' : undefined;
+            if (category) {
+                const key = options.detail === 'minimal' ? 'work' : category;
+                if (!group) {
+                    group = { kind: 'workGroup', key: row.key, category: key, rows: [] };
+                    result.push(group);
+                }
+                if (group.category !== key) group.category = 'work';
+                group.rows.push(row);
+                continue;
+            }
+            group = undefined;
+            if (row.kind !== 'text' || options.progress === 'all' || row === latestText) result.push(row);
+        }
+    }
+    return result;
+}
+
+function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
+    group: WorkGroup; renderRow: (row: Row) => ReactNode; onOpenDiff?: OpenDiffHandler; prefs?: TranscriptPrefs;
+}) {
+    const calls = group.rows.flatMap(rowCalls);
+    const running = calls.some(call => !toolRowDone(call));
+    const edits = calls.filter(call => toolFamily(call.call.tool) === 'edit');
+    const hasThinking = group.rows.some(row => row.kind === 'thinking');
+    const [open, setOpen] = useAutoOpen((calls.some(call => toolFamily(call.call.tool) === 'edit') && prefOn(prefs, 'edit')) || (calls.some(call => toolFamily(call.call.tool) === 'terminal') && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
+    const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
+        : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
+        : group.category === 'terminal' ? t('txCommandsRan')
+        : group.category === 'git' ? t('txGitWork')
+        : t(running ? 'txWorking' : 'txWorked');
+    const actionCount = calls.length === 1 ? t('txOneAction') : tf('surfaceActions', { count: String(calls.length) });
+    const reads = calls.filter(call => toolFamily(call.call.tool) === 'read').length;
+    const searches = calls.filter(call => toolFamily(call.call.tool) === 'search').length;
+    const summary: string[] = [];
+    if (group.category === 'explore') {
+        if (reads) summary.push(reads === 1 ? t('txOneRead') : tf('txReadCount', { count: String(reads) }));
+        if (searches) summary.push(searches === 1 ? t('txOneSearch') : tf('txSearchCount', { count: String(searches) }));
+    } else if (group.category === 'edit') {
+        summary.push(calls.length === 1 ? t('txOneEdit') : tf('txEditCount', { count: String(calls.length) }));
+    } else if (group.category === 'terminal') {
+        summary.push(calls.length === 1 ? t('txOneCommand') : tf('txCommandCount', { count: String(calls.length) }));
+    } else {
+        summary.push(actionCount);
+    }
+    return <div className="conversation-work">
+        <details className={`step conversation-work-group${running ? ' running' : ''}`} open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+            <summary>
+                <span className="sum-row">
+                    <ListChecks size={13} className="step-icon" />
+                    <span className="step-label">{label}</span>
+                    <span className="conversation-work-summary">{summary.map(part => <span key={part} dir="auto">{part}</span>)}</span>
+                    {running && <span className="step-status spinner" aria-hidden="true" />}
+                    {edits.length > 0 && onOpenDiff && <button
+                        type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}
+                        onClick={event => {
+                            event.preventDefault(); event.stopPropagation();
+                            onOpenDiff(edits.map(call => ({ tool: call.call.tool, args: call.call.text, callId: call.call.callId, result: call.call.result })));
+                        }}
+                    ><ExternalLink size={12} /></button>}
+                    <ChevronDown size={13} className="step-chev" />
+                </span>
+            </summary>
+            <div className="step-group-body">{group.rows.map(renderRow)}</div>
+        </details>
+    </div>;
+}
 
 export const TASK_LIST_TOOL = 'update_task_list';
 export const USER_QUESTION_TOOL = 'ask_user_question';
@@ -323,6 +426,31 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
     return rows;
 }
 
+/** Filter the observation view after identifying the original final answer. */
+function activityRows(steps: Step[], hasDecisionCard: boolean, filter: ActivityFilter, search: string): Row[] {
+    const timeline = buildRows(steps, hasDecisionCard);
+    const trailing = timeline.find(row => row.kind === 'text' && row.steps.some(step => step.final)) ?? timeline.at(-1);
+    const query = search.trim().toLocaleLowerCase();
+    const matches = (row: Row): boolean => {
+        const step = rowStep(row);
+        const tool = row.kind === 'tool' || row.kind === 'taskList' || row.kind === 'decision';
+        if (filter === 'tools' && !tool) return false;
+        if (filter === 'commands' && (row.kind !== 'tool' || toolFamily(row.call.tool) !== 'terminal')) return false;
+        if (filter === 'thinking' && row.kind !== 'thinking') return false;
+        if (filter === 'failures' && (row.kind !== 'tool' || !toolRowFailed(row.call, row.result))) return false;
+        const body = row.kind === 'text' ? row.steps.map(item => item.text).join('\n') : step?.text;
+        const output = row.kind === 'tool' ? resultTextOf(row.call, row.result) : step?.result;
+        return !query || [step?.tool, body, output].some(value => value?.toLocaleLowerCase().includes(query));
+    };
+    return timeline.flatMap<Row>(row => {
+        if (row === trailing && row.kind === 'text') return [];
+        if (row.kind !== 'toolGroup') return matches(row) ? [row] : [];
+        const calls = row.calls.filter(call => matches({ ...call, kind: 'tool' }));
+        if (!calls.length) return [];
+        return calls.length === 1 ? [{ ...calls[0], kind: 'tool' as const }] : [{ ...row, key: calls[0].key, calls }];
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Tool dropdown bodies - one dedicated design per tool family. All content
 // sits directly on the pill background (no inner boxes/borders).
@@ -373,7 +501,9 @@ function resultTextOf(call: Step, result?: Step): string {
 const ERROR_RESULT_RE = /^error\b/i;
 
 function toolRowFailed(call: Step, result?: Step): boolean {
-    return call.backgroundOutcome?.status === 'failed' || (call.backgroundOutcome?.exitCode != null && call.backgroundOutcome.exitCode !== 0) || !!(call.isError || result?.isError) || ERROR_RESULT_RE.test(resultTextOf(call, result).trim());
+    const output = resultTextOf(call, result);
+    const exit = toolFamily(call.tool) === 'terminal' ? output.match(/(?:^|\n)Exit code: (-?\d+)(?:\r?\n|$)/)?.[1] : undefined;
+    return call.backgroundOutcome?.status === 'failed' || (call.backgroundOutcome?.exitCode != null && call.backgroundOutcome.exitCode !== 0) || !!(call.isError || result?.isError) || ERROR_RESULT_RE.test(output.trim()) || (exit !== undefined && exit !== '0');
 }
 
 /** Did THIS call step come back as an error? The result text is attached to
@@ -1083,7 +1213,8 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
     // Controlled open: seeded from the family's auto-expand switch; the user's
     // collapse survives streaming re-renders (MessageItem is memoized, but
     // result arrivals still re-render rows).
-    const [open, setOpen] = useAutoOpen(prefOn(prefs, family));
+    const failedCall = row.kind === 'tool' && toolRowFailed(row.call, row.result);
+    const [open, setOpen] = useAutoOpen(prefOn(prefs, family) || (family === 'terminal' && transcriptOptions(prefs).commands === 'errors' && failedCall));
     // Thinking pill: while streaming and OPEN, its scrollable body follows
     // the newest thinking lines - but ONLY while the reader is pinned to
     // the bottom; a manual scroll-up inside the pill is never yanked back.
@@ -1956,7 +2087,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -1969,16 +2100,18 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
     const isTyping = status === 'streaming' && role === 'assistant' && !renderedHtml && !text && steps.length === 0 && !message.retryStatus;
     const isSystem = role === 'system';
     const readOnly = activityOnly || observation;
+    const options = transcriptOptions(transcriptPrefs);
+    const displayPrefs = readOnly ? transcriptPrefs : conversationPrefs(transcriptPrefs);
 
     const rows = useMemo(() => {
+        if (activityOnly) return activityRows(steps, !!message.decisions?.length, activityFilter, activitySearch);
         const timeline = buildRows(steps, !!message.decisions?.length);
         const trailing = timeline.find(row => row.kind === 'text' && row.steps.some(step => step.final)) ?? timeline.at(-1);
         // Keep progress visible throughout the turn; fold it into Activity
         // only once the completed answer is available.
-        if (activityOnly) return timeline.filter(row => row !== trailing || row.kind !== 'text');
-        if (observation || status !== 'done') return timeline;
+        if (observation || status !== 'done' || !options.compactCompleted) return timeline;
         return timeline.filter(row => row.kind !== 'text' || row === trailing);
-    }, [steps, message.decisions, activityOnly, observation, status]);
+    }, [steps, message.decisions, activityOnly, activityFilter, activitySearch, observation, status, options.compactCompleted]);
     const [activityNow, setActivityNow] = useState(Date.now);
     useEffect(() => {
         if (!readOnly) return;
@@ -1989,7 +2122,7 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
     // Text segments vs. action pills: with pills present, text interleaves
     // INSIDE the timeline (chronological); without, text segments ARE the
     // message body and render in the normal content slot.
-    const hasPills = rows.some((r) => r.kind !== 'text');
+    const hasPills = activityOnly ? rows.length > 0 : rows.some((r) => r.kind !== 'text');
     const textRows = rows.filter((r): r is Extract<Row, { kind: 'text' }> => r.kind === 'text');
 
     // Keep a visible heartbeat whenever the run is live but NO row is spinning
@@ -2004,10 +2137,17 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
         !!lastRow &&
         lastRow.kind !== 'text' &&
         (lastRow.kind === 'thinking' ||
+            // A pending update_task_list already draws its own spinner in
+            // TaskListRow; without this the heartbeat doubles up with it.
+            (lastRow.kind === 'taskList' && !lastRow.step.result) ||
             (lastRow.kind === 'toolGroup'
                 ? lastRow.calls.some((c) => !toolRowDone(c))
                 : lastRow.kind === 'tool' && !toolRowDone(lastRow)));
-    const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
+    // A turn blocked on the reader is not a working turn. An unanswered
+    // decision is waiting on them, so a heartbeat beside it claims the agent
+    // is busy when it is actually parked.
+    const awaitingAnswer = !!message.decisions?.some((decision) => !decision.answered);
+    const showWorking = status === 'streaming' && role === 'assistant' && !approvalPending && !awaitingAnswer && rows.length > 0 && !lastRowSpins && lastRow?.kind !== 'text';
 
     const showFooter = !readOnly && role === 'assistant' && status === 'done' && !!(renderedHtml || text);
     // User bubbles carry their own footer from the moment they appear; the
@@ -2040,9 +2180,28 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
         );
     }
 
-    const collapseSteps = !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
+    const collapseSteps = options.compactCompleted && !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
     const finalTextRows = collapseSteps ? textRows : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
+
+    const renderRow = (row: Row): ReactNode => {
+        const timestamp = rowStep(row)?.startedAt ?? message.createdAt;
+        const age = readOnly && options.timestamps ? { timestamp, now: activityNow } : undefined;
+        const content = row.kind === 'toolGroup' ? (
+            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={displayPrefs} age={age} activityNow={readOnly && options.timestamps ? activityNow : undefined} />
+        ) : row.kind === 'text' ? (
+            <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent && !observation} />
+        ) : row.kind === 'taskList' ? (
+            <TaskListRow key={row.key} row={row} view={readOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={displayPrefs} age={age} />
+        ) : row.kind === 'decision' ? (
+            <DecisionRecords key={row.key} steps={row.steps} />
+        ) : (
+            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={readOnly ? undefined : onBackgroundTerminal} onKillBackground={readOnly ? undefined : onKillBackground} prefs={displayPrefs} age={age} />
+        );
+        if (!readOnly) return <div className="conversation-entry" key={row.key}>{content}</div>;
+        return <div className="activity-entry" key={row.key}>{content}{row.kind === 'decision' && age && <ActivityAge {...age} />}</div>;
+    };
+    const displayRows = readOnly ? rows : conversationRows(rows, options);
 
     return (
         <article
@@ -2054,23 +2213,9 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
             {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
             {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
-                    {rows.map((row) => {
-                        const timestamp = (row.kind === 'toolGroup' ? row.calls[0]?.call : row.kind === 'tool' ? row.call : row.kind === 'thinking' || row.kind === 'taskList' ? row.step : row.steps[0])?.startedAt ?? message.createdAt;
-                        const age = readOnly ? { timestamp, now: activityNow } : undefined;
-                        const content = row.kind === 'toolGroup' ? (
-                            <ToolGroupRow key={row.key} row={row} onOpenDiff={onOpenDiff} prefs={transcriptPrefs} age={age} activityNow={readOnly ? activityNow : undefined} />
-                        ) : row.kind === 'text' ? (
-                            <TextSegmentRow key={row.key} steps={row.steps} streaming={streamingContent && !observation} />
-                        ) : row.kind === 'taskList' ? (
-                            <TaskListRow key={row.key} row={row} view={readOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={transcriptPrefs} age={age} />
-                        ) : row.kind === 'decision' ? (
-                            <DecisionRecords key={row.key} steps={row.steps} />
-                        ) : (
-                            <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={readOnly ? undefined : onBackgroundTerminal} onKillBackground={readOnly ? undefined : onKillBackground} prefs={transcriptPrefs} age={age} />
-                        );
-                        if (!readOnly) return content;
-                        return <div className="activity-entry" key={row.key}>{content}{row.kind === 'decision' && age && <ActivityAge {...age} />}</div>;
-                    })}
+                    {displayRows.map(row => row.kind === 'workGroup'
+                        ? <ConversationWorkGroup key={row.key} group={row} renderRow={renderRow} prefs={displayPrefs} onOpenDiff={onOpenDiff} />
+                        : renderRow(row))}
                     {showWorking && (
                         <div className="working-row" aria-label={t('working')}>
                             <span className="step-status spinner" aria-hidden="true" />
@@ -2238,6 +2383,8 @@ function MessageItemImpl({ activityOnly = false, observation = false, reviewSha,
 }
 
 interface MessageItemProps {
+    activityFilter?: ActivityFilter;
+    activitySearch?: string;
     activityOnly?: boolean;
     observation?: boolean;
     reviewSha?: string;
@@ -2290,6 +2437,8 @@ interface MessageItemProps {
  * each time, which is exactly when expansion feels like tearing.
  */
 export const MessageItem = memo(MessageItemImpl, (a, b) =>
+    a.activityFilter === b.activityFilter &&
+    a.activitySearch === b.activitySearch &&
     a.activityOnly === b.activityOnly &&
     a.observation === b.observation &&
     a.reviewSha === b.reviewSha &&
@@ -2320,9 +2469,11 @@ function ActivityAge({ timestamp, now }: { timestamp: number; now: number }) {
 }
 
 /** Activity is an observation surface; approvals and execution stay in chat. */
-export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void }) {
+export type ActivityFilter = 'all' | 'tools' | 'commands' | 'thinking' | 'failures';
+
+export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, filter = 'all', search = '', ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void; filter?: ActivityFilter; search?: string }) {
     const start = Math.max(0, Math.min(firstVisible, messages.length - 1));
-    const activity = messages.slice(start).filter((message) => message.role === 'assistant' && message.steps.some((step) => step.kind !== 'text'));
-    if (!activity.length) return <p className="activity-empty">{t('surfaceNoActivity')}</p>;
-    return <div className="activity-timeline">{start > 0 && <button type="button" className="show-earlier" onClick={onShowEarlier}>{t('historyShowEarlier')}</button>}{activity.map((message) => <MessageItem key={message.id} message={message} {...props} activityOnly />)}</div>;
+    const activity = messages.slice(start).filter(message => message.role === 'assistant' && activityRows(message.steps, !!message.decisions?.length, filter, search).length > 0);
+    if (!activity.length) return <p className="activity-empty">{t(filter !== 'all' || search.trim() ? 'txNoMatchingActivity' : 'surfaceNoActivity')}</p>;
+    return <div className="activity-timeline">{start > 0 && <button type="button" className="show-earlier" onClick={onShowEarlier}>{t('historyShowEarlier')}</button>}{activity.map(message => <MessageItem key={message.id} message={message} {...props} activityOnly activityFilter={filter} activitySearch={search} />)}</div>;
 }

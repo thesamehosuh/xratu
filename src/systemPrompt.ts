@@ -1,8 +1,16 @@
+import { PULL_REQUEST_AGENT_INSTRUCTIONS } from './pullRequests/tools';
+
 // Canonical system prompt for the local agent runtime. Hand-maintained. Keep
 // it free of audience and product-name directives: the ONE declared exception
 // is the reply-language block below - it is a first-class input
 // (`replyLanguage`), byte-stable like every other prompt input, not ad-hoc
 // text.
+export const REPLY_CONCISE_FINAL = "Final responses: default to 1-3 short sentences stating the outcome and any blocker or next step. Mention verification only when useful, in one short clause. Do not repeat progress updates, list files, recount commands, add headings, or offer to continue. Give more detail when the user asks for it or the task requires an explanation.";
+
+export function buildNativeSystemContext(rulesContext: string, planMode: boolean): string {
+    return [rulesContext, REPLY_CONCISE_FINAL, !planMode && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n');
+}
+
 export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and clear like a senior classmate. No emojis.\nAfter changing code, say briefly what changed (1-2 sentences) - never repeat the edited code and never mention internal tool names.\nBefore claiming victory, quickly verify your changes (re-read the edited file or run the relevant check) so your summary reflects reality.\nFor multi-step work you may maintain a visible checklist with `update_task_list` (complete list every call, exactly one item in_progress while executing) so the user can follow progress - useful for plan mode AND for any non-trivial execution you choose to track.";
 
 /** Reply-language directives. Exported so the prompt-cache suite can assert
@@ -98,6 +106,7 @@ export interface LocalSystemPromptInputs {
 export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string {
     const parts: string[] = [
         LOCAL_SYSTEM_PROMPT,
+        REPLY_CONCISE_FINAL,
         "",
         "Operational notes for local mode:",
         "- Attached images are part of the current request only.",
@@ -106,6 +115,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
         "- `ask_user_question` shows the user a decision card (2-4 options, one recommended) and returns their pick. Use it for genuine user-owned choices (preferences, tradeoffs, ambiguous direction) instead of asking a multiple-choice question in prose; never for permission requests, and never for what you can decide or verify yourself.",
     ];
+    if (!inputs.planMode) parts.push('', PULL_REQUEST_AGENT_INSTRUCTIONS);
     if (inputs.replyLanguage === 'fa') {
         parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
         if (inputs.farsiSkill) {

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { BROWSER_MUTATING_TOOLS, BROWSER_TOOL_DEFINITIONS } from './browserPolicy';
 import type { BrowserController } from './browserController';
 import { isOfflineMode } from './networkPolicy';
+import { PULL_REQUEST_TOOLS, PULL_REQUEST_MUTATIONS, type PullRequestToolExecutor } from './pullRequests/tools';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
@@ -593,7 +594,9 @@ export function getLocalToolDefinitions(opts?: {
         .filter(tool => !plan || !BROWSER_MUTATING_TOOLS.has(tool.name))
         // Always reach the live gate: YOLO may be toggled after this snapshot.
         .map(tool => ({ ...tool, requiresApproval: BROWSER_MUTATING_TOOLS.has(tool.name) }));
-    return [...builtin, ...web, ...browser, ...taskDefs, ...skillDefs, ...external];
+    const pullRequests = PULL_REQUEST_TOOLS.filter(tool => (!plan || !PULL_REQUEST_MUTATIONS.has(tool.name))
+        && (!isOfflineMode() || !['get_pull_request', 'watch_pull_request'].includes(tool.name)));
+    return [...builtin, ...web, ...browser, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
 }
 
 /**
@@ -1430,10 +1433,15 @@ export function createLocalToolExecutor(
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
     /** Marks this executor as a delegated child's. */
-    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean },
+    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor },
 ): import('./local/localAgent').LocalToolExecutor {
     return {
         execute: async (call, onOutput) => {
+            if (PULL_REQUEST_TOOLS.some(tool => tool.name === call.name)) {
+                if ((opts?.plan || opts?.nested) && PULL_REQUEST_MUTATIONS.has(call.name)) return { output: 'PR session changes are unavailable in plan mode and subagents.', isError: true };
+                if (!opts?.pullRequests) return { output: 'PR tools are unavailable in this context.', isError: true };
+                return opts.pullRequests(call.name, call.arguments);
+            }
             if (call.name.startsWith('browser_')) {
                 if (opts?.plan && BROWSER_MUTATING_TOOLS.has(call.name)) return { output: 'Error: browser actions are disabled in plan mode.', isError: true };
                 if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };

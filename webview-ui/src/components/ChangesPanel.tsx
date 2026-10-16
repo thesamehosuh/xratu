@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, History, Check, ExternalLink, FileDiff, FileText, MessageSquarePlus, RefreshCw, Send, TriangleAlert } from 'lucide-react';
+import { ChevronDown, History, Check, ExternalLink, FileText, MessageSquarePlus, RefreshCw, Send, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -91,6 +91,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const listRequest = useRef('');
     const fileRequest = useRef('');
     const loadedFile = useRef<ReviewFile | null>(null);
+    const previousFiles = useRef<ReviewChange[]>([]);
     const [files, setFiles] = useState<ReviewChange[]>([]);
     const [selected, setSelected] = useState<string | null>(null);
     const [file, setFile] = useState<ReviewFile | null>(null);
@@ -114,7 +115,18 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 setLoading(false);
                 setErrorKey(message.errorKey ?? null);
                 setFiles(message.files);
-                setSelected((current) => message.files.some((item) => item.path === current) ? current : message.files.find((item) => item.path === initialPath)?.path ?? message.files[0]?.path ?? null);
+                const previous = new Map(previousFiles.current.map(file => [file.path, file]));
+                const changed = message.files.filter(file => {
+                    const old = previous.get(file.path);
+                    return !old || old.modifiedAt !== file.modifiedAt || old.added !== file.added || old.removed !== file.removed || old.binary !== file.binary || old.untracked !== file.untracked;
+                });
+                const newest = [...changed].sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))[0]?.path;
+                setSelected(current => {
+                    if (!previous.size && initialPath && message.files.some(file => file.path === initialPath)) return initialPath;
+                    if (!toSha && newest) return newest;
+                    return message.files.some(file => file.path === current) ? current : message.files[0]?.path ?? null;
+                });
+                previousFiles.current = message.files;
                 onCount(message.files.length);
                 onFiles(message.files);
             } else if (message.type === 'changeFileState' && message.requestId === fileRequest.current && message.sha === sha) {
@@ -127,11 +139,11 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [onCount, onFiles, initialPath, sha]);
+    }, [onCount, onFiles, initialPath, sha, toSha]);
 
     useEffect(() => {
         setReviewed(new Map()); setComments(new Map()); setFiles([]); setSelected(null); setFile(null);
-        loadedFile.current = null;
+        loadedFile.current = null; previousFiles.current = [];
         listRequest.current = ''; fileRequest.current = '';
         setVisibleFiles(80);
         onCount(0); onFiles([]);
@@ -181,14 +193,13 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         onFeedback(`${selected}\n${comment.trim()}`); setComment('');
     };
     return <section className="changes-review" hidden={!expanded} aria-label={t('surfaceChanges')}>
-        <header className="review-head"><FileDiff size={13} /><h2>{t('surfaceReview')}</h2><span className="review-count" dir="ltr">{files.length}</span>
+        <div className="review-head"><span>{t('surfaceSinceCheckpoint')}</span>{!!files.length && <span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span>}
             <button type="button" className="icon-btn" onClick={refresh} aria-label={t('surfaceRefresh')} disabled={!sha || loading}><RefreshCw size={12} /></button>
-        </header>
+        </div>
         <div className="review-body">
             {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} />{tOrRaw(errorKey)}<button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
             {!errorKey && !files.length && <p className="review-empty">{loading ? t('working') : t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p>}
             {!!files.length && <>
-                <div className="review-summary"><span>{t('surfaceSinceCheckpoint')}</span><span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span></div>
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={selected === change.path} onClick={() => setSelected(change.path)}>
                     <FileText size={12} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
                 </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>

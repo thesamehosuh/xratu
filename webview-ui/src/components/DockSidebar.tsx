@@ -12,7 +12,7 @@ export function DockSidebar({ children, active, dragging }: { children: ReactNod
         const saved = getWebviewState().reviewSidebarWidth;
         return typeof saved === 'number' && Number.isFinite(saved) ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, saved)) : null;
     });
-    const [width, setWidth] = useState(350);
+    const [width, setWidth] = useState(330);
     const [maximum, setMaximum] = useState(MAX_WIDTH);
     const [resizing, setResizing] = useState(false);
 
@@ -24,7 +24,7 @@ export function DockSidebar({ children, active, dragging }: { children: ReactNod
             setMaximum(max);
             if (preferred === null) surface.style.removeProperty('--review-width');
             else surface.style.setProperty('--review-width', `${Math.min(max, preferred)}px`);
-            setWidth(Math.round(pane.current?.getBoundingClientRect().width ?? 350));
+            setWidth(Math.round(pane.current?.getBoundingClientRect().width ?? 330));
         };
         update();
         const observer = new ResizeObserver(update);

@@ -12,7 +12,7 @@ import {
     X,
 } from 'lucide-react';
 import type { ConnectionStatus as ConnStatus, SessionMeta } from '../types';
-import { t } from '../i18n';
+import { t, tf } from '../i18n';
 import { formatCalendarDate, formatFullTimestamp } from '../datetime';
 
 export type SessionsScope = 'workspace' | 'all';
@@ -154,6 +154,8 @@ export function Toolbar({
                         title={formatFullTimestamp(item.updatedAt)}
                     >
                         <span className="session-row-title" dir="auto">{item.title || t('sessionsUntitled')}</span>
+                        {!!item.prPending && <span className="session-row-ws">{tf('prSessionUpdates', { count: String(item.prPending) })}</span>}
+                        {!!item.prWatching && <span className="session-row-ws">{t('prSessionWatching')}</span>}
                         {/* Path is always LTR: dir-locked so a leading "/" is
                             not re-ordered by the RTL row, and the ellipsis
                             lands at the END of the path. */}

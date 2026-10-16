@@ -10,6 +10,9 @@ import { AgentsPage } from './components/AgentsPage';
 import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
+import { PullRequestsPanel } from './components/PullRequestsPanel';
+import { PullRequestIndicator } from './components/PullRequestIndicator';
+import { usePullRequests } from './usePullRequests';
 import { useDockLayout } from './useDockLayout';
 import { ActivityPanel } from './components/ActivityPanel';
 import type { AgentProfileView, ReviewChange } from './types';
@@ -225,7 +228,9 @@ export function App() {
         const turns = chat.messages.filter(message => message.role === 'user' && message.cp);
         return turns.map((message, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.cp, number: index + 1 }));
     }, [chat.messages]);
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0 || activeReviewSha !== null);
+    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const pullRequests = usePullRequests(currentSessionId);
+    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0 || activeReviewSha !== null, pullRequests.state.links.length > 0);
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
@@ -245,7 +250,6 @@ export function App() {
     const [reviewFiles, setReviewFiles] = useState<ReviewChange[]>([]);
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
-    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     useEffect(() => { setModelPings({}); }, [engineState?.active, currentSessionId]);
     const [currentBrowserSessionId, setCurrentBrowserSessionId] = useState<string | null>(null);
     const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -745,6 +749,9 @@ export function App() {
                 case 'openBrowser':
                     setScreen('chat');
                     setSurfaceTab('browser');
+                    break;
+                case 'openPullRequests':
+                    setScreen('chat'); setSurfaceTab('pullRequests');
                     break;
                 case 'connectionStatus':
                     setConn(msg.status);
@@ -1420,6 +1427,8 @@ export function App() {
                     }}
                     transcriptPrefs={transcriptPrefs}
                     onSetTranscriptPref={(id, enabled) => send({ type: 'transcriptSet', id, enabled })}
+                    onSetTranscriptOptions={options => send({ type: 'transcriptOptionsSet', options })}
+                    onResetTranscriptPrefs={() => send({ type: 'transcriptReset' })}
                     onOpenCredentials={() => {
                         setCredReturnTo('settings');
                         setScreen('credentials');
@@ -1656,6 +1665,7 @@ export function App() {
             </div>
             </div>
             <div className="compose-dock">
+            <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}
@@ -1801,10 +1811,11 @@ export function App() {
             />
             </div>
             </div>
-            {(activityVisible || activityOpened) && <ActivityPanel visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
+            {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} pullRequests={pullRequests.state} onOpenPullRequests={() => setSurfaceTab('pullRequests')} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             {agentRuns.length > 0 && <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             {chat.backgroundJobs.length > 0 && <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} />}
             <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
+            {pullRequests.state.links.length > 0 && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} busy={chat.busy} />}
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
                 <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} />
             </DockSidebar>

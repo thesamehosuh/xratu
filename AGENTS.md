@@ -40,6 +40,9 @@ assets/         brand assets (assets/brand) + bundled skills (assets/skills)
   behavior, not retroactively.
 - Small, scoped PRs. One logical change per PR; mechanical moves/deletions
   get their own PR, separate from behavior changes.
+- **Keep READMEs concise.** Do not add entries for routine UI or settings
+  tweaks. Use PR descriptions or existing detailed docs; add README content
+  only when essential setup or core usage changes.
 - Every PR gets reviewed (automated reviewers are installed on this repo) and
   every finding must be triaged — fix it or reply with a reason — before
   merge. Green CI alone is not enough.
