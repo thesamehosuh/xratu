@@ -1,4 +1,5 @@
-import { Brain, Circle, ChevronDown, ListChecks, X } from 'lucide-react';
+import { useState } from 'react';
+import { Brain, Circle, ChevronDown, X } from 'lucide-react';
 import { ToolImages } from './ToolImages';
 import type { Step } from '../types';
 import { t, tf } from '../i18n';
@@ -20,14 +21,16 @@ export function CompactSteps({ steps, failed, createdAt, completedAt }: {
     createdAt: number;
     completedAt?: number;
 }) {
+    const [open, setOpen] = useState(false);
     const calls = steps.filter((step) => (step.kind === 'toolCall' || step.kind === 'toolResult' || step.kind === 'thinking') && step.tool !== 'ask_user_question')
         .map(step => step.kind === 'toolResult' ? { ...step, result: step.text } : step);
     if (!calls.length) return null;
     const count = calls.filter((step) => step.kind !== 'thinking').length;
     const failures = calls.filter(failed).length;
-    return <details className="completed-steps">
-        <summary><ListChecks size={13} /><span>{count ? tf('surfaceActions', { count: String(count) }) : t('miniThinking')}</span>{failures > 0 && <span className="err">{tf('txFailureCount', { count: String(failures) })}</span>}<span className="completed-steps-time">{completedAt ? tf('surfaceFinishedIn', { seconds: String(Math.max(1, Math.round((completedAt - createdAt) / 1000))) }) : t('surfaceCompleted')}</span><ChevronDown size={12} /></summary>
-        <div className="compact-step-list">{calls.map((step) => {
+    const Icon = calls.at(-1)?.kind === 'thinking' ? Brain : toolIcon(calls.at(-1)?.tool);
+    return <details className="completed-steps" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+        <summary><Icon size={13} /><span>{count ? tf('surfaceActions', { count: String(count) }) : t('miniThinking')}</span>{failures > 0 && <span className="err">{tf('txFailureCount', { count: String(failures) })}</span>}<span className="completed-steps-time">{completedAt ? tf('surfaceFinishedIn', { seconds: String(Math.max(1, Math.round((completedAt - createdAt) / 1000))) }) : t('surfaceCompleted')}</span><ChevronDown size={12} /></summary>
+        {open && <div className="compact-step-list">{calls.map((step) => {
             const Icon = step.kind === 'thinking' ? Brain : toolIcon(step.tool);
             const label = step.kind === 'thinking' ? t('miniThinking') : toolLabel(step.tool).fa;
             const detail = hint(step);
@@ -43,6 +46,6 @@ export function CompactSteps({ steps, failed, createdAt, completedAt }: {
                 {error && errorOutput && <pre dir="auto" className="compact-step-error">{errorOutput.slice(0, 8000)}</pre>}
                 <ToolImages call={normalized} />
             </div>;
-        })}</div>
+        })}</div>}
     </details>;
 }

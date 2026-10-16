@@ -43,7 +43,7 @@ async function setup(page: Page, launchOptions: Parameters<typeof chromium.launc
     await page.goto('/');
     await post(page, { type: 'locale', locale }); await post(page, { type: 'showChat' });
     await post(page, { type: 'sessionState', id: 'browser-session', title: null });
-    await page.locator('#surface-tab-browser').click();
+    await post(page, { type: 'openBrowser' });
     return { controller, errors, settle: () => delivery };
 }
 
@@ -93,7 +93,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await page.locator('.browser-keyboard').focus(); await page.locator('.browser-keyboard').press('Tab');
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.activeElement.tagName' })).output).toBe('"BUTTON"');
             if (width > 860) {
-                await page.locator('.dock-tabs.main .dock-layout-button').click();
+                await page.locator('#surface-tab-browser').press('Shift+F10');
+                await page.locator('.dock-layout-menu [role=menuitem]').first().click();
+                await expect(page.locator('.browser-pane')).toHaveClass(/panel-main/);
+                await page.locator('#surface-tab-browser').press('Shift+F10');
                 await page.locator('.dock-layout-menu [role=menuitem]').first().click();
                 await expect(page.locator('.browser-pane')).toHaveClass(/panel-side/);
                 await expect(page.locator('.browser-viewport img')).toBeVisible();

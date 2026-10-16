@@ -80,7 +80,7 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await expect(page.locator('.activity-empty')).toHaveText('No activity matches these filters.');
 });
 
-test('balanced groups completed commands while the active command and failures stay actionable', async ({ page }) => {
+test('balanced groups completed and failed commands while the active command stays actionable', async ({ page }) => {
     await post(page, { type: 'startResponse' });
     await tool(page, 'lint', 'run_terminal_command', 'lint');
     await tool(page, 'build', 'run_terminal_command', 'build');
@@ -154,9 +154,11 @@ test('minimal keeps actionable failures, approvals and background controls visib
     await seed(page);
     await tool(page, 'cmd', 'run_terminal_command', '', false);
     await post(page, { type: 'toolResult', tool: 'run_terminal_command', callId: 'cmd', output: 'STDOUT:\nTest failed\nExit code: 1' });
-    const failure = page.locator('.transcript-pane details.step.fail');
-    await expect(failure).toHaveAttribute('open', '');
-    await expect(failure).toContainText('Test failed');
+    const group = page.locator('.transcript-pane .conversation-work-group').last();
+    await expect(group).not.toHaveAttribute('open');
+    await expect(page.locator('.transcript-pane details.step.fail')).toHaveCount(0);
+    await group.locator(':scope > summary').click();
+    await expect(group.locator('details.step.fail')).toContainText('Test failed');
     await tool(page, 'bg', 'run_terminal_command', '', false);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();
     await post(page, { type: 'needsApproval', approval_id: 'ap', approvals: [{ tool_call_id: 'bg', tool_name: 'run_terminal_command', args: { command: 'npm test' } }] });
@@ -299,4 +301,16 @@ test('Git rows retain branch, revision and commit hints before and after complet
     await expect(summary).not.toHaveAttribute('open');
     await summary.locator('summary').click();
     for (const [, , hint] of operations) await expect(summary.locator('code').filter({ hasText: hint })).toHaveCount(1);
+});
+
+test('the action summary icon follows the running tool and failed reads stay folded', async ({ page }) => {
+    await post(page, { type: 'startResponse' });
+    await tool(page, 'read', 'read_file', 'src/a.ts', false);
+    const summary = page.locator('.conversation-work-group > summary');
+    await expect(summary.locator('.lucide-file-text')).toBeVisible();
+    await post(page, { type: 'toolResult', tool: 'read_file', callId: 'read', output: 'Error: file unavailable', isError: true });
+    await tool(page, 'search-next', 'grep_search', 'src', false);
+    await expect(summary.locator('.lucide-search')).toBeVisible();
+    await expect(page.locator('.conversation-work-group')).not.toHaveAttribute('open');
+    await expect(page.locator('.transcript-pane')).not.toContainText('Error: file unavailable');
 });

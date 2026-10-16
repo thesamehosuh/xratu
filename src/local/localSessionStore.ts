@@ -27,6 +27,7 @@ export interface LocalSessionHistoryMessage {
 /** An interrupted in-flight turn, persisted mid-run so a host crash can
  *  restore it instead of dropping the whole response. */
 export interface LocalPendingTurn {
+    hidden?: boolean;
     prompt: string;
     events: any[];
     text: string;
@@ -422,6 +423,7 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
     }) : [];
     return {
         prompt: clipHistoryContent(pt.prompt, contentCap),
+        ...(pt.hidden === true ? { hidden: true } : {}),
         events,
         text: clipHistoryContent(pt.text, contentCap),
         thinking: clipHistoryContent(pt.thinking, contentCap),

@@ -109,6 +109,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 createdAt: Date.now(),
                 attachments: msg.attachments,
                 cp: msg.cp,
+                hidden: msg.hidden,
             });
 
         case 'userCheckpoint': {

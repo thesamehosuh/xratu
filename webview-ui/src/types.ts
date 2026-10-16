@@ -408,7 +408,7 @@ export type FromExtensionMessage =
      *  or not-yet-started folder gets starting-from-scratch prompts instead.
      *  Absent (older host) means "assume a project". */
     | { type: 'showChat'; workspaceKind?: 'empty' | 'bare' | 'project' }
-    | { type: 'restoreUser'; value: string; attachments?: AttachmentMeta[]; cp?: string }
+    | { type: 'restoreUser'; hidden?: boolean; value: string; attachments?: AttachmentMeta[]; cp?: string }
     /** Live turn: the host created the pre-prompt shadow checkpoint for the
      *  userIndex-th user message - attaches the restore point to that bubble. */
     | { type: 'userCheckpoint'; userIndex: number; sha: string }
@@ -978,6 +978,7 @@ export interface TokenUsage {
 export interface ChatMessage {
     id: string;
     role: 'user' | 'assistant' | 'system';
+    hidden?: boolean;
     // Raw text used while streaming and as a fallback.
     text: string;
     // Server-rendered, sanitized HTML (markdown / shiki) when available.

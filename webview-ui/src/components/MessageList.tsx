@@ -27,7 +27,9 @@ interface MessageListProps {
     onReviewChanges?: (sha: string, path?: string, turnNumber?: number) => void;
     onAskReview?: (text: string) => void;
     reviewSha?: string | null;
+    reviewPanelOpen?: boolean;
     reviewFiles?: ReviewChange[];
+    turnFiles?: Record<string, ReviewChange[]>;
     /** Open the native diff editor for a completed edit step. */
     onOpenDiff?: (edits: OpenDiffEdit[]) => void;
     /** Release the turn while a running terminal command keeps going. */
@@ -89,7 +91,7 @@ const SUGGESTIONS_FRESH: Suggestion[] = [
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onAskReview, reviewSha, reviewFiles, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onAskReview, reviewSha, reviewPanelOpen, reviewFiles, turnFiles, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -108,6 +110,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
         checkpoints.set(m.id, checkpoint);
         if (m.role === 'user') userIndexOf.set(m.id, userCount++);
     }
+    const checkpointKeys = new Map<number, string>();
+    const reviewUsers = messages.filter(message => message.role === 'user' && message.cp);
+    reviewUsers.forEach((message, index) => checkpointKeys.set(index + 1, `${message.cp}:${reviewUsers[index + 1]?.cp ?? ''}`));
     const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
     // Clamp so an out-of-range window still mounts the newest bubble (never a
     // blank list) and never starts past the end.
@@ -195,7 +200,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     <span>{t('historyShowEarlier')}</span>
                 </button>
             )}
-            {messages.slice(start).map((m, i) => (
+            {messages.slice(start).map((m, i) => m.hidden ? null : (
                 <MessageItem
                     key={m.id}
                     message={m}
@@ -205,10 +210,10 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
                     onReviewChanges={onReviewChanges}
-                    onAskReview={onAskReview}
+                    onAskReview={reviewPanelOpen ? undefined : onAskReview}
                     reviewSha={checkpoints.get(m.id)}
                     reviewTurnNumber={checkpointNumbers.get(m.id)}
-                    reviewFiles={checkpoints.get(m.id) === reviewSha ? reviewFiles : undefined}
+                    reviewFiles={turnFiles?.[checkpointKeys.get(checkpointNumbers.get(m.id) ?? 0) ?? ''] ?? (checkpoints.get(m.id) === reviewSha ? reviewFiles : undefined)}
                     onOpenDiff={onOpenDiff}
                     onBackgroundTerminal={onBackgroundTerminal}
                     onKillBackground={onKillBackground}

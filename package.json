@@ -278,6 +278,7 @@
     "test:subagents": "node test/test-subagents.mjs",
     "test:subagent-observation": "node test/test-subagent-observation.mjs",
     "test:subagent-runner": "node test/test-subagent-runner.mjs",
+    "test:chat-replay": "node test/test-chat-replay.mjs",
     "test:session-actions": "node test/test-session-actions.mjs",
     "test:checkpoint-actions": "node test/test-checkpoint-actions.mjs",
     "test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",

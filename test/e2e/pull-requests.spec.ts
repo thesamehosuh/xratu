@@ -34,7 +34,7 @@ async function openSession(page: Page, locale = 'en') {
 }
 
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
-    test(`agent-linked PRs appear in chat, Activity and the conditional sidebar ${locale} ${width}`, async ({ page }, info) => {
+    test(`agent-linked PRs stay out of chat and open through the panel command ${locale} ${width}`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await openSession(page, locale);
         await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
@@ -47,32 +47,16 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         const resume = { workspace: '/project', branch: 'fix/session-updates', engine: 'xratu', model: 'provider/model', credential: 'account', nativeSessionId: null, binaryPath: null };
         await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([{ ...link, watch: watching, resume }]) });
         await host(page, { type: 'fullResponse', persian: 'PR linked and watching.' });
-        const chatIndicator = page.locator('.conversation-panel .pr-indicator');
-        await expect(chatIndicator).toBeVisible();
-        await expect(chatIndicator).toContainText('#42');
-        await expect(chatIndicator.locator('.pr-indicator-row')).toHaveClass(/failed/);
-        await expect(chatIndicator.locator('.pr-indicator-watch')).toBeVisible();
-        await expect(page.locator('.pr-link-form')).toHaveCount(0);
-        await expect(page.locator('.pr-resume-option')).toHaveCount(0);
-        await expect(page.locator('.pr-panel-head')).toHaveCount(0);
-        if (width > 860) {
-            await expect(page.locator('.dock-tabs.side #surface-tab-pullRequests')).toBeVisible();
-            await expect(page.locator('.pr-panel.panel-side')).toBeVisible();
-            await expect(page.locator('.conversation-panel')).toBeVisible();
-        } else {
-            await expect(page.locator('.dock-tabs.main #surface-tab-pullRequests')).toBeVisible();
-            await expect(page.locator('.pr-panel')).toBeHidden();
-        }
+        await expect(page.locator('.pr-indicator')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        await expect(page.locator('.pr-panel')).toBeHidden();
         await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-chat-${locale}-${width}.png`) });
         await page.locator('#surface-tab-activity').click();
-        const activityIndicator = page.locator('.activity-pane .pr-indicator');
-        await expect(activityIndicator).toBeVisible();
-        await expect(activityIndicator).toContainText('Make session updates reliable');
         await expect(page.locator('.activity-timeline details.step')).toBeVisible();
-        await expect(activityIndicator.locator('.pr-indicator-watch')).toBeVisible();
-        await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-activity-${locale}-${width}.png`) });
-        await activityIndicator.locator('.pr-indicator-row').click();
+        await expect(page.locator('.pr-indicator')).toHaveCount(0);
+        await host(page, { type: 'openPullRequests' });
         await expect(page.locator('.pr-panel')).toBeVisible();
+        await expect(page.locator('.pr-panel')).toHaveClass(/panel-main/);
         await expect(page.locator('.pr-row')).toContainText('Make session updates reliable');
         const details = page.locator('.pr-detail');
         await expect(details.nth(0)).not.toHaveAttribute('open');
@@ -97,22 +81,20 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
         await host(page, { type: 'sessionState', id: 'session-b', title: 'Session B' });
-        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        await expect(page.locator('.pr-row')).toHaveCount(0);
         await expect(page.locator('.pr-indicator')).toHaveCount(0);
         await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        await expect(page.locator('.pr-row')).toHaveCount(0);
         await reply(page, state(), 'session-b');
         expect(await page.locator('.app').evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
     });
 }
 
-test('pending review indicators appear in chat and Activity; interrupted continuation stays explicit', async ({ page }) => {
+test('pending updates stay inside the PR panel and interrupted continuation stays explicit', async ({ page }) => {
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: { ...state([link]), delivery: { ids: ['event'], status: 'interrupted', owner: 1 }, events: [{ id: 'event', key: 'github.com/example/repo#42', url, number: 42, createdAt: '2026-01-01T12:00:00Z', headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }] } });
-    await expect(page.locator('.conversation-panel .pr-indicator-updates')).toContainText('1');
-    await page.locator('#surface-tab-activity').click();
-    await expect(page.locator('.activity-pane .pr-indicator-updates')).toContainText('1');
-    await page.locator('.activity-pane .pr-indicator-updates').click();
+    await expect(page.locator('.pr-indicator')).toHaveCount(0);
+    await host(page, { type: 'openPullRequests' });
     await expect(page.locator('.pr-updates')).toContainText('interrupted');
     await host(page, { type: 'startResponse' });
     await expect(page.getByRole('button', { name: 'Review with agent', exact: true })).toBeDisabled();
@@ -120,12 +102,12 @@ test('pending review indicators appear in chat and Activity; interrupted continu
     expect((await sent(page)).at(-1)).toMatchObject({ action: 'dismiss', sessionId: 'session-a' });
 });
 
-test('unlinking the last PR hides the panel and restores chat without losing its draft', async ({ page }) => {
+test('unlinking the last PR leaves the explicitly opened empty panel and preserves the draft', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await openSession(page);
     await page.locator('.composer-input').fill('Continue reviewing');
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await host(page, { type: 'openPullRequests' });
     await page.locator('.pr-menu summary').click();
     await expect(page.getByRole('button', { name: 'Unlink', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
@@ -134,15 +116,15 @@ test('unlinking the last PR hides the panel and restores chat without losing its
     await page.getByRole('button', { name: 'Unlink', exact: true }).click();
     expect((await sent(page)).at(-1)).toMatchObject({ action: 'unlink', url });
     await reply(page, state());
-    await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
-    await expect(page.locator('.pr-panel')).toHaveCount(0);
+    await expect(page.locator('.pr-row')).toHaveCount(0);
+    await page.locator('#surface-tab-conversation').click();
     await expect(page.locator('.composer-input')).toHaveValue('Continue reviewing');
 });
 
 for (const refreshFirst of [true, false]) test(`focus refresh never supersedes a pending watch action (refresh first: ${refreshFirst})`, async ({ page }) => {
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await host(page, { type: 'openPullRequests' });
     await page.getByRole('button', { name: 'Watch', exact: true }).click();
     const action = (await sent(page)).filter(message => message.type === 'pullRequestAction').at(-1)!;
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -156,14 +138,14 @@ for (const refreshFirst of [true, false]) test(`focus refresh never supersedes a
     await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
     if (!refreshFirst) await host(page, { type: 'pullRequestsState', sessionId: 'session-a', requestId: refresh.requestId, state: state([link]) });
     await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
-    await expect(page.locator('.conversation-panel .pr-indicator-watch')).toBeVisible();
+    await expect(page.locator('.pr-indicator')).toHaveCount(0);
 });
 
 test('PR state refreshes remotely without disabling Watch during background reads', async ({ page }) => {
     await page.clock.install();
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await host(page, { type: 'openPullRequests' });
     const before = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
     await page.clock.fastForward(30_000);
     const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState');
@@ -179,7 +161,7 @@ test('a timed-out watch action releases the controls and allows background refre
     await page.clock.install();
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await page.locator('.conversation-panel .pr-indicator-row').click();
+    await host(page, { type: 'openPullRequests' });
     await page.getByRole('button', { name: 'Watch', exact: true }).click();
     const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
     await page.clock.fastForward(50_000);

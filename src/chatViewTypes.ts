@@ -31,6 +31,8 @@ export interface HistoryMessage {
     /** Shadow-checkpoint sha taken just BEFORE this prompt ran - the restore
      *  point when the user edits/resends or regenerates this turn. */
     cp?: string;
+    /** Automatic monitor wake; model context only, hidden from Conversation. */
+    hidden?: boolean;
     /** Attachment metadata (no base64) for user turns - rendered in the
      *  bubble and replayed on edit/resend. */
     attachments?: AttachmentMeta[];

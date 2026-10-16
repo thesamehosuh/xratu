@@ -11,7 +11,7 @@ export interface DockLayout {
 }
 
 export function defaultDockLayout(): DockLayout {
-    return { version: 2, main: ['conversation', 'activity', 'agents', 'background', 'browser'], side: ['changes', 'pullRequests'], mainActive: 'conversation', sideActive: 'changes' };
+    return { version: 2, main: ['conversation', 'activity', 'agents', 'background', 'pullRequests'], side: ['changes', 'browser'], mainActive: 'conversation', sideActive: 'changes' };
 }
 
 export function readDockLayout(value: unknown): DockLayout {

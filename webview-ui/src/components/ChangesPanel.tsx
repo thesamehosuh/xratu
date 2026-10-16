@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, History, Check, ExternalLink, FileText, MessageSquarePlus, RefreshCw, Send, TriangleAlert } from 'lucide-react';
+import { ChevronDown, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -8,8 +8,9 @@ import { ReviewDiff } from './ReviewDiff';
 export interface ReviewTurn { sha: string; toSha?: string; number: number }
 const ignoreFiles = () => {};
 
-export function ChangesPanel({ turns = [], selectedNumber = null, ...props }: {
+export function ChangesPanel({ turns = [], selectedNumber = null, onTurnFiles, ...props }: {
     turns?: ReviewTurn[];
+    onTurnFiles?: (turn: ReviewTurn, files: ReviewChange[]) => void;
     selectedNumber?: number | null;
     sha: string | null;
     initialPath?: string | null;
@@ -46,11 +47,12 @@ export function ChangesPanel({ turns = [], selectedNumber = null, ...props }: {
         {!sha && <ChangeReview {...props} onFiles={ignoreFiles} />}
         {[...(current ? [current] : []), ...previous].map((turn, index) => <ReviewTurnPanel key={`${props.sessionKey}-${turn.number}`} turn={turn}
             current={turn.number === current?.number} incoming={turn.number === incomingNumber} historyHeading={index === 1 && previous.some(item => counts[item.number] > 0)}
-            initialPath={turn.number === incomingNumber ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onFeedback={props.onFeedback} onCount={count} onFiles={props.onFiles} />)}
+            initialPath={turn.number === incomingNumber ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onFeedback={props.onFeedback} onCount={count} onFiles={props.onFiles} onTurnFiles={onTurnFiles} />)}
     </div>;
 }
 
-function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath, busy, sessionKey, onFeedback, onCount, onFiles }: {
+function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onTurnFiles }: {
+    onTurnFiles?: (turn: ReviewTurn, files: ReviewChange[]) => void;
     turn: ReviewTurn; current: boolean; incoming: boolean; historyHeading: boolean; initialPath?: string | null; busy: boolean;
     sessionKey: string; onFeedback: (text: string) => void; onCount: (number: number, count: number) => void; onFiles: (files: ReviewChange[]) => void;
 }) {
@@ -60,6 +62,7 @@ function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath,
     useEffect(() => { if (current) setExpanded(false); }, [current]);
     const updateCount = useCallback((value: number) => { setCount(value); onCount(turn.number, value); }, [turn.number, onCount]);
     useEffect(() => { if (incoming) onFiles(files); }, [incoming, files, onFiles]);
+    const recordFiles = useCallback((files: ReviewChange[]) => onTurnFiles?.(turn, files), [turn, onTurnFiles]);
     return <>
         {historyHeading && <h3 className="review-history-heading"><History size={14} />{t('surfacePreviousTurns')}</h3>}
         <details className={current ? 'review-current' : 'review-turn'} hidden={!current && !count} open={current || expanded} onToggle={event => { if (!current) setExpanded(event.currentTarget.open); }}>
@@ -68,15 +71,16 @@ function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath,
                 <span className="review-turn-title"><span className="review-turn-heading">{tf('surfacePreviousTurn', { number: String(turn.number) })}<span className="review-turn-files">{tf('surfaceTurnFiles', { count: String(count) })}</span></span></span>
                 <span className="review-turn-action">{t(expanded ? 'surfaceHideChanges' : 'surfaceShowChanges')}</span>
             </summary>
-            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={!turn.toSha && busy} sessionKey={sessionKey} onFeedback={onFeedback} onCount={updateCount} onFiles={setFiles} expanded={current || expanded} />
+            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={!turn.toSha && busy} sessionKey={sessionKey} onFeedback={onFeedback} onCount={updateCount} onFiles={setFiles} onSnapshot={recordFiles} expanded={current || expanded} />
         </details>
     </>;
 }
 
-function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, expanded = true }: {
+function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onSnapshot, expanded = true }: {
     sha: string | null;
     toSha?: string;
     expanded?: boolean;
+    onSnapshot?: (files: ReviewChange[]) => void;
     initialPath?: string | null;
     busy: boolean;
     sessionKey: string;
@@ -99,10 +103,6 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const [fileLoading, setFileLoading] = useState(false);
     const [errorKey, setErrorKey] = useState<string | null>(null);
     const [fileError, setFileError] = useState<string | null>(null);
-    const [reviewed, setReviewed] = useState<Map<string, string>>(() => new Map());
-    const [comments, setComments] = useState<Map<string, string>>(() => new Map());
-    const comment = selected ? comments.get(selected) ?? '' : '';
-    const setComment = (value: string) => { if (selected) setComments((current) => new Map(current).set(selected, value)); };
     const [revision, setRevision] = useState(0);
     const [visibleFiles, setVisibleFiles] = useState(80);
     const refresh = () => setRevision((value) => value + 1);
@@ -129,6 +129,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 previousFiles.current = message.files;
                 onCount(message.files.length);
                 onFiles(message.files);
+                onSnapshot?.(message.files);
             } else if (message.type === 'changeFileState' && message.requestId === fileRequest.current && message.sha === sha) {
                 window.clearTimeout(fileTimer.current);
                 setFileLoading(false);
@@ -139,10 +140,10 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [onCount, onFiles, initialPath, sha, toSha]);
+    }, [onCount, onFiles, onSnapshot, initialPath, sha, toSha]);
 
     useEffect(() => {
-        setReviewed(new Map()); setComments(new Map()); setFiles([]); setSelected(null); setFile(null);
+        setFiles([]); setSelected(null); setFile(null);
         loadedFile.current = null; previousFiles.current = [];
         listRequest.current = ''; fileRequest.current = '';
         setVisibleFiles(80);
@@ -185,13 +186,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     }, [sessionKey, toSha]);
 
     const totals = useMemo(() => files.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed }), { added: 0, removed: 0 }), [files]);
-    const fingerprint = file?.kind === 'text' ? `${file.before}\0${file.after}` : '';
-    const isReviewed = !!selected && !!fingerprint && reviewed.get(selected) === fingerprint;
     const openFile = () => { if (sha && selected) postMessage({ type: 'changeFileOpen', sha, toSha, path: selected }); };
-    const sendFeedback = () => {
-        if (!comment.trim() || !selected) return;
-        onFeedback(`${selected}\n${comment.trim()}`); setComment('');
-    };
     return <section className="changes-review" hidden={!expanded} aria-label={t('surfaceChanges')}>
         <div className="review-head"><span>{t('surfaceSinceCheckpoint')}</span>{!!files.length && <span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span>}
             <button type="button" className="icon-btn" onClick={refresh} aria-label={t('surfaceRefresh')} disabled={!sha || loading}><RefreshCw size={12} /></button>
@@ -207,11 +202,8 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                     <div className="review-diff-head"><code dir="ltr">{file.path}</code></div>
                     {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
                     <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={openFile}><ExternalLink size={12} />{t('surfaceOpenEditor')}</button>
-                        <button type="button" className={`settings-ghost-action${isReviewed ? ' reviewed' : ''}`} disabled={!fingerprint} onClick={() => { if (selected) setReviewed((current) => { const next = new Map(current); if (isReviewed) next.delete(selected); else next.set(selected, fingerprint); return next; }); }}><Check size={12} />{t(isReviewed ? 'surfaceReviewed' : 'surfaceMarkReviewed')}</button></div>
+                        <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: file.path }))}><MessageSquarePlus size={12} />{t('surfaceAskReview')}</button></div>
                 </> : null}
-                <textarea className="review-input" dir="auto" value={comment} onChange={(event) => setComment(event.target.value)} aria-label={t('surfaceReviewComment')} placeholder={t('surfaceReviewComment')} />
-                <button type="button" className="settings-ghost-action" onClick={sendFeedback} disabled={!comment.trim()}><Send size={12} />{t('surfaceSendFeedback')}</button>
-                <button type="button" className="review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: files.map((change) => change.path).join(', ') }))}><MessageSquarePlus size={12} />{t('surfaceAskReview')}</button>
             </>}
         </div>
     </section>;

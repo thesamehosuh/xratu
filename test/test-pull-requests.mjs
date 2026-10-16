@@ -418,7 +418,7 @@ test('damaged snapshot/cursor state is rejected before publication and failed va
 
 test('the real host run boundary rechecks branch, epoch, and Stop after asynchronous context capture', async () => {
     const Host = runBoundary();
-    for (const change of ['branch', 'epoch', 'stop']) {
+    for (const change of ['branch', 'epoch', 'stop', 'model-management', 'benchmark']) {
         const host = new Host(), capture = deferred(), entered = deferred();
         let admitted = true, runs = 0;
         Object.assign(host, { _sessionEpoch: 1, _localRunActive: false, _sessionTransitionsPending: 0, _checkpointRestoreActive: false, _planMode: false, _view: { webview: { postMessage: () => {} } }, _history: [], _persistLocalSession: async () => {}, _handleChatRequest: async () => { runs++; }, _pullRequestExecution: async () => { entered.resolve(); return capture.promise; } });
@@ -426,6 +426,8 @@ test('the real host run boundary rechecks branch, epoch, and Stop after asynchro
         await entered.promise;
         if (change === 'epoch') host._sessionEpoch++;
         if (change === 'stop') admitted = false;
+        if (change === 'model-management') host._modelManagementController = {};
+        if (change === 'benchmark') host._benchmarkController = {};
         capture.resolve(change === 'branch' ? { ...execution, branch: 'other' } : execution);
         assert.equal(await pending, false);
         assert.equal(runs, 0);
@@ -434,10 +436,13 @@ test('the real host run boundary rechecks branch, epoch, and Stop after asynchro
 
 test('the host run boundary skips the identity gate when a manual continuation has no resolvable context', async () => {
     const Host = runBoundary();
-    const host = new Host(), runs = [];
-    Object.assign(host, { _sessionEpoch: 1, _localRunActive: false, _sessionTransitionsPending: 0, _checkpointRestoreActive: false, _planMode: false, _view: { webview: { postMessage: () => {} } }, _history: [], _persistLocalSession: async () => {}, _handleChatRequest: async prompt => { runs.push(prompt); host._history.push({ role: 'user', content: prompt }); }, _pullRequestExecution: () => { throw new Error('detached HEAD'); } });
+    const host = new Host(), runs = [], displayed = [];
+    Object.assign(host, { _sessionEpoch: 1, _localRunActive: false, _sessionTransitionsPending: 0, _checkpointRestoreActive: false, _planMode: false, _view: { webview: { postMessage: message => displayed.push(message) } }, _history: [], _persistLocalSession: async () => {}, _handleChatRequest: async prompt => { runs.push(prompt); host._history.push({ role: 'user', content: prompt }); }, _pullRequestExecution: () => { throw new Error('detached HEAD'); } });
     assert.equal(await host._runPullRequestUpdate('update', 1, [target], null, () => true), true);
     assert.equal(runs.length, 1);
+    assert.equal(displayed.length, 1);
+    assert.equal(displayed[0].hidden, true);
+    assert.equal(host._history[0].hidden, true, 'automatic notifications remain hidden after restore');
 });
 
 test('large review updates have bounded excerpts while the durable cursor still deduplicates every comment', async () => {
