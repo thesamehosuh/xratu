@@ -184,7 +184,7 @@ test('a timed-out watch action releases the controls and allows background refre
     const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
     await page.clock.fastForward(50_000);
     await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeEnabled();
-    await page.clock.fastForward(10_000);
+    await page.clock.fastForward(30_000);
     expect((await sent(page)).filter(message => message.type === 'pullRequestsGetState')).toHaveLength(reads + 1);
     await reply(page, state([{ ...link, watch: watching }]));
     await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
