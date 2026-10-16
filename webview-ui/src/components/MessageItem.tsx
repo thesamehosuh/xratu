@@ -184,7 +184,10 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
                     <ChevronDown size={13} className="step-chev" />
                 </span>
             </summary>
-            <div className="step-group-body">{group.rows.map(renderRow)}</div>
+            {/* Lazy body: nested pills mount their context (diffs, outputs,
+                highlights) only once the group is expanded - mounting them
+                under a closed group froze long transcripts. */}
+            {open && <div className="step-group-body">{group.rows.map(renderRow)}</div>}
         </details>
     </div>;
 }
@@ -1135,13 +1138,10 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
     const allDone = row.calls.every(toolRowDone);
     const anyFailed = row.calls.some((c) => toolRowFailed(c.call, c.result));
     // A run of edits is ONE "N files edited" pill whose body is a per-file
-    // diff list - not N stacked edit pills.
+    // diff list - not N stacked edit pills. Like every other run it starts
+    // closed (the transcript switches opt back into auto-expand); the diff
+    // list mounts on expand.
     const isEdit = toolFamily(tool) === 'edit';
-    // Edit groups start OPEN, exactly like a single edit pill (same
-    // preference): the diff IS the payload, so a collapsed "N files edited"
-    // makes the user click for the thing they came to read. Other runs follow
-    // their own family's switch - for reads/searches/commands the count
-    // genuinely is the summary.
     const [open, setOpen] = useAutoOpen(prefOn(prefs, toolFamily(tool)));
     const stats = useMemo(() => (isEdit ? sumEditStats(row.calls) : null), [isEdit, row.calls]);
     return (
@@ -1192,7 +1192,10 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
                     <ChevronDown size={13} className="step-chev" />
                 </span>
             </summary>
-            {isEdit ? (
+            {/* Lazy bodies: each call's context mounts only once the group is
+                expanded - a run of closed pills otherwise mounts every diff
+                and output up front. */}
+            {open && (isEdit ? (
                 <div className="step-body">
                     {row.calls.map((c) => (
                         <ToolDetails key={c.key} call={c.call} result={c.result}><EditFileSection call={c.call} result={c.result} /></ToolDetails>
@@ -1204,7 +1207,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
                         <ActivityRow key={c.key} row={{ ...c, kind: 'tool' }} running={false} isLast={false} prefs={prefs} age={activityNow === undefined ? undefined : { timestamp: c.call.startedAt ?? age?.timestamp ?? activityNow, now: activityNow }} />
                     ))}
                 </div>
-            )}
+            ))}
             {age && <ActivityAge {...age} />}
         </details>
     );
@@ -1311,7 +1314,9 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                         <ChevronDown size={13} className="step-chev" />
                     </span>
                 </summary>
-                {row.step.html ? (
+                {/* Lazy body: the reasoning text mounts only once expanded -
+                    a thinking stream is the longest content in the transcript. */}
+                {thinkOpen && (row.step.html ? (
                     <div
                         ref={(el) => { thinkRef.current = el; }}
                         onScroll={onThinkScroll}
@@ -1331,7 +1336,7 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                         onScroll={onThinkScroll}
                         dir="ltr"
                     >{row.step.text}</pre>
-                )}
+                ))}
                 {age && <ActivityAge {...age} />}
             </details>
         );
@@ -1442,9 +1447,14 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
                     </span>
                 )}
             </summary>
-            <div className="step-body">
-                <ToolBody call={row.call} result={row.result} />
-            </div>
+            {/* Lazy body: the pill context (diffs, outputs, highlights) mounts
+                only once expanded - a closed pill renders its summary row
+                alone, which is what keeps long transcripts fast. */}
+            {open && (
+                <div className="step-body">
+                    <ToolBody call={row.call} result={row.result} />
+                </div>
+            )}
             {age && <ActivityAge {...age} />}
         </details>
     );

@@ -22,7 +22,7 @@ assert.ok(done.indexOf('Final answer') > done.indexOf('completed-steps'));
 assert.match(done, /compact-step failed/);
 assert.match(done, /Exit 1/);
 assert.doesNotMatch(done, /lucide-check/);
-const activity = renderToString(createElement(ActivityTimeline, {messages:[message]}));
+const activity = renderToString(createElement(ActivityTimeline, {messages:[message], transcriptPrefs:{expand:{edit:true}}}));
 assert.match(activity, /class="pill-diff"/);
 assert.match(activity, /Before tools/);
 assert.doesNotMatch(activity, /Final answer/);

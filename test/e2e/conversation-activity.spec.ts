@@ -59,9 +59,18 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await group.locator(':scope > summary').click();
     await expect(page.locator('.transcript-pane .conversation-activity-link')).toHaveCount(0);
     await page.locator('#surface-tab-activity').click();
+    // Pills mount their bodies on expand: open every closed pill so the
+    // retained results are in the DOM before asserting on them (the two
+    // consecutive reads share one grouped pill).
+    await expect(page.locator('.activity-pane details.step')).toHaveCount(3);
+    const closedActivity = page.locator('.activity-pane details.step:not([open]) > summary');
+    while (await closedActivity.count() > 0) await closedActivity.first().click();
     await expect(page.locator('.activity-pane')).toContainText('Retained result for test/auth.ts');
     await expect(page.locator('.activity-filters select')).toHaveCount(0);
     await pick(page, '.activity-filters .dropdown-trigger', 'Thinking');
+    const thinkPill = page.locator('.activity-timeline details.step');
+    await expect(thinkPill).toHaveCount(1);
+    if (!await thinkPill.evaluate((el) => (el as HTMLDetailsElement).open)) await thinkPill.locator(':scope > summary').click();
     await expect(page.locator('.activity-timeline')).toContainText('Trace the expiry guard.');
     await expect(page.locator('.activity-timeline')).not.toContainText('Retained result for');
     await pick(page, '.activity-filters .dropdown-trigger', 'All activity');
@@ -82,6 +91,11 @@ test('balanced groups completed commands while the active command and failures s
     await tool(page, 'test', 'run_terminal_command', 'test', false);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();
     await group.locator(':scope > summary').click();
+    // Nested pills mount their bodies on expand too: wait for them, then
+    // open the ones that start closed.
+    await expect(group.locator('.step-group-body details.step')).toHaveCount(2);
+    const closedNested = group.locator('.step-group-body details.step:not([open]) > summary');
+    while (await closedNested.count() > 0) await closedNested.first().click();
     await expect(group).toContainText('Retained result for lint');
     await post(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'test passed', callId: 'test' });
     await expect(group).toHaveAttribute('open', '');
@@ -91,6 +105,9 @@ test('balanced groups completed commands while the active command and failures s
     await expect(page.locator('.transcript-pane details.step.fail')).toBeVisible();
     await expect(page.locator('.transcript-pane details.step.fail')).toHaveAttribute('open', '');
     await page.locator('#surface-tab-activity').click();
+    // The failed pill auto-opens; open the rest without toggling it shut.
+    const closedPane = page.locator('.activity-pane details.step:not([open]) > summary');
+    while (await closedPane.count() > 0) await closedPane.first().click();
     await expect(page.locator('.activity-pane')).toContainText('Retained result for lint');
     await expect(page.locator('.activity-pane')).toContainText('Retained result for build');
     await expect(page.locator('.activity-pane .conversation-work-group')).toHaveCount(0);
@@ -159,7 +176,11 @@ test('Activity can disable following and timestamps without discarding the trace
     await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBe(0);
     await tool(page, 'later', 'read_file', 'later.ts');
     await expect.poll(() => pane.evaluate(el => el.scrollTop)).toBe(0);
-    await expect(pane).toContainText('later.ts');
+    // The read pill has no auto-expand switch: its body mounts only on a
+    // manual toggle, so the arrival of the new turn is asserted on the pill
+    // count instead of its hidden result text (18 seeds + the later read,
+    // which folds into one pill with the preceding read).
+    await expect(pane.locator('details.step')).toHaveCount(18);
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {

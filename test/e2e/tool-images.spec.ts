@@ -133,5 +133,8 @@ test('a text-only tool result renders no image block', async ({ page }) => {
 
     await expect(page.locator('.tool-images')).toHaveCount(0);
     await page.locator('#surface-tab-activity').click();
+    // Read pills start closed and mount their body on expand.
+    await page.locator('.activity-pane details.step > summary').click();
     await expect(page.locator('.step')).toContainText('file body');
+    await expect(page.locator('.tool-images')).toHaveCount(0);
 });

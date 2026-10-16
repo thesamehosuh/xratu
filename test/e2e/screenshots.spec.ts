@@ -334,9 +334,10 @@ async function chatScreen(page: Page, locale: Locale): Promise<Locator> {
     await host(page, { type: 'restoreUser', value: locale === 'fa' ? 'احراز هویت نشست را اضافه کن و تستش را بنویس' : 'Add session auth and write its test' });
     await host(page, { type: 'startResponse' });
     await host(page, { type: 'chunk', value: locale === 'fa' ? 'مسیر نشست را باز می کنم و توکن را از رفرش می گیرم.' : 'Opening the session helper and reading the refresh token.' });
-    // An edit pill renders its diff OPEN by default (transcriptPrefs defaults),
-    // so this one turn covers the user capsule, the assistant turn, the tool
-    // pill AND the inline diff - the densest screen in the product.
+    // Edit pills start closed and mount their diff on expand
+    // (transcriptPrefs defaults), so open this one: the turn then covers the
+    // user capsule, the assistant turn, the tool pill AND the inline diff -
+    // the densest screen in the product.
     await host(page, { type: 'toolCall', tool: 'apply_patch', args: JSON.stringify({ path: 'src/auth/session.ts', patch: PATCH }), callId: 'c-patch' });
     await host(page, { type: 'toolResult', tool: 'apply_patch', callId: 'c-patch', output: 'Patch applied cleanly to src/auth/session.ts' });
     await host(page, {
@@ -348,6 +349,7 @@ async function chatScreen(page: Page, locale: Locale): Promise<Locator> {
         contextWindow: 128000,
     });
     await host(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
+    await page.locator('.transcript-pane details.step > summary').click();
     await page.locator('.surface-tabs').getByRole('tab', { name: locale === 'fa' ? 'فعالیت' : 'Activity', exact: true }).click();
     const diff = page.locator('.pill-diff').first();
     await expect(diff).toBeVisible();

@@ -50,10 +50,14 @@ const taskStep = (id: string, desc: string, extra?: Partial<Step>): Step => ({
 });
 
 // Two consecutive subagent runs: two top-level pills, never a nested group.
+// Closed pills mount no body, so each report stays unmounted while both
+// delegated briefs remain visible in the summaries.
 let html = render(messageWith([taskStep('a', 'find foo'), taskStep('b', 'find bar')]));
 ok(!html.includes('step-group-body'), 'subagent runs do not group (no nested pill body)');
-ok(html.includes('report for find foo') && html.includes('report for find bar'),
-    'both subagent runs render their own report');
+ok(!html.includes('report for find foo') && !html.includes('report for find bar'),
+    'closed subagent pills mount no report bodies');
+ok(html.includes('find foo') && html.includes('find bar'),
+    'collapsed summaries carry each delegated task brief');
 ok(html.includes('find foo'), 'collapsed summary carries the delegated task brief');
 ok(!html.includes('explore ·'), 'collapsed summary does NOT show the agent profile');
 ok(html.includes('sum-sub'), 'closed pill has the second (elbow) row');
@@ -81,7 +85,11 @@ const grepStep = (id: string): Step => ({
     result: 'match',
 });
 html = render(messageWith([grepStep('g1'), grepStep('g2')]));
-ok(html.includes('step-group-body'), 'spam tools still group');
+// (React SSR splits the badge text with a `<!-- -->` marker, so comments
+// are stripped before reading it.)
+ok((html.match(/<details\b/g) ?? []).length === 1
+    && html.replace(/<!--[\s\S]*?-->/g, '').includes('×2'),
+    'spam tools still group into one pill with a ×2 badge');
 
 // Positive control: terminal runs also stay ungrouped.
 const termStep = (id: string, cmd: string): Step => ({

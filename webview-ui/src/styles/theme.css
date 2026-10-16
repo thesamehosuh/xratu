@@ -3992,7 +3992,12 @@ pre.tool-cmd {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 8px 12px 0;
+    /* Same column as the composer card below it (max 700px, centered):
+       full-width chips misaligned with the card on wide screens. */
+    width: calc(100% - 2 * var(--composer-inset, 13px));
+    max-width: 700px;
+    margin-inline: auto;
+    padding: 8px 3px 0;
     background: var(--xratu-shell);
 }
 

@@ -247,7 +247,10 @@ export function App() {
     const [activityOpened, setActivityOpened] = useState(false);
     useEffect(() => { if (activityVisible) setActivityOpened(true); }, [activityVisible]);
     const [reviewPath, setReviewPath] = useState<string | null>(null);
-    const [reviewFiles, setReviewFiles] = useState<ReviewChange[]>([]);
+    // The selected turn's diff, once the review pane reports it. `undefined`
+    // means not yet known (older turns always read as unknown) - only a
+    // positively-empty list hides the turn's review buttons.
+    const [reviewFiles, setReviewFiles] = useState<ReviewChange[] | undefined>(undefined);
     const [agentProfiles, setAgentProfiles] = useState<AgentProfileView[] | null>(null);
     const [agentsError, setAgentsError] = useState<string | undefined>();
     useEffect(() => { setModelPings({}); }, [engineState?.active, currentSessionId]);
