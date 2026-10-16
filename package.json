@@ -361,7 +361,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@opencode/client": "2.0.30",
     "cross-spawn": "^7.0.6",
-    "lucide-react": "^1.55.0",
+    "lucide-react": "^1.56.0",
     "markdown-it": "^14.3.2",
     "pdfjs-dist": "^4.10.38",
     "playwright-core": "^1.64.0",
