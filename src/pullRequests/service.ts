@@ -97,6 +97,14 @@ export class PullRequestService {
             }
         });
     }
+    /** A manual Continue delivers queued updates into the context the user is
+     *  in now; re-anchor those watches so the next update resumes there too
+     *  instead of matching an identity that no longer exists. */
+    async anchorResume(context: PullRequestContext, keys: string[], execution: PullRequestExecution): Promise<void> {
+        await this.change(context, state => {
+            for (const link of state.links) if (link.watch && keys.includes(pullRequestKey(link))) link.resume = execution;
+        });
+    }
     async refreshContext(context: PullRequestContext): Promise<void> {
         if (isOfflineMode() || Date.now() < this.rateLimitedUntil) return;
         const state = await this.store.load(context.sessionId, context.workspace);

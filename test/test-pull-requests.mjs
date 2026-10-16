@@ -10,7 +10,7 @@ import vm from 'node:vm';
 const require = createRequire(import.meta.url);
 const { PullRequestStore } = require('../out/pullRequests/store.js');
 const { PullRequestService } = require('../out/pullRequests/service.js');
-const { PullRequestController } = require('../out/pullRequests/controller.js');
+const { PullRequestController, pullRequestEventPrompt } = require('../out/pullRequests/controller.js');
 const { GitHubPullRequests } = require('../out/pullRequests/github.js');
 const { pullRequestTarget, PullRequestError } = require('../out/pullRequests/types.js');
 const { setOfflineMode } = require('../out/networkPolicy.js');
@@ -31,6 +31,17 @@ async function fixture() {
     const store = new PullRequestStore(storage, error => diagnostics.push(error));
     const service = new PullRequestService(store, provider, () => {}, error => diagnostics.push(error));
     return { store, service, provider, storage, diagnostics, reads: () => reads, update: value => { current = snapshot(value); }, fail: value => { error = value; }, load: () => store.load(context.sessionId, context.workspace) };
+}
+/** The real host run boundary, compiled from src so its guards cannot drift. */
+function runBoundary() {
+    const ts = require('typescript');
+    const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
+    const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
+    const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'XratuChatViewProvider');
+    const method = cls.members.find(node => node.name?.getText(file) === '_runPullRequestUpdate');
+    const sandbox = { ui: () => 'PR update', isOfflineMode: () => false, executionMatches };
+    vm.runInNewContext(ts.transpileModule(`class Host { ${method.getText(file)} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    return sandbox.Host;
 }
 
 test('canonical PR identities reject non-GitHub URLs, credentials, traversal, and option-like targets', () => {
@@ -406,15 +417,9 @@ test('damaged snapshot/cursor state is rejected before publication and failed va
 });
 
 test('the real host run boundary rechecks branch, epoch, and Stop after asynchronous context capture', async () => {
-    const ts = require('typescript');
-    const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
-    const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
-    const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'XratuChatViewProvider');
-    const method = cls.members.find(node => node.name?.getText(file) === '_runPullRequestUpdate');
-    const sandbox = { ui: () => 'PR update', isOfflineMode: () => false, executionMatches };
-    vm.runInNewContext(ts.transpileModule(`class Host { ${method.getText(file)} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    const Host = runBoundary();
     for (const change of ['branch', 'epoch', 'stop']) {
-        const host = new sandbox.Host(), capture = deferred(), entered = deferred();
+        const host = new Host(), capture = deferred(), entered = deferred();
         let admitted = true, runs = 0;
         Object.assign(host, { _sessionEpoch: 1, _localRunActive: false, _sessionTransitionsPending: 0, _checkpointRestoreActive: false, _planMode: false, _view: { webview: { postMessage: () => {} } }, _history: [], _persistLocalSession: async () => {}, _handleChatRequest: async () => { runs++; }, _pullRequestExecution: async () => { entered.resolve(); return capture.promise; } });
         const pending = host._runPullRequestUpdate('update', 1, [target], execution, () => admitted);
@@ -425,6 +430,14 @@ test('the real host run boundary rechecks branch, epoch, and Stop after asynchro
         assert.equal(await pending, false);
         assert.equal(runs, 0);
     }
+});
+
+test('the host run boundary skips the identity gate when a manual continuation has no resolvable context', async () => {
+    const Host = runBoundary();
+    const host = new Host(), runs = [];
+    Object.assign(host, { _sessionEpoch: 1, _localRunActive: false, _sessionTransitionsPending: 0, _checkpointRestoreActive: false, _planMode: false, _view: { webview: { postMessage: () => {} } }, _history: [], _persistLocalSession: async () => {}, _handleChatRequest: async prompt => { runs.push(prompt); host._history.push({ role: 'user', content: prompt }); }, _pullRequestExecution: () => { throw new Error('detached HEAD'); } });
+    assert.equal(await host._runPullRequestUpdate('update', 1, [target], null, () => true), true);
+    assert.equal(runs.length, 1);
 });
 
 test('large review updates have bounded excerpts while the durable cursor still deduplicates every comment', async () => {
@@ -489,6 +502,64 @@ test('notification-only watches never launch an agent without explicit continuat
     assert.equal((await f.load()).events.length, 1);
     await controller.resume(true);
     assert.equal(runs, 1);
+});
+
+test('manual continuation delivers through a changed context and re-anchors automatic resume', async () => {
+    const f = await fixture(), runs = [];
+    await f.service.watch(context, target, execution);
+    f.update({ mergeability: 'conflicting' }); await f.service.sweep();
+    const next = { ...execution, branch: 'other-branch', model: 'model-b' };
+    const identity = { ...context, epoch: 1, busy: false, plan: false };
+    const controller = new PullRequestController({ identity: () => identity, ensureSession: async () => {}, execution: async () => next, run: async (prompt, epoch, urls, expected) => { runs.push({ prompt, expected }); return true; }, publish: () => {}, diagnostic: error => f.diagnostics.push(error) }, f.storage, f.provider);
+    await controller.resume(false);
+    assert.equal(runs.length, 0);
+    assert.equal((await f.load()).events.length, 1);
+    await controller.resume(true);
+    assert.equal(runs.length, 1);
+    assert.deepEqual(runs[0].expected, next);
+    const state = await f.load();
+    assert.equal(state.events.length, 0);
+    assert.deepEqual(state.links[0].resume, next);
+    assert.equal(f.diagnostics.length, 0);
+});
+
+test('manual continuation works without a branch and leaves notification-only watches unanchored', async () => {
+    const f = await fixture(), runs = [];
+    await f.service.watch(context, target);
+    f.update({ mergeability: 'conflicting' }); await f.service.sweep();
+    const identity = { ...context, epoch: 1, busy: false, plan: false };
+    const controller = new PullRequestController({ identity: () => identity, ensureSession: async () => {}, execution: async () => { throw new PullRequestError('prBranchRequired'); }, run: async (prompt, epoch, urls, expected) => { runs.push({ prompt, expected }); return true; }, publish: () => {}, diagnostic: () => {} }, f.storage, f.provider);
+    await controller.resume(true);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].expected, null);
+    const state = await f.load();
+    assert.equal(state.events.length, 0);
+    assert.equal(state.links[0].resume, undefined);
+});
+
+test('watching starts notification-only when the execution context cannot be resolved', async () => {
+    const f = await fixture(), messages = [];
+    const identity = { ...context, epoch: 1, busy: false, plan: false };
+    const controller = new PullRequestController({ identity: () => identity, ensureSession: async () => {}, execution: async () => { throw new PullRequestError('prBranchRequired'); }, run: async () => true, publish: message => messages.push(message), diagnostic: () => {} }, f.storage, f.provider);
+    await controller.action('watch', target, context.sessionId, 'watch-no-branch', true);
+    assert.equal(messages.at(-1).errorKey, undefined);
+    const state = await f.load();
+    assert.ok(state.links[0].watch);
+    assert.equal(state.links[0].resume, undefined);
+    const second = target.replace('42', '43');
+    const result = await controller.tool('watch_pull_request', { url: second });
+    assert.notEqual(result.isError, true);
+    const links = JSON.parse(result.output).pullRequests;
+    assert.equal(links.find(link => link.url === target).autoResume, false);
+    assert.equal(links.find(link => link.url === second).watching, true);
+    assert.equal(links.find(link => link.url === second).autoResume, false);
+});
+
+test('the wake prompt keeps the watch across turns and only unwatches when the task is done', () => {
+    const prompt = pullRequestEventPrompt([{ id: 'event', key: 'github.com/example/repo#42', url: target, number: 42, createdAt: new Date().toISOString(), headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }]);
+    assert.match(prompt, /watch outlives this turn/);
+    assert.match(prompt, /unwatch_pull_request only when the PR task is finished or the user asks you to stop/);
+    assert.ok(!prompt.includes('Before handing work back'));
 });
 
 test('GitHub reader paginates checks and consumes all REST activity pages', async () => {
