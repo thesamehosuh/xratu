@@ -395,6 +395,7 @@ try {
     function lifecycleHost() {
         const host = new sandbox.Host();
         const operations = [];
+        let backgroundRefreshes = 0;
         const values = new Map();
         let managed = join(root, '2.0.26', 'opencode');
         Object.assign(host, {
@@ -403,6 +404,7 @@ try {
             _setupAvailability: new Map([['old', {}]]),
             _cancelSetup: () => {}, _cancelNativeSetup: () => {}, _cancelModelPings: () => {},
             _postEngineState: () => {}, _serializeSessionTransition: async (operation) => operation(),
+            _postBackgroundJobs: () => { backgroundRefreshes++; },
             _openCodeEngine: { dispose: async () => { operations.push('dispose'); } },
             _persistLocalSession: async () => { operations.push('persist'); },
             _clearHistoryNow: async ({ engineId }) => { operations.push(`chat:${engineId}`); host._activeEngine = engineId; return true; },
@@ -413,13 +415,14 @@ try {
                 remove: async () => { operations.push('remove'); managed = undefined; },
             }),
         });
-        return { host, operations, values };
+        return { host, operations, values, backgroundRefreshes: () => backgroundRefreshes };
     }
     const updating = lifecycleHost();
     await updating.host._engineInstall();
     assert.deepEqual(updating.operations, ['dispose', 'install', 'persist', 'chat:opencode']);
     assert.equal(updating.host._engineInstallController, undefined);
     assert.equal(updating.host._setupAvailability.size, 0);
+    assert.equal(updating.backgroundRefreshes(), 1, 'disposed native jobs disappear from the background UI');
     assert.equal(updating.values.get('xratu.enginePath.opencode'), '');
     const removing = lifecycleHost();
     await removing.host._engineRemove();

@@ -700,6 +700,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._openCodeEngine = undefined;
         this._openCodeEnvironmentKey = '';
         await previous?.dispose();
+        this._postBackgroundJobs();
     }
     async _engineRemove(): Promise<void> {
         if (this._engineInstallController || this._localRunActive || this._setupStarting || !this._engineSetup.installedByXratu) return;
