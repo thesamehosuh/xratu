@@ -149,7 +149,7 @@ export type ToExtensionMessage =
     | { type: 'mcpMarketplaceDetect'; id: string }
     /** Refresh the git status line under the composer. */
     | { type: 'gitStatusGetState' }
-    | { type: 'pullRequestsGetState'; requestId: string }
+    | { type: 'pullRequestsGetState'; requestId: string; refresh?: boolean }
     | { type: 'pullRequestAction'; action: PullRequestAction; url?: string; sessionId: string | null; requestId: string; autoResume?: boolean }
     /** Branch picker: request the local branch list. */
     | { type: 'gitBranchesGetState' }

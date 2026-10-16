@@ -23,6 +23,8 @@ export interface PullRequestWatch {
     startedAt: string; headSha: string | null; failedChecks: readonly string[];
     passed: boolean; passedChecks: readonly string[]; remarksThrough: string;
     remarkIds: readonly string[]; conflicting: boolean; wakes: number;
+    /** Old cursors consumed baseline failures without queuing a wake. */
+    initialChecksReported?: boolean;
 }
 export interface PullRequestExecution {
     workspace: string; branch: string; engine: 'xratu' | 'opencode';

@@ -41,7 +41,7 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
-    _sendPullRequests(requestId?: string): Promise<void>;
+    _sendPullRequests(requestId?: string, refresh?: boolean): Promise<void>;
     _pullRequestAction(action: PullRequestAction, url: unknown, sessionId: string | null, requestId: string, autoResume?: boolean): Promise<void>;
     _stopPullRequestWatches(): Promise<void>;
     _nativeGetState(requestId: string): Promise<void>;
@@ -558,7 +558,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     await host._sendGitStatus();
                     break;
                 case 'pullRequestsGetState':
-                    if (typeof data.requestId === 'string' && data.requestId.length <= 100) await host._sendPullRequests(data.requestId);
+                    if (typeof data.requestId === 'string' && data.requestId.length <= 100) await host._sendPullRequests(data.requestId, data.refresh === true);
                     break;
                 case 'pullRequestAction':
                     if (typeof data.requestId === 'string' && data.requestId.length <= 100 && ['link', 'unlink', 'refresh', 'watch', 'unwatch', 'resume', 'dismiss'].includes(data.action)) {
