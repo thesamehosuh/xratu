@@ -8,10 +8,12 @@ import './enginesPage.css';
 
 export function EnginesPage({ state, send }: { state: EngineSetupState | null; send: (message: ToExtensionMessage) => void }) {
     const [customPath, setCustomPath] = useState(state?.customPath ?? '');
+    const [confirmRemove, setConfirmRemove] = useState(false);
     useEffect(() => { setCustomPath(state?.customPath ?? ''); }, [state?.customPath]);
+    useEffect(() => { setConfirmRemove(false); }, [state?.phase, state?.binaryPath]);
     const phase = state?.phase ?? 'checking';
-    const locked = !!state?.busy || phase === 'installing' || phase === 'checking';
-    const statusKey = { checking: 'engineChecking', missing: 'engineMissing', unsupported: 'engineUnsupported', ready: 'engineReady', installing: 'engineInstalling', failed: 'engineFailed' } as const;
+    const locked = !!state?.busy || phase === 'installing' || phase === 'removing' || phase === 'checking';
+    const statusKey = { checking: 'engineChecking', missing: 'engineMissing', unsupported: 'engineUnsupported', ready: 'engineReady', installing: 'engineInstalling', removing: 'engineRemoving', failed: 'engineFailed' } as const;
     return <section className="settings-page engines-page">
         <header className="settings-head"><h2>{t('enginesTitle')}</h2><button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} disabled={locked} onClick={() => send({ type: 'enginesGetState' })}><RefreshCw size={14} className={phase === 'checking' ? 'spinning' : undefined} /></button></header>
         <div className="settings-scroll engines-content">
@@ -28,6 +30,17 @@ export function EnginesPage({ state, send }: { state: EngineSetupState | null; s
                 {phase === 'ready' && state?.active !== 'opencode' && <button type="button" className="primary-btn" disabled={locked} onClick={() => send({ type: 'engineSelect', engine: 'opencode' })}>{t('engineUse')}</button>}
                 </div>
                 {phase !== 'ready' && <OpenCodeSetup state={state} send={send} />}
+                {state?.installedByXratu && <div className="engine-maintenance">
+                    {state.updateAvailable && <p>{t('engineUpdateHint')}</p>}
+                    <div className="engine-maintenance-actions">
+                        <button type="button" className="secondary-btn" disabled={locked || !state.updateAvailable} onClick={() => send({ type: 'engineInstall' })}>{t(state.updateAvailable ? 'engineUpdate' : 'engineUpToDate')}</button>
+                        <button type="button" className="secondary-btn" disabled={locked} onClick={() => setConfirmRemove(true)}>{t('engineRemove')}</button>
+                    </div>
+                    {confirmRemove && <div className="engine-remove-confirm" role="group" aria-label={t('engineRemove')}>
+                        <p>{t('engineRemoveHint')}</p>
+                        <div className="engine-maintenance-actions"><button type="button" className="secondary-btn" disabled={locked} onClick={() => { setConfirmRemove(false); send({ type: 'engineRemove' }); }}>{t('engineRemoveConfirm')}</button><button type="button" className="secondary-btn" disabled={locked} onClick={() => setConfirmRemove(false)}>{t('editCancel')}</button></div>
+                    </div>}
+                </div>}
                 <div className="engine-controls"><details className="engine-details"><summary>{t('engineSetup')}</summary>
                     {state?.binaryPath && <p className="engine-path" dir="ltr">{state.binaryPath}</p>}
                     <p>{t(phase === 'unsupported' ? 'engineUpgradeHint' : state?.installedByXratu ? 'engineManaged' : phase === 'ready' ? 'engineExternal' : 'engineInstallHint')}</p>

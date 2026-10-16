@@ -5,7 +5,7 @@ import type { EngineSetupState, ToExtensionMessage } from '../types';
 /** The installer is the same action in onboarding and engine settings. */
 export function OpenCodeSetup({ state, send }: { state: EngineSetupState | null; send: (message: ToExtensionMessage) => void }) {
     const phase = state?.phase ?? 'checking';
-    const locked = !!state?.busy || phase === 'installing' || phase === 'checking';
+    const locked = !!state?.busy || phase === 'installing' || phase === 'removing' || phase === 'checking';
     const total = state?.totalBytes;
     return <div className="setup-install">
         {phase === 'checking' && <span className="setup-status" role="status"><RefreshCw size={14} className="spinning" />{t('engineChecking')}</span>}
