@@ -141,6 +141,7 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
     const running = calls.some(call => !toolRowDone(call));
     const edits = calls.filter(call => toolFamily(call.call.tool) === 'edit');
     const hasThinking = group.rows.some(row => row.kind === 'thinking');
+    const Icon = group.category === 'git' ? toolIcon('git_status') : ListChecks;
     const [open, setOpen] = useAutoOpen((calls.some(call => toolFamily(call.call.tool) === 'edit') && prefOn(prefs, 'edit')) || (calls.some(call => toolFamily(call.call.tool) === 'terminal') && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
     const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
         : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
@@ -158,6 +159,10 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
         summary.push(calls.length === 1 ? t('txOneEdit') : tf('txEditCount', { count: String(calls.length) }));
     } else if (group.category === 'terminal') {
         summary.push(calls.length === 1 ? t('txOneCommand') : tf('txCommandCount', { count: String(calls.length) }));
+    } else if (group.category === 'git') {
+        const tools = new Map<string, number>();
+        for (const { call } of calls) if (call.tool) tools.set(call.tool, (tools.get(call.tool) ?? 0) + 1);
+        for (const [tool, count] of tools) summary.push(`${toolLabel(tool).fa}${count > 1 ? ` ×${count}` : ''}`);
     } else {
         summary.push(actionCount);
     }
@@ -165,7 +170,7 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
         <details className={`step conversation-work-group${running ? ' running' : ''}`} open={open} onToggle={event => setOpen(event.currentTarget.open)}>
             <summary>
                 <span className="sum-row">
-                    <ListChecks size={13} className="step-icon" />
+                    <Icon size={13} className="step-icon" />
                     <span className="step-label">{label}</span>
                     <span className="conversation-work-summary">{summary.map(part => <span key={part} dir="auto">{part}</span>)}</span>
                     {running && <span className="step-status spinner" aria-hidden="true" />}
@@ -1253,6 +1258,11 @@ function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, o
         if (!summaryCall) return null;
         const args = parseArgs(summaryCall.text);
         if (family === 'terminal') return argString(args, 'command') ?? null;
+        if (family === 'git') {
+            return argString(args, 'path') ?? argString(args, 'file_path') ?? argString(args, 'message')
+                ?? argString(args, 'branch') ?? argString(args, 'revision') ?? argString(args, 'ref')
+                ?? argString(args, 'remote') ?? argString(args, 'name') ?? argString(args, 'stash') ?? null;
+        }
         if (family === 'subagent') {
             return argString(args, 'description') ?? argString(args, 'subagent_type') ?? null;
         }
@@ -2180,7 +2190,13 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
         );
     }
 
-    const collapseSteps = options.compactCompleted && !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered) && !steps.some((step) => step.background);
+    const collapseSteps = options.compactCompleted && !readOnly && role === 'assistant' && status === 'done' && !approvalPending && !message.decisions?.some((decision) => !decision.answered);
+    // A background process can outlive the answer. Keep its controls outside
+    // the completed-work disclosure without holding the whole turn open.
+    const completedSteps = steps.filter(step => !step.background);
+    const backgroundRows = rows.flatMap(row => rowCalls(row)
+        .filter(call => call.call.background)
+        .map(call => ({ ...call, kind: 'tool' as const })));
     const finalTextRows = collapseSteps ? textRows : [];
     const streamingContent = status === 'streaming' && role === 'assistant' && !approvalPending && !approvalResolved;
 
@@ -2210,7 +2226,8 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
             aria-busy={status === 'streaming' && !approvalPending}
         >
             {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
-            {collapseSteps && hasPills && <CompactSteps steps={steps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
+            {collapseSteps && hasPills && <CompactSteps steps={completedSteps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
+            {collapseSteps && backgroundRows.length > 0 && <div className="steps">{backgroundRows.map(renderRow)}</div>}
             {!isSystem && hasPills && !collapseSteps && (
                 <div className="steps" aria-label={t('stepsAria')}>
                     {displayRows.map(row => row.kind === 'workGroup'

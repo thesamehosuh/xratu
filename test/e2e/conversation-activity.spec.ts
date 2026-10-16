@@ -213,3 +213,61 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.screenshot({ path: info.outputPath(`settings-bottom-${locale}-${width}.png`), animations: 'disabled' });
     });
 }
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`Git work collapses after the answer while background controls stay visible (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'startResponse' });
+        await tool(page, 'status', 'git_status', '');
+        await tool(page, 'diff', 'git_diff', 'src/auth.ts');
+        const group = page.locator('.transcript-pane .conversation-work-group');
+        await expect(group).toHaveCount(1);
+        await expect(group).not.toHaveAttribute('open');
+        await expect(group.locator('summary').first()).toContainText(locale === 'en' ? 'Git diff' : 'تفاوت گیت');
+        await group.locator('summary').first().click();
+        await expect(group).toContainText('src/auth.ts');
+        await page.screenshot({ path: info.outputPath('git-live.png'), animations: 'disabled' });
+        await tool(page, 'server', 'run_terminal_command', '', false);
+        await post(page, { type: 'terminalBackgrounded', callId: 'server', jobId: 'dev-server', byUser: true });
+        await post(page, { type: 'chunk', value: 'The changes are ready.' });
+        await post(page, { type: 'fullResponse', persian: 'The changes are ready.', renderedHtml: '<p>The changes are ready.</p>' });
+        const summary = page.locator('.transcript-pane .completed-steps');
+        await expect(summary).toBeVisible();
+        await expect(summary).not.toHaveAttribute('open');
+        await expect(page.locator('.transcript-pane .conversation-work-group')).toHaveCount(0);
+        await expect(page.locator('.transcript-pane').getByRole('button', { name: locale === 'en' ? 'Stop' : 'متوقف کردن', exact: true })).toBeVisible();
+        await expect(page.locator('.transcript-pane')).toContainText('The changes are ready.');
+        await page.screenshot({ path: info.outputPath('git-completed.png'), animations: 'disabled' });
+        await summary.locator('summary').click();
+        await expect(summary.locator('.compact-step')).toHaveCount(2);
+        await expect(summary).toContainText('src/auth.ts');
+        await post(page, { type: 'backgroundJobFinished', jobId: 'dev-server', output: 'Server failed to bind', status: 'failed', exitCode: 1 });
+        await expect(summary.locator('.compact-step')).toHaveCount(3);
+        await expect(summary.locator('.compact-step.failed')).toContainText('Server failed to bind');
+        await page.screenshot({ path: info.outputPath('git-expanded.png'), animations: 'disabled' });
+        await page.locator('#surface-tab-activity').click();
+        await expect(page.locator('.activity-pane')).toContainText('Retained result for src/auth.ts');
+    });
+}
+
+test('Git rows retain branch, revision and commit hints before and after completion', async ({ page }) => {
+    await post(page, { type: 'startResponse' });
+    const operations = [
+        ['git_branch', { action: 'create', name: 'fix/expiry' }, 'fix/expiry'],
+        ['git_show', { revision: 'HEAD~2' }, 'HEAD~2'],
+        ['git_commit', { message: 'fix: reject expired tokens' }, 'fix: reject expired tokens'],
+    ] as const;
+    for (const [tool, args] of operations) {
+        await post(page, { type: 'toolCall', tool, args: JSON.stringify(args), callId: tool });
+        await post(page, { type: 'toolResult', tool, output: 'Completed', callId: tool });
+    }
+    const group = page.locator('.transcript-pane .conversation-work-group');
+    await group.locator('summary').first().click();
+    for (const [, , hint] of operations) await expect(group.locator('.step-cmd').filter({ hasText: hint })).toHaveCount(1);
+    await post(page, { type: 'fullResponse', persian: 'Done.', renderedHtml: '<p>Done.</p>' });
+    const summary = page.locator('.transcript-pane .completed-steps');
+    await expect(summary).not.toHaveAttribute('open');
+    await summary.locator('summary').click();
+    for (const [, , hint] of operations) await expect(summary.locator('code').filter({ hasText: hint })).toHaveCount(1);
+});
