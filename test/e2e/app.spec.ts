@@ -384,6 +384,7 @@ test('capabilities refresh spinner keeps spinning until EVERY echo arrives', asy
 
 test('stream follow survives shrink-clamps and a large edit pill', async ({ page }) => {
     await page.goto('/');
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: { edit: true } } });
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'restoreUser', value: 'Refactor the handlers module' });
@@ -684,7 +685,7 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
 });
 
 
-test('transcript switches ship a transcriptSet and follow the host echo', async ({ page }) => {
+test('conversation display choices follow the host echo', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
@@ -692,39 +693,21 @@ test('transcript switches ship a transcriptSet and follow the host echo', async 
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });
     await hostMessage(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'STDOUT:\nok\nExit code: 0', callId: 't1' });
-    await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args: JSON.stringify({ path: 'src/a.ts', patch: '<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' }), callId: 'p1' });
-    await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', output: 'done', callId: 'p1' });
-
-    // Shipped defaults: the diff is expanded, the command output is not.
-    await expect(page.locator('details.step').first()).toBeVisible();
-    expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
-        .toEqual([false, true]);
-
+    const command = page.locator('.transcript-pane details.step').first();
+    await expect(command).not.toHaveAttribute('open');
     await hostMessage(page, { type: 'openSettings' });
-    const switches = page.locator('.settings-card').filter({ has: page.getByRole('heading', { name: 'Auto-expand', exact: true }) }).getByRole('switch');
-    // The card mounts on a later commit than the message that requested it, so
-    // read the switches only once they exist. A bare `evaluateAll` here got `[]`
-    // on the slower macOS leg - an empty result that reads like "no switches
-    // exist" rather than "not rendered yet".
-    await expect(switches).toHaveCount(3);
-    // diffs on, commands off, reasoning off
-    expect(await switches.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked'))))
-        .toEqual(['true', 'false', 'false']);
-
-    await switches.nth(1).click();
-    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<Record<string, unknown>>);
-    expect(sent).toContainEqual({ type: 'transcriptSet', id: 'terminal', enabled: true });
-
-    // The host owns the blob: the switch only moves when the host echoes it.
-    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: { terminal: true } } });
-    await expect(switches.nth(1)).toHaveAttribute('aria-checked', 'true');
-    // Back to the chat screen (there is no `openChat` message - an unknown one
-    // leaves Settings on top, and the transcript below would then be asserted
-    // while hidden, which passes without proving anything).
+    await page.locator('.conversation-advanced > summary').click();
+    const output = page.locator('#tx-commands');
+    await expect(output).toHaveText('On failure');
+    await output.click();
+    await page.getByRole('option', { name: 'Expanded', exact: true }).click();
+    const messages = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
+    expect(messages).toContainEqual({ type: 'transcriptOptionsSet', options: { commands: 'expanded' } });
+    await expect(output).toHaveText('On failure');
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { commands: 'expanded' } } });
+    await expect(output).toHaveText('Expanded');
     await hostMessage(page, { type: 'showChat' });
-    await expect(page.locator('.composer-input')).toBeVisible();
-    expect(await page.locator('details.step').evaluateAll((els) => els.map((e) => (e as HTMLDetailsElement).open)))
-        .toEqual([true, true]);
+    await expect(command).toHaveAttribute('open', '');
 });
 
 test('the reasoning body stays LTR in fa - reasoning is always English', async ({ page }) => {
@@ -733,6 +716,7 @@ test('the reasoning body stays LTR in fa - reasoning is always English', async (
     await hostMessage(page, { type: 'locale', locale: 'fa' });
     await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
     await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { reasoning: 'collapsed' } } });
     // `thinkingHtml` patches the LATEST thinking step, so create it first.
     await hostMessage(page, { type: 'thinking', value: 'seed' });
     await hostMessage(page, {

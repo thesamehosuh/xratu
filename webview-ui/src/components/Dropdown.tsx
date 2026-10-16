@@ -42,6 +42,7 @@ export function popupPlacement(el: HTMLElement, maxHeight: number): { up: boolea
 export function Dropdown({
     label,
     id,
+    describedBy,
     disabled = false,
     value,
     options,
@@ -49,6 +50,7 @@ export function Dropdown({
 }: {
     label: string;
     id?: string;
+    describedBy?: string;
     disabled?: boolean;
     value: string;
     options: Array<{ value: string; label: string }>;
@@ -115,6 +117,7 @@ export function Dropdown({
                 aria-haspopup="listbox"
                 aria-expanded={open}
                 aria-label={label}
+                aria-describedby={describedBy}
                 onClick={() => setOpen((wasOpen) => !wasOpen)}
                 onKeyDown={(e) => {
                     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {

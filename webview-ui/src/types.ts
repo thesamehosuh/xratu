@@ -13,7 +13,7 @@ export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workS
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
-import type { TranscriptPrefs } from './transcriptPrefs';
+import type { TranscriptPrefs, TranscriptOptions } from './transcriptPrefs';
 
 /** One completed edit call to diff: the raw tool args text (JSON as the
  *  tool sent it), the server-side tool_call id for snapshot lookup, and the
@@ -186,6 +186,8 @@ export type ToExtensionMessage =
      *  thinking). The host merges it into its opaque prefs blob and echoes
      *  transcriptPrefs. */
     | { type: 'transcriptSet'; id: string; enabled: boolean }
+    | { type: 'transcriptOptionsSet'; options: Partial<TranscriptOptions> }
+    | { type: 'transcriptReset' }
     /** @-mention support: ask the host for the workspace file list (git
      *  keep-set with a findFiles fallback) to power the composer popup. */
     | { type: 'requestFileList' }

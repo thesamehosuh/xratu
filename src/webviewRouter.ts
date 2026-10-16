@@ -147,6 +147,7 @@ export interface WebviewMessageHost {
     _setThinkingLevel(model: string, level: ThinkingLevel | null): Promise<void>;
     _setNativeVariant(model: string, variant: string | null): Promise<void>;
     _setTranscriptPref(id: string, enabled: boolean): Promise<void>;
+    _setTranscriptOptions(options: unknown, reset?: boolean): Promise<void>;
     _showStartScreen(): Promise<void>;
     _startConnectionPolling(): void;
     _taskListEdits: Record<string, TaskListItem[]>;
@@ -312,6 +313,12 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // webview owns the row schema); only the SHAPE is
                     // validated here - see transcriptPrefs.ts.
                     await host._setTranscriptPref(String(data.id ?? ''), !!data.enabled);
+                    host._sendTranscriptPrefs();
+                    break;
+                }
+                case 'transcriptOptionsSet':
+                case 'transcriptReset': {
+                    await host._setTranscriptOptions(data.type === 'transcriptOptionsSet' ? data.options : undefined, data.type === 'transcriptReset');
                     host._sendTranscriptPrefs();
                     break;
                 }

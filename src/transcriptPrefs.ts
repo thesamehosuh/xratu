@@ -1,21 +1,42 @@
 /**
- * Transcript display preferences - the persisted blob behind the Settings
- * page's "which pills open themselves" switches (auto-expanded diffs,
- * commands, reasoning).
- *
- * The host stores the blob OPAQUELY (one JSON string in globalState): the row
- * ids are the WEBVIEW's schema (webview-ui/src/transcriptPrefs.ts), so adding
- * a row there must never require a change here.
- *
- * What the host DOES own is the trust boundary. `transcriptSet` carries
- * webview-supplied ids, so they are pattern-checked, only booleans survive,
- * and the map is capped - a malformed or hostile payload can never grow the
- * persisted blob without bound.
+ * Host-persisted transcript display preferences. Legacy expansion ids remain
+ * bounded boolean flags; presentation options use a closed, shared schema.
+ * Both stored JSON and incoming webview patches cross the same validation.
  */
+
+export interface TranscriptOptions {
+    detail: 'minimal' | 'balanced' | 'detailed';
+    reasoning: 'activity' | 'collapsed' | 'expanded';
+    commands: 'collapsed' | 'errors' | 'expanded';
+    progress: 'latest' | 'all';
+    compactCompleted: boolean;
+    followActivity: boolean;
+    timestamps: boolean;
+}
 
 export interface TranscriptPrefs {
     /** Row ids whose pill starts expanded. An absent id means collapsed. */
     expand: Record<string, boolean>;
+    options?: Partial<TranscriptOptions>;
+}
+
+/** Closed, bounded presentation schema for both stored JSON and webview input. */
+export function sanitizeTranscriptOptions(raw: unknown): Partial<TranscriptOptions> {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const input = raw as Record<string, unknown>;
+    const options: Partial<TranscriptOptions> = {};
+    if (typeof input.detail === 'string' && ['minimal', 'balanced', 'detailed'].includes(input.detail)) options.detail = input.detail as TranscriptOptions['detail'];
+    if (typeof input.reasoning === 'string' && ['activity', 'collapsed', 'expanded'].includes(input.reasoning)) options.reasoning = input.reasoning as TranscriptOptions['reasoning'];
+    if (typeof input.commands === 'string' && ['collapsed', 'errors', 'expanded'].includes(input.commands)) options.commands = input.commands as TranscriptOptions['commands'];
+    if (input.progress === 'latest' || input.progress === 'all') options.progress = input.progress;
+    for (const key of ['compactCompleted', 'followActivity', 'timestamps'] as const) {
+        if (typeof input[key] === 'boolean') options[key] = input[key];
+    }
+    return options;
+}
+
+export function withTranscriptOptions(prefs: TranscriptPrefs, raw: unknown): TranscriptPrefs {
+    return { ...prefs, options: { ...prefs.options, ...sanitizeTranscriptOptions(raw) } };
 }
 
 /** Ids are short slugs (tool families, 'thinking', …) - never paths or prose. */
@@ -60,7 +81,9 @@ export function parseTranscriptPrefs(raw: string | undefined): TranscriptPrefs {
         return emptyTranscriptPrefs();
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyTranscriptPrefs();
-    return { expand: sanitizeMap((parsed as Record<string, unknown>).expand) };
+    const input = parsed as Record<string, unknown>;
+    const options = sanitizeTranscriptOptions(input.options);
+    return { expand: sanitizeMap(input.expand), ...(Object.keys(options).length ? { options } : {}) };
 }
 
 /** Fold one toggle into the blob. An out-of-shape id is a no-op. */
@@ -75,5 +98,5 @@ export function withTranscriptPref(
     if (!Object.prototype.hasOwnProperty.call(map, id) && Object.keys(map).length >= MAX_IDS) {
         return prefs;
     }
-    return { expand: { ...map, [id]: enabled } };
+    return { ...prefs, expand: { ...map, [id]: enabled } };
 }

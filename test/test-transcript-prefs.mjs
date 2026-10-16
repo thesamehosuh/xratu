@@ -17,7 +17,7 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
-    parseTranscriptPrefs, withTranscriptPref, emptyTranscriptPrefs, isTranscriptId,
+    parseTranscriptPrefs, withTranscriptPref, withTranscriptOptions, sanitizeTranscriptOptions, emptyTranscriptPrefs, isTranscriptId,
 } = require('../out/transcriptPrefs.js');
 
 let failed = 0;
@@ -88,6 +88,18 @@ const full = { expand: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [
 check('fold beyond cap is a no-op', withTranscriptPref(full, 'terminal', true), full);
 check('toggling a full map still works', withTranscriptPref(full, 'k0', false).expand.k0, false);
 check('empty helper', emptyTranscriptPrefs(), { expand: {} });
+
+const options = { detail: 'minimal', reasoning: 'activity', commands: 'errors', progress: 'latest', compactCompleted: false, followActivity: false, timestamps: false };
+check('presentation options round trip', parseTranscriptPrefs(JSON.stringify({ expand: { edit: true }, options })), { expand: { edit: true }, options });
+check('unknown presentation keys and invalid values dropped', sanitizeTranscriptOptions({ detail: 'quiet', reasoning: true, commands: 1, progress: 'some', compactCompleted: 'yes', unknown: true }), {});
+check('presentation enum must be a string', sanitizeTranscriptOptions({ detail: ['minimal'] }), {});
+check('presentation array rejected', sanitizeTranscriptOptions(['minimal']), {});
+check('presentation null rejected', sanitizeTranscriptOptions(null), {});
+check('presentation prototype keys rejected', sanitizeTranscriptOptions(JSON.parse('{"__proto__":{"polluted":true},"detail":"balanced"}')), { detail: 'balanced' });
+const chosen = withTranscriptOptions(base, { detail: 'detailed' });
+check('presentation patch preserves expansion choices', chosen, { ...base, options: { detail: 'detailed' } });
+check('expansion patch preserves presentation choices', withTranscriptPref(chosen, 'edit', false), { expand: { edit: false, thinking: false }, options: { detail: 'detailed' } });
+check('presentation patches preserve other choices', withTranscriptOptions(chosen, { commands: 'errors', unknown: true }), { ...base, options: { detail: 'detailed', commands: 'errors' } });
 
 console.log(failed === 0 ? '\ntranscript-prefs: all assertions passed' : `\ntranscript-prefs: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
