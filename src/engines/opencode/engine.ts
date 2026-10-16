@@ -1,6 +1,8 @@
 // Event and permission mapping adapted from T3 Code's OpenCode 2 adapter.
 // Native OpenCode owns tools/history; Xratu owns the display and decision cards.
 import { randomUUID } from 'crypto';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { setTimeout as delay } from 'timers/promises';
 import { isSessionNotFoundError, type FormInfo1, type ModelInfo, type OpenCodeClient } from '@opencode/client';
 import type { LocalAgentEvent, LocalSteerMessage } from '../../local/localTypes';
@@ -12,6 +14,7 @@ import { openCodePermissions } from './permissions';
 import { NativeShellMonitor, type NativeShellUpdate } from './shells';
 import { OpenCodeMcpBridge, type NativeMcpSource } from './mcpBridge';
 import { abortable } from '../../oauth/refreshLock';
+import { OpenCodeAttachmentStore } from './attachments';
 
 export class EngineError extends Error {
     constructor(readonly valueKey: string) { super(valueKey); }
@@ -44,14 +47,16 @@ export class OpenCodeEngine implements AgentEngine {
     private readonly mcpBridge?: OpenCodeMcpBridge;
     private readonly mcpRegistrations = new WeakMap<OpenCodeClient, Map<string, { fingerprint: string; enabled: boolean }>>();
     private mcpSync: Promise<void> = Promise.resolve();
+    private readonly attachments: OpenCodeAttachmentStore;
     observeShells(sessionID: string, workspace: string, emit: (update: NativeShellUpdate) => void): void {
         this.shellMonitor ??= new NativeShellMonitor(async () => (await this.server.connect()).client, emit);
         this.shellMonitor.watch(sessionID, workspace);
     }
     backgroundJobs() { return this.shellMonitor?.views() ?? []; }
     stopShell(jobID: string): Promise<boolean> { return this.shellMonitor?.stop(jobID) ?? Promise.resolve(false); }
-    constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>, private readonly mcpSource?: NativeMcpSource) {
+    constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>, private readonly mcpSource?: NativeMcpSource, attachmentRoot = path.join(tmpdir(), 'xratu-opencode-attachments')) {
         this.server = server ?? new OpenCodeServer(binary, env);
+        this.attachments = new OpenCodeAttachmentStore(attachmentRoot);
         if (mcpSource) this.mcpBridge = new OpenCodeMcpBridge(mcpSource);
     }
     private async syncMcp(client: OpenCodeClient, workspace: string, signal: AbortSignal): Promise<void> {
@@ -165,7 +170,9 @@ export class OpenCodeEngine implements AgentEngine {
         const id = `msg_xratu_${randomUUID()}`;
         active.steers.set(id, message);
         try {
-            await active.client.session.prompt({ sessionID: active.sessionID, id, delivery: 'steer', text: message.text, ...(message.attachments?.length ? { files: message.attachments.map((image) => ({ name: image.name, uri: `data:${image.mimeType};base64,${image.dataBase64}` })) } : {}) }, { signal: active.signal });
+            const prompt = await this.attachments.prepare(active.sessionID, message.text, message.attachments, active.signal);
+            if (this.active !== active) { active.steers.delete(id); return false; }
+            await active.client.session.prompt({ sessionID: active.sessionID, id, delivery: 'steer', ...prompt }, { signal: active.signal });
             return true;
         } catch (error) { active.steers.delete(id); throw error; }
     }
@@ -220,17 +227,19 @@ export class OpenCodeEngine implements AgentEngine {
         const abort = () => streamController.abort(turn.signal.reason);
         turn.signal.addEventListener('abort', abort, { once: true });
         if (turn.signal.aborted) abort();
-        const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+        const calls = new Map<string, { name: string; input: Record<string, unknown>; nativeEdit?: boolean }>();
         const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>() };
         let text = '';
         let reasoning = '';
         let completed = false;
         let executionStarted = false;
         let heldSuccess = false;
+        let failedEdits = 0;
         this.mcpBridge?.activate(sessionID, turn.plan, turn.signal);
         try {
             const stream = await subscribeEvents(baseUrl, headers, streamController.signal);
-            await client.session.prompt({ sessionID, text: [turn.context, turn.prompt].filter(Boolean).join('\n\n'), ...(turn.attachments?.length ? { files: turn.attachments.map((image) => ({ name: image.name, uri: `data:${image.mimeType};base64,${image.dataBase64}` })) } : {}) }, options);
+            const prompt = await this.attachments.prepare(sessionID, [turn.context, turn.prompt].filter(Boolean).join('\n\n'), turn.attachments, turn.signal);
+            await client.session.prompt({ sessionID, ...prompt }, options);
             this.active = active;
             for (const message of host.steer?.drain() ?? []) await this.steer(message);
             yield { type: 'status', value: 'running' };
@@ -267,7 +276,7 @@ export class OpenCodeEngine implements AgentEngine {
                         if (typeof data.delta === 'string') { reasoning += data.delta; yield { type: 'thinking', value: reasoning }; }
                         break;
                     case 'session.tool.input.started':
-                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {} });
+                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {}, nativeEdit: ['edit', 'write', 'apply_patch', 'multiedit'].includes(data.name) });
                         break;
                     case 'session.tool.called': {
                         const id = String(data.id);
@@ -286,11 +295,18 @@ export class OpenCodeEngine implements AgentEngine {
                     case 'session.tool.success':
                     case 'session.tool.failed': {
                         const id = String(data.id);
+                        const call = calls.get(id);
                         const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
                         if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
-                        yield { type: 'toolResult', id, tool: calls.get(id)?.name ?? 'opencode_tool', output: contentText(data.content) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError: event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0) };
+                        const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
+                        if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
+                        yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: contentText(data.content) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError };
                         calls.delete(id);
                         active.calls.delete(id);
+                        // Native tools own their arguments and retries. Stop a
+                        // failing edit loop through the normal interrupt/wait
+                        // cleanup rather than rewriting or replaying edits.
+                        if (failedEdits >= 3) throw new EngineError('engineRepeatedEditFailures');
                         break;
                     }
                     case 'permission.asked': {

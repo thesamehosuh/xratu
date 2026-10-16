@@ -3,7 +3,12 @@ Third-party notices for Xratu
 T3 Code — https://github.com/pingdotgg/t3code
 Reference commit: ec80933ac8cd02fec5c97b342462ccc9567cdb1e
 Adapted: OpenCode2Server.ts, OpenCode2Client.ts, v2/adapter.ts,
-CodexInstallation.ts, and provider readiness/setup state patterns.
+v2/textGeneration.ts, provider-core/server/attachmentPrompt.ts,
+CodexInstallation.ts, provider readiness/setup state patterns,
+orchestration-v2/pullRequestWatch.ts and its evaluator test scenarios,
+pullRequest/gitHubPullRequestJson.ts check queries, and the linked PR panel
+row/actions pattern from ThreadPullRequestsPanel.tsx, and the shared inline
+status pattern from ThreadPullRequestBadgeControl and ThreadDetailsPrRow.
 Xratu adapts these patterns to its VS Code host, Promise SDK and decision cards.
 
 MIT License
@@ -28,7 +33,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-OpenCode client, protocol and schema 2.0.26
+OpenCode client, protocol and schema 2.0.30
 https://github.com/anomalyco/opencode
 MIT License
 

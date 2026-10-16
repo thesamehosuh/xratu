@@ -4,6 +4,8 @@ import type { ChildProcess } from 'child_process';
 import crossSpawn from 'cross-spawn';
 import { OpenCode, type OpenCodeClient } from '@opencode/client';
 import { killTree } from '../../tooling/processTree';
+import { openCodeFetch } from './transport';
+import { openCodeEnvironment } from './environment';
 
 export interface OpenCodeConnection { client: OpenCodeClient; baseUrl: string; headers: Record<string, string> }
 export class OpenCodeServer {
@@ -16,7 +18,7 @@ export class OpenCodeServer {
     private start(): Promise<OpenCodeConnection> {
         return new Promise((resolve, reject) => {
             const password = randomBytes(32).toString('hex');
-            const env = { ...this.env, OPENCODE_PASSWORD: password };
+            const env = { ...openCodeEnvironment(this.env), OPENCODE_PASSWORD: password };
             delete (env as NodeJS.ProcessEnv).OPENCODE_SERVER_PASSWORD;
             const child = crossSpawn(this.binary, ['serve', '--hostname=127.0.0.1', '--port=0'], { env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
             this.child = child;
@@ -34,7 +36,7 @@ export class OpenCodeServer {
                 settled = true;
                 clearTimeout(timer);
                 const headers = { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` };
-                resolve({ baseUrl: url, headers, client: OpenCode.make({ baseUrl: url, headers }) });
+                resolve({ baseUrl: url, headers, client: OpenCode.make({ baseUrl: url, headers, fetch: openCodeFetch }) });
             };
             child.stdout?.on('data', read);
             child.stderr?.on('data', read);

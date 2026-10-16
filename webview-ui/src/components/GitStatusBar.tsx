@@ -8,6 +8,7 @@ interface GitStatusBarProps {
     root: string | null;
     /** Open the branch drop-up (the line is the picker's trigger). */
     onOpenPicker: () => void;
+    disabled?: boolean;
 }
 
 /** Head-truncate a long path: the TAIL is the informative part, so an ellipsis
@@ -25,7 +26,7 @@ function compactPath(value: string, max = 38): string {
  * composer above it. Renders nothing at all outside a git repository, so a
  * non-git workspace shows no trace of it.
  */
-export function GitStatusBar({ status, root, onOpenPicker }: GitStatusBarProps) {
+export function GitStatusBar({ status, root, onOpenPicker, disabled = false }: GitStatusBarProps) {
     if (!status || !status.isRepo) return null;
 
     const parts: string[] = [];
@@ -45,7 +46,8 @@ export function GitStatusBar({ status, root, onOpenPicker }: GitStatusBarProps) 
             className="git-status"
             dir="ltr"
             onClick={onOpenPicker}
-            title={t('gitStatusOpen')}
+            disabled={disabled}
+            title={t(disabled ? 'gitCheckoutBusy' : 'gitStatusOpen')}
             aria-label={`${root ? `${root} ` : ''}${branch}: ${parts.join(', ')}`}
         >
             {/* Folder then branch on the left, counts on the right: which

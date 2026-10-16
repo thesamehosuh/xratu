@@ -31,6 +31,13 @@ const ws = '/tmp/fake-workspace';
 
 try {
     const store = new LocalSessionStore(root);
+    const corrupt = await store.create(ws);
+    for (const value of [null, [], 7, 'not a snapshot']) {
+        writeFileSync(join(root, 'sessions', corrupt.id, 'snapshot.json'), JSON.stringify(value));
+        check(`corrupt snapshot root ${JSON.stringify(value)} is rejected`, await store.load(corrupt.id), null);
+    }
+    await store.delete(corrupt.id);
+
 
     // Child observations persist as display events, independently of model rows.
     const observed = await store.create(ws);

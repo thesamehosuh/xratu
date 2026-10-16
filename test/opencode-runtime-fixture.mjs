@@ -2,7 +2,7 @@
 // Uses an isolated OpenCode data directory and a local simulated model; no provider keys.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export async function checkOpenCodeRuntime(OpenCodeEngine, root, binary) {
@@ -11,7 +11,9 @@ export async function checkOpenCodeRuntime(OpenCodeEngine, root, binary) {
     let phase = 'cancel';
     let mcpCalls = 0;
     let approvals = 0;
+    let heldResponse;
     const catalogs = [];
+    const inputs = [];
     const model = createServer(async (request, response) => {
         let raw = '';
         for await (const chunk of request) raw += chunk;
@@ -21,9 +23,11 @@ export async function checkOpenCodeRuntime(OpenCodeEngine, root, binary) {
             return;
         }
         catalogs.push(body.tools.map((tool) => tool.function.name));
+        inputs.push(body.messages);
         response.writeHead(200, { 'content-type': 'text/event-stream' });
         const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'stub', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
         if (phase === 'cancel') { chunk({ role: 'assistant', content: 'Working' }); return; }
+        if (phase === 'steer') { heldResponse = response; chunk({ role: 'assistant', content: 'Waiting for direction' }); return; }
         if (phase === 'tool') {
             const name = catalogs.at(-1).find((name) => name.endsWith('_mcp__docs__lookup'));
             if (!name) { response.end('data: [DONE]\n\n'); return; }
@@ -51,7 +55,7 @@ export async function checkOpenCodeRuntime(OpenCodeEngine, root, binary) {
             mcpCalls++;
             return { text: 'Found documentation', images: [] };
         },
-    });
+    }, join(workspace, 'attachments # نمونه'));
     let session;
     const host = {
         approvals: { requestApproval: async (_id, calls) => { approvals++; assert.equal(calls[0].name, 'mcp__docs__lookup'); return Object.fromEntries(calls.map((call) => [call.id, true])); } },
@@ -78,11 +82,32 @@ export async function checkOpenCodeRuntime(OpenCodeEngine, root, binary) {
             assert.equal(session.nativeSessionId, nativeID);
         }
         phase = 'done';
-        for await (const _event of engine.runTurn({ ...turn, session, plan: true, signal: AbortSignal.timeout(30_000) }, host)) { /* drain */ }
+        const code = { name: 'source #1.ts', mimeType: 'text/plain', dataBase64: Buffer.from('// sample\n'.repeat(4000) + 'const ATTACHMENT_TAIL = "complete";').toString('base64') };
+        for await (const _event of engine.runTurn({ ...turn, session, attachments: [code], signal: AbortSignal.timeout(30_000) }, host)) { /* drain */ }
+        assert.ok(JSON.stringify(inputs.at(-1)).includes('ATTACHMENT_TAIL'), 'full text attachment reaches the native model beyond the built-in preview cap');
+        phase = 'steer';
+        const steerCode = { name: 'follow-up.ts', mimeType: 'text/plain', dataBase64: Buffer.from('const STEER_NATIVE_ATTACHMENT = true;').toString('base64') };
+        let steered = false;
+        for await (const event of engine.runTurn({ ...turn, session, signal: AbortSignal.timeout(30_000) }, host)) {
+            if (event.type === 'chunk' && !steered) {
+                steered = true;
+                assert.equal(await engine.steer({ text: 'Read the added code', attachments: [steerCode], steerId: 'runtime-steer' }), true);
+                phase = 'done';
+                heldResponse.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+                heldResponse.end('data: [DONE]\n\n');
+            }
+        }
+        assert.ok(JSON.stringify(inputs.at(-1)).includes('STEER_NATIVE_ATTACHMENT'), 'steered code files reach a real native model step');
+        const image = { name: 'screen #1.png', mimeType: 'image/png', dataBase64: (await readFile(new URL('../assets/icon.png', import.meta.url))).toString('base64') };
+        for await (const _event of engine.runTurn({ ...turn, session, attachments: [image], signal: AbortSignal.timeout(30_000) }, host)) { /* drain */ }
+        assert.ok(inputs.at(-1).some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url' && part.image_url.url === `data:image/png;base64,${image.dataBase64}`)), 'image bytes reach the real native model request');
+        const planCode = { name: 'Dockerfile', mimeType: 'text/plain', dataBase64: Buffer.from('FROM scratch\n# PLAN_ATTACHMENT').toString('base64') };
+        for await (const _event of engine.runTurn({ ...turn, session, attachments: [planCode], plan: true, signal: AbortSignal.timeout(30_000) }, host)) { /* drain */ }
+        assert.ok(JSON.stringify(inputs.at(-1)).includes('PLAN_ATTACHMENT'), 'Plan can receive an explicitly attached file outside the workspace without widening native tool permissions');
         assert.equal(catalogs.at(-1).some((name) => name.endsWith('_mcp__docs__lookup')), false, 'Plan excludes shared MCP tools from the real native catalog');
         assert.equal(mcpCalls, 2);
         assert.equal(approvals, 2);
-        console.log('ok real OpenCode binary: first-turn MCP readiness, repeated cancellation, same-session resume, MCP execution, approval attribution and Plan');
+        console.log('ok real OpenCode binary: repeated cancellation, same-session resume, full code files, images, Plan attachments, MCP readiness and approvals');
     } finally {
         await engine.dispose();
         model.closeAllConnections();

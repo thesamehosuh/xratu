@@ -14,6 +14,39 @@ test.beforeEach(async ({ page }) => {
 
 for (const locale of ['en', 'fa'] as const) {
     for (const width of [420, 1280]) {
+        test(`managed engine update and removal (${locale}, ${width})`, async ({ page }, testInfo) => {
+            await page.setViewportSize({ width, height: 800 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'openEngines' });
+            const state = { active: 'opencode', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\Xratu\\tools\\opencode.exe', customPath: '', installedByXratu: true, updateAvailable: true, busy: false };
+            await post(page, { type: 'enginesState', state });
+            const engine = page.locator('.engine-card').last();
+            const update = engine.getByRole('button', { name: locale === 'en' ? 'Update engine' : 'بروزرسانی موتور', exact: true });
+            const remove = engine.getByRole('button', { name: locale === 'en' ? 'Remove engine' : 'حذف موتور', exact: true });
+            await update.click();
+            expect(await sent(page)).toContainEqual({ type: 'engineInstall' });
+            await remove.click();
+            expect((await sent(page)).some((message) => (message as { type: string }).type === 'engineRemove')).toBe(false);
+            await engine.locator('.engine-remove-confirm').getByRole('button', { name: locale === 'en' ? 'Cancel' : 'لغو', exact: true }).click();
+            await expect(engine.locator('.engine-remove-confirm')).toHaveCount(0);
+            await remove.click();
+            await expect(engine.locator('.engine-remove-confirm')).toContainText(locale === 'en' ? 'credentials, settings, and history are kept' : 'تنظیمات و تاریخچه OpenCode میمونن');
+            await page.screenshot({ path: testInfo.outputPath('managed-engine-confirm.png') });
+            expect(await page.locator('.page-content').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+            await engine.locator('.engine-remove-confirm').getByRole('button').first().click();
+            expect(await sent(page)).toContainEqual({ type: 'engineRemove' });
+            for (const phase of ['ready', 'installing', 'removing']) {
+                await post(page, { type: 'enginesState', state: { ...state, phase, busy: phase === 'ready' } });
+                await expect(update).toBeDisabled();
+                await expect(remove).toBeDisabled();
+                await expect(engine.locator('.engine-remove-confirm')).toHaveCount(0);
+            }
+            await post(page, { type: 'enginesState', state: { ...state, version: '2.0.30', updateAvailable: false } });
+            await expect(engine.getByRole('button', { name: locale === 'en' ? 'Recommended version installed' : 'نسخه پیشنهادی نصبه' })).toBeDisabled();
+            await expect(remove).toBeEnabled();
+            await post(page, { type: 'enginesState', state: { ...state, installedByXratu: false } });
+            await expect(engine.locator('.engine-maintenance')).toHaveCount(0);
+        });
         test(`OpenCode setup and installation controls (${locale}, ${width})`, async ({ page }) => {
             await page.setViewportSize({ width, height: 800 });
             await post(page, { type: 'locale', locale });

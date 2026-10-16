@@ -1,8 +1,9 @@
 // T3 Code subscribes before prompting and tolerates unknown OpenCode 2 events.
 // Keep terminal envelopes even when newer servers add fields (see notices).
+import { openCodeFetch } from './transport';
 export interface NativeEvent { type: string; data: Record<string, unknown> }
 export async function subscribeEvents(baseUrl: string, headers: Record<string, string>, signal: AbortSignal): Promise<AsyncIterable<NativeEvent>> {
-    const response = await fetch(`${baseUrl}/api/event`, { headers: { ...headers, Accept: 'text/event-stream' }, signal });
+    const response = await openCodeFetch(`${baseUrl}/api/event`, { headers: { ...headers, Accept: 'text/event-stream' }, signal });
     if (!response.ok || !response.body) throw new Error(`OpenCode event stream failed: HTTP ${response.status}`);
     const reader = response.body.getReader();
     return (async function* () {

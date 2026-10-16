@@ -22,7 +22,7 @@ export class StartupPageIntent {
     }
 }
 
-export type ReviewChange = ChangedFile;
+export type ReviewChange = ChangedFile & { modifiedAt?: number };
 export type ReviewFile = {
     path: string;
     kind: 'text' | 'binary' | 'tooLarge';
@@ -46,6 +46,20 @@ export interface AgentProfileView {
 interface ReviewStore {
     diffCheckpoint(root: string, sha: string, toSha?: string): Promise<ChangedFile[]>;
     readCheckpointFile(root: string, sha: string, file: string): Promise<string | null>;
+}
+
+/** Live metadata lets the UI follow edits without reading file contents. */
+export async function listReviewChanges(store: ReviewStore, root: string, sha: string, toSha?: string): Promise<ReviewChange[]> {
+    validateReviewCheckpoint(sha);
+    if (toSha !== undefined) validateReviewCheckpoint(toSha);
+    const files = await store.diffCheckpoint(root, sha, toSha);
+    if (toSha) return files;
+    return Promise.all(files.map(async file => {
+        try {
+            const stat = await fs.promises.lstat(sanitizePath(file.path, root));
+            return { ...file, modifiedAt: stat.mtimeMs };
+        } catch { return file; }
+    }));
 }
 
 export const REVIEW_FILE_LIMIT = 200_000;

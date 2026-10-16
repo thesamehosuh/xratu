@@ -406,12 +406,12 @@ async function settingsScreen(page: Page, locale: Locale): Promise<Locator> {
     await host(page, { type: 'openSettings' });
     const view = page.locator('.settings-page').first();
     await expect(view).toBeVisible();
-    // Three transcript switches = the page really mounted its cards (the same
-    // signal app.spec.ts uses), not just an empty scroll shell.
-    const activity = page.locator('.settings-card').filter({ has: page.getByRole('heading', {
-        name: locale === 'fa' ? 'باز شدن خودکار' : 'Auto-expand', exact: true,
+    // Check a populated control so an empty settings shell cannot pass.
+    const conversation = page.locator('.settings-card').filter({ has: page.getByRole('heading', {
+        name: locale === 'fa' ? 'گفتگو' : 'Conversation', exact: true,
     }) });
-    await expect(activity.getByRole('switch')).toHaveCount(3);
+    await expect(conversation.locator('#tx-detail')).toBeVisible();
+    await expect(conversation.locator('#tx-detail')).toHaveAttribute('aria-haspopup', 'listbox');
     return view;
 }
 

@@ -59,7 +59,7 @@ const finalMessage = agentMessage({...collectAgentRuns(state.messages)[0],trace:
 assert.match(renderToString(createElement(MessageItem,{message:finalMessage,observation:true})), /<strong>Final findings<\/strong>/);
 const oldLayout = readDockLayout({version:1,main:['conversation','activity'],side:['changes']});
 assert.deepEqual(oldLayout.main,['conversation','activity','agents','background','browser']);
-assert.deepEqual(movePanel(oldLayout,'agents','side').side,['changes','agents']);
+assert.deepEqual(movePanel(oldLayout,'agents','side').side,['changes','pullRequests','agents']);
 post({type:'toolCall',tool:'run_terminal_command',args:'{"command":"npm test"}',callId:'bg'});
 post({type:'terminalBackgrounded',callId:'bg',jobId:'job',byUser:true});
 post({type:'backgroundJobs',jobs:[{jobId:'job',command:'npm test',running:true,uptimeSeconds:1}]});

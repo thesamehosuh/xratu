@@ -5,13 +5,15 @@ import type { RuntimeSetupState, SetupEngine, SetupPath } from '../../src/engine
 export type { RuntimeSetupState, SetupPath } from '../../src/engines/setup';
 import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
 import type { BrowserCommand, BrowserFrame, BrowserState } from '../../src/browserTypes';
+import type { PullRequestView } from '../../src/pullRequests/types';
+import type { PullRequestAction } from '../../src/pullRequests/controller';
 export type { SubagentTrace } from '../../src/subagentObservation';
 import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 export type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
 // Message protocol shared between the VS Code extension host (extension.ts)
 // and the React webview.  Keep these in sync with extension.ts.
 
-import type { TranscriptPrefs } from './transcriptPrefs';
+import type { TranscriptPrefs, TranscriptOptions } from './transcriptPrefs';
 
 /** One completed edit call to diff: the raw tool args text (JSON as the
  *  tool sent it), the server-side tool_call id for snapshot lookup, and the
@@ -25,11 +27,12 @@ export interface OpenDiffEdit {
 
 export interface EngineSetupState {
     active: 'xratu' | 'opencode';
-    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'failed';
+    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'removing' | 'failed';
     version?: string;
     binaryPath?: string;
     customPath: string;
     installedByXratu: boolean;
+    updateAvailable?: boolean;
     downloadedBytes?: number;
     totalBytes?: number;
     errorKey?: string;
@@ -51,6 +54,7 @@ export type ToExtensionMessage =
     | { type: 'enginesGetState' }
     | { type: 'engineSelect'; engine: 'xratu' | 'opencode' }
     | { type: 'engineInstall' }
+    | { type: 'engineRemove' }
     | { type: 'engineInstallCancel' }
     | { type: 'engineSetPath'; path: string }
     | { type: 'pingFreeModel'; model: string; automatic?: boolean }
@@ -147,6 +151,8 @@ export type ToExtensionMessage =
     | { type: 'mcpMarketplaceDetect'; id: string }
     /** Refresh the git status line under the composer. */
     | { type: 'gitStatusGetState' }
+    | { type: 'pullRequestsGetState'; requestId: string; refresh?: boolean }
+    | { type: 'pullRequestAction'; action: PullRequestAction; url?: string; sessionId: string | null; requestId: string; autoResume?: boolean }
     /** Branch picker: request the local branch list. */
     | { type: 'gitBranchesGetState' }
     /** Branch picker: switch the workspace to `branch`. The host validates it
@@ -182,6 +188,8 @@ export type ToExtensionMessage =
      *  thinking). The host merges it into its opaque prefs blob and echoes
      *  transcriptPrefs. */
     | { type: 'transcriptSet'; id: string; enabled: boolean }
+    | { type: 'transcriptOptionsSet'; options: Partial<TranscriptOptions> }
+    | { type: 'transcriptReset' }
     /** @-mention support: ask the host for the workspace file list (git
      *  keep-set with a findFiles fallback) to power the composer popup. */
     | { type: 'requestFileList' }
@@ -356,6 +364,8 @@ export interface ModelPingState {
 }
 
 export interface SessionMeta {
+    prPending?: number;
+    prWatching?: number;
     id: string;
     title: string;
     workspace: string;
@@ -379,6 +389,7 @@ export type FromExtensionMessage =
     | { type: 'enginesState'; state: EngineSetupState }
     | { type: 'openEngines' }
     | { type: 'openBrowser' }
+    | { type: 'openPullRequests' }
     | { type: 'browserState'; state: BrowserState }
     | { type: 'browserFrame'; frame: BrowserFrame }
     | { type: 'browserActionError'; sessionId: string; browserId: string; errorKey: string; detail: string }
@@ -544,6 +555,7 @@ export type FromExtensionMessage =
      *  git status for the line under the composer (`isRepo: false` outside a
      *  repository, where the line renders nothing). */
     | { type: 'gitStatusState'; status: GitStatusSummary; root: string | null }
+    | { type: 'pullRequestsState'; sessionId: string | null; requestId?: string; state: PullRequestView; errorKey?: string; detail?: string }
     /** Response to gitBranchesGetState - local branches + the current one. */
     | { type: 'gitBranchesState'; branches: string[]; current: string | null }
     /** Host-echoed current task list (user override merged; null when the

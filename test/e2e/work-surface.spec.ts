@@ -35,7 +35,8 @@ const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
-    if (await page.locator('#surface-tab-changes').isVisible()) await page.locator('#surface-tab-changes').click();
+    await expect(page.locator('#surface-tab-changes')).toBeVisible();
+    await page.locator('#surface-tab-changes').click();
     await replyFile(page);
     await expect(page.locator('.review-diff')).toBeVisible();
 };
@@ -62,6 +63,7 @@ for (const locale of ['en', 'fa']) {
         await page.evaluate(() => Object.assign(window, { __xratuUiState: { anotherPreference: 'preserved' } }));
         await openReview(page);
         const handle = page.locator('.review-resize');
+        const initialWidth = Number(await handle.getAttribute('aria-valuenow'));
         const box = await handle.boundingBox();
         expect(box).not.toBeNull();
         const x = box!.x + box!.width / 2;
@@ -69,9 +71,9 @@ for (const locale of ['en', 'fa']) {
         await page.mouse.down();
         await page.mouse.move(x + (locale === 'fa' ? 120 : -120), box!.y + 80, { steps: 8 });
         await page.mouse.up();
-        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+        await expect(handle).toHaveAttribute('aria-valuenow', String(initialWidth + 120));
         const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: Record<string, unknown> }).__xratuUiState);
-        expect(saved).toMatchObject({ anotherPreference: 'preserved', reviewSidebarWidth: 470 });
+        expect(saved).toMatchObject({ anotherPreference: 'preserved', reviewSidebarWidth: initialWidth + 120 });
         await handle.focus();
         await page.keyboard.press('Home');
         await expect(handle).toHaveAttribute('aria-valuenow', '260');
@@ -86,7 +88,7 @@ for (const locale of ['en', 'fa']) {
         await page.reload();
         await post(page, { type: 'showChat' });
         await openReview(page);
-        await expect(handle).toHaveAttribute('aria-valuenow', '470');
+        await expect(handle).toHaveAttribute('aria-valuenow', String(initialWidth + 120));
     });
 }
 
@@ -287,7 +289,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         await post(page, { type: 'taskListState', tasks: [{ id: 'one', label: 'Current task', status: 'in_progress' }] });
         for (const [trigger, selector] of [
             ['.picker-chip', '.model-pop'], ['.tok-meter', '.ctx-menu'], ['[data-policy=mode]', '.composer-policy-menu'],
-            ['[data-policy=approval]', '.composer-policy-menu'], ['.attach-btn', '.attach-menu'], ['.task-list-chip', '.task-list-chip-menu'], ['.git-status', '.branch-pop'],
+            ['[data-policy=approval]', '.composer-policy-menu'], ['.attach-btn', '.attach-menu'], ['.task-list-chip', '.task-list-chip-menu'],
         ]) {
             await page.locator(trigger).click();
             const menu = page.locator(selector);
@@ -305,6 +307,19 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         }
         expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
         await expect(page.locator('.send-btn.is-stop')).toBeVisible();
+        await expect(page.locator('.git-status')).toBeDisabled();
+        await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+        await page.locator('.git-status').click();
+        const branches = page.locator('.branch-pop');
+        await expect(branches).toBeVisible();
+        const branchBox = await branches.boundingBox();
+        expect(branchBox!.x).toBeGreaterThanOrEqual(0);
+        expect(branchBox!.x + branchBox!.width).toBeLessThanOrEqual(width + 1);
+        expect(branchBox!.y).toBeGreaterThanOrEqual(0);
+        expect(branchBox!.y + branchBox!.height).toBeLessThanOrEqual(641);
+        await page.keyboard.press('Escape');
+        await expect(branches).toHaveCount(0);
+        expect((await sent(page)).some(m => m.type === 'cancelRequest')).toBe(false);
     });
 }
 
@@ -686,7 +701,7 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
 }
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }) => {
+    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
         await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
@@ -700,6 +715,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await post(page, { ...changed, type: 'changesState', files: changes });
         await expect(page.locator('#surface-tab-changes')).toBeVisible();
         await replyFile(page, 'first result');
+        await page.locator('#surface-tab-changes').click();
+        await expect(page.locator('.review-current .review-diff')).toBeVisible();
+        await expect(page.locator('.review-head h2')).toHaveCount(0);
+        await page.screenshot({ animations: 'disabled', path: info.outputPath(`changes-${locale}-${width}.png`) });
         await post(page, { type: 'restoreUser', value: 'Second edit', cp: otherSha });
         await expect.poll(async () => (await sent(page)).filter(m => m.type === 'changesGetState' && m.sha === sha && m.toSha === otherSha).length).toBe(1);
         const requests = (await sent(page)).filter(m => m.type === 'changesGetState');
@@ -812,10 +831,10 @@ for (const locale of ['en', 'fa']) {
             await post(page, { type: 'startResponse' });
             await post(page, { type: 'fullResponse', persian: `Result ${index + 1}` });
         }
-        const requests = (await sent(page)).filter(message => message.type === 'changesGetState');
         for (const [from, to] of [[sha, otherSha], [otherSha, sha], [sha, thirdSha], [thirdSha, undefined]]) {
+            await expect.poll(async () => (await sent(page)).some(message => message.type === 'changesGetState' && message.sha === from && message.toSha === to)).toBe(true);
+            const requests = (await sent(page)).filter(message => message.type === 'changesGetState');
             const request = requests.filter(message => message.sha === from && message.toSha === to).at(-1)!;
-            expect(request).toBeTruthy();
             await post(page, { ...request, type: 'changesState', files: changes });
         }
         await page.locator('#surface-tab-changes').click();
@@ -843,3 +862,91 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.review-current')).toContainText('first A result');
     });
 }
+
+for (const locale of ['en', 'fa']) {
+    for (const width of [420, 1080]) {
+        test(`checkpoint restore scope and recoverable rejection (${locale}, ${width}px)`, async ({ page }, testInfo) => {
+            await page.setViewportSize({ width, height: 900 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'restoreUser', value: 'Update the workspace', cp: sha });
+            await page.locator('.composer-input').fill('Keep this draft');
+            await post(page, { type: 'notification', id: 'restore-confirm', kind: 'warning', valueKey: 'checkpointScopeConfirm',
+                actions: ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'] });
+            await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'whole workspace' : 'کل پوشه کاری');
+            await expect(page.locator('.notif-action')).toHaveCount(3);
+            await page.screenshot({ path: testInfo.outputPath('restore-confirm.png') });
+            await page.locator('.notif-action').first().click();
+            await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-confirm')?.action).toBe('checkpointScopeFiles');
+            for (const [key, text] of [
+                ['checkpointActionStale', locale === 'en' ? 'request restore again' : 'دوباره از گفتگوی فعلی'],
+                ['checkpointBackgroundBusy', locale === 'en' ? 'Stop it from Background' : 'از بخش پس زمینه'],
+            ]) {
+                await post(page, { type: 'notification', id: key, kind: 'warning', valueKey: key });
+                await expect(page.locator('.notif-copy')).toContainText(text);
+                await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+                await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
+                await page.locator('.notif-close').click();
+            }
+        });
+    }
+}
+
+for (const locale of ['en', 'fa']) {
+    for (const width of [420, 1080]) {
+        test(`branch checkout is unavailable during a run (${locale}, ${width}px)`, async ({ page }, testInfo) => {
+            await page.setViewportSize({ width, height: 900 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'gitStatusState', root: 'workspace', status: { isRepo: true, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
+            await page.locator('.composer-input').fill('Keep this draft');
+            await page.locator('.git-status').click();
+            await post(page, { type: 'gitBranchesState', branches: ['main', 'next'], current: 'main' });
+            await expect(page.locator('.branch-pop')).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath('branch-before.png') });
+            await post(page, { type: 'startResponse' });
+            await expect(page.locator('.git-status')).toBeDisabled();
+            await expect(page.locator('.branch-pop')).toHaveCount(0);
+            await post(page, { type: 'notification', id: 'branch-busy', kind: 'warning', valueKey: 'gitCheckoutBusy' });
+            await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'session action' : 'کار گفتگو');
+            await page.screenshot({ path: testInfo.outputPath('branch-busy.png') });
+            await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+            expect((await sent(page)).filter(message => message.type === 'gitCheckout')).toHaveLength(0);
+            await post(page, { type: 'fullResponse', persian: 'Done', renderedHtml: '<p>Done</p>' });
+            await expect(page.locator('.git-status')).toBeEnabled();
+            await expect(page.locator('.branch-pop')).toHaveCount(0);
+            await page.locator('.notif-close').click();
+            await post(page, { type: 'sessionState', id: 'A', title: 'Current conversation' });
+            await post(page, { type: 'restoreUser', value: 'Previous task', cp: sha });
+            for (const key of ['sessionLoadFailed', 'sessionCreateFailed', 'sessionSwitchStale']) {
+                await post(page, { type: 'notification', id: key, kind: 'warning', valueKey: key });
+                await expect(page.locator('.notif-copy')).not.toHaveText(key);
+                await expect(page.getByText('Previous task', { exact: true })).toBeVisible();
+                await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+                await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
+                await page.locator('.notif-close').click();
+            }
+
+        });
+    }
+}
+
+
+test('live changes follow the latest edited file and preserve a manual selection until another edit', async ({ page }) => {
+    await openReview(page);
+    const refresh = async (files: Array<Record<string, unknown>>) => {
+        const old = await latest(page, 'changesGetState');
+        await page.locator('.review-head').getByRole('button', { name: 'Refresh' }).click();
+        const request = await latest(page, 'changesGetState', old.requestId);
+        await post(page, { ...request, type: 'changesState', files });
+    };
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 2 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
+    await replyFile(page, 'second changed');
+    await page.locator('.review-file').filter({ hasText: 'src/first.ts' }).click();
+    await replyFile(page, 'first manually selected');
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 2 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/first.ts');
+    await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 3 }]);
+    await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
+    await replyFile(page, 'second changed again');
+    await expect(page.locator('.review-diff')).toContainText('second changed again');
+});

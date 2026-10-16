@@ -17,6 +17,8 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-run-tests-guard.mjs
  */
 import Module from 'module';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { createRequire } from 'module';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
@@ -26,6 +28,16 @@ import { join } from 'path';
 // guard logic is testable in plain node.
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
+    if (request === 'cross-spawn') {
+        // This suite checks path guards and runner argv, not installed frameworks.
+        // Real Jest workers kept the Windows temp directory locked after assertions passed.
+        return () => {
+            const child = new EventEmitter();
+            child.stdout = new PassThrough(); child.stderr = new PassThrough();
+            queueMicrotask(() => child.emit('close', 0));
+            return child;
+        };
+    }
     if (request === 'vscode') {
         return {
             workspace: { getConfiguration: () => ({ get: () => undefined, update: async () => undefined }) },
@@ -129,10 +141,6 @@ try {
     ok('run_tests advertises that it requires approval',
         /Requires approval\.$/.test(def.description), def.description.slice(-40));
 } finally {
-    // maxRetries/retryDelay, not `force` alone: this suite really runs `jest`
-    // and `pytest`, and on Windows their workers still hold directory handles
-    // when we get here. `force` swallows ENOENT but not EBUSY, so the whole
-    // suite failed on teardown with every assertion green.
     rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 

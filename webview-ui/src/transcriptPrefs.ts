@@ -1,24 +1,44 @@
 /**
- * Transcript display preferences - the webview half of the Settings page's
- * "which pills open themselves" switches.
- *
- * This module owns the ROW SCHEMA. The host persists the blob opaquely
- * (src/transcriptPrefs.ts), so adding a switch below needs no host change:
- * one entry in TRANSCRIPT_ROWS plus the i18n strings it names. The consumers
- * already ask `prefOn` per tool family and for 'thinking', so a new row needs
- * no rendering change unless its id is neither.
- *
- * Defaults live HERE, never in the persisted blob: an untouched id has no
- * entry, so changing a default moves everyone who never expressed an opinion
- * and leaves everyone who did alone.
+ * Display defaults and legacy expansion preferences. Defaults resolve at
+ * render time; explicit stored choices survive changes to the default mode.
+ * The host shares the closed presentation schema and persists the overrides.
  */
 import type { StringKey } from './i18n';
+import { sanitizeTranscriptOptions } from '../../src/transcriptPrefs';
+import type { TranscriptOptions } from '../../src/transcriptPrefs';
+export type { TranscriptOptions } from '../../src/transcriptPrefs';
 
 export type ToolFamily = 'edit' | 'terminal' | 'read' | 'search' | 'git' | 'web' | 'ops' | 'mcp' | 'subagent' | 'generic';
 
 export interface TranscriptPrefs {
     /** Row ids whose pill starts expanded. An absent id means collapsed. */
     expand: Record<string, boolean>;
+    options?: Partial<TranscriptOptions>;
+}
+
+export function transcriptOptions(prefs?: TranscriptPrefs): TranscriptOptions {
+    const detail = prefs?.options?.detail ?? 'balanced';
+    return {
+        detail,
+        reasoning: prefs?.expand.thinking ? 'expanded' : prefs?.expand.thinking === false || detail === 'detailed' ? 'collapsed' : 'activity',
+        commands: prefs?.expand.terminal ? 'expanded' : prefs?.expand.terminal === false ? 'collapsed' : 'errors',
+        progress: detail === 'minimal' ? 'latest' : 'all',
+        compactCompleted: true,
+        followActivity: true,
+        timestamps: true,
+        ...prefs?.options,
+    };
+}
+
+/** Existing explicit expansion choices survive the new compact defaults. */
+export function conversationPrefs(prefs?: TranscriptPrefs): TranscriptPrefs {
+    const options = transcriptOptions(prefs);
+    return { ...prefs, options, expand: {
+        edit: options.detail === 'detailed',
+        ...prefs?.expand,
+        thinking: options.reasoning === 'expanded',
+        terminal: options.commands === 'expanded',
+    } };
 }
 
 /** Regex-ordered, first match wins - mirrors TOOL_ICONS/TOOL_LABELS style. */
@@ -74,7 +94,9 @@ function coerceMap(raw: unknown): Record<string, boolean> {
 /** Tolerate anything on the wire (the blob is host-persisted JSON). */
 export function coerceTranscriptPrefs(raw: unknown): TranscriptPrefs {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_TRANSCRIPT_PREFS;
-    return { expand: coerceMap((raw as Record<string, unknown>).expand) };
+    const input = raw as Record<string, unknown>;
+    const options = sanitizeTranscriptOptions(input.options);
+    return { expand: coerceMap(input.expand), ...(Object.keys(options).length ? { options } : {}) };
 }
 
 /** Resolve one switch/pill: stored override first, then the row's default,

@@ -23,8 +23,9 @@ export function CompactSteps({ steps, failed, createdAt, completedAt }: {
     const calls = steps.filter((step) => (step.kind === 'toolCall' || step.kind === 'toolResult' || step.kind === 'thinking') && step.tool !== 'ask_user_question');
     if (!calls.length) return null;
     const count = calls.filter((step) => step.kind !== 'thinking').length;
+    const failures = calls.filter(step => failed(step.kind === 'toolResult' ? { ...step, result: step.text } : step)).length;
     return <details className="completed-steps">
-        <summary><ListChecks size={13} /><span>{count ? tf('surfaceActions', { count: String(count) }) : t('miniThinking')}</span><span className="completed-steps-time">{completedAt ? tf('surfaceFinishedIn', { seconds: String(Math.max(1, Math.round((completedAt - createdAt) / 1000))) }) : t('surfaceCompleted')}</span><ChevronDown size={12} /></summary>
+        <summary><ListChecks size={13} /><span>{count ? tf('surfaceActions', { count: String(count) }) : t('miniThinking')}</span>{failures > 0 && <span className="err">{tf('txFailureCount', { count: String(failures) })}</span>}<span className="completed-steps-time">{completedAt ? tf('surfaceFinishedIn', { seconds: String(Math.max(1, Math.round((completedAt - createdAt) / 1000))) }) : t('surfaceCompleted')}</span><ChevronDown size={12} /></summary>
         <div className="compact-step-list">{calls.map((step) => {
             const Icon = step.kind === 'thinking' ? Brain : toolIcon(step.tool);
             const label = step.kind === 'thinking' ? t('miniThinking') : toolLabel(step.tool).fa;

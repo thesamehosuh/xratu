@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -172,6 +172,11 @@
         "category": "%command.category%"
       },
       {
+        "command": "xratu.pullRequests",
+        "title": "%command.pullRequests.title%",
+        "category": "%command.category%"
+      },
+      {
         "command": "xratu.attachFile",
         "title": "%command.attachFile.title%",
         "category": "%command.category%"
@@ -248,6 +253,10 @@
     "test:mcp-config": "node test/test-mcp-config.mjs",
     "test:mcp-marketplace": "node test/test-mcp-marketplace.mjs",
     "test:git-status": "node test/test-git-status.mjs",
+    "test:git-commit": "node test/test-git-commit.mjs",
+    "test:pull-requests": "node test/test-pull-requests.mjs",
+    "test:pull-request-watch": "node test/test-pull-request-watch.mjs",
+    "test:pull-request-tools": "node test/test-pull-request-tools.mjs",
     "test:provider-identity": "node test/test-provider-identity.mjs",
     "test:api-style": "node test/test-api-style.mjs",
     "test:pricing": "node test/test-pricing.mjs",
@@ -269,6 +278,8 @@
     "test:subagents": "node test/test-subagents.mjs",
     "test:subagent-observation": "node test/test-subagent-observation.mjs",
     "test:subagent-runner": "node test/test-subagent-runner.mjs",
+    "test:session-actions": "node test/test-session-actions.mjs",
+    "test:checkpoint-actions": "node test/test-checkpoint-actions.mjs",
     "test:shadow-checkpoint": "node test/test-shadow-checkpoint.mjs",
     "test:session-store": "node test/test-session-store.mjs",
     "test:python-workspace": "node test/test-python-workspace.mjs",
@@ -347,10 +358,10 @@
     "vite-plugin-singlefile": "^2.0.3"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
-    "@opencode/client": "2.0.26",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@opencode/client": "2.0.30",
     "cross-spawn": "^7.0.6",
-    "lucide-react": "^1.33.0",
+    "lucide-react": "^1.55.0",
     "markdown-it": "^14.3.2",
     "pdfjs-dist": "^4.10.38",
     "playwright-core": "^1.64.0",

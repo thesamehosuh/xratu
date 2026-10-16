@@ -22,6 +22,7 @@ export interface EngineTurn {
     plan: boolean;
     yolo: boolean;
     context?: string;
+    /** Built-in turns carry images; native turns also stage text/code files. */
     attachments?: LocalImageAttachment[];
     session?: EngineSessionRef;
     localRequest?: LocalAgentRequest;
@@ -43,11 +44,12 @@ export interface AgentEngine {
 
 export interface EngineSetupState {
     active: EngineId;
-    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'failed';
+    phase: 'checking' | 'missing' | 'unsupported' | 'ready' | 'installing' | 'removing' | 'failed';
     version?: string;
     binaryPath?: string;
     customPath: string;
     installedByXratu: boolean;
+    updateAvailable?: boolean;
     downloadedBytes?: number;
     totalBytes?: number;
     errorKey?: string;
