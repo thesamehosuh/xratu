@@ -3,9 +3,11 @@
 .conversation-work-group .step-group-body { padding-block:4px; }
 .conversation-work-group .step { margin-block:3px; }
 .step > summary .sum-row { min-height:24px; line-height:20px; }
-.step > summary .sum-row > :is(.step-label,.step-cmd,.conversation-work-summary) { line-height:20px; transform:translateY(-1px); }
+.step > summary .sum-row > :is(.step-label,.step-cmd,.conversation-work-summary) { line-height:20px; }
 .conversation-work-group > summary .step-label,.conversation-work-summary { display:flex; align-items:center; min-height:20px; line-height:20px; }
-.conversation-work-summary { gap:6px; min-width:0; margin-inline-start:auto; color:var(--vscode-descriptionForeground); font-size:inherit; }
+.conversation-work-group > summary .step-label { flex:0 0 auto; }
+.conversation-work-group > summary .step-chev { margin-inline-start:0; }
+.conversation-work-summary { gap:6px; min-width:0; flex-wrap:wrap; color:var(--vscode-descriptionForeground); font-size:inherit; }
 .conversation-work-summary > span { white-space:nowrap; unicode-bidi:isolate; }
 .conversation-work-summary > span + span::before { content:'·'; margin-inline-end:6px; }
 .conversation-advanced > summary:focus-visible { outline:1px solid var(--vscode-focusBorder,var(--vscode-textLink-foreground)); outline-offset:3px; }
@@ -24,4 +26,26 @@
 @media(max-width:520px) {
     .conversation-preference:has(.dropdown) { align-items:stretch; flex-direction:column; gap:8px; }
     .conversation-preference > .dropdown { flex:0 0 auto; max-width:100%; width:100%; }
+}
+
+/* Conversation uses the same quiet row geometry for every tool family. */
+.transcript-pane .step > summary { padding-block:2px; }
+.transcript-pane .conversation-work-group .step-group-body {
+    padding-inline-start:20px;
+    border-inline-start:0;
+}
+.completed-steps > summary { min-height:28px; font-size:12px; flex-wrap:wrap; }
+.completed-steps-time { margin-inline-start:0; font-size:inherit; }
+.compact-step-list {
+    gap:0;
+    padding:4px 0;
+    border:0;
+    border-radius:0;
+    background:transparent;
+}
+.compact-step { min-height:26px; font-size:12px; }
+.compact-step > code { font-size:11px; }
+.completed-steps > summary:focus-visible {
+    outline:1px solid var(--vscode-focusBorder);
+    outline-offset:2px;
 }
