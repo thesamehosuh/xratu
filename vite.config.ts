@@ -21,9 +21,10 @@ export default defineConfig({
         },
     },
     server: {
-        // Used for standalone webview preview and `vite` dev.
-        host: '0.0.0.0',
-        port: 3000,
+        // Standalone webview preview / `vite` dev. Loopback + the port
+        // documented in AGENTS.md (`XRATU_DEV_WEBVIEW_URL`), never a
+        // network-wide bind.
+        port: 5173,
         strictPort: false,
     },
 });

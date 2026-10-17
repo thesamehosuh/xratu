@@ -227,7 +227,7 @@
     "url": "https://github.com/thesamehosuh/xratu"
   },
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 3000",
+    "dev": "vite",
     "build": "npm run compile",
     "vscode:prepublish": "npm run package",
     "compile": "node esbuild.js && vite build",

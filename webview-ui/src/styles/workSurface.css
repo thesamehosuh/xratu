@@ -70,9 +70,9 @@
 .pr-detail li > a:hover { text-decoration:underline; }
 .pr-detail li > span:last-child { margin-inline-start:auto; flex-shrink:0; color:var(--vscode-descriptionForeground); font-size:11px; }
 .pr-check-badge { padding:1px 6px; border-radius:999px; background:color-mix(in srgb,var(--vscode-foreground) 6%,transparent); }
-.pr-check-badge.is-failure,.pr-check-badge.is-cancelled,.pr-check-badge.is-action-required { color:var(--vscode-errorForeground); background:color-mix(in srgb,var(--vscode-errorForeground) 12%,transparent); }
-.pr-check-badge.is-success { color:var(--vscode-testing-iconPassed,var(--surface-accent)); background:color-mix(in srgb,var(--vscode-testing-iconPassed,var(--surface-accent)) 12%,transparent); }
-.pr-check-badge.is-pending { color:var(--vscode-editorWarning-foreground); background:color-mix(in srgb,var(--vscode-editorWarning-foreground) 12%,transparent); }
+.pr-detail .pr-check-badge.is-failure,.pr-detail .pr-check-badge.is-cancelled,.pr-detail .pr-check-badge.is-action-required { color:var(--vscode-errorForeground); background:color-mix(in srgb,var(--vscode-errorForeground) 12%,transparent); }
+.pr-detail .pr-check-badge.is-success { color:var(--vscode-testing-iconPassed,var(--surface-accent)); background:color-mix(in srgb,var(--vscode-testing-iconPassed,var(--surface-accent)) 12%,transparent); }
+.pr-detail .pr-check-badge.is-pending { color:var(--vscode-editorWarning-foreground); background:color-mix(in srgb,var(--vscode-editorWarning-foreground) 12%,transparent); }
 .pr-check-dot { width:7px; height:7px; flex-shrink:0; border-radius:50%; background:var(--vscode-descriptionForeground); align-self:center; }
 .pr-check-dot.success { background:var(--vscode-testing-iconPassed,var(--surface-accent)); }
 .pr-check-dot.failure,.pr-check-dot.cancelled,.pr-check-dot.action-required { background:var(--vscode-errorForeground); }
