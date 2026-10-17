@@ -21,8 +21,9 @@ export default defineConfig({
         },
     },
     server: {
-        // Not used for the packaged webview, but handy for `vite` dev.
-        port: 5173,
+        // Used for standalone webview preview and `vite` dev.
+        host: '0.0.0.0',
+        port: 3000,
         strictPort: false,
     },
 });

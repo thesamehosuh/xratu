@@ -70,3 +70,7 @@ dist/*.map
 
 # Offline setup/provider guides are opened locally by the extension.
 !assets/guides/**
+metadata.json
+bun.lock
+
+

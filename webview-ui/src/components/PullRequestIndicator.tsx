@@ -32,6 +32,5 @@ export function PullRequestIndicator({ state, onOpen }: { state: PullRequestView
                 {link.watch && <Eye size={13} className="pr-indicator-watch" aria-label={t('prWatching')} />}
             </button>;
         })}
-        {state.events.length > 0 && <button type="button" className="pr-indicator-updates" onClick={onOpen}>{tf('prPending', { count: String(state.events.length) })}</button>}
     </div>;
 }

@@ -11,10 +11,15 @@
 .conversation-work-summary > span { white-space:nowrap; unicode-bidi:isolate; }
 .conversation-work-summary > span + span::before { content:'·'; margin-inline-end:6px; }
 .conversation-advanced > summary:focus-visible { outline:1px solid var(--vscode-focusBorder,var(--vscode-textLink-foreground)); outline-offset:3px; }
-.activity-filters { display:flex; gap:8px; max-width:700px; margin:0 auto 18px; position:sticky; inset-block-start:0; z-index:1; background:var(--page-canvas); padding-block:5px; }
-.activity-filters input,.activity-filters .dropdown-trigger,.conversation-preference .dropdown-trigger { min-width:0; border:1px solid var(--page-line); border-radius:5px; background:var(--vscode-input-background); color:var(--vscode-input-foreground); padding:6px 8px; font:inherit; font-size:12px; }
-.activity-filters input { flex:1; width:0; }
-.activity-filters > .dropdown { flex:0 1 auto; max-width:45%; min-width:110px; }
+.activity-filters { display:flex; align-items:center; gap:8px; max-width:700px; margin:0 auto 16px; position:sticky; inset-block-start:0; z-index:10; background:var(--page-canvas); padding-block:14px 10px; border-block-end:1px solid var(--page-line); box-shadow:0 -18px 0 var(--page-canvas); }
+.activity-search-box { flex:1; min-width:0; display:flex; align-items:center; gap:7px; padding:0 9px; min-height:32px; border:1px solid var(--page-line); border-radius:7px; background:var(--vscode-input-background,var(--page-surface)); color:var(--vscode-input-foreground); transition:border-color .15s; }
+.activity-search-box:focus-within { border-color:var(--surface-accent); }
+.activity-search-icon { flex-shrink:0; color:var(--vscode-descriptionForeground); }
+.activity-filters .dropdown-trigger,.conversation-preference .dropdown-trigger { min-width:0; min-height:32px; border:1px solid var(--page-line); border-radius:7px; background:var(--vscode-input-background,var(--page-surface)); color:var(--vscode-input-foreground); padding:5px 9px; font:inherit; font-size:12px; }
+.activity-filters input { flex:1; width:0; min-width:0; border:0; background:transparent; color:inherit; padding:5px 0; font:inherit; font-size:12px; outline:none; }
+.activity-search-clear { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--vscode-descriptionForeground); cursor:pointer; flex-shrink:0; }
+.activity-search-clear:hover { background:var(--vscode-list-hoverBackground); color:var(--vscode-foreground); }
+.activity-filters > .dropdown { flex:0 1 auto; max-width:45%; min-width:124px; }
 .conversation-preference { align-items:center; gap:12px; }
 .preferences-page .conversation-preference .settings-nav-main { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
 .preference-description { font-size:11px; line-height:1.6; color:var(--vscode-descriptionForeground); font-weight:400; }
