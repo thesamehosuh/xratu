@@ -14,6 +14,8 @@ const reviewTones: Record<string, string> = { APPROVED: 'is-approved', CHANGES_R
 const checkLabels: Record<PullRequestCheck['status'], Parameters<typeof t>[0]> = {
     pending: 'prCheck_pending', success: 'prCheck_success', failure: 'prCheck_failure', cancelled: 'prCheck_cancelled', 'action-required': 'prCheck_actionRequired', neutral: 'prCheck_neutral', skipped: 'prCheck_skipped',
 };
+const reasons = { closed: 'prWatchEnded_closed', merged: 'prWatchEnded_merged', unreadable: 'prWatchEnded_unreadable', 'comment-limit': 'prWatchEnded_commentLimit' } as const;
+const changes = { 'checks-failed': 'prEventsFailed', 'checks-passed': 'prEventsPassed', remarks: 'prEventsRemarks', conflicting: 'prEventsConflict' } as const;
 
 function checksSummary(checks: PullRequestCheck[]): string {
     const counts = [
@@ -25,8 +27,8 @@ function checksSummary(checks: PullRequestCheck[]): string {
     return counts.filter(([, count]) => count > 0).map(([key, count]) => tf(key, { count: String(count) })).join(' · ') || t('prNoChecks');
 }
 
-export function PullRequestsPanel({ visible, panelClass, state, pending, error, action }: {
-    visible: boolean; panelClass: string; busy?: boolean; state: PullRequestView; pending: boolean;
+export function PullRequestsPanel({ visible, panelClass, busy, state, pending, error, action }: {
+    visible: boolean; panelClass: string; busy: boolean; state: PullRequestView; pending: boolean;
     error: { key: string; detail?: string } | null; action: (action: PullRequestAction, url?: string) => void;
 }) {
     const root = useRef<HTMLElement>(null);
@@ -35,10 +37,19 @@ export function PullRequestsPanel({ visible, panelClass, state, pending, error, 
         document.addEventListener('pointerdown', close);
         return () => document.removeEventListener('pointerdown', close);
     }, []);
+    const running = state.delivery?.status === 'running';
+    const resumeContext = state.events.find(event => event.resume)?.resume;
     return <section ref={root} className={`pr-panel ${panelClass}`} id="surface-panel-pullRequests" role="tabpanel" aria-labelledby="surface-tab-pullRequests" aria-hidden={!visible || undefined}>
         <div className="pr-scroll">
             {state.offline && <p className="pr-notice" role="status">{t('prOffline')}</p>}
             {error && <div className="pr-error" role="alert"><TriangleAlert size={14} /><div>{tOrRaw(error.key)}{error.detail && <p dir="auto">{error.detail}</p>}</div></div>}
+            {state.events.length > 0 && <section className="pr-updates" aria-label={tf('prPending', { count: String(state.events.length) })}>
+                <strong>{tf('prPending', { count: String(state.events.length) })}</strong>
+                {state.delivery && <p role="status">{t(state.delivery.status === 'running' ? 'prRunning' : state.delivery.status === 'interrupted' ? 'prInterrupted' : 'prDeliveryFailed')}</p>}
+                {resumeContext && <p className="pr-help">{t('prResumeContext')} <code dir="ltr">{resumeContext.engine} · {resumeContext.model} · {resumeContext.branch}</code></p>}
+                <ul>{state.events.map(event => <li key={event.id}><a href={event.url} target="_blank" rel="noreferrer" dir="ltr">#{event.number}</a><span>{event.reason ? t(reasons[event.reason]) : event.changes.map(change => t(changes[change.kind])).join(' · ')}</span></li>)}</ul>
+                <div className="pr-actions"><button type="button" className="secondary-btn" disabled={pending || busy || running || state.offline} onClick={() => action('resume')}>{t('prContinue')}</button><button type="button" className="settings-ghost-action" disabled={pending || running} onClick={() => action('dismiss')}>{t('prDismiss')}</button></div>
+            </section>}
             {state.links.length === 0 && !error && (
                 <div className="pr-empty-state" role="status">
                     <div className="pr-empty-icon" aria-hidden="true">
