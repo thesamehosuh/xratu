@@ -77,7 +77,11 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await page.getByRole('searchbox', { name: 'Search activity' }).fill('I will inspect');
     await expect(page.locator('.activity-timeline')).toContainText('I will inspect token validation.');
     await page.getByRole('searchbox', { name: 'Search activity' }).fill('no-such-activity');
-    await expect(page.locator('.activity-empty')).toHaveText('No activity matches these filters.');
+    await expect(page.locator('.activity-empty-title')).toHaveText('No activity matches these filters.');
+    await page.getByRole('button', { name: 'Reset filters' }).click();
+    await expect(page.locator('.activity-empty')).toHaveCount(0);
+    await expect(page.getByRole('searchbox', { name: 'Search activity' })).toHaveValue('');
+    await expect(page.locator('.activity-timeline')).toContainText('I will inspect token validation.');
 });
 
 test('balanced groups completed and failed commands while the active command stays actionable', async ({ page }) => {

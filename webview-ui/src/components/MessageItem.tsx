@@ -2503,9 +2503,28 @@ function ActivityAge({ timestamp, now }: { timestamp: number; now: number }) {
 /** Activity is an observation surface; approvals and execution stay in chat. */
 export type ActivityFilter = 'all' | 'tools' | 'commands' | 'thinking' | 'failures';
 
-export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, filter = 'all', search = '', ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void; filter?: ActivityFilter; search?: string }) {
+export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, filter = 'all', search = '', onResetFilter, ...props }: Omit<MessageItemProps, 'message'> & { messages: ChatMessage[]; firstVisible?: number; onShowEarlier?: () => void; filter?: ActivityFilter; search?: string; onResetFilter?: () => void }) {
     const start = Math.max(0, Math.min(firstVisible, messages.length - 1));
     const activity = messages.slice(start).filter(message => message.role === 'assistant' && activityRows(message.steps, !!message.decisions?.length, filter, search).length > 0);
-    if (!activity.length) return <p className="activity-empty">{t(filter !== 'all' || search.trim() ? 'txNoMatchingActivity' : 'surfaceNoActivity')}</p>;
+    const isFiltered = filter !== 'all' || Boolean(search.trim());
+    if (!activity.length) {
+        return (
+            <div className="activity-empty" role="status">
+                <div className="activity-empty-icon" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 10h3.5l2.3-5.2 4.1 10.4 2.6-5.2H18" />
+                    </svg>
+                </div>
+                <strong className="activity-empty-title">{t(isFiltered ? 'txNoMatchingActivity' : 'surfaceNoActivity')}</strong>
+                {!isFiltered && <p className="activity-empty-hint">{t('activityEmptyHint')}</p>}
+                {isFiltered && onResetFilter && (
+                    <button type="button" className="secondary-btn activity-reset-btn" onClick={onResetFilter}>
+                        {t('activityClearFilter')}
+                    </button>
+                )}
+            </div>
+        );
+    }
     return <div className="activity-timeline">{start > 0 && <button type="button" className="show-earlier" onClick={onShowEarlier}>{t('historyShowEarlier')}</button>}{activity.map(message => <MessageItem key={message.id} message={message} {...props} activityOnly activityFilter={filter} activitySearch={search} />)}</div>;
 }
+

@@ -1280,6 +1280,13 @@ const fa = {
 
     // Composer meters (distinct labels so context vs quota is unambiguous)
     ctxMeterLabel: 'پنجره کانتکست',
+    prEmptyTitle: 'هنوز درخواست ادغامی وصل نشده',
+    prEmptyHint: 'نشانی یا شماره PR گیت هاب رو بالا وارد کن تا وضعیت چک ها، نظرات و تغییراتش اینجا دنبال بشه.',
+    prUrlPlaceholder: 'https://github.com/owner/repo/pull/123 یا #123',
+    activityClearFilter: 'پاک کردن فیلترها',
+    activityEmptyHint: 'فراخوانی ابزارها، خروجی دستورات و مراحل استدلال در طول کار ایجنت اینجا ثبت میشن.',
+    agentEmptyHint: 'وقتی ایجنت بخشی از کار رو به زیرعامل ها واگذار کنه، وضعیت و جزئیات اجرای اون ها اینجا نمایش داده میشه.',
+    bgEmptyHint: 'دستورات طولانی مدت که به پس زمینه فرستاده میشن اینجا با خروجی زنده نمایش داده میشن.',
 
     // Free-runtime rejections (dedicated keys - never a generic provider error)
 } as const;
@@ -2508,6 +2515,13 @@ const en: Record<keyof typeof fa, string> = {
 
     // Composer meters (distinct labels so context vs quota is unambiguous)
     ctxMeterLabel: 'Context window',
+    prEmptyTitle: 'No pull requests linked yet',
+    prEmptyHint: 'Paste a GitHub PR URL or number above to track its checks, review comments, and branch status here.',
+    prUrlPlaceholder: 'https://github.com/owner/repo/pull/123 or #123',
+    activityClearFilter: 'Reset filters',
+    activityEmptyHint: 'Tool calls, command outputs, and reasoning steps are recorded here as the agent works.',
+    agentEmptyHint: 'When the agent delegates work to subagents, their live status and execution traces appear here.',
+    bgEmptyHint: 'Long-running commands sent to the background appear here with live streaming output.',
 
     // Free-runtime rejections (dedicated keys - never a generic provider error)
 };

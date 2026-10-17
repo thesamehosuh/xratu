@@ -74,12 +74,21 @@ export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass }: { jo
     }, [selectedKey, visible]);
     const mounted = new Set([...opened, ...(visible && selectedKey ? [selectedKey] : [])]);
     return <div className={`background-pane bg-jobs ${panelClass}`} id="surface-panel-background" role="tabpanel" aria-labelledby="surface-tab-background" aria-hidden={!visible || undefined}>
-        <div className="background-layout"><nav className="background-task-list" aria-label={t('surfaceBackground')}>
-            {running.length > 1 && <header><button type="button" className="bg-jobs-stopall" title={t('bgStopAllTitle')} onClick={() => running.forEach(job => onStop(job.jobId))}><Square size={10} />{t('bgStopAll')}</button></header>}
-            <div className="background-task-items">{jobs.map(job => <div className={`bg-job background-task${job.jobId === selected?.jobId ? ' selected' : ''}`} key={job.jobId}>
-                <button type="button" className="background-task-select" aria-pressed={job.jobId === selected?.jobId} onClick={() => setSelectedId(job.jobId)}><Status job={job} /><code className="bg-job-cmd" dir="ltr" title={job.command}>{job.command}</code><Uptime job={job} /></button>
-                {job.running && <button type="button" className="bg-job-stop" title={t('bgStopTitle')} aria-label={t('bgStop')} onClick={() => onStop(job.jobId)}><Square size={11} /></button>}
-            </div>)}</div>
-        </nav><div className="background-task-view">{jobs.filter(job => mounted.has(job.jobId)).map(job => <TaskLog key={job.jobId} job={job} visible={visible && job.jobId === selected?.jobId} />)}</div></div>
+        {jobs.length === 0 ? (
+            <div className="bg-panel-empty" role="status">
+                <div className="bg-empty-icon" aria-hidden="true"><SquareTerminal size={22} /></div>
+                <strong className="bg-empty-title">{t('surfaceNoActivity')}</strong>
+                <p className="bg-empty-hint">{t('bgEmptyHint')}</p>
+            </div>
+        ) : (
+            <div className="background-layout"><nav className="background-task-list" aria-label={t('surfaceBackground')}>
+                {running.length > 1 && <header><button type="button" className="bg-jobs-stopall" title={t('bgStopAllTitle')} onClick={() => running.forEach(job => onStop(job.jobId))}><Square size={10} />{t('bgStopAll')}</button></header>}
+                <div className="background-task-items">{jobs.map(job => <div className={`bg-job background-task${job.jobId === selected?.jobId ? ' selected' : ''}`} key={job.jobId}>
+                    <button type="button" className="background-task-select" aria-pressed={job.jobId === selected?.jobId} onClick={() => setSelectedId(job.jobId)}><Status job={job} /><code className="bg-job-cmd" dir="ltr" title={job.command}>{job.command}</code><Uptime job={job} /></button>
+                    {job.running && <button type="button" className="bg-job-stop" title={t('bgStopTitle')} aria-label={t('bgStop')} onClick={() => onStop(job.jobId)}><Square size={11} /></button>}
+                </div>)}</div>
+            </nav><div className="background-task-view">{jobs.filter(job => mounted.has(job.jobId)).map(job => <TaskLog key={job.jobId} job={job} visible={visible && job.jobId === selected?.jobId} />)}</div></div>
+        )}
     </div>;
 }
+

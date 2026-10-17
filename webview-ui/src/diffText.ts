@@ -43,8 +43,8 @@ export function parseDiffLines(lines: string[]): DiffLine[] {
 /** Escape text for `dangerouslySetInnerHTML`. Every string that reaches it is
  *  model-controlled (a diff body, a file's contents), so an unescaped one
  *  would inject markup verbatim. */
-export function escapeHtml(s: string): string {
-    return s
+export function escapeHtml(s = ''): string {
+    return String(s)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')

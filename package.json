@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -227,6 +227,8 @@
     "url": "https://github.com/thesamehosuh/xratu"
   },
   "scripts": {
+    "dev": "vite",
+    "build": "npm run compile",
     "vscode:prepublish": "npm run package",
     "compile": "node esbuild.js && vite build",
     "watch": "node esbuild.js --watch",
