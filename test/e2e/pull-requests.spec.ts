@@ -30,6 +30,10 @@ async function openSession(page: Page, locale = 'en') {
     await host(page, { type: 'showChat' });
     await host(page, { type: 'sessionState', id: 'session-a', title: 'Session A' });
     await expect(page.locator('.composer-input')).toBeVisible();
+    await page.waitForFunction(() => {
+        const reads = ((window as unknown as { __xratuHostMessages: Array<{ type: string; refresh?: boolean }> }).__xratuHostMessages || []).filter(message => message.type === 'pullRequestsGetState');
+        return reads.length > 0 && reads[reads.length - 1].refresh === true;
+    });
     await reply(page, state());
 }
 
