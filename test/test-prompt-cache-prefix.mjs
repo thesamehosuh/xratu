@@ -258,6 +258,13 @@ ok('native PR work watches pending checks and reviews', buildNativeSystemContext
 ok('native plan context does not advertise PR mutation tools', !buildNativeSystemContext(true).includes('watch_pull_request'));
 
 ok('native context leaves project-rule discovery to OpenCode', !buildNativeSystemContext(false).includes('AGENTS.md'));
+// The bridge registers `skill` only when at least one skill is listable
+// (getLocalToolDefinitions); the prompt must not name a tool the catalog lacks.
+const withSkill = buildNativeSystemContext(false, 'auto', { toolCatalog: ['update_task_list', 'skill', 'browser_snapshot'] });
+const withoutSkill = buildNativeSystemContext(false, 'auto', { toolCatalog: ['update_task_list', 'browser_snapshot'] });
+ok('native context advertises the bridged skill tool when the catalog has it', withSkill.includes('bridged skill tool'));
+ok('native context omits the bridged skill tool when the catalog lacks it', !withoutSkill.includes('bridged skill tool'));
+ok('native context keeps task-list and browser guidance without the skill tool', withoutSkill.includes('update_task_list') && withoutSkill.includes('browser_*'));
 for (const [mode, directive] of [['en', REPLY_LANGUAGE_EN], ['fa', REPLY_LANGUAGE_FA], ['auto', REPLY_LANGUAGE_AUTO]]) {
     ok(`native context respects ${mode} reply language`, buildNativeSystemContext(false, mode).includes(directive));
 }

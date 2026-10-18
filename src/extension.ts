@@ -185,7 +185,8 @@ import { boundOutcomeEvents, trimDisplayEvent } from './local/eventBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { RulesSnapshot } from './local/rulesSnapshot';
 import { gitWorkspaceFiles, setPlanModeExitListener, setTaskListWriteListener } from './xratu_mcp_tools';
-import { TASK_LIST_TOOL_NAME, parseTaskListArgs, type TaskListItem } from './taskList';
+import { TASK_LIST_TOOL_NAME, parseTaskListArgs, taskListReminderLine, type TaskListItem } from './taskList';
+import { isNativePlanTool, isNativeServiceTool, nativeServiceTools } from './engines/opencode/services';
 import { resolveEditMode } from './tooling/editFileArgs';
 import { resolveAgentRounds } from './tooling/agentRounds';
 import { resolveParallelSubagents } from './tooling/parallelSubagents';
@@ -333,6 +334,21 @@ interface CheckpointActionContext {
 }
 
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
+    private _nativeToolContext?: { sessionID: string; plan: boolean; signal: AbortSignal; executor: ReturnType<typeof createLocalToolExecutor> };
+
+    private _nativeServiceDefinitions() {
+        const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        return nativeServiceTools(getLocalToolDefinitions({ skills: this._discoverSkillsForRun(workspace) }));
+    }
+
+    private _nativeServiceExecutor(workspace: string, signal: AbortSignal, plan: boolean) {
+        const sessionId = this._browserSessionId();
+        this._browser.setSession(sessionId);
+        return createLocalToolExecutor(workspace,
+            (root, reason) => this._checkpoints.ensureTurnSnapshot(root, reason),
+            undefined, name => resolveSkillForRun(workspace, name, new Set(this._disabledSkillIds())),
+            undefined, undefined, { browser: this._browser, sessionId, signal, plan });
+    }
     private readonly _pullRequests: PullRequestController;
     private _browserPanelVisible = false;
     private readonly _browser = new BrowserController({
@@ -808,8 +824,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 listTools: async () => [
                     ...await externalMcpInstance?.listTools() ?? [],
                     ...PULL_REQUEST_TOOLS.map(tool => ({ ...tool, originalName: tool.name, serverName: 'xratu', autoApprove: true })),
+                    ...this._nativeServiceDefinitions(),
                 ],
-                callTool: async (name, args, signal) => {
+                callTool: async (name, args, signal, context) => {
+                    const active = this._nativeToolContext;
+                    if (!active || active.sessionID !== context.sessionID || active.plan !== context.plan || active.signal !== signal || signal.aborted
+                        || (context.plan && !isNativePlanTool(name))) {
+                        return { text: 'Xratu service is unavailable in this turn.', images: [], isError: true };
+                    }
+                    if (isNativeServiceTool(name)) {
+                        const result = await active.executor.execute({ id: crypto.randomUUID(), name, arguments: args, argumentsJson: JSON.stringify(args) });
+                        signal.throwIfAborted();
+                        return { text: result.output, images: result.images ?? [], isError: result.isError };
+                    }
                     if (PULL_REQUEST_TOOLS.some(tool => tool.name === name)) {
                         signal?.throwIfAborted();
                         const result = await this._pullRequests.tool(name, args ?? {});
@@ -4787,11 +4814,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (!workspace) throw new EngineError('engineWorkspaceRequired');
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
             const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
+            const runPlanMode = planMode ?? this._planMode;
+            const executor = this._nativeServiceExecutor(workspace, controller.signal, runPlanMode);
+            // Same catalog the bridge registers for this session, so the prompt
+            // never names a bridged tool that is not actually exposed (skill).
+            const bridgedTools = this._nativeServiceDefinitions();
+            this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
-            const agent = engine.runTurn({ prompt, context: buildNativeSystemContext(planMode ?? this._planMode, this._resolveReplyLanguage()), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+            const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
                 questions: { ask: (question) => this._requestLocalDecision(question) },
-                onSession: async (session) => { this._engineSession = session; this._observeNativeShells(engine, session.nativeSessionId!, workspace); await this._persistLocalSession(); },
+                onSession: async (session) => {
+                    this._engineSession = session;
+                    this._nativeToolContext = { sessionID: session.nativeSessionId!, plan: runPlanMode, signal: controller.signal, executor };
+                    this._observeNativeShells(engine, session.nativeSessionId!, workspace);
+                    await this._persistLocalSession();
+                },
                 steer: { drain: () => this._localSteerQueue.splice(0).map((entry) => ({ text: entry.text, attachments: entry.images, steerId: entry.steerId })) },
                 onSteerRejected: (steerId) => this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId }),
             });
@@ -4806,9 +4844,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             else {
                 const detail = error instanceof Error ? error.message : String(error);
                 outcome.errorEvent = error instanceof EngineError ? { error_key: error.valueKey } : { error: detail };
-                this._view?.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: detail });
+                const http = providerHttpStatus(error);
+                const explained = this._globalState.get<boolean>('xratu.errorExplanations') === false ? null : explainError(http ? `${detail} ${http.body}` : detail, http?.status);
+                this._view?.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : explained ? { type: 'error', valueKey: explained.valueKey, params: explained.params } : { type: 'error', value: detail });
             }
         } finally {
+            this._nativeToolContext = undefined;
+            this._activeRunTaskList = null;
             this._nativeTurnActive = false;
             this._runInFlight = false;
             this._localPendingTurn = null;
@@ -5033,6 +5075,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // Clear the countdown right before the next fetch so the bubble
                 // falls back to the typing dots.
                 this._view?.webview.postMessage({ type: 'attempting' });
+                break;
+            case 'engineNotice':
+                this.notifyBanner(event.kind, event.valueKey, event.params);
                 break;
             case 'needsApproval':
                 outcome.needsApprovalId = event.approvalId;

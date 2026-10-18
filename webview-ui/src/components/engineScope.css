@@ -7,6 +7,12 @@
 .engine-scope .dropdown-trigger { padding: 5px 8px; min-block-size: 29px; background: var(--xratu-surface-inset); border: 1px solid var(--vscode-input-border); }
 
 .native-config .settings-scroll { display: flex; flex-direction: column; gap: 14px; }
+.native-inventory { margin-block-start: 16px; border-block-start: 1px solid var(--vscode-widget-border); padding-block: 12px; }
+.native-inventory > summary { cursor: pointer; font-size: 12px; font-weight: 600; line-height: 1.6; }
+.native-inventory-head { display: flex; align-items: center; gap: 12px; margin-block: 10px; }
+.native-inventory-head > span { flex: 1; font-size: 11px; line-height: 1.6; }
+.native-inventory-head > button { flex-shrink: 0; }
+.native-config .secondary-btn { align-self: flex-start; inline-size: auto; padding: 8px 12px; white-space: normal; line-height: 1.6; }
 .native-config-row { display: flex; flex-direction: column; gap: 5px; padding-block: 10px; border-block-end: 1px solid var(--vscode-widget-border); font-size: 12px; }
 .native-config-row > span, .native-config-row > code { color: var(--vscode-descriptionForeground); font-size: 11px; overflow-wrap: anywhere; }
 /* VS Code's webview stylesheet paints <code> with the text-code-block

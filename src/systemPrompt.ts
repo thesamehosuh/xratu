@@ -7,10 +7,29 @@ import { PULL_REQUEST_AGENT_INSTRUCTIONS } from './pullRequests/tools';
 // text.
 export const REPLY_CONCISE_FINAL = "Final responses: default to 1-3 short sentences stating the outcome and any blocker or next step. Mention verification only when useful, in one short clause. Do not repeat progress updates, list files, recount commands, add headings, or offer to continue. Give more detail when the user asks for it or the task requires an explanation.";
 
+/** Bridge facts the native context may advertise. */
+export interface NativeSystemContextOptions {
+    /** The bridged tool catalog for this session (`nativeServiceTools(...)`
+     *  names). The `skill` tool is registered only when at least one skill is
+     *  listable (see `getLocalToolDefinitions`), so naming it unconditionally
+     *  would point the model at a tool it cannot call. Task-list and browser
+     *  instructions stay unconditional - the bridge always exposes those. */
+    toolCatalog?: readonly string[];
+}
+
 /** OpenCode loads project rules itself; only Xratu policy belongs here. */
-export function buildNativeSystemContext(planMode: boolean, replyLanguage: 'fa' | 'en' | 'auto' = 'auto'): string {
+export function buildNativeSystemContext(planMode: boolean, replyLanguage: 'fa' | 'en' | 'auto' = 'auto', options: NativeSystemContextOptions = {}): string {
     const language = replyLanguage === 'fa' ? REPLY_LANGUAGE_FA : replyLanguage === 'en' ? REPLY_LANGUAGE_EN : REPLY_LANGUAGE_AUTO;
-    return [language, REPLY_CONCISE_FINAL, !planMode && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n');
+    const services = [
+        'Xratu services are available through its MCP bridge: use update_task_list for the visible task list and browser_* for the shared browser.',
+        ...(options.toolCatalog?.includes('skill')
+            ? ['Use the bridged skill tool for Xratu-managed skills and their resources.']
+            : []),
+        'Keep task labels in the reply language. Native tools, credentials, and project instructions remain managed by OpenCode.',
+    ].join(' ');
+    return [language, REPLY_CONCISE_FINAL, services,
+        planMode ? 'Plan mode: keep this turn read-only. Draft the plan with update_task_list, then call exit_plan_mode and finish. Full tool access begins on the next turn only.' : PULL_REQUEST_AGENT_INSTRUCTIONS,
+    ].filter(Boolean).join('\n\n');
 }
 
 export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and clear like a senior classmate. No emojis.\nAfter changing code, say briefly what changed (1-2 sentences) - never repeat the edited code and never mention internal tool names.\nBefore claiming victory, quickly verify your changes (re-read the edited file or run the relevant check) so your summary reflects reality.\nFor multi-step work you may maintain a visible checklist with `update_task_list` (complete list every call, exactly one item in_progress while executing) so the user can follow progress - useful for plan mode AND for any non-trivial execution you choose to track.";

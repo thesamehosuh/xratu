@@ -12,6 +12,8 @@ export interface NativeSetupState {
     integrations: NativeIntegration[];
     servers: { name: string; status: string }[];
     skills: { name: string; description?: string; path: string }[];
+    agents?: { id: string; name: string; description?: string; mode: 'primary' | 'subagent' | 'all' }[];
+    agentsErrorKey?: string;
     errorKey?: string;
     busy?: boolean;
     oauth?: { integrationID: string; url: string; instructions: string; mode: 'auto' | 'code' };

@@ -175,28 +175,28 @@ export function SettingsPage({
 
                     <div className="settings-nav-row">
                         <div className="settings-nav-main">
-                            <strong>{t('settingsReplyLanguage')}</strong>{nativeEngine && <span className="scope-hint">{t('setupNativeReply')}</span>}
+                            <strong>{t('settingsReplyLanguage')}</strong>
                             <PreferenceHelp text={t('settingsReplyLanguageDesc')} />
                         </div>
                         <div className="lang-choice">
                             <button
                                 type="button"
                                 className={replyLanguage === 'fa' ? 'lang-chip active' : 'lang-chip'}
-                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('fa')}
+                                onClick={() => onSetReplyLanguage?.('fa')}
                             >
                                 فارسی
                             </button>
                             <button
                                 type="button"
                                 className={replyLanguage === 'en' ? 'lang-chip active' : 'lang-chip'}
-                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('en')}
+                                onClick={() => onSetReplyLanguage?.('en')}
                             >
                                 English
                             </button>
                             <button
                                 type="button"
                                 className={replyLanguage === 'auto' ? 'lang-chip active' : 'lang-chip'}
-                                disabled={nativeEngine} onClick={() => onSetReplyLanguage?.('auto')}
+                                onClick={() => onSetReplyLanguage?.('auto')}
                             >
                                 {t('settingsReplyAuto')}
                             </button>

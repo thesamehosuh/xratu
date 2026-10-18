@@ -1,4 +1,6 @@
 import { SidePanel } from './SidePanel';
+import { NativeInventory } from './EngineScope';
+import type { NativeSetupState } from '../types';
 import { useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft,
@@ -44,6 +46,7 @@ import { getLocale, t, tOrRaw, tf, type StringKey } from '../i18n';
 export type CapabilityTab = 'servers' | 'marketplace' | 'skills';
 
 interface CapabilitiesPageProps {
+    native?: { state: NativeSetupState | null; refresh: () => void };
     initialTab?: CapabilityTab;
     onTabChange?: (tab: CapabilityTab) => void;
     onBack: () => void;
@@ -364,7 +367,7 @@ export function CapabilitiesPage({
     onOpenSkill,
     onNewSkill,
     onDeleteSkill,
-    initialTab = 'servers', onTabChange,
+    initialTab = 'servers', onTabChange, native,
 }: CapabilitiesPageProps) {
     const [tab, updateTab] = useState<CapabilityTab>(initialTab);
     const setTab = (next: CapabilityTab) => { updateTab(next); onTabChange?.(next); };
@@ -1400,6 +1403,7 @@ export function CapabilitiesPage({
             </header>
 
             <div className="settings-scroll">
+                {native && <p className="scope-hint">{t(tab === 'skills' ? 'nativeSharedSkills' : 'nativeSharedMcp')}</p>}
                 {legacyInUse && tab === 'servers' && (
                     <div className="mcp-hint warn" role="status">
                         <TriangleAlert size={12} aria-hidden="true" />
@@ -1440,6 +1444,7 @@ export function CapabilitiesPage({
                 {tab === 'servers' && renderServersTab()}
                 {tab === 'marketplace' && renderMarketplace()}
                 {tab === 'skills' && renderSkillsTab()}
+                {native && tab !== 'marketplace' && <NativeInventory state={native.state} section={tab} refresh={native.refresh} />}
 
                 {/* Apply-on-new-session semantics are fine print - footer, not header. */}
                 <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">

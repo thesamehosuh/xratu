@@ -194,6 +194,8 @@ export type LocalAgentEvent =
     // the next fetch. Display-only - never part of the committed transcript.
     | { type: 'retrying'; attempt: number; maxAttempts: number; nextRetryInMs: number; offline?: boolean }
     | { type: 'attempting' }
+    /** Native runtime lifecycle feedback; never part of the model ledger. */
+    | { type: 'engineNotice'; kind: 'info' | 'warning'; valueKey: string; params?: Record<string, string> }
     // `estimated` marks the mid-stream usage estimates emitted WHILE a
     // response streams - the host must never record them as the turn's
     // real usage (the round-end event carries the authoritative copy).
