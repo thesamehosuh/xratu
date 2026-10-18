@@ -286,7 +286,7 @@ export function ProxyPage({
                             }}
                         >
                             {justSaved && !dirty ? <Check size={13} /> : null}
-                            {t('proxySave')}
+                            <span>{t('proxySave')}</span>
                         </button>
                     </div>
                 </section>
@@ -407,7 +407,7 @@ export function ProxyPage({
                     ))}
                 </section>
 
-                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+                <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
 
                     <span dir="auto">{t('proxyFooterNote')}</span>
                 </div></details>

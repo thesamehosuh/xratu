@@ -15,7 +15,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
     return (
         <section className="settings-page agents-page">
             <header className="settings-head"><h2>{t('surfaceAgents')}</h2>
-                <button type="button" className="page-add" onClick={onManage}><FolderOpen size={12} />{t('surfaceManage')}</button>
+                <button type="button" className="page-add" onClick={onManage}><FolderOpen size={12} /><span>{t('surfaceManage')}</span></button>
                 <button type="button" className="icon-btn" onClick={onRefresh} aria-label={t('surfaceRefresh')}><RefreshCw size={12} /></button>
             </header>
             <div className="settings-scroll agents-content">
@@ -44,12 +44,12 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
                                 <p dir="auto">{profile.description}</p>
                                 {profile.model && <code dir="ltr">{profile.model}{profile.reasoningEffort ? ` · ${profile.reasoningEffort}` : ''}</code>}
                                 {profile.tools && <div className="agent-tools" aria-label={t('surfaceTools')}>{profile.tools.map((tool) => <code dir="ltr" key={tool}>{tool}</code>)}</div>}
-                                {profile.editable && <button type="button" className="settings-ghost-action" onClick={() => onOpen(profile)}><FolderOpen size={12} />{t('surfaceOpenFile')}</button>}
+                                {profile.editable && <button type="button" className="settings-ghost-action" onClick={() => onOpen(profile)}><FolderOpen size={12} /><span>{t('surfaceOpenFile')}</span></button>}
                             </div>}
                         </div>;
                     })}</div>;
                 })}
-                <details className="agent-discovery"><summary>{t('surfaceDiscovery')}<ChevronDown size={12} /></summary>
+                <details className="agent-discovery"><summary><span>{t('surfaceDiscovery')}</span><ChevronDown size={12} /></summary>
                     <div className="agent-paths">{['.xratu/agents/', '.agents/agents/', '.claude/agents/'].map((path) => <code dir="ltr" key={path}>{path}</code>)}</div>
                 </details>
             </div>

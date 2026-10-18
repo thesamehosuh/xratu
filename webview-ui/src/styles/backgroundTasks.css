@@ -6,7 +6,7 @@
 .bg-jobs-stopall:hover { color:var(--vscode-errorForeground); background:var(--xratu-error-faint); }
 .background-task-items { max-height:134px; overflow:auto; scrollbar-width:thin; }
 .background-task { display:flex; align-items:center; gap:5px; min-width:0; border:1px solid transparent; border-radius:6px; margin-block:2px; padding:0 3px; }
-.background-task.selected { background:var(--xratu-accent-faint); border-color:color-mix(in srgb,var(--surface-accent) 16%,var(--page-line)); }
+.background-task.selected { background:color-mix(in srgb,var(--vscode-foreground) 6%,transparent); border-color:color-mix(in srgb,var(--surface-accent) 16%,var(--page-line)); }
 .background-task:not(.selected):hover { background:var(--vscode-list-hoverBackground); }
 .background-task-select { display:flex; align-items:center; gap:7px; flex:1; min-width:0; padding:8px 5px; border:0; background:transparent; text-align:start; color:var(--vscode-foreground); }
 .bg-job-cmd { flex:1; min-width:0; padding:0; background:transparent; color:inherit; font:11px/1.5 var(--vscode-editor-font-family,monospace); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }

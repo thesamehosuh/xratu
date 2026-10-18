@@ -60,7 +60,11 @@ for (const locale of ['en', 'fa'] as const) {
             expect(await sent(page)).toContainEqual({ type: 'engineInstall' });
             await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'installing', customPath: '', installedByXratu: false, downloadedBytes: 4000, totalBytes: 8000, busy: false } });
             await expect(engine.locator('progress')).toHaveAttribute('value', '4000');
-            await engine.locator('.setup-install button').click();
+            const cancel = engine.locator('.setup-install button');
+            // Text actions must not inherit the 26px icon-only dimensions.
+            expect(await cancel.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+            await expect(cancel).toHaveCSS('white-space', 'nowrap');
+            await cancel.click();
             expect(await sent(page)).toContainEqual({ type: 'engineInstallCancel' });
             await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\tools\\opencode.exe', customPath: '', installedByXratu: true, busy: false } });
             await engine.locator('.primary-btn').click();

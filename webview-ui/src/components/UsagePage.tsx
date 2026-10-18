@@ -449,7 +449,7 @@ function AddModelForm({ onSave, onCancel }: { onSave: UsagePageProps['onSaveMode
                 </button>
                 <button type="button" className="settings-primary-action" disabled={!valid} onClick={submit}>
                     <Plus size={13} aria-hidden="true" />
-                    {t('pricingAddModel')}
+                    <span>{t('pricingAddModel')}</span>
                 </button>
             </div>
         </div>
@@ -642,7 +642,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                             <div className="usage-plan-footer">
                                 <p>{t('usageChatGptHint')}</p>
                                 <a className="usage-manage" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">
-                                    {t('usageManage')}<ExternalLink size={12} aria-hidden="true" />
+                                    <span>{t('usageManage')}</span><ExternalLink size={12} aria-hidden="true" />
                                 </a>
                             </div>
                         </div>
@@ -890,7 +890,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                     </div>
                 </section>
 
-                <details className="settings-card rate-disclosure"><summary>{t('miniPricing')}<ChevronDown size={12}/></summary>
+                <details className="settings-card rate-disclosure"><summary><span>{t('miniPricing')}</span><ChevronDown size={12}/></summary>
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Tag size={15} />
@@ -919,7 +919,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                         ) : (
                             <button type="button" className="rates-add-toggle" onClick={() => setAdding(true)}>
                                 <Plus size={12} aria-hidden="true" />
-                                {t('ratesAddToggle')}
+                                <span>{t('ratesAddToggle')}</span>
                             </button>
                         )}
                     </div>
@@ -927,7 +927,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
 
                 </details>
                 {/* Fine print lives at the footer, like the MCP/Skills page. */}
-                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+                <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
 
                     <span>{t('pricingDesc')}</span>
                 </div></details>

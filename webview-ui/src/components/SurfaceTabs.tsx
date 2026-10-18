@@ -97,15 +97,35 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1;
             list.scrollBy(event.deltaY * unit * (locale === 'fa' ? -1 : 1), 0);
         };
+        let revealFrame = 0;
+        const revealActiveTab = () => {
+            cancelAnimationFrame(revealFrame);
+            revealFrame = requestAnimationFrame(() => {
+                const tab = document.getElementById(`surface-tab-${active}`)?.closest<HTMLElement>('.dock-tab');
+                if (!tab) return;
+                tab.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+                // Recheck after nearest alignment settles; if an edge remains
+                // clipped, align the active tab to the logical start instead.
+                revealFrame = requestAnimationFrame(() => {
+                    const bounds = list.getBoundingClientRect();
+                    const tabBounds = tab.getBoundingClientRect();
+                    if (tabBounds.left < bounds.left - 1 || tabBounds.right > bounds.right + 1) {
+                        tab.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'start' });
+                    }
+                });
+            });
+        };
         measure();
         const observer = new ResizeObserver(() => {
             measure();
-            document.getElementById(`surface-tab-${active}`)?.closest('.dock-tab')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            // Run after the responsive layout settles so a shrinking tab strip
+            // does not leave the selected tab clipped outside its scrollport.
+            revealActiveTab();
         });
         observer.observe(list);
         list.addEventListener('scroll', measure);
         list.addEventListener('wheel', wheel, { passive: false });
-        return () => { observer.disconnect(); list.removeEventListener('scroll', measure); list.removeEventListener('wheel', wheel); };
+        return () => { cancelAnimationFrame(revealFrame); observer.disconnect(); list.removeEventListener('scroll', measure); list.removeEventListener('wheel', wheel); };
     }, [active, locale, panels.length]);
     useEffect(() => {
         const frame = requestAnimationFrame(() => document.getElementById(`surface-tab-${active}`)?.closest('.dock-tab')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
@@ -187,19 +207,19 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             })}
         </div>
         {overflowing && <button type="button" className="icon-btn dock-scroll-button" aria-label={t('surfaceScrollTabsForward')} title={t('surfaceScrollTabsForward')} disabled={!scroll.end} onClick={() => scrollTabs(true)}><Forward size={14} /></button>}
-        {panels.length === 0 && <span className="dock-drop-label">{location === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(location === 'side' ? 'surfaceDropSidebar' : 'surfaceDropMain')}</span>}
+        {panels.length === 0 && <span className="dock-drop-label">{location === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}<span>{t(location === 'side' ? 'surfaceDropSidebar' : 'surfaceDropMain')}</span></span>}
         <div className="dock-tab-actions">
         <button type="button" className="icon-btn dock-add-button" aria-label={t('surfaceAddTab')} title={t('surfaceAddTab')} disabled={!canAdd} onClick={() => onAdd(location)}><Plus size={15} /></button>
         <button ref={trigger} type="button" className="icon-btn dock-layout-button" aria-label={active ? tf('surfaceTabActions', { tab: tabLabel(active) }) : t('surfacePanelLayout')} title={active ? tf('surfaceTabActions', { tab: tabLabel(active) }) : t('surfacePanelLayout')} aria-haspopup="menu" aria-expanded={!!menu} disabled={!active} onClick={() => { returnFocus.current = trigger.current; setMenu(menu ? null : active); }}><MoreHorizontal size={15} /></button>
         </div>
         {menu && <div className="dock-layout-menu" role="menu" aria-label={tf('surfaceTabActions', { tab: tabLabel(menu) })}>
             <div className="dock-menu-title">{tabLabel(menu)}</div>
-            {wide && menu !== 'conversation' && <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</button>}
-            {menu !== 'conversation' && <button type="button" role="menuitem" onClick={() => { onClose([menu]); setMenu(null); }}><X size={14} />{t('surfaceCloseTab')}</button>}
-            <button type="button" role="menuitem" disabled={!panels.some(panel => panel !== menu && panel !== 'conversation')} onClick={() => { onClose(panels.filter(panel => panel !== menu)); onActivate(menu); setMenu(null); }}>{t('surfaceCloseOtherTabs')}</button>
+            {wide && menu !== 'conversation' && <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}<span>{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</span></button>}
+            {menu !== 'conversation' && <button type="button" role="menuitem" onClick={() => { onClose([menu]); setMenu(null); }}><X size={14} /><span>{t('surfaceCloseTab')}</span></button>}
+            <button type="button" role="menuitem" disabled={!panels.some(panel => panel !== menu && panel !== 'conversation')} onClick={() => { onClose(panels.filter(panel => panel !== menu)); onActivate(menu); setMenu(null); }}><span>{t('surfaceCloseOtherTabs')}</span></button>
             <div className="dock-menu-separator" role="separator" />
-            <button type="button" role="menuitem" disabled={!canReopen} onClick={() => { onReopen(); setMenu(null); }}>{t('surfaceReopenTab')}</button>
-            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} />{t('surfaceResetLayout')}</button>
+            <button type="button" role="menuitem" disabled={!canReopen} onClick={() => { onReopen(); setMenu(null); }}><span>{t('surfaceReopenTab')}</span></button>
+            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} /><span>{t('surfaceResetLayout')}</span></button>
         </div>}
     </nav>;
 }

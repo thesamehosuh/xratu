@@ -91,3 +91,15 @@ export function formatMessageTimestamp(ts: number): string {
         ? formatClockTime(ts)
         : `${formatCalendarDate(ts)} ${formatClockTime(ts)}`;
 }
+
+/** Compact elapsed time, resolved in the current UI language at render time. */
+export function formatDuration(seconds: number): string {
+    const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+    const total = safe < 10 ? Math.round(safe * 10) / 10 : Math.round(safe);
+    const locale = getLocale() === 'fa' ? 'fa-IR' : 'en';
+    const unit = (value: number, name: 'hour' | 'minute' | 'second') =>
+        new Intl.NumberFormat(locale, { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(value);
+    if (total < 60) return unit(total, 'second');
+    if (total < 3600) return [unit(Math.floor(total / 60), 'minute'), total % 60 ? unit(total % 60, 'second') : ''].filter(Boolean).join(' ');
+    return [unit(Math.floor(total / 3600), 'hour'), total % 3600 >= 60 ? unit(Math.floor(total % 3600 / 60), 'minute') : ''].filter(Boolean).join(' ');
+}

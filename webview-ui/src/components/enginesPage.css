@@ -6,7 +6,7 @@
     background: color-mix(in srgb, var(--vscode-sideBar-background), var(--vscode-foreground) 3%);
     box-sizing: border-box; min-width: 0;
 }
-.engines-page .engine-card.selected { border-color: var(--xratu-accent); background: color-mix(in srgb, var(--vscode-sideBar-background), var(--xratu-accent) 4%); }
+.engines-page .engine-card.selected { border-color: var(--xratu-accent); background: color-mix(in srgb, var(--vscode-sideBar-background), var(--vscode-foreground) 4%); }
 .engine-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .engine-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .engine-mark { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid var(--engine-line); border-radius: 6px; background: var(--vscode-sideBar-background); }

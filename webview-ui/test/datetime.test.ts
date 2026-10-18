@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, formatRelativeTime, isSameLocalDay, localDayKey, localDayTimestamp, shiftLocalDay } from '../src/datetime';
+import { formatDuration, formatCalendarDate, formatClockTime, formatFullTimestamp, formatMessageTimestamp, formatRelativeTime, isSameLocalDay, localDayKey, localDayTimestamp, shiftLocalDay } from '../src/datetime';
 import { setLocale } from '../src/i18n';
 
 // A LOCAL 13:05 - deliberately past noon so a 12-hour clock would render a
@@ -67,5 +67,20 @@ assert.equal(localDayKey(localDayTimestamp('2026-09-20')), '2026-09-20');
 
 // Restore the Persian-first default for any later test in the bundle.
 setLocale('fa');
+
+setLocale('en');
+assert.equal(formatDuration(0), '0s');
+assert.equal(formatDuration(2.4), '2.4s');
+assert.equal(formatDuration(59.6), '1m');
+assert.equal(formatDuration(59), '59s');
+assert.equal(formatDuration(60), '1m');
+assert.equal(formatDuration(61), '1m 1s');
+assert.equal(formatDuration(3599), '59m 59s');
+assert.equal(formatDuration(3600), '1h');
+assert.equal(formatDuration(8427), '2h 20m');
+assert.equal(formatDuration(-1), '0s');
+setLocale('fa');
+assert.ok(formatDuration(8427).includes('۲'));
+assert.ok(!formatDuration(8427).includes('8427'));
 
 console.log('datetime.test.ts: all tests passed');

@@ -723,11 +723,11 @@ export function CapabilitiesPage({
                                     }}
                                 >
                                     <RefreshCw size={12} className={pendingRestart === s.name ? 'spinning' : undefined} />
-                                    {t('mcpRestart')}
+                                    <span>{t('mcpRestart')}</span>
                                 </button>
                                 <button type="button" role="menuitem" className="mcp-menu-item" onClick={() => openEditor(s)}>
                                     <Pencil size={12} />
-                                    {t('mcpEdit')}
+                                    <span>{t('mcpEdit')}</span>
                                 </button>
                                 <button
                                     type="button"
@@ -839,7 +839,7 @@ export function CapabilitiesPage({
                 <div className="mcp-form-actions">
                     <button type="button" className="mcp-save" onClick={saveDraft}>
                         <Check size={14} />
-                        {t('mcpSave')}
+                        <span>{t('mcpSave')}</span>
                     </button>
                     <button type="button" className="settings-ghost-action" onClick={closeEditor}>{t('mcpCancel')}</button>
                 </div>
@@ -884,12 +884,12 @@ export function CapabilitiesPage({
                     {requiredEnv.length > 0 ? (
                         <button type="button" className="mcp-save" onClick={() => openEditorFromEntry(entry, install)}>
                             <Pencil size={13} />
-                            {t('mcpMarketAddAndEdit')}
+                            <span>{t('mcpMarketAddAndEdit')}</span>
                         </button>
                     ) : (
                         <button type="button" className="mcp-save" onClick={() => addFromMarketplace(entry)}>
                             <Check size={13} />
-                            {t('mcpMarketConfirm')}
+                            <span>{t('mcpMarketConfirm')}</span>
                         </button>
                     )}
                     <button type="button" className="settings-ghost-action" onClick={() => setArmedAdd(null)}>
@@ -898,7 +898,7 @@ export function CapabilitiesPage({
                     {entry.repoUrl && (
                         <a className="mp-link" href={entry.repoUrl} target="_blank" rel="noreferrer">
                             <ExternalLink size={11} />
-                            {t('mcpMarketOpenRepo')}
+                            <span>{t('mcpMarketOpenRepo')}</span>
                         </a>
                     )}
                 </div>
@@ -950,14 +950,14 @@ export function CapabilitiesPage({
                                 {entry.verified && (
                                     <span className="mcp-badge verified">
                                         <ShieldCheck size={9} />
-                                        {t('mcpMarketVerified')}
+                                        <span>{t('mcpMarketVerified')}</span>
                                     </span>
                                 )}
                                 {entry.recommended && <span className="mcp-badge featured">{t('mcpMarketRecommended')}</span>}
                                 {needsKey && (
                                     <span className="mcp-badge warn">
                                         <KeyRound size={9} />
-                                        {t('mcpMarketNeedsKey')}
+                                        <span>{t('mcpMarketNeedsKey')}</span>
                                     </span>
                                 )}
                             </span>
@@ -991,7 +991,7 @@ export function CapabilitiesPage({
                             {added ? (
                                 <span className="mcp-added-pill">
                                     <Check size={11} />
-                                    {t('mcpRegExists')}
+                                    <span>{t('mcpRegExists')}</span>
                                 </span>
                             ) : entry.install ? (
                                 <button
@@ -1001,7 +1001,7 @@ export function CapabilitiesPage({
                                     onClick={() => setArmedAdd(armed ? null : entry.id)}
                                 >
                                     <Plus size={12} />
-                                    {t('mcpRegAdd')}
+                                    <span>{t('mcpRegAdd')}</span>
                                 </button>
                             ) : (
                                 <>
@@ -1022,7 +1022,7 @@ export function CapabilitiesPage({
                                         onClick={() => openEditorFromEntry(entry, null)}
                                     >
                                         <Pencil size={12} />
-                                        {t('mcpMarketManual')}
+                                        <span>{t('mcpMarketManual')}</span>
                                     </button>
                                 </>
                             )}
@@ -1052,7 +1052,7 @@ export function CapabilitiesPage({
                         }}
                     >
                         <RefreshCw size={13} />
-                        {t('mcpMarketRefresh')}
+                        <span>{t('mcpMarketRefresh')}</span>
                     </button>
                 </div>
 
@@ -1205,7 +1205,7 @@ export function CapabilitiesPage({
                     </div>
                     <button type="button" className="cred-local-connect" onClick={() => openEditor()}>
                         <Plus size={13} />
-                        {t('mcpAddServer')}
+                        <span>{t('mcpAddServer')}</span>
                     </button>
                 </div>
 
@@ -1215,7 +1215,7 @@ export function CapabilitiesPage({
                             <span>{t('mcpEmptyTitle')}</span>
                             <button type="button" className="cred-local-connect" onClick={() => openEditor()}>
                                 <Plus size={13} />
-                                {t('mcpAddServer')}
+                                <span>{t('mcpAddServer')}</span>
                             </button>
                         </div>
                     )}
@@ -1330,7 +1330,7 @@ export function CapabilitiesPage({
                     </div>
                     <button type="button" className="cred-local-connect" onClick={onNewSkill}>
                         <Plus size={13} />
-                        {t('skillsNew')}
+                        <span>{t('skillsNew')}</span>
                     </button>
                 </div>
                 <div className="settings-card-body">
@@ -1340,7 +1340,7 @@ export function CapabilitiesPage({
                             <strong>{t('skillsEmptyTitle')}</strong>
                             <button type="button" className="cred-local-connect" onClick={() => onRevealSkillsFolder()}>
                                 <FolderOpen size={13} />
-                                {t('skillsOpenFolder')}
+                                <span>{t('skillsOpenFolder')}</span>
                             </button>
                         </div>
                     ) : (
@@ -1442,7 +1442,7 @@ export function CapabilitiesPage({
                 {tab === 'skills' && renderSkillsTab()}
 
                 {/* Apply-on-new-session semantics are fine print - footer, not header. */}
-                <details className="page-help"><summary><Info size={11}/>{t('miniDetails')}</summary><div className="page-help-body">
+                <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
 
                     {tab === 'marketplace' && <span>{t('mcpMarketSecurityNote')}</span>}
                     <span>{tab === 'skills' ? t('skillsHint') : t('mcpApplyHint')}</span>

@@ -145,11 +145,11 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     <div className="chip-row">
                         <button type="button" className="chip" onClick={() => onOpenCredentials?.('byok')}>
                             <Link size={14} />
-                            {t('credSetupAction')}
+                            <span>{t('credSetupAction')}</span>
                         </button>
                         <button type="button" className="chip" onClick={() => onOpenCredentials?.('local')}>
                             <Laptop size={14} />
-                            {t('credLocalBannerAction')}
+                            <span>{t('credLocalBannerAction')}</span>
                         </button>
                     </div>
                 </div>
@@ -181,7 +181,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                                         onClick={() => onPickSuggestion(prompt)}
                                     >
                                         <Icon size={14} />
-                                        {t(key)}
+                                        <span>{t(key)}</span>
                                     </button>
                                 );
                             })}

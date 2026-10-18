@@ -54,7 +54,7 @@ function TerminalOutput({ text, done }: { text: string; done: boolean }) {
                 <button type="button" className={channel === 'stdout' ? 'active' : ''} aria-pressed={channel === 'stdout'} onClick={() => setChannel('stdout')}>{t('termStdout')}</button>
                 {output.stderr && <button type="button" className={channel === 'stderr' ? 'active error' : 'error'} aria-pressed={channel === 'stderr'} onClick={() => setChannel('stderr')}>{t('termStderr')}</button>}
             </div>
-            {output.exit && <span className={`detail-exit${output.exit === '0' ? '' : ' error'}`} dir="ltr">{output.exit === '0' ? <Check size={11} /> : <X size={11} />}{t('termExitCode')} {output.exit}</span>}
+            {output.exit && <span className={`detail-exit${output.exit === '0' ? '' : ' error'}`} dir="ltr">{output.exit === '0' ? <Check size={11} /> : <X size={11} />}<span>{t('termExitCode')}</span> {output.exit}</span>}
             <CopyOutput text={selected} />
         </div>
         {selected ? <pre ref={ref} dir="ltr" className={channel === 'stderr' ? 'detail-output error' : 'detail-output'} onScroll={() => { const el = ref.current; if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>{selected}</pre>
@@ -84,7 +84,7 @@ function WebOutput({ text }: { text: string }) {
     const results = useMemo(() => webResults(text), [text]);
     if (!results) return <RawOutput text={text} auto />;
     return <div className="detail-web-results">{results.map((result, index) => <article key={index}>
-        <a href={result.url} target="_blank" rel="noopener noreferrer" dir="auto">{result.title}<ExternalLink size={11} /></a>
+        <a href={result.url} target="_blank" rel="noopener noreferrer" dir="auto"><span>{result.title}</span><ExternalLink size={11} /></a>
         <code dir="ltr">{new URL(result.url).hostname}</code><p dir="auto">{result.snippet}</p>
     </article>)}</div>;
 }
@@ -106,6 +106,6 @@ export function ToolDetails({ call, result, children }: { call: Step; result?: S
         {children ?? (family === 'terminal' ? <TerminalOutput text={text} done={done} /> : family === 'read' && path && text && !/^Error:/.test(text) ? <SourceOutput text={source} path={path} start={Number(readHeader?.[1] ?? args.start_line) || 1} /> : text ? family === 'search' && call.tool === 'grep_search' ? <SearchOutput text={text} /> : family === 'web' && call.tool === 'web_search' ? <WebOutput text={text} /> : <RawOutput text={text} auto={family === 'web'} /> : <div className="detail-empty">{done ? t('toolNoOutput') : <><span className="spinner" aria-hidden="true" />{t('toolRunning')}</>}</div>)}
         {call.backgroundOutcome?.status === 'killed' && <div className="detail-interrupted">{t('bgStopped')}</div>}
         {call.interrupted && <div className="detail-interrupted">{t('toolInterrupted')}</div>}
-        {call.text && call.text !== '{}' && <details className="detail-arguments"><summary><ChevronDown size={11} />{t('toolArguments')}</summary><div className="detail-output-bar"><span dir="ltr">{call.tool}</span><CopyOutput text={call.text} /></div><pre className="detail-output" dir="ltr">{Object.keys(args).length ? JSON.stringify(args, null, 2) : call.text}</pre></details>}
+        {call.text && call.text !== '{}' && <details className="detail-arguments"><summary><ChevronDown size={11} /><span>{t('toolArguments')}</span></summary><div className="detail-output-bar"><span dir="ltr">{call.tool}</span><CopyOutput text={call.text} /></div><pre className="detail-output" dir="ltr">{Object.keys(args).length ? JSON.stringify(args, null, 2) : call.text}</pre></details>}
     </div>;
 }

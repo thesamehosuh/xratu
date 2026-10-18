@@ -1005,17 +1005,17 @@ export function InputBar({
                     }
                 }}>
                     <button type="button" className="composer-policy" data-policy="mode" aria-haspopup="menu" aria-expanded={policyOpen === 'mode'} onClick={() => setPolicyOpen(policyOpen === 'mode' ? null : 'mode')} title={t(planMode ? 'planControlHint' : 'buildControlHint')}>
-                        {planMode ? <ListChecks size={12} /> : <Wrench size={12} />}{t(planMode ? 'surfacePlan' : 'surfaceBuild')}<ChevronDown size={10} />
+                        {planMode ? <ListChecks size={12} /> : <Wrench size={12} />}<span>{t(planMode ? 'surfacePlan' : 'surfaceBuild')}</span><ChevronDown size={10} />
                     </button>
                     <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t(yolo ? 'autoControlHint' : 'askControlHint')}>
-                        <ShieldCheck size={12} />{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}<ChevronDown size={10} />
+                        <ShieldCheck size={12} /><span>{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</span><ChevronDown size={10} />
                     </button>
                     {policyOpen && <div className="composer-policy-menu" role="menu" aria-label={t(policyOpen === 'mode' ? 'surfaceModeControl' : 'surfacePermissionControl')}>
                         {[false, true].map((enabled) => <button type="button" key={String(enabled)} role="menuitemradio" aria-checked={(policyOpen === 'mode' ? planMode : yolo) === enabled} onClick={() => {
                             const current = policyOpen === 'mode' ? planMode : yolo;
                             if (current !== enabled) (policyOpen === 'mode' ? onTogglePlan : onToggleYolo)?.();
                             setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus();
-                        }}>{t(policyOpen === 'mode' ? enabled ? 'surfacePlan' : 'surfaceBuild' : enabled ? 'surfaceAutoApprove' : 'surfaceAskFirst')}{(policyOpen === 'mode' ? planMode : yolo) === enabled && <Check size={12} />}</button>)}
+                        }}><span>{t(policyOpen === 'mode' ? enabled ? 'surfacePlan' : 'surfaceBuild' : enabled ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</span>{(policyOpen === 'mode' ? planMode : yolo) === enabled && <Check size={12} />}</button>)}
                     </div>}
                 </div>}
             </div>
@@ -1243,7 +1243,7 @@ export function InputBar({
                                     className={`ctx-opt${!ctxOverridden ? ' selected' : ''}`}
                                     onClick={() => pickCtx(null)}
                                 >
-                                    {t('ctxOptDefault')}
+                                    <span>{t('ctxOptDefault')}</span>
                                     {!ctxOverridden && <Check size={12} />}
                                 </button>
                                 {CTX_PRESETS.map((p) => {
@@ -1384,7 +1384,7 @@ export function InputBar({
                             <div className="thinking-row" role="radiogroup" aria-label={t('thinkingLevel')}>
                                 <span className="thinking-row-label">
                                     <Brain size={12} />
-                                    {t('thinkingLevel')}
+                                    <span>{t('thinkingLevel')}</span>
                                 </span>
                                 <div className="thinking-seg">
                                     {[null, ...thinkingOptions].map((lvl) => {

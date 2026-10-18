@@ -64,7 +64,7 @@ function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath,
     useEffect(() => { if (incoming) onFiles(files); }, [incoming, files, onFiles]);
     const recordFiles = useCallback((files: ReviewChange[]) => onTurnFiles?.(turn, files), [turn, onTurnFiles]);
     return <>
-        {historyHeading && <h3 className="review-history-heading"><History size={14} />{t('surfacePreviousTurns')}</h3>}
+        {historyHeading && <h3 className="review-history-heading"><History size={14} /><span>{t('surfacePreviousTurns')}</span></h3>}
         <details className={current ? 'review-current' : 'review-turn'} hidden={!current && !count} open={current || expanded} onToggle={event => { if (!current) setExpanded(event.currentTarget.open); }}>
             <summary hidden={current}>
                 <ChevronDown className="review-turn-chevron" size={18} />
@@ -192,7 +192,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
             <button type="button" className="icon-btn" onClick={refresh} aria-label={t('surfaceRefresh')} disabled={!sha || loading}><RefreshCw size={12} /></button>
         </div>
         <div className="review-body">
-            {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} />{tOrRaw(errorKey)}<button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
+            {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} /><span>{tOrRaw(errorKey)}</span><button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
             {!errorKey && !files.length && (loading ? <p className="review-empty" role="status">{t('working')}</p> : <div className="surface-empty-state" role="status"><span className="surface-empty-icon" aria-hidden="true"><CodeXml size={22} /></span><strong>{t('surfaceNoChangesTitle')}</strong><p>{t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p><span>{t('surfaceChangesHint')}</span></div>)}
             {!!files.length && <>
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={selected === change.path} onClick={() => setSelected(change.path)}>
@@ -201,8 +201,8 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 {fileLoading ? <span className="step-status spinner" aria-label={t('working')} /> : fileError ? <p role="alert">{tOrRaw(fileError)}</p> : file ? <>
                     <div className="review-diff-head"><code dir="ltr">{file.path}</code></div>
                     {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
-                    <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={openFile}><ExternalLink size={12} />{t('surfaceOpenEditor')}</button>
-                        <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: file.path }))}><MessageSquarePlus size={12} />{t('surfaceAskReview')}</button></div>
+                    <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={openFile}><ExternalLink size={12} /><span>{t('surfaceOpenEditor')}</span></button>
+                        <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: file.path }))}><MessageSquarePlus size={12} /><span>{t('surfaceAskReview')}</span></button></div>
                 </> : null}
             </>}
         </div>
