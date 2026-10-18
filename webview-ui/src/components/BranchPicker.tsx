@@ -118,7 +118,7 @@ export function BranchPicker({ branches, current, onPick, onClose }: BranchPicke
                         {branch === current && (
                             <span className="branch-current">
                                 <Check size={11} aria-hidden="true" />
-                                {t('gitBranchCurrent')}
+                                <span>{t('gitBranchCurrent')}</span>
                             </span>
                         )}
                     </button>

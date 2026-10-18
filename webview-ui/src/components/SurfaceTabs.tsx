@@ -128,12 +128,12 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
                 </button>;
             })}
         </div>
-        {panels.length === 0 && <span className="dock-drop-label">{location === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(location === 'side' ? 'surfaceDropSidebar' : 'surfaceDropMain')}</span>}
+        {panels.length === 0 && <span className="dock-drop-label">{location === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}<span>{t(location === 'side' ? 'surfaceDropSidebar' : 'surfaceDropMain')}</span></span>}
         <button ref={trigger} type="button" className="icon-btn dock-layout-button" aria-label={t('surfacePanelLayout')} title={t('surfacePanelLayout')} aria-haspopup="menu" aria-expanded={!!menu} onClick={() => setMenu(menu ? null : 'open')}><MoreHorizontal size={15} /></button>
         {menu && <div className="dock-layout-menu" role="menu" aria-label={t('surfacePanelLayout')}>
-            {wide && menu !== 'open' && <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</button>}
+            {wide && menu !== 'open' && <button type="button" role="menuitem" onClick={() => { onMove(menu, destination); setMenu(null); }}>{destination === 'side' ? <PanelRight size={14} /> : <PanelsTopLeft size={14} />}<span>{t(destination === 'side' ? 'surfaceMoveSidebar' : 'surfaceMoveMain')}</span></button>}
             {onOpen && SURFACE_PANELS.flatMap(panel => (wide ? ['main', 'side'] as const : ['main'] as const).map(to => <button type="button" role="menuitem" key={`${panel}-${to}`} onClick={() => { onOpen(panel, to); setMenu(null); }}><span>{t(labels[panel])}</span><span>{t(to === 'main' ? 'surfaceMainTabs' : 'surfaceSidebarTabs')}</span></button>))}
-            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} />{t('surfaceResetLayout')}</button>
+            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} /><span>{t('surfaceResetLayout')}</span></button>
         </div>}
     </nav>;
 }

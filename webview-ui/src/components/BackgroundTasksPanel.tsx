@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FileTerminal, Folder, Hash, Square, SquareTerminal, X } from 'lucide-react';
 import type { BackgroundJobView } from '../types';
-import { formatFullTimestamp } from '../datetime';
+import { formatDuration, formatFullTimestamp } from '../datetime';
 import { t, tf } from '../i18n';
 import { postMessage } from '../vscode';
 
@@ -24,7 +24,7 @@ function Uptime({ job }: { job: BackgroundJobView }) {
         return () => clearInterval(timer);
     }, [job.running]);
     const seconds = Math.max(0, job.running && job.startedAt ? Math.floor((now - job.startedAt) / 1_000) : job.uptimeSeconds + (job.running ? Math.floor(Math.max(0, now - basis.current.time) / 1_000) : 0));
-    return <span className="bg-job-up" dir="ltr" title={job.startedAt ? formatFullTimestamp(job.startedAt) : undefined}>{seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`}</span>;
+    return <span className="bg-job-up" dir="auto" title={job.startedAt ? formatFullTimestamp(job.startedAt) : undefined}>{formatDuration(seconds)}</span>;
 }
 function TaskLog({ job, visible }: { job: BackgroundJobView; visible: boolean }) {
     const pane = useRef<HTMLPreElement>(null);
@@ -47,7 +47,7 @@ function TaskLog({ job, visible }: { job: BackgroundJobView; visible: boolean })
             <div className="background-task-meta"><Status job={job} /><span>{t(({ running:'bgTaskRunning', stopped:'bgStopped', failed:'bgTaskFailed', done:'bgTaskDone' } as const)[status])}</span><Uptime job={job} />
                 {job.exitCode != null && <span className={`background-exit${job.exitCode !== 0 ? ' failed' : ''}`} dir="ltr">{tf('surfaceExitCode',{code:String(job.exitCode)})}</span>}
             </div>
-            <details className="background-task-info"><summary><ChevronDown size={11} />{t('bgTaskDetails')}</summary>
+            <details className="background-task-info"><summary><ChevronDown size={11} /><span>{t('bgTaskDetails')}</span></summary>
                 <div><Hash size={12} /><code dir="ltr">{job.jobId}</code>{job.pid != null && <code dir="ltr">PID {job.pid}</code>}</div>
                 {job.cwd && <div><Folder size={12} /><code dir="ltr">{job.cwd}</code></div>}
             </details>
@@ -82,7 +82,7 @@ export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass }: { jo
             </div>
         ) : (
             <div className="background-layout"><nav className="background-task-list" aria-label={t('surfaceBackground')}>
-                {running.length > 1 && <header><button type="button" className="bg-jobs-stopall" title={t('bgStopAllTitle')} onClick={() => running.forEach(job => onStop(job.jobId))}><Square size={10} />{t('bgStopAll')}</button></header>}
+                {running.length > 1 && <header><button type="button" className="bg-jobs-stopall" title={t('bgStopAllTitle')} onClick={() => running.forEach(job => onStop(job.jobId))}><Square size={10} /><span>{t('bgStopAll')}</span></button></header>}
                 <div className="background-task-items">{jobs.map(job => <div className={`bg-job background-task${job.jobId === selected?.jobId ? ' selected' : ''}`} key={job.jobId}>
                     <button type="button" className="background-task-select" aria-pressed={job.jobId === selected?.jobId} onClick={() => setSelectedId(job.jobId)}><Status job={job} /><code className="bg-job-cmd" dir="ltr" title={job.command}>{job.command}</code><Uptime job={job} /></button>
                     {job.running && <button type="button" className="bg-job-stop" title={t('bgStopTitle')} aria-label={t('bgStop')} onClick={() => onStop(job.jobId)}><Square size={11} /></button>}

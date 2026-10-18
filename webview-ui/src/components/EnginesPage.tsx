@@ -19,12 +19,12 @@ export function EnginesPage({ state, send }: { state: EngineSetupState | null; s
         <div className="settings-scroll engines-content">
             <section className={`settings-card engine-card${state?.active === 'xratu' ? ' selected' : ''}`}>
                 <div className="engine-heading"><span className="engine-mark xratu" aria-hidden="true"><img src={brandMark} alt="" /></span><h3 dir="ltr">{t('engineXratu')}</h3>{state?.active === 'xratu' && <span className="engine-active" title={t('engineActive')} aria-label={t('engineActive')}><Check size={12} /><span>{t('engineActive')}</span></span>}</div>
-                <div className="engine-features"><span><KeyRound size={12} />{t('engineByok')}</span><span><Laptop size={12} />{t('engineLocal')}</span></div>
+                <div className="engine-features"><span><KeyRound size={12} /><span>{t('engineByok')}</span></span><span><Laptop size={12} /><span>{t('engineLocal')}</span></span></div>
                 <div className="engine-footer"><span className="engine-built-in">{t('engineBuiltIn')}</span>{state?.active !== 'xratu' && <button type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'engineSelect', engine: 'xratu' })}>{t('engineUse')}</button>}</div>
             </section>
             <section className={`settings-card engine-card${state?.active === 'opencode' ? ' selected' : ''}`}>
                 <div className="engine-heading"><span className="engine-mark" aria-hidden="true"><SquareTerminal /></span><h3 dir="ltr">{t('engineOpenCode')}</h3>{state?.version && <code className="engine-version" dir="ltr">{state.version}</code>}{state?.active === 'opencode' && <span className="engine-active" title={t('engineActive')} aria-label={t('engineActive')}><Check size={12} /><span>{t('engineActive')}</span></span>}</div>
-                <div className="engine-features"><span className="engine-free"><Sparkles size={12} />{t('engineFreeModels')}</span><span><Wrench size={12} />{t('engineNativeTools')}</span></div>
+                <div className="engine-features"><span className="engine-free"><Sparkles size={12} /><span>{t('engineFreeModels')}</span></span><span><Wrench size={12} /><span>{t('engineNativeTools')}</span></span></div>
                 <div className="engine-footer">
                 <div className={`engine-status ${phase}`} role="status"><span className="engine-status-dot" aria-hidden="true" /><span>{t(statusKey[phase])}</span></div>
                 {phase === 'ready' && state?.active !== 'opencode' && <button type="button" className="primary-btn" disabled={locked} onClick={() => send({ type: 'engineSelect', engine: 'opencode' })}>{t('engineUse')}</button>}

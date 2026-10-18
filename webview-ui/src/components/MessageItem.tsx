@@ -38,7 +38,7 @@ import { useHighlightedCode } from '../highlight';
 import { toolIcon, toolLabel } from '../toolMeta';
 import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
-import { formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
+import { formatDuration, formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
 import { formatCost } from '../cost';
 import { conversationPrefs, prefOn, toolFamily, transcriptOptions, type TranscriptPrefs, type TranscriptOptions } from '../transcriptPrefs';
 
@@ -58,7 +58,7 @@ function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage[
         <div className="msg-content retry-status" aria-live="polite">
             <span className="retry-dot" aria-hidden="true" />
             <span>{t(retryStatus.offline ? 'retryingOffline' : 'retrying')}: {retryStatus.attempt}/{retryStatus.maxAttempts}</span>
-            <span className="retry-countdown">{seconds}s</span>
+            <span className="retry-countdown">{formatDuration(seconds)}</span>
         </div>
     );
 }
@@ -363,11 +363,10 @@ function pushToolRow(rows: Row[], row: ToolRow): void {
 }
 
 
-/** Compact wall-clock span for a finished thinking pill ("2.4s" / "12s"). */
+/** Compact wall-clock span for a finished thinking pill. */
 function fmtDur(ms?: number): string {
     if (!ms || ms < 0) return '';
-    const s = ms / 1000;
-    return s >= 10 ? `${Math.round(s)}s` : `${s.toFixed(1)}s`;
+    return formatDuration(ms / 1000);
 }
 
 /** "1.2k"-style token counts for the answer footer. */
@@ -1095,13 +1094,13 @@ function SubagentBody({ call, result }: { call: Step; result?: Step }) {
     return <div className="subagent-preview">
         <div className="subagent-preview-head"><span className="subagent-profile" dir="auto">{trace?.profile ?? String(args.subagent_type ?? '')}</span>
             {trace?.model && <code dir="ltr">{trace.model}</code>}
-            {openAgent && <button type="button" className="subagent-open" onClick={() => openAgent(call.id)}><ExternalLink size={12} />{t('agentObserve')}</button>}
+            {openAgent && <button type="button" className="subagent-open" onClick={() => openAgent(call.id)}><ExternalLink size={12} /><span>{t('agentObserve')}</span></button>}
         </div>
         {trace?.description && <p dir="auto">{trace.description}</p>}
         {!done && <div className="subagent-preview-live"><span className="spinner" aria-hidden="true" /><code dir="ltr">{current?.tool ?? t('subagentDelegating')}</code><span>{tf('subagentToolCalls', { count: String(trace?.toolCalls ?? 0) })}</span></div>}
         {done && <div className="subagent-preview-report" dir="auto">{trace?.report ?? text}</div>}
         {!trace && !done && call.live && <pre className="subagent-legacy-live" dir="ltr">{call.live.slice(-20_000)}</pre>}
-        <details className="detail-arguments"><summary><ChevronDown size={11} />{t('agentTask')}</summary><p dir="auto">{trace?.prompt ?? String(args.prompt ?? '')}</p></details>
+        <details className="detail-arguments"><summary><ChevronDown size={11} /><span>{t('agentTask')}</span></summary><p dir="auto">{trace?.prompt ?? String(args.prompt ?? '')}</p></details>
     </div>;
 }
 
@@ -1751,7 +1750,7 @@ export function TaskListEditor({ tasks, editable, onChange }: { tasks: TaskListI
             ) : (
                 <button type="button" className="task-list-add-btn" onClick={() => setAdding(true)} disabled={tasks.length >= TASK_LIST_MAX_ITEMS}>
                     <Plus size={12} />
-                    {t('taskListAddItem')}
+                    <span>{t('taskListAddItem')}</span>
                 </button>
             ))}
         </>
@@ -2071,7 +2070,7 @@ function DecisionCard({
                 ))}
             </div>
 
-            {payload.multiSelect && <button type="button" className="apply-btn" disabled={!validSelection(selectedLabels.length) || submitting} onClick={() => { if (validSelection(selectedLabels.length)) settle(JSON.stringify(selectedLabels)); }}><Check size={13} />{t('decisionSend')}</button>}
+            {payload.multiSelect && <button type="button" className="apply-btn" disabled={!validSelection(selectedLabels.length) || submitting} onClick={() => { if (validSelection(selectedLabels.length)) settle(JSON.stringify(selectedLabels)); }}><Check size={13} /><span>{t('decisionSend')}</span></button>}
             {otherOpen ? (
                 <div className="decision-other-box">
                     <textarea
@@ -2098,14 +2097,14 @@ function DecisionCard({
                             disabled={!otherText.trim() || submitting || (payload.multiSelect && !validSelection(selectedLabels.length + 1))}
                         >
                             {submitting ? <span className="step-status spinner" /> : <Check size={13} />}
-                            {t('decisionSend')}
+                            <span>{t('decisionSend')}</span>
                         </button>
                     </div>
                 </div>
             ) : payload.allowCustomAnswer !== false ? (
                 <button type="button" className="decision-other-btn" onClick={() => setOtherOpen(true)} disabled={submitting}>
                     <PencilLine size={12} />
-                    {t('decisionOther')}
+                    <span>{t('decisionOther')}</span>
                 </button>
             ) : null}
         </section>

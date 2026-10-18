@@ -16,8 +16,8 @@
 .setup-heading p { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0; line-height: 1.6; }
 .setup-paths { display: flex; flex-direction: column; gap: 10px; }
 .setup-path { appearance: none; display: flex; align-items: center; gap: 14px; inline-size: 100%; padding: 17px 15px; text-align: start; color: var(--vscode-foreground); background: color-mix(in srgb, var(--xratu-surface-inset) 24%, var(--vscode-sideBar-background)); border: 1px solid var(--vscode-input-border, var(--vscode-contrastBorder)); border-radius: 12px; cursor: pointer; }
-.setup-path.recommended { border-color: color-mix(in srgb, var(--xratu-accent) 65%, var(--vscode-input-border)); background: color-mix(in srgb, var(--xratu-accent) 5%, var(--vscode-sideBar-background)); }
-.setup-path:hover { border-color: var(--xratu-accent); background: color-mix(in srgb, var(--xratu-accent) 9%, var(--vscode-sideBar-background)); }
+.setup-path.recommended { border-color: color-mix(in srgb, var(--xratu-accent) 65%, var(--vscode-input-border)); background: color-mix(in srgb, var(--vscode-foreground) 5%, var(--vscode-sideBar-background)); }
+.setup-path:hover { border-color: var(--xratu-accent); background: var(--vscode-list-hoverBackground); }
 .setup-path:focus-visible, .setup-model:focus-visible { outline: 2px solid var(--xratu-accent); outline-offset: 3px; }
 .setup-path-icon { display: grid; place-items: center; inline-size: 36px; block-size: 36px; flex-shrink: 0; color: var(--vscode-descriptionForeground); }
 .recommended .setup-path-icon { color: var(--xratu-accent); }
@@ -41,7 +41,7 @@
 .setup-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-block-size: 160px; overflow: auto; }
 .setup-models { display: flex; flex-direction: column; gap: 4px; max-block-size: 270px; overflow: auto; padding: 3px; margin: -3px; }
 .setup-model { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px 10px; text-align: start; color: var(--vscode-foreground); background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
-.setup-model.selected { border-color: color-mix(in srgb, var(--xratu-accent) 65%, var(--vscode-input-border)); background: color-mix(in srgb, var(--xratu-accent) 6%, var(--vscode-sideBar-background)); }
+.setup-model.selected { border-color: color-mix(in srgb, var(--xratu-accent) 65%, var(--vscode-input-border)); background: color-mix(in srgb, var(--vscode-foreground) 6%, var(--vscode-sideBar-background)); }
 .setup-model:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
 .setup-model:disabled { cursor: default; }
 .setup-model-radio { color: var(--vscode-descriptionForeground); display: flex; flex-shrink: 0; }
@@ -81,3 +81,5 @@
 .setup-free { grid-column: 3; }
 .app[dir="rtl"] .setup-model-radio { grid-column: 3; }
 .app[dir="rtl"] .setup-free { grid-column: 1; }
+
+.setup-install > .ghost-btn { align-self: flex-start; }

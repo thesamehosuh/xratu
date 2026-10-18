@@ -5,7 +5,7 @@ import type { TranscriptPrefs } from '../transcriptPrefs';
 import { agentMessage, type AgentRun } from '../subagentView';
 import { MessageItem } from './MessageItem';
 import { getLocale, t, tf, type Locale } from '../i18n';
-import { formatFullTimestamp } from '../datetime';
+import { formatDuration, formatFullTimestamp } from '../datetime';
 
 export function agentStatusLabel(status: AgentRun['status']) { return t(({ queued: 'agentQueued', running: 'agentRunning', waiting: 'agentWaiting', done: 'agentDone', error: 'agentFailed', cancelled: 'agentCancelled', interrupted: 'agentInterrupted' } as const)[status]); }
 function RunStatus({ status }: { status: AgentRun['status'] }) {
@@ -16,7 +16,7 @@ function RunClock({ run }: { run: AgentRun }) {
     const live = ['running', 'waiting'].includes(run.status);
     useEffect(() => { if (!live) return; const timer = setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, [live]);
     const seconds = Math.max(0, Math.floor(((live ? now : run.trace?.endedAt ?? run.trace?.updatedAt ?? run.call.endedAt ?? run.createdAt) - (run.trace?.startedAt ?? run.createdAt)) / 1_000));
-    return <span className="agent-metric" title={formatFullTimestamp(run.trace?.startedAt ?? run.createdAt)}><Clock3 size={12} /><span dir="ltr">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span></span>;
+    return <span className="agent-metric" title={formatFullTimestamp(run.trace?.startedAt ?? run.createdAt)}><Clock3 size={12} /><span dir="auto">{formatDuration(seconds)}</span></span>;
 }
 
 const RunView = memo(function RunView({ run, visible, onConversation, prefs, locale }: { run: AgentRun; visible: boolean; onConversation: () => void; prefs: TranscriptPrefs; locale: Locale }) {
@@ -42,13 +42,13 @@ const RunView = memo(function RunView({ run, visible, onConversation, prefs, loc
             {trace && <div className="agent-run-meta technical"><span className="agent-metric"><Cpu size={12} /><code dir="ltr">{trace.model}</code></span>{trace.effort && <span className="agent-metric"><Gauge size={12} /><span dir="ltr">{trace.effort}</span></span>}
                 <span className="agent-token-metric" title={t('agentTokens')} dir="ltr">{trace.inputTokens.toLocaleString('en-US')} ↓ &nbsp; {trace.outputTokens.toLocaleString('en-US')} ↑</span>
             </div>}
-            <details className="agent-brief"><summary><ChevronDown size={11} />{t('agentTask')}<code dir="ltr">{trace?.taskId ?? run.profile}</code></summary>
+            <details className="agent-brief"><summary><ChevronDown size={11} /><span>{t('agentTask')}</span><code dir="ltr">{trace?.taskId ?? run.profile}</code></summary>
                 <p dir="auto">{trace?.prompt ?? String(toolArgs(run.call.text).prompt ?? '')}</p>
                 {trace?.tools.length ? <div className="agent-capabilities" aria-label={t('agentAvailableTools')}>{trace.tools.map(tool => <code dir="ltr" key={tool}>{tool}</code>)}</div> : null}
             </details>
         </header>
         <div className="agent-view-tabs" role="tablist" aria-label={t('agentViews')}>
-            {(['conversation', 'activity'] as const).map(id => <button type="button" key={id} role="tab" aria-selected={view === id} tabIndex={view === id ? 0 : -1} aria-controls={`agent-content-${run.id}`} className={view === id ? 'active' : ''} onKeyDown={event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'conversation' : event.key === 'End' ? 'activity' : id === 'conversation' ? 'activity' : 'conversation'; setView(next); event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-agent-view="${next}"]`)?.focus(); } }} data-agent-view={id} id={`agent-view-${run.id}-${id}`} onClick={() => setView(id)}>{id === 'conversation' ? <MessageSquare size={12} /> : <List size={12} />}{t(id === 'conversation' ? 'surfaceConversation' : 'surfaceActivity')}</button>)}
+            {(['conversation', 'activity'] as const).map(id => <button type="button" key={id} role="tab" aria-selected={view === id} tabIndex={view === id ? 0 : -1} aria-controls={`agent-content-${run.id}`} className={view === id ? 'active' : ''} onKeyDown={event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'conversation' : event.key === 'End' ? 'activity' : id === 'conversation' ? 'activity' : 'conversation'; setView(next); event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-agent-view="${next}"]`)?.focus(); } }} data-agent-view={id} id={`agent-view-${run.id}-${id}`} onClick={() => setView(id)}>{id === 'conversation' ? <MessageSquare size={12} /> : <List size={12} />}<span>{t(id === 'conversation' ? 'surfaceConversation' : 'surfaceActivity')}</span></button>)}
             <span dir="auto">{tf('subagentToolCalls', { count: String(trace?.toolCalls ?? 0) })}</span>
         </div>
         {pending && <div className="agent-approval-notice"><ShieldAlert size={13} /><span>{t('agentWaiting')}{trace?.pendingTools?.length ? <code dir="ltr">{trace.pendingTools.join(', ')}</code> : null}</span><button type="button" onClick={onConversation}>{t('agentOpenApproval')}</button></div>}

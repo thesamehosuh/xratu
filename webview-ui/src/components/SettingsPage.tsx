@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
     Activity,
+    RotateCcw,
     BookOpen,
     ArrowLeft,
     ArrowRight,
@@ -126,9 +127,9 @@ export function SettingsPage({
                             <Activity size={15} />
                         </div>
                         <h3>{t('surfaceConversation')}</h3>
+                        <button type="button" className="settings-ghost-action conversation-reset" aria-label={t('txReset')} title={t('txReset')} onClick={onResetTranscriptPrefs}><RotateCcw size={12} /><span>{t('txResetShort')}</span></button>
                     </div>
                     {choice('detail', 'txDetail', 'txDetailDesc', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
-                    <p className="conversation-preview" role="status">{t(options.detail === 'minimal' ? 'txMinimalPreview' : options.detail === 'balanced' ? 'txBalancedPreview' : 'txDetailedPreview')}</p>
                     <details className="conversation-advanced"><summary>{t('txAdvanced')}</summary>
                         {choice('reasoning', 'miniThinking', 'txReasoningDesc', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
                         <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong><span className="preference-description" id="tx-diffs-hint">{t('txDiffsDesc')}</span></label><Dropdown id="tx-diffs" label={t('miniFiles')} describedBy="tx-diffs-hint" value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>
@@ -138,8 +139,6 @@ export function SettingsPage({
                         {toggle('followActivity', 'txFollowActivity', 'txFollowActivityDesc')}
                         {toggle('timestamps', 'txTimestamps', 'txTimestampsDesc')}
                     </details>
-                    <p className="preference-description">{t('txAlwaysVisible')}</p>
-                    <button type="button" className="settings-ghost-action conversation-reset" onClick={onResetTranscriptPrefs}>{t('txReset')}</button>
                 </section>
 
                 <section className="settings-card">

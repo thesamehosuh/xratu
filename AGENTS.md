@@ -351,3 +351,22 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
   separate.
 - Tool schemas snapshot at session start; tool changes reach in-flight
   agents only in a fresh session.
+
+## UI polish rules
+
+- Format elapsed times with the shared locale-aware `formatDuration`: seconds,
+  then minutes and seconds, then hours and minutes. Never show unbounded seconds.
+- Vertically center text and icons together in buttons, tabs, badges and status
+  rows; wrap icon-adjacent labels in spans so shared font-leading trimming also
+  reaches their flex items. Inspect actual glyph alignment in English and Persian,
+  narrow and wide; `align-items: center` alone does not center visible glyphs.
+- Dim teal backgrounds require bright teal content. Use neutral surfaces for
+  secondary gray text, or white text where stronger neutral contrast is needed.
+- Text actions must size to their labels, with padding and no cramped wrapping.
+  Fixed square dimensions belong only to icon-only buttons. Check installer
+  cancellation in both onboarding and Engines.
+- Keep Settings concise: omit conversation detail preview prose and the
+  always-visible approvals explanation. Keep conversation reset a compact action
+  beside the Conversation heading, not a full-width preference row.
+- The composer stop/cancel action uses a red background with white content in
+  both idle and hover states; never inherit the send action's teal hover fill.

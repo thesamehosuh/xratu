@@ -342,7 +342,7 @@ export function CredentialsPage({
                 <div className="cred-local-runtime-info">
                     <span className="cred-local-runtime-name">
                         <Laptop size={12} />
-                        {rt.name}
+                        <span>{rt.name}</span>
                     </span>
                     <span className="cred-local-runtime-meta" dir="ltr">
                         {rt.baseUrl} · {rt.modelCount} {t('credLocalModelsCount')}
@@ -351,7 +351,7 @@ export function CredentialsPage({
                 {connected ? (
                     <span className="cred-local-connected">
                         <Check size={12} />
-                        {t('credActive')}
+                        <span>{t('credActive')}</span>
                     </span>
                 ) : (
                     <button
@@ -401,7 +401,7 @@ export function CredentialsPage({
                                     {!busy && accounts.length > 0 && <button type="button" className="ghost-btn cred-oauth-action"
                                         disabled={!!inProgress} onClick={() => onOAuthSignIn(provider.providerId, 'browser')}>
                                         <Plus size={13} />
-                                        {t('credOAuthAddAccount')}
+                                        <span>{t('credOAuthAddAccount')}</span>
                                     </button>}
                                     {!busy && accounts.length === 0 && (
                                         <>
@@ -413,7 +413,7 @@ export function CredentialsPage({
                                                 disabled={!!inProgress}
                                             >
                                                 <Link size={13} />
-                                                {t('miniSignIn')}
+                                                <span>{t('miniSignIn')}</span>
                                             </button>
                                             {provider.methods?.includes('device') && <button
                                                 type="button"
@@ -446,7 +446,7 @@ export function CredentialsPage({
                                             <span className="cred-oauth-account" title={account.accountLabel}>
                                                 <bdi dir="auto">{account.accountLabel || t('credOAuthAccount')}</bdi>
                                             </span>
-                                            {account.active && <span className="cred-oauth-active"><Check size={11} />{t('credActive')}</span>}
+                                            {account.active && <span className="cred-oauth-active"><Check size={11} /><span>{t('credActive')}</span></span>}
                                             <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
                                                 aria-label={t('credOAuthSignOut')} title={t('credOAuthSignOut')}
                                                 onClick={() => onOAuthSignOut(account.credentialId)}><LogOut size={14} /></button>
@@ -457,7 +457,7 @@ export function CredentialsPage({
                                                 disabled={!!inProgress || selectingId === account.credentialId}
                                                 onClick={() => { setSelectingId(account.credentialId); onSelectCredential(account.credentialId); }}>
                                                 {selectingId === account.credentialId && <RefreshCw size={12} className="spinning" />}
-                                                {t('credOAuthUseAccount')}
+                                                <span>{t('credOAuthUseAccount')}</span>
                                             </button>
                                         </div>}
                                     </div>
@@ -466,7 +466,7 @@ export function CredentialsPage({
 
                             {busy && inProgress?.method === 'browser' && (
                                 <div className="cred-oauth-wait">
-                                    <span className="cred-oauth-status"><RefreshCw size={13} className="spinning" />{t('credOAuthWaiting')}</span>
+                                    <span className="cred-oauth-status"><RefreshCw size={13} className="spinning" /><span>{t('credOAuthWaiting')}</span></span>
                                     {oauthState?.authorizeUrl && <>
                                         <div className="cred-oauth-actions">
                                             <a className="primary-btn cred-oauth-action" href={oauthState.authorizeUrl}
@@ -488,7 +488,7 @@ export function CredentialsPage({
                                 <div className="cred-oauth-device">
                                     <span className="cred-oauth-status">
                                         {!oauthState?.deviceCode && <RefreshCw size={13} className="spinning" />}
-                                        {t(oauthState?.deviceCode ? 'credOAuthWaitingDevice' : 'credOAuthGettingDeviceCode')}
+                                        <span>{t(oauthState?.deviceCode ? 'credOAuthWaitingDevice' : 'credOAuthGettingDeviceCode')}</span>
                                     </span>
                                     {oauthState?.deviceCode && <>
                                         <code className="cred-oauth-code" dir="ltr">{oauthState.deviceCode.userCode}</code>
@@ -790,7 +790,7 @@ export function CredentialsPage({
                     }}
                 >
                     <Link size={14} />
-                    {t('credConnect')}
+                    <span>{t('credConnect')}</span>
                 </button>
             </div>
 
@@ -897,7 +897,7 @@ export function CredentialsPage({
                                         {isActive ? (
                                             <span className="saved-active">
                                                 <Check size={12} />
-                                                {t('credActive')}
+                                                <span>{t('credActive')}</span>
                                             </span>
                                         ) : selectingId === credential.id ? (
                                             <span className="saved-switching">
@@ -1002,7 +1002,7 @@ export function CredentialsPage({
                                 disabled={modelsRefreshing}
                             >
                                 <RefreshCw size={12} className={modelsRefreshing ? 'spinning' : undefined} />
-                                {t('credRetry')}
+                                <span>{t('credRetry')}</span>
                             </button>
                         )}
                     </div>

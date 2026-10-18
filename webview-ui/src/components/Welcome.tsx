@@ -87,9 +87,9 @@ export function Welcome(props: WelcomeProps) {
                 </button>)}
             </div> : <section className="setup-body" aria-busy={starting || state?.phase === 'checking'}>
                 {!(path === 'local' && !hasModels) && <div className="setup-context"><span dir="ltr">{path === 'free' ? 'OpenCode 2' : 'Xratu'}</span>{state?.providerName && <span dir="auto">{state.providerName}</span>}<button type="button" className="ghost-btn small" aria-label={t('setupCheckAgain')} title={t('setupCheckAgain')} onClick={props.onRetry} disabled={starting || state?.phase === 'checking' || engineState?.phase === 'installing'}><RefreshCw size={13} className={state?.phase === 'checking' ? 'spinning' : undefined} /></button></div>}
-                {path !== 'local' && (!state || state.phase === 'checking') && <div className="setup-status" role="status"><RefreshCw size={14} className="spinning" />{t('setupChecking')}</div>}
+                {path !== 'local' && (!state || state.phase === 'checking') && <div className="setup-status" role="status"><RefreshCw size={14} className="spinning" /><span>{t('setupChecking')}</span></div>}
                 {path === 'free' && state?.phase === 'install' && <OpenCodeSetup state={engineState} send={send} />}
-                {state?.phase === 'workspace' && <button type="button" className="primary-btn" onClick={() => send({ type: 'setupOpenFolder' })}><FolderOpen size={14} />{t('setupOpenFolder')}</button>}
+                {state?.phase === 'workspace' && <button type="button" className="primary-btn" onClick={() => send({ type: 'setupOpenFolder' })}><FolderOpen size={14} /><span>{t('setupOpenFolder')}</span></button>}
                 {state?.phase === 'offline' && <div className="setup-recovery"><p>{t('engineOfflineUnsupported')}</p><button type="button" className="primary-btn" onClick={() => { send({ type: 'setOfflineMode', enabled: false }); }}>{t('setupGoOnline')}</button><button type="button" className="ghost-btn" onClick={() => props.onChoose('local')}>{t('setupRunLocal')}</button></div>}
                 {state?.busy && <p className="setup-muted" role="status">{t('engineBusyHint')}</p>}
                 {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
@@ -98,7 +98,7 @@ export function Welcome(props: WelcomeProps) {
                     <SetupModelPicker models={state!.models} selected={selected} freeOnly={path === 'free'} onSelect={setSelected} />
                     {path === 'free' && state?.phase === 'attention' && <p className="setup-muted" role="status">{t('setupFreeUnavailable')}</p>}
                     <button type="button" className="primary-btn setup-start" disabled={!ready} onClick={() => { if (!state || !canStartSetup(state, selected)) return; setStarting(true); send({ type: 'setupComplete', requestId: state.requestId, model: selected }); }}>
-                        {starting ? <RefreshCw size={14} className="spinning" /> : locale === 'fa' ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}{t('setupStartChat')}
+                        {starting ? <RefreshCw size={14} className="spinning" /> : locale === 'fa' ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}<span>{t('setupStartChat')}</span>
                     </button>
                     {path === 'free' && <span className="setup-muted setup-footnote">{t('setupAvailabilityHint')}</span>}
                     {path !== 'free' && <button type="button" className="ghost-btn small" onClick={() => setEditingConnection(true)}>{t('setupChangeConnection')}</button>}
