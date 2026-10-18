@@ -285,7 +285,11 @@ export function ApprovalCard({
                 })}
             </div>
 
-            {!isResolved && (
+            {/* Session trust is root-scoped: a child-attributed card offers only
+                this one decision, so it never advertises a session-wide approval
+                the host refuses to grant (AGENTS.md: approvals stay real for
+                children). */}
+            {!isResolved && !payload.source && (
                 <div className="approval-foot">
                     <button
                         type="button"

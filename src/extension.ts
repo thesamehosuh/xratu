@@ -3775,12 +3775,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  The pending promise is tracked so a cancel can reject it - otherwise
      *  the suspended local agent generator would hang forever.
      *  Calls whose kind was allowed for this session resolve silently; only
-     *  the remainder reach the approval card. */
+     *  the remainder reach the approval card - and NEVER a child-attributed
+     *  call: session trust is root-scoped (AGENTS.md: approvals stay real for
+     *  children), so a kind the user trusted on a root request must not
+     *  silently answer a delegated child's mutation. */
     private _requestLocalApproval(approvalId: string, approvals: Array<{ tool_call_id: string; tool_name: string; args: Record<string, unknown> }>, source?: SubagentApprovalSource, signal?: AbortSignal): Promise<Record<string, boolean>> {
         if (signal?.aborted) return Promise.reject(signal.reason);
         const preDecided: Record<string, boolean> = {};
         const pending = approvals.filter((a) => {
-            if (isSessionApproved(a.tool_name, a.args, this._sessionApprovedKinds)) {
+            if (!source && isSessionApproved(a.tool_name, a.args, this._sessionApprovedKinds)) {
                 preDecided[a.tool_call_id] = true;
                 return false;
             }
@@ -7603,7 +7606,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Only approvable items carry a kind - a pre-denied call must
             // never teach the session gate to auto-approve its kind later.
             // Null kind (shell-composed terminal commands) never records.
-            const kind = sessionApprovalKind(toolName, args ?? {});
+            // A child-attributed card records NOTHING either: approving a
+            // child's request must not widen root-wide session trust (the
+            // reverse direction of the root-trust rule above).
+            const kind = parsed.source ? null : sessionApprovalKind(toolName, args ?? {});
 
             if (toolName === 'edit_file') {
                 // Deny an unknown mode BEFORE the preview: otherwise the card

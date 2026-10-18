@@ -526,7 +526,7 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_requestLocalApproval', '_requestLocalDecision', '_resolveLocalDecision', '_releaseDecisionCard', '_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_requestLocalApproval', '_processNeedsApproval', '_requestLocalDecision', '_resolveLocalDecision', '_releaseDecisionCard', '_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
     const moduleLoad = Module._load;
     let sharedExecutorModule;
@@ -538,7 +538,7 @@ try {
         sharedExecutorModule = require('../out/mcp.js');
     } finally { Module._load = moduleLoad; }
     const skillModule = require('../out/skills.js');
-    const sandbox = { isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, sessionApprovalKind: require('../out/sessionApproval.js').sessionApprovalKind, sanitizePath: require('../out/paths.js').sanitizePath, resolveEditMode: require('../out/tooling/editFileArgs.js').resolveEditMode, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeDefinitionsMethod = sandbox.Host.prototype._nativeServiceDefinitions;
     const nativeExecutorMethod = sandbox.Host.prototype._nativeServiceExecutor;
@@ -965,6 +965,33 @@ try {
         assert.ok(cards.some(card => card.type === 'decisionResolved' && card.answer === null));
     }
     console.log('ok real host per-request cancellation releases queued cards and preserves native attribution');
+    {
+        // AGENTS.md: approvals stay real for children. A root "allow for this
+        // session" must not answer a delegated child, and a child's card must
+        // not teach the session-wide trust set either.
+        const trust = new sandbox.Host();
+        const trustCards = [];
+        Object.assign(trust, {
+            _sessionApprovedKinds: new Set(['cmd:echo']),
+            _localApprovalResolvers: {}, _approvalCloseItems: {},
+            _approvalCardRelease: new Map(), _approvalCardChain: Promise.resolve(),
+            _view: { webview: { postMessage: message => trustCards.push(message) } },
+        });
+        const rootDecision = await trust._requestLocalApproval('root-trust', [{ tool_call_id: 'root-call', tool_name: 'run_terminal_command', args: { command: 'echo root' } }]);
+        assert.equal(rootDecision['root-call'], true, 'a root call still rides the session-approved kind');
+        assert.equal(trust._localApprovalResolvers['root-trust'], undefined, 'a session-approved root call never opens a card');
+        const childTrust = new AbortController();
+        const childRequest = trust._requestLocalApproval('child-card', [{ tool_call_id: 'child-call', tool_name: 'run_terminal_command', args: { command: 'echo child' } }], { profile: 'general', parentCallId: 'parent-call', description: 'Inspect' }, childTrust.signal);
+        await new Promise(resolve => setImmediate(resolve));
+        const childCard = trustCards.find(message => message.approval_id === 'child-card');
+        assert.ok(childCard && childCard.source.parentCallId === 'parent-call', 'a child call whose kind the root trusted still gets its own attributed card');
+        assert.equal(trust._approvalCloseItems['child-card'].some(item => item.kind), false, 'a child card records no session-wide kind');
+        await trust._handleToolApproval('child-card', { 'child-call': true }, true);
+        const childDecision = await childRequest;
+        assert.equal(childDecision['child-call'], true, 'the child card still resolves its own request');
+        assert.deepEqual([...trust._sessionApprovedKinds], ['cmd:echo'], 'a child session-approval never widens root trust');
+        console.log('ok session-approved kinds stay root-scoped and child cards cannot widen them');
+    }
 
     const pingHost = new sandbox.Host();
     pingHost._activeEngine = 'opencode';
