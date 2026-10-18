@@ -10,7 +10,10 @@ export const REPLY_CONCISE_FINAL = "Final responses: default to 1-3 short senten
 /** OpenCode loads project rules itself; only Xratu policy belongs here. */
 export function buildNativeSystemContext(planMode: boolean, replyLanguage: 'fa' | 'en' | 'auto' = 'auto'): string {
     const language = replyLanguage === 'fa' ? REPLY_LANGUAGE_FA : replyLanguage === 'en' ? REPLY_LANGUAGE_EN : REPLY_LANGUAGE_AUTO;
-    return [language, REPLY_CONCISE_FINAL, !planMode && PULL_REQUEST_AGENT_INSTRUCTIONS].filter(Boolean).join('\n\n');
+    return [language, REPLY_CONCISE_FINAL,
+        'Xratu services are available through its MCP bridge: use update_task_list for the visible task list, browser_* for the shared browser, and the bridged skill tool for Xratu-managed skills and their resources. Keep task labels in the reply language. Native tools, credentials, and project instructions remain managed by OpenCode.',
+        planMode ? 'Plan mode: keep this turn read-only. Draft the plan with update_task_list, then call exit_plan_mode and finish. Full tool access begins on the next turn only.' : PULL_REQUEST_AGENT_INSTRUCTIONS,
+    ].filter(Boolean).join('\n\n');
 }
 
 export const LOCAL_SYSTEM_PROMPT = "You are an AI coding assistant.\nWarm and clear like a senior classmate. No emojis.\nAfter changing code, say briefly what changed (1-2 sentences) - never repeat the edited code and never mention internal tool names.\nBefore claiming victory, quickly verify your changes (re-read the edited file or run the relevant check) so your summary reflects reality.\nFor multi-step work you may maintain a visible checklist with `update_task_list` (complete list every call, exactly one item in_progress while executing) so the user can follow progress - useful for plan mode AND for any non-trivial execution you choose to track.";

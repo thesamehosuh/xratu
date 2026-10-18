@@ -25,8 +25,12 @@ another engine's settings does not change the current conversation. OpenCode's
 provider view lists its saved and environment connections and supports simple
 SDK API-key and OAuth methods. Authentication methods with additional forms or
 commands still use OpenCode's own setup. Native MCP and skill lists are read-only.
-MCP servers configured in Xratu are also available to OpenCode; manage those
-servers with the Xratu scope selected on the MCP page. Native subagents remain unavailable.
+Manage Xratu MCP servers, marketplace installs, and skills with either settings
+scope selected. OpenCode accesses enabled Xratu skills and their bundled resources
+through the shared skill tool. Its own native resources remain a separate read-only
+inventory. The browser, task list, reply language, and plan handoff also work
+with OpenCode; ending a plan unlocks execution on the next turn. Native subagents
+remain unavailable.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
 

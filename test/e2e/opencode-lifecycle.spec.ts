@@ -106,13 +106,16 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await page.locator('.page-sidebar').getByRole('button', { name: locale === 'en' ? 'Servers' : 'سرور ها', exact: true }).click();
         await expect.poll(async () => (await sent(page)).filter((message) => message.type === 'nativeGetState').length).toBeGreaterThan(0);
         const requestId = (await sent(page)).filter((message) => message.type === 'nativeGetState').at(-1)!.requestId;
-        await post(page, { type: 'nativeSetupState', state: { requestId, phase: 'ready', integrations: [], servers: [{ name: 'Xratu', status: 'connected' }, { name: 'native-docs', status: 'connected' }], skills: [] } });
-        await expect(page.locator('.native-config-row').filter({ hasText: 'Xratu' })).toBeVisible();
+        await post(page, { type: 'nativeSetupState', state: { requestId, phase: 'ready', integrations: [], servers: [{ name: 'native-docs', status: 'connected' }], skills: [] } });
+        await post(page, { type: 'mcpState', servers: [{ name: 'shared-docs', type: 'stdio', command: 'npx', args: ['docs-server'], source: 'global', state: 'connected', toolCount: 1, lastError: null }], hasWorkspace: true, legacyInUse: false });
+        await expect(page.locator('.mcp-row').filter({ hasText: 'shared-docs' })).toBeVisible();
+        await page.locator('.native-inventory summary').click();
+        await expect(page.locator('.native-config-row').filter({ hasText: 'native-docs' })).toBeVisible();
         if (process.env.XRATU_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('native-mcp.png') });
         await page.locator('#settings-engine').click();
         await page.getByRole('option', { name: 'Xratu', exact: true }).click();
         await post(page, { type: 'mcpState', servers: [], hasWorkspace: true, legacyInUse: false });
-        await expect(page.locator('.native-config')).toHaveCount(0);
+        await expect(page.locator('.native-inventory')).toHaveCount(0);
         expect((await sent(page)).some((message) => message.type === 'engineSelect')).toBe(false, 'editing shared MCP settings does not switch the conversation engine');
     });
 }

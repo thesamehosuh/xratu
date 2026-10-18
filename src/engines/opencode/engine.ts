@@ -7,6 +7,9 @@ import { setTimeout as delay } from 'timers/promises';
 import { isSessionNotFoundError, type FormInfo1, type ModelInfo, type OpenCodeClient } from '@opencode/client';
 import type { LocalAgentEvent, LocalSteerMessage } from '../../local/localTypes';
 import type { AgentEngine, EngineHost, EngineTurn } from '../types';
+import { ENGINE_CAPABILITIES } from '../types';
+import { nativeToolDisplayArgs } from './services';
+import { mapMcpToolContent } from '../../mcpToolContent';
 import type { NativeIntegration } from '../nativeSetup';
 import { OpenCodeServer } from './server';
 import { subscribeEvents } from './events';
@@ -21,9 +24,6 @@ export class EngineError extends Error {
 }
 const TOOL_NAMES: Record<string, string> = { shell: 'run_terminal_command', bash: 'run_terminal_command', read: 'read_file', edit: 'edit_file', write: 'write_file', glob: 'glob_search', grep: 'grep_search', websearch: 'web_search', webfetch: 'fetch_url', question: 'ask_user_question' };
 function toolName(name: string): string { return TOOL_NAMES[name] ?? `opencode_${name}`; }
-function contentText(content: unknown): string {
-    return Array.isArray(content) ? content.map((part) => part && typeof part === 'object' && typeof part.text === 'string' ? part.text : '').filter(Boolean).join('\n').slice(0, 200_000) : '';
-}
 function errorText(error: unknown): string {
     if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
     return JSON.stringify(error) ?? 'OpenCode execution failed';
@@ -39,7 +39,7 @@ export function isFreeModel(model: Pick<ModelInfo, 'id' | 'providerID' | 'cost'>
 
 export class OpenCodeEngine implements AgentEngine {
     readonly id = 'opencode' as const;
-    readonly capabilities = { steering: true, rewind: false, localTools: false };
+    readonly capabilities = ENGINE_CAPABILITIES.opencode;
     private readonly server: Pick<OpenCodeServer, 'connect' | 'dispose'>;
     private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage> };
     private shellMonitor?: NativeShellMonitor;
@@ -106,8 +106,14 @@ export class OpenCodeEngine implements AgentEngine {
         const { client } = await this.server.connect();
         await this.syncMcp(client, workspace, signal);
         const input = { location: { directory: workspace } };
-        const [integrations, servers, skills] = await Promise.all([
+        let agentsErrorKey: string | undefined;
+        const [integrations, servers, skills, agents] = await Promise.all([
             client.integration.list(input, { signal }), client.mcp.list(input, { signal }), client.skill.list(input, { signal }),
+            client.agent.list(input, { signal }).catch(() => {
+                signal.throwIfAborted();
+                agentsErrorKey = 'nativeAgentsLoadFailed';
+                return { data: [] };
+            }),
         ]);
         return {
             integrations: integrations.data.map((entry): NativeIntegration => ({
@@ -116,8 +122,10 @@ export class OpenCodeEngine implements AgentEngine {
                 oauth: entry.methods.filter((method) => method.type === 'oauth' && (!method.form || !Object.keys(method.form).length)).map((method) => ({ id: 'id' in method ? method.id : '', label: 'label' in method ? method.label ?? '' : '' })),
                 connections: entry.connections.map((connection) => ({ label: connection.type === 'env' ? connection.name : connection.label, source: connection.type, needsAuth: connection.status?.status === 'needs_auth' })),
             })),
-            servers: servers.data.map((server) => ({ name: server.name === this.mcpBridge?.name ? 'Xratu' : server.name, status: server.status.status })),
+            servers: servers.data.filter(server => server.name !== this.mcpBridge?.name).map(server => ({ name: server.name, status: server.status.status })),
             skills: skills.data.map((skill) => ({ name: skill.name, description: skill.description, path: skill.path })),
+            agents: agents.data.filter(agent => !agent.hidden).map(agent => ({ id: agent.id, name: agent.name, description: agent.description, mode: agent.mode })),
+            ...(agentsErrorKey ? { agentsErrorKey } : {}),
         };
     }
     async connectKey(integrationID: string, key: string, workspace: string, signal: AbortSignal): Promise<void> {
@@ -201,7 +209,7 @@ export class OpenCodeEngine implements AgentEngine {
         // models require OpenCode's harness, including its tool definitions.
         const permissions = this.probing ? [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'subagent', resource: '*', effect: 'deny' as const }] : [
             ...openCodePermissions(turn.plan, turn.yolo),
-            ...(!turn.plan ? (this.mcpBridge?.trustedActions() ?? []).map((action) => ({ action, resource: '*', effect: 'allow' as const })) : []),
+            ...(turn.plan ? this.mcpBridge?.planActions() ?? [] : this.mcpBridge?.trustedActions() ?? []).map((action) => ({ action, resource: '*', effect: 'allow' as const })),
         ];
         const mcpNames = this.mcpBridge?.toolNames();
         const displayToolName = (name: string) => mcpNames?.get(name) ?? toolName(name);
@@ -262,7 +270,14 @@ export class OpenCodeEngine implements AgentEngine {
                     case 'session.execution.started': executionStarted = true; heldSuccess = false; break;
                     case 'session.retry.scheduled':
                         if (this.probing) throw new Error(errorText(data.error));
+                        if (typeof data.attempt === 'number' && typeof data.at === 'number' && Number.isFinite(data.attempt) && Number.isFinite(data.at)) {
+                            yield { type: 'retrying', attempt: Math.max(1, data.attempt), maxAttempts: 0, nextRetryInMs: Math.max(0, data.at - Date.now()) };
+                        }
                         break;
+                    case 'session.step.started': yield { type: 'attempting' }; break;
+                    case 'session.compaction.started': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacting' }; break;
+                    case 'session.compaction.ended': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacted' }; break;
+                    case 'session.compaction.failed': yield { type: 'engineNotice', kind: 'warning', valueKey: 'engineCompactionFailed', params: { error: errorText(data.error) } }; break;
                     case 'session.inbox.delivered': {
                         const message = active.steers.get(String(data.inboxID));
                         if (message) { active.steers.delete(String(data.inboxID)); yield { type: 'steer', ...message }; }
@@ -294,7 +309,7 @@ export class OpenCodeEngine implements AgentEngine {
                         call.input = data.input && typeof data.input === 'object' ? data.input as Record<string, unknown> : {};
                         calls.set(id, call);
                         if (call.name === 'run_terminal_command') active.calls.add(id);
-                        yield { type: 'toolCall', id, tool: call.name, args: call.input };
+                        yield { type: 'toolCall', id, tool: call.name, args: nativeToolDisplayArgs(call.name, call.input) };
                         break;
                     }
                     case 'session.tool.progress': {
@@ -310,7 +325,10 @@ export class OpenCodeEngine implements AgentEngine {
                         if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
                         const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
                         if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
-                        yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: contentText(data.content) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError };
+                        // V2 represents MCP images as file parts with data URIs.
+                        // Reuse shared image bounds; never fetch native file/HTTP URIs.
+                        const content = mapMcpToolContent(Array.isArray(data.content) ? data.content.map(part => part?.type === 'file' && typeof part.uri === 'string' && /^data:image\//i.test(part.uri) ? { type: 'text', text: part.uri } : part) : [], call?.name);
+                        yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}) };
                         calls.delete(id);
                         active.calls.delete(id);
                         // Native tools own their arguments and retries. Stop a

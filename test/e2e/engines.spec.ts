@@ -12,6 +12,62 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
 });
 
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+    test(`OpenCode shares Xratu settings and capability management (${locale}, ${width})`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await page.locator('.composer-input').fill('Preserve this draft');
+        await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: true, busy: false } });
+        await post(page, { type: 'openSettings' });
+        const reply = page.locator('.settings-nav-row').filter({ hasText: locale === 'en' ? 'Reply language' : 'زبان پاسخ' });
+        await expect(reply.getByRole('button', { name: 'English', exact: true })).toBeEnabled();
+        await reply.getByRole('button', { name: 'English', exact: true }).click();
+        expect(await sent(page)).toContainEqual({ type: 'setReplyLanguage', replyLanguage: 'en' });
+        await page.screenshot({ path: testInfo.outputPath('shared-settings.png') });
+        const sidebar = page.locator('.page-sidebar');
+        await sidebar.getByRole('button', { name: locale === 'en' ? 'Servers' : 'سرور ها', exact: true }).click();
+        const replyNative = async () => {
+            await expect.poll(async () => (await sent(page)).some(message => (message as { type: string }).type === 'nativeGetState')).toBe(true);
+            const request = (await sent(page)).filter(message => (message as { type: string }).type === 'nativeGetState').at(-1) as { requestId: string };
+            await post(page, { type: 'nativeSetupState', state: { requestId: request.requestId, phase: 'ready', integrations: [], servers: [{ name: 'native-docs', status: 'connected' }], skills: [{ name: 'native-review', path: 'C:\\project\\.opencode\\skills\\review\\SKILL.md' }], agents: [{ id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only native exploration' }] } });
+        };
+        await replyNative();
+        await post(page, { type: 'mcpState', hasWorkspace: true, legacyInUse: false, servers: [{ name: 'shared-docs', type: 'stdio', command: 'npx', args: ['docs-server'], source: 'global', state: 'connected', toolCount: 3, lastError: null }] });
+        await post(page, { type: 'skillsState', skills: [{ id: 'project-xratu:review', name: 'review', description: 'Review project changes', dirPath: 'C:\\project\\.xratu\\skills\\review', source: 'project-xratu', error: null, enabled: true, bodyChars: 400 }] });
+        await expect(page.locator('.mcp-row').filter({ hasText: 'shared-docs' })).toBeVisible();
+        await expect(page.getByRole('button', { name: locale === 'en' ? 'Add server' : 'افزودن سرور', exact: true })).toBeVisible();
+        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory summary').click();
+        await expect(page.locator('.native-inventory')).toContainText('native-docs');
+        await page.screenshot({ path: testInfo.outputPath('shared-servers.png') });
+        await sidebar.getByRole('button', { name: locale === 'en' ? 'Marketplace' : 'فروشگاه', exact: true }).click();
+        await expect.poll(async () => (await sent(page)).some(message => (message as { type: string }).type === 'mcpMarketplaceGetState')).toBe(true);
+        await post(page, { type: 'mcpMarketplaceState', query: '', entries: [{ id: 'curated:docs', source: 'curated', serverName: 'market-docs', name: 'market-docs', description: 'Documentation server', tags: [], install: { kind: 'stdio', command: 'npx', args: ['docs-server'], runtime: 'node' }, installConfidence: 'curated' }], sources: [], status: 'live', fetchedAt: Date.now(), error: null, liveSearch: false });
+        await expect(page.locator('.mp-row')).toContainText('market-docs');
+        await page.screenshot({ path: testInfo.outputPath('shared-marketplace.png') });
+        await sidebar.getByRole('button', { name: locale === 'en' ? 'Skills' : 'مهارت ها', exact: true }).click();
+        const skill = page.locator('.mcp-row').filter({ hasText: 'review' });
+        await expect(skill).toBeVisible();
+        await skill.getByRole('switch').click();
+        expect(await sent(page)).toContainEqual({ type: 'skillsToggle', id: 'project-xratu:review', enabled: false });
+        await expect(page.getByRole('button', { name: locale === 'en' ? 'New skill' : 'مهارت جدید', exact: true })).toBeVisible();
+        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory summary').click();
+        await expect(page.locator('.native-inventory')).toContainText('native-review');
+        await page.screenshot({ path: testInfo.outputPath('shared-skills.png') });
+        await sidebar.getByRole('button', { name: locale === 'en' ? 'Agent files' : 'فایل های ایجنت', exact: true }).click();
+        await replyNative();
+        await expect(page.locator('.native-inventory')).toContainText('Explore');
+        await expect(page.locator('.native-inventory')).toContainText(locale === 'en' ? 'execution disabled' : 'اجرا غیرفعاله');
+        await page.screenshot({ path: testInfo.outputPath('native-agent-inventory.png') });
+        expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+        await page.getByRole('button', { name: locale === 'en' ? 'Manage Xratu agent files' : 'مدیریت فایل های ایجنت Xratu', exact: true }).click();
+        await expect(page.locator('.agents-page')).toBeVisible();
+        expect((await sent(page)).some(message => ['engineSelect', 'setupOpen'].includes((message as { type: string }).type))).toBe(false);
+        await page.locator('.sidebar-back').click();
+        await expect(page.locator('.composer-input')).toHaveValue('Preserve this draft');
+    });
+}
+
 for (const locale of ['en', 'fa'] as const) {
     for (const width of [420, 1280]) {
         test(`managed engine update and removal (${locale}, ${width})`, async ({ page }, testInfo) => {

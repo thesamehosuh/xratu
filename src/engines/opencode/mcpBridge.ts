@@ -4,8 +4,13 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { AggregatedTool, ExternalMcpManager } from '../../externalMcp';
+import { isNativePlanTool } from './services';
 
-export type NativeMcpSource = Pick<ExternalMcpManager, 'listTools' | 'callTool'>;
+export interface NativeMcpContext { sessionID: string; plan: boolean }
+export interface NativeMcpSource {
+    listTools: ExternalMcpManager['listTools'];
+    callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, context: NativeMcpContext): ReturnType<ExternalMcpManager['callTool']>;
+}
 const normalize = (name: string) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
 
 /** Share existing Xratu connections, including proxy routing and all transports.
@@ -35,6 +40,10 @@ export class OpenCodeMcpBridge {
     }
     toolNames(): Map<string, string> { return new Map([...this.wireTools].map(([name, tool]) => [`${this.name}_${name}`, tool.name])); }
     trustedActions(): string[] { return [...this.wireTools].filter(([, tool]) => tool.autoApprove).map(([name]) => `${this.name}_${name}`); }
+    planActions(): string[] { return [...this.wireTools].filter(([, tool]) => this.planSafe(tool)).map(([name]) => `${this.name}_${name}`); }
+    private planSafe(tool: AggregatedTool): boolean {
+        return tool.serverName === 'xratu' && tool.originalName === tool.name && isNativePlanTool(tool.name);
+    }
     activate(sessionID: string, plan: boolean, signal: AbortSignal): void { this.sessions.set(sessionID, { plan, signal }); }
     deactivate(sessionID: string): void { this.sessions.delete(sessionID); }
 
@@ -56,10 +65,10 @@ export class OpenCodeMcpBridge {
                 const sessionID = call.params._meta?.['ai.opencode/sessionID'];
                 const session = typeof sessionID === 'string' ? this.sessions.get(sessionID) : undefined;
                 const tool = this.wireTools.get(call.params.name);
-                if (!session || session.plan || session.signal.aborted || !tool) {
+                if (!session || session.signal.aborted || !tool || (session.plan && !this.planSafe(tool))) {
                     return { isError: true, content: [{ type: 'text', text: 'Xratu MCP call is not allowed in this session.' }] };
                 }
-                const result = await this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal);
+                const result = await this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan });
                 return { isError: result.isError === true, content: [
                     ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
                     ...result.images.map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.dataBase64 })),

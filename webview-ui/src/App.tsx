@@ -1,4 +1,5 @@
 import { EngineScope, NativeConfiguration } from './components/EngineScope';
+import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
 import { BrowserPanel } from './components/BrowserPanel';
@@ -324,7 +325,7 @@ export function App() {
     }, [screen, setupPath, setupCredentialId, setupRefresh, send]);
     useEffect(() => { setSettingsEngine(engineState?.active ?? 'xratu'); }, [engineState?.active, screen]);
     useEffect(() => {
-        if (settingsEngine !== 'opencode' || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
+        if (!ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
         const requestId = crypto.randomUUID();
         nativeRequest.current = requestId;
         setNativeState(null);
@@ -1320,6 +1321,7 @@ export function App() {
     if (screen === 'capabilities') {
         overlay = (
                 <CapabilitiesPage
+                    native={ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration ? { state: nativeState, refresh: () => setNativeRefresh(value => value + 1) } : undefined}
                     initialTab={capabilityTab}
                     onTabChange={setCapabilityTab}
                     onBack={() => setScreen(capReturnTo)}
@@ -1482,7 +1484,7 @@ export function App() {
     }
 
     if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
-        if (settingsEngine === 'opencode' && screen !== 'credentials') overlay = <NativeConfiguration state={nativeState} section={screen === 'agents' ? 'agents' : capabilityTab} send={send} refresh={() => setNativeRefresh((value) => value + 1)} />;
+        if (!ENGINE_CAPABILITIES[settingsEngine].subagents && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
         overlay = <div className="scoped-page"><EngineScope engine={settingsEngine} onChange={setSettingsEngine} />{overlay}</div>;
     }
     const taskControl = taskProgress && taskListView && (

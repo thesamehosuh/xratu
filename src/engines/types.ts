@@ -12,7 +12,15 @@ export interface EngineCapabilities {
     steering: boolean;
     rewind: boolean;
     localTools: boolean;
+    nativeConfiguration: boolean;
+    offline: boolean;
+    subagents: boolean;
 }
+/** Shared by runtime admission, setup, and settings; readiness is separate. */
+export const ENGINE_CAPABILITIES: Record<EngineId, EngineCapabilities> = {
+    xratu: { steering: true, rewind: true, localTools: true, nativeConfiguration: false, offline: true, subagents: true },
+    opencode: { steering: true, rewind: false, localTools: false, nativeConfiguration: true, offline: false, subagents: false },
+};
 export interface EngineTurn {
     prompt: string;
     model: string;

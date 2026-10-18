@@ -58,7 +58,7 @@ function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage[
     return (
         <div className="msg-content retry-status" aria-live="polite">
             <span className="retry-dot" aria-hidden="true" />
-            <span>{t(retryStatus.offline ? 'retryingOffline' : 'retrying')}: {retryStatus.attempt}/{retryStatus.maxAttempts}</span>
+            <span>{t(retryStatus.offline ? 'retryingOffline' : 'retrying')}: {retryStatus.attempt}{retryStatus.maxAttempts > 0 ? `/${retryStatus.maxAttempts}` : ''}</span>
             <span className="retry-countdown">{formatDuration(seconds)}</span>
         </div>
     );
@@ -2321,7 +2321,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     <span className="dot" />
                 </div>
             ) : message.retryStatus ? (
-                <RetryCountdown retryStatus={message.retryStatus} />
+                <RetryCountdown key={`${message.retryStatus.attempt}:${message.retryStatus.nextRetryInMs}`} retryStatus={message.retryStatus} />
             ) : text ? (
                 <div
                     className={`msg-content msg-text${streamingContent ? ' streaming' : ''}`}

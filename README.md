@@ -52,7 +52,9 @@ To change your connection later, open **Settings → Providers**. Use
   **Skills**, and custom **Agents**.
 
 The built-in Xratu engine supports local models, subagents, and conversation
-rewind. OpenCode uses its own credentials and native sessions; subagents,
+rewind. OpenCode shares Xratu’s MCP servers, marketplace installs, browser,
+task list, and enabled skills while keeping its own credentials and native
+sessions; subagents,
 conversation rewind, and offline mode are currently unavailable with that engine.
 
 ## Approvals and privacy

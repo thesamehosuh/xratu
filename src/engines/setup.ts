@@ -1,4 +1,6 @@
-export type SetupEngine = 'xratu' | 'opencode';
+import { ENGINE_CAPABILITIES, type EngineId } from './types';
+
+export type SetupEngine = EngineId;
 export type SetupPath = 'free' | 'provider' | 'local';
 export type ModelAvailability = 'checking' | 'available' | 'rateLimited' | 'failed';
 
@@ -28,8 +30,8 @@ export interface RuntimeSetupState {
 
 /** Setup ownership is separate from which engine a conversation runs. */
 export const ENGINE_SETUP = {
-    xratu: { label: 'engineXratu', auth: 'xratu', configuration: 'xratu', offline: true, subagents: true },
-    opencode: { label: 'engineOpenCode', auth: 'native', configuration: 'native', offline: false, subagents: false },
+    xratu: { label: 'engineXratu', auth: 'xratu', configuration: 'xratu', ...ENGINE_CAPABILITIES.xratu },
+    opencode: { label: 'engineOpenCode', auth: 'native', configuration: 'native', ...ENGINE_CAPABILITIES.opencode },
 } as const;
 
 // Adapted from T3 Code's providerReadiness.logic.ts (MIT; THIRD_PARTY_NOTICES).

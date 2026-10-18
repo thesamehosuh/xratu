@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import Module, { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { OpenCode } from '@opencode/client';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -14,9 +14,9 @@ import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-engines-'));
 const bundle = join(root, 'engine.cjs');
-await build({ stdin: { contents: "export { trimDisplayEvent } from './src/local/eventBounds'; export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/transport'; export * from './src/engines/opencode/environment'; export * from './src/engines/opencode/events'; export * from './src/engines/opencode/releases'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
+await build({ stdin: { contents: "export { trimDisplayEvent } from './src/local/eventBounds'; export * from './src/engines/setup'; export * from './src/engines/opencode/engine'; export * from './src/engines/opencode/attachments'; export * from './src/engines/opencode/installation'; export * from './src/engines/opencode/transport'; export * from './src/engines/opencode/environment'; export * from './src/engines/opencode/events'; export * from './src/engines/opencode/releases'; export * from './src/engines/opencode/permissions'; export * from './src/engines/opencode/shells'; export * from './src/engines/opencode/mcpBridge'; export * from './src/engines/opencode/services'; export * from './src/engines/types';", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle });
 const require = createRequire(import.meta.url);
-const { openCodeEnvironment, openCodeFetch, subscribeEvents, openCodeUpdateAvailable, OPENCODE_VERSION, trimDisplayEvent, OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
+const { ENGINE_CAPABILITIES, nativeServiceTools, nativeToolDisplayArgs, isNativePlanTool, isNativeServiceTool, openCodeEnvironment, openCodeFetch, subscribeEvents, openCodeUpdateAvailable, OPENCODE_VERSION, trimDisplayEvent, OpenCodeEngine, OpenCodeAttachmentStore, OpenCodeMcpBridge, OpenCodeInstallation, NativeShellMonitor, EngineError, isFreeModel, releaseTarget, openCodePermissions, setupPhase, canStartSetup } = require(bundle);
 
 async function harness(mode = 'complete', mcpSource) {
     let stream;
@@ -50,6 +50,7 @@ async function harness(mode = 'complete', mcpSource) {
         const json = (value) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: value })); };
         const integration = { id: 'openrouter', name: 'OpenRouter', methods: [{ type: 'key' }, { type: 'oauth', id: 'browser', label: 'Sign in' }], connections: [{ type: 'env', name: 'OPENROUTER_API_KEY', unexpectedSecret: 'must-not-render' }, { type: 'credential', id: 'cred-1', label: 'Saved account', method: 'key', value: { key: 'must-not-render' } }] };
         if (req.method === 'GET' && req.url.startsWith('/api/integration')) { json(req.url.split('?')[0] === '/api/integration' ? [integration] : integration); return; }
+        if (req.method === 'GET' && req.url.startsWith('/api/agent')) { if (mode === 'agentsFailed') { res.writeHead(500).end(); return; } json([{ id: 'build', name: 'Build', mode: 'primary', hidden: false, system: 'must-not-render' }, { id: 'explore', name: 'Explore', mode: 'subagent', hidden: false }, { id: 'compaction', name: 'Compact', mode: 'primary', hidden: true }]); return; }
         if (req.method === 'GET' && req.url.startsWith('/api/mcp')) { json([{ name: 'native-mcp', status: { status: 'connected' }, configuration: { key: 'must-not-render' } }, ...nativeServers.values()]); return; }
         if (req.url.startsWith('/api/experimental/mcp/')) {
             const name = decodeURIComponent(req.url.split('?')[0].split('/')[4]);
@@ -101,6 +102,16 @@ async function harness(mode = 'complete', mcpSource) {
             setImmediate(() => {
                 emit('session.execution.succeeded', { sessionID: 'native-1' }); // stale terminal before the new execution
                 emit('session.execution.started', { sessionID: 'native-1' });
+                if (mode === 'serviceEvents') {
+                    emit('session.retry.scheduled', { sessionID: 'native-1', attempt: 2, at: Date.now() + 2000, error: { message: 'Temporary outage' } });
+                    emit('session.step.started', { sessionID: 'native-1' });
+                    for (const type of ['started', 'ended', 'failed']) emit(`session.compaction.${type}`, { sessionID: 'native-1', error: { message: 'Summary unavailable' } });
+                    emit('session.tool.input.started', { sessionID: 'native-1', id: 'read-1', name: 'read' });
+                    emit('session.tool.called', { sessionID: 'native-1', id: 'read-1', input: { filePath: 'C:\\project\\file.ts' } });
+                    emit('session.tool.success', { sessionID: 'native-1', id: 'read-1', content: [{ type: 'text', text: 'File read' }, { type: 'file', mime: 'image/png', uri: 'data:image/png;base64,aW1hZ2U=' }, { type: 'file', mime: 'image/png', uri: 'http://127.0.0.1/private' }] });
+                    finish();
+                    return;
+                }
                 if (mode.startsWith('ping')) {
                     if (mode === 'pingLimited') emit('session.retry.scheduled', { sessionID: 'native-1', error: { message: 'Rate limit exceeded. Please try again later.' } });
                     else finish();
@@ -347,6 +358,67 @@ try {
         assert.equal(mcpCalls.length, 1);
     } finally { await mcpClient.close(); await bridge.dispose(); }
     console.log('ok real MCP handshake, discovery, images, loopback auth, Plan and session isolation');
+    const serviceDefinitions = [
+        { name: 'update_task_list', requiresApproval: false }, { name: 'exit_plan_mode', requiresApproval: false },
+        { name: 'skill', requiresApproval: false }, { name: 'browser_snapshot', requiresApproval: false },
+        { name: 'browser_open', requiresApproval: true }, { name: 'read_file' }, { name: 'task' }, { name: 'browser_unknown' },
+    ].map(tool => ({ description: tool.name, inputSchema: { type: 'object', properties: {} }, ...tool }));
+    const services = nativeServiceTools(serviceDefinitions);
+    assert.deepEqual(services.map(tool => tool.name), ['update_task_list', 'exit_plan_mode', 'skill', 'browser_snapshot', 'browser_open']);
+    assert.equal(services.find(tool => tool.name === 'browser_open').autoApprove, false);
+    assert.equal(nativeServiceTools([{ name: 'browser_click', description: '', inputSchema: {} }])[0].autoApprove, false, 'browser mutation approval is structural even if a catalog omits its flag');
+    const nativeInput = { filePath: 'C:\\src\\file.ts', oldString: 'before', newString: 'after' };
+    const display = nativeToolDisplayArgs('edit_file', nativeInput);
+    assert.equal(display.path, nativeInput.filePath);
+    assert.equal(display.old_text, 'before');
+    assert.equal(nativeInput.path, undefined, 'display normalization cannot mutate native arguments');
+    assert.equal(ENGINE_CAPABILITIES.opencode.subagents, false);
+    const serviceCalls = [];
+    const serviceBridge = new OpenCodeMcpBridge({ listTools: async () => services, callTool: async (name, args, signal, context) => {
+        serviceCalls.push({ name, context });
+        return { text: 'Updated', images: [] };
+    } });
+    const serviceClient = new Client({ name: 'services-test', version: '1.0.0' });
+    const serviceController = new AbortController();
+    try {
+        serviceBridge.setTools([...services, mcpTools[0]]);
+        const connection = await serviceBridge.connect();
+        await serviceClient.connect(new StreamableHTTPClientTransport(new URL(connection.url), { requestInit: { headers: connection.headers } }));
+        serviceBridge.activate('native-plan', true, serviceController.signal);
+        const call = (name, sessionID = 'native-plan') => serviceClient.callTool({ name, arguments: {}, _meta: { 'ai.opencode/sessionID': sessionID } });
+        for (const name of ['update_task_list', 'exit_plan_mode', 'skill', 'browser_snapshot']) assert.notEqual((await call(name)).isError, true);
+        for (const name of ['browser_open', 'mcp__docs__lookup', 'browser_unknown']) assert.equal((await call(name)).isError, true, `${name} stays denied in Plan`);
+        assert.equal((await call('skill', 'wrong-session')).isError, true);
+        assert.equal(serviceCalls.length, 4);
+        assert.deepEqual(serviceCalls[0].context, { sessionID: 'native-plan', plan: true });
+        assert.equal(serviceBridge.planActions().length, 4, 'only curated, plan-safe Xratu services get native permission rules');
+        const planEngine = await harness('plan', { listTools: async () => services, callTool: async () => ({ text: '', images: [] }) });
+        try {
+            for await (const _event of planEngine.engine.runTurn({ ...baseTurn, plan: true, signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
+            const policy = planEngine.requests.find(request => request.method === 'POST' && request.path === '/api/session').body.permissions;
+            assert.ok(policy.some(rule => rule.action.endsWith('_update_task_list') && rule.effect === 'allow'));
+            assert.ok(!policy.some(rule => rule.action.endsWith('_browser_open') && rule.effect === 'allow'));
+            assert.ok(policy.some(rule => rule.action === '*' && rule.effect === 'deny'));
+        } finally { await planEngine.close(); }
+        serviceBridge.activate('native-plan', false, serviceController.signal);
+        assert.notEqual((await call('browser_open')).isError, true);
+        serviceController.abort();
+        assert.equal((await call('skill')).isError, true);
+    } finally { await serviceClient.close(); await serviceBridge.dispose(); }
+    const nativeEvents = await harness('serviceEvents');
+    try {
+        const events = [];
+        for await (const event of nativeEvents.engine.runTurn({ ...baseTurn, signal: AbortSignal.timeout(5000) }, host)) events.push(event);
+        assert.equal(events.find(event => event.type === 'toolCall').args.path, 'C:\\project\\file.ts');
+        const output = events.find(event => event.type === 'toolResult');
+        assert.equal(output.output, 'File read');
+        assert.equal(output.images[0].dataBase64, 'aW1hZ2U=');
+        assert.equal(output.images.length, 1, 'native file/HTTP URIs are never fetched');
+        assert.equal(events.find(event => event.type === 'retrying').maxAttempts, 0, 'native retry limits remain unknown');
+        assert.equal(events.filter(event => event.type === 'engineNotice').length, 3);
+        assert.ok(events.some(event => event.type === 'attempting'));
+    } finally { await nativeEvents.close(); }
+    console.log('ok shared service catalog, Plan allowlist, native image parts, display metadata and lifecycle feedback');
     const namesBridge = new OpenCodeMcpBridge(mcpSource);
     namesBridge.setTools([
         { ...mcpTools[0], name: 'mcp__foo.bar__lookup', autoApprove: true },
@@ -418,6 +490,13 @@ try {
     assert.equal(canStartSetup({ ...setup, models: [{ ...setup.models[0], free: false }] }, 'free', 1001), false);
     assert.equal(canStartSetup(setup, 'paid', 1001), false);
     console.log('ok onboarding readiness, free-only handoff, expiring evidence and busy guard');
+    const missingAgentApi = await harness('agentsFailed');
+    try {
+        const data = await missingAgentApi.engine.configuration(root, AbortSignal.timeout(5000));
+        assert.equal(data.agentsErrorKey, 'nativeAgentsLoadFailed');
+        assert.equal(data.integrations[0].id, 'openrouter', 'optional agent inventory failure must not disable provider settings');
+        assert.equal(data.servers[0].name, 'native-mcp');
+    } finally { await missingAgentApi.close(); }
     const nativeConfig = await harness();
     try {
         const data = await nativeConfig.engine.configuration(root, AbortSignal.timeout(5000));
@@ -425,6 +504,7 @@ try {
         assert.equal(data.integrations[0].key, true);
         assert.equal(data.servers[0].name, 'native-mcp');
         assert.equal(data.skills[0].name, 'Native skill');
+        assert.deepEqual(data.agents.map(agent => agent.id), ['build', 'explore']);
         assert.equal(JSON.stringify(data).includes('must-not-render'), false, 'native secrets and skill content never enter display envelopes');
         await nativeConfig.engine.connectKey('openrouter', 'test-only-key', root, AbortSignal.timeout(5000));
         const write = nativeConfig.requests.find((request) => request.method === 'POST' && request.path.includes('/connect/key'));
@@ -437,10 +517,23 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
-    const sandbox = { buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const moduleLoad = Module._load;
+    let sharedExecutorModule;
+    try {
+        Module._load = function (request, parent, isMain) {
+            if (request === 'vscode') return { workspace: { getConfiguration: () => ({ get: () => undefined }), isTrusted: true }, env: {} };
+            return moduleLoad.call(this, request, parent, isMain);
+        };
+        sharedExecutorModule = require('../out/mcp.js');
+    } finally { Module._load = moduleLoad; }
+    const skillModule = require('../out/skills.js');
+    const sandbox = { externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+    const nativeDefinitionsMethod = sandbox.Host.prototype._nativeServiceDefinitions;
+    const nativeExecutorMethod = sandbox.Host.prototype._nativeServiceExecutor;
+    Object.assign(sandbox.Host.prototype, { _nativeServiceDefinitions: () => [], _nativeServiceExecutor: () => ({ execute: async () => ({ output: 'ok' }) }), _currentTaskList: () => [], _globalState: { get: () => undefined } });
     function lifecycleHost() {
         const host = new sandbox.Host();
         const operations = [];
@@ -521,7 +614,69 @@ try {
     assert.equal((await resumed.host._getOpenCodeEngine(restoredBinary)).binary, restoredBinary, 'saved native sessions keep their binary identity after an update');
     resumed.host._engineSession = { engineId: 'opencode', binaryPath: restoredBinary };
     assert.equal((await resumed.host._getOpenCodeEngine()).binary, restoredBinary, 'model probes and settings cannot replace the runtime of a restored conversation');
+    const boundSource = resumed.host._openCodeEngine.mcpSource;
+    const serviceSignal = new AbortController();
+    const executions = [];
+    resumed.host._nativeToolContext = { sessionID: 'bound-session', plan: true, signal: serviceSignal.signal, executor: { execute: async call => { executions.push(call); return { output: 'Executed', images: [] }; } } };
+    const invoke = (name, sessionID = 'bound-session', plan = true, signal = serviceSignal.signal) => boundSource.callTool(name, { name: 'example' }, signal, { sessionID, plan });
+    assert.equal((await invoke('skill')).text, 'Executed');
+    assert.equal((await invoke('browser_snapshot')).text, 'Executed');
+    assert.equal((await invoke('browser_open')).isError, true, 'host independently refuses Plan mutation');
+    assert.equal((await invoke('skill', 'unrelated-session')).isError, true);
+    assert.equal((await invoke('skill', 'bound-session', false)).isError, true);
+    assert.equal((await invoke('skill', 'bound-session', true, new AbortController().signal)).isError, true);
+    assert.equal(executions.length, 2, 'wrong session, policy or cancellation identity never reaches the executor');
+    serviceSignal.abort();
+    assert.equal((await invoke('skill')).isError, true);
+    resumed.host._nativeToolContext = undefined;
+    assert.equal((await invoke('skill')).isError, true, 'settled turns lose access');
+    const skillDir = join(root, '.xratu', 'skills', 'service-check');
+    await mkdir(join(skillDir, 'references'), { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '\ufeff---\r\nname: service-check\r\ndescription: Test shared skill\r\n---\r\nFollow the service checklist.');
+    await writeFile(join(skillDir, 'references', 'steps.txt'), 'Inspect the shared executor.');
+    const disabledSkills = new Set();
+    const browserCalls = [];
+    Object.assign(resumed.host, {
+        _nativeServiceDefinitions: nativeDefinitionsMethod,
+        _nativeServiceExecutor: nativeExecutorMethod,
+        _discoverSkillsForRun: workspace => skillModule.listableSkills(skillModule.discoverSkills({ workspaceRoot: workspace }), disabledSkills),
+        _disabledSkillIds: () => [...disabledSkills],
+        _browserSessionId: () => 'xratu-chat-services',
+        _browser: { setSession: id => browserCalls.push({ id }), tool: async (sessionId, name, args, signal) => { browserCalls.push({ sessionId, name, signal }); return { output: 'Browser state', images: [] }; } },
+        _checkpoints: { ensureTurnSnapshot: () => { throw new Error('read-only services must not create file snapshots'); } },
+    });
+    const catalog = await boundSource.listTools();
+    assert.ok(catalog.some(tool => tool.name === 'skill' && tool.inputSchema.properties.name.enum.includes('service-check')));
+    assert.ok(catalog.some(tool => tool.name === 'update_task_list'));
+    assert.ok(catalog.some(tool => tool.name === 'browser_open' && !tool.autoApprove));
+    assert.ok(!catalog.some(tool => tool.name === 'task' || tool.name === 'edit_file'));
+    const activeSignal = new AbortController();
+    const serviceExecutor = resumed.host._nativeServiceExecutor(root, activeSignal.signal, true);
+    resumed.host._nativeToolContext = { sessionID: 'native-services', plan: true, signal: activeSignal.signal, executor: serviceExecutor };
+    const executeService = (name, args) => boundSource.callTool(name, args, activeSignal.signal, { sessionID: 'native-services', plan: true });
+    const expansion = require('../out/xratu_mcp_tools.js');
+    let writtenTasks, exitedPlan = false;
+    expansion.setTaskListWriteListener(tasks => { writtenTasks = tasks; });
+    expansion.setPlanModeExitListener(() => { exitedPlan = true; });
+    try {
+        const tasks = [{ label: 'Check service integration', status: 'in_progress' }];
+        assert.notEqual((await executeService('update_task_list', { tasks })).isError, true);
+        assert.deepEqual(writtenTasks, tasks, 'native calls use the actual Xratu task-list writer');
+        assert.match((await executeService('skill', { name: 'service-check' })).text, /Follow the service checklist/);
+        assert.match((await executeService('skill', { name: 'service-check', resource: 'references/steps.txt' })).text, /Resource: service-check\/references\/steps\.txt\n\nInspect the shared executor\./);
+        assert.equal((await executeService('skill', { name: 'service-check', resource: '../outside.txt' })).isError, true);
+        disabledSkills.add('project-xratu:service-check');
+        assert.equal((await executeService('skill', { name: 'service-check' })).isError, true, 'disabled skills are gated even with a stale native catalog');
+        await executeService('browser_snapshot', {});
+        assert.equal(browserCalls.at(-1).sessionId, 'xratu-chat-services', 'native metadata must not replace the shared Xratu browser identity');
+        assert.equal(browserCalls.at(-1).signal, activeSignal.signal);
+        assert.notEqual((await executeService('exit_plan_mode', {})).isError, true);
+        assert.equal(exitedPlan, true);
+        assert.equal((await serviceExecutor.execute({ id: 'blocked', name: 'browser_open', arguments: { url: 'https://example.test' }, argumentsJson: '{}' })).isError, true, 'ending Plan does not unlock the current executor');
+    } finally { expansion.setTaskListWriteListener(null); expansion.setPlanModeExitListener(null); }
+    console.log('ok real native host executor: task persistence, skill resources/disablement, browser identity and frozen Plan handoff');
     await resumed.host._openCodeEngine.dispose();
+    console.log('ok native host service context enforces session, Plan, cancellation identity and settlement');
     console.log('ok update/removal lifecycle, runtime disposal, failure recovery, busy guards and saved-session identity');
     const nativeTurn = await harness('cancelResume');
     try {
@@ -595,6 +750,21 @@ try {
         assert.equal(events.at(-1).value, 'done');
     } finally { await failedTurn.close(); }
     console.log('ok repeated native edit failures release the host/UI and preserve same-session continuation');
+    for (const explanations of [true, false]) {
+        const errorHost = new sandbox.Host();
+        const messages = [];
+        Object.assign(errorHost, {
+            _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(),
+            _view: { webview: { postMessage: message => messages.push(message) } },
+            _getOpenCodeEngine: async () => { throw new Error('getaddrinfo ENOTFOUND provider.example'); },
+            _postEngineState: () => {}, _globalState: { get: () => explanations },
+        });
+        const outcome = await errorHost._runOpenCodeAgent('Check the connection');
+        assert.equal(outcome.errorEvent.error, 'getaddrinfo ENOTFOUND provider.example', 'keep the original native error for history');
+        assert.equal(messages.at(-1)[explanations ? 'valueKey' : 'value'], explanations ? 'errDns' : 'getaddrinfo ENOTFOUND provider.example');
+        assert.equal(errorHost._nativeToolContext, undefined);
+    }
+    console.log('ok native error explanations respect the shared preference and preserve provider detail');
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;
