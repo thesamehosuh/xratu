@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, CodeXml, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, TriangleAlert } from 'lucide-react';
+import { ChevronDown, CodeXml, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
 import { ReviewDiff } from './ReviewDiff';
 
-export interface ReviewTurn { sha: string; toSha?: string; number: number }
+export interface ReviewTurn { sha: string; toSha?: string; number: number; userIndex?: number }
 const ignoreFiles = () => {};
 
 export function ChangesPanel({ turns = [], selectedNumber = null, onTurnFiles, ...props }: {
@@ -71,13 +71,14 @@ function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath,
                 <span className="review-turn-title"><span className="review-turn-heading">{tf('surfacePreviousTurn', { number: String(turn.number) })}<span className="review-turn-files">{tf('surfaceTurnFiles', { count: String(count) })}</span></span></span>
                 <span className="review-turn-action">{t(expanded ? 'surfaceHideChanges' : 'surfaceShowChanges')}</span>
             </summary>
-            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={!turn.toSha && busy} sessionKey={sessionKey} onFeedback={onFeedback} onCount={updateCount} onFiles={setFiles} onSnapshot={recordFiles} expanded={current || expanded} />
+            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={busy} sessionKey={sessionKey} onFeedback={onFeedback} onCount={updateCount} onFiles={setFiles} onSnapshot={recordFiles} expanded={current || expanded} userIndex={turn.userIndex} />
         </details>
     </>;
 }
 
-function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onSnapshot, expanded = true }: {
+function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onSnapshot, expanded = true, userIndex }: {
     sha: string | null;
+    userIndex?: number;
     toSha?: string;
     expanded?: boolean;
     onSnapshot?: (files: ReviewChange[]) => void;
@@ -93,6 +94,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const listTimer = useRef<number>();
     const fileTimer = useRef<number>();
     const listRequest = useRef('');
+    const listLoaded = useRef(false);
     const fileRequest = useRef('');
     const loadedFile = useRef<ReviewFile | null>(null);
     const previousFiles = useRef<ReviewChange[]>([]);
@@ -105,6 +107,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const [fileError, setFileError] = useState<string | null>(null);
     const [revision, setRevision] = useState(0);
     const [visibleFiles, setVisibleFiles] = useState(80);
+    const liveBusy = busy && !toSha;
     const refresh = () => setRevision((value) => value + 1);
 
     useEffect(() => {
@@ -113,6 +116,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
             if (message.type === 'changesState' && message.requestId === listRequest.current && message.sha === sha) {
                 window.clearTimeout(listTimer.current);
                 setLoading(false);
+                listLoaded.current = true;
                 setErrorKey(message.errorKey ?? null);
                 setFiles(message.files);
                 const previous = new Map(previousFiles.current.map(file => [file.path, file]));
@@ -144,7 +148,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
 
     useEffect(() => {
         setFiles([]); setSelected(null); setFile(null);
-        loadedFile.current = null; previousFiles.current = [];
+        loadedFile.current = null; previousFiles.current = []; listLoaded.current = false;
         listRequest.current = ''; fileRequest.current = '';
         setVisibleFiles(80);
         onCount(0); onFiles([]);
@@ -155,11 +159,11 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     useEffect(() => {
         listRequest.current = `${id}-list-${++sequence.current}`;
         if (!sha) { setLoading(false); setErrorKey(null); return; }
-        setLoading(true); setErrorKey(null);
+        setLoading(!listLoaded.current); setErrorKey(null);
         postMessage({ type: 'changesGetState', sha, toSha, requestId: listRequest.current });
         listTimer.current = window.setTimeout(() => { setLoading(false); setErrorKey('surfaceChangesFailed'); }, 45_000);
         return () => window.clearTimeout(listTimer.current);
-    }, [sha, toSha, busy, revision, sessionKey, id]);
+    }, [sha, toSha, liveBusy, revision, sessionKey, id]);
 
     useEffect(() => {
         fileRequest.current = `${id}-file-${++sequence.current}`;
@@ -175,6 +179,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     useEffect(() => {
         let timer: number | undefined;
         const changed = (event: MessageEvent<FromExtensionMessage>) => {
+            if (event.data.type === 'checkpointRestored' && (event.data.sessionId ?? '') === sessionKey) { refresh(); return; }
             if (toSha) return;
             if (event.data.type !== 'toolResult' && event.data.type !== 'backgroundJobs') return;
             if (event.data.type === 'toolResult' && !['apply_patch', 'edit_file', 'replace_in_file', 'write_file', 'delete_file', 'move_file', 'copy_file', 'git_commit', 'git_branch', 'git_checkout', 'git_pull', 'git_push', 'git_merge', 'install_dependency', 'run_tests', 'run_terminal_command', 'process', 'task'].includes(event.data.tool) && !event.data.tool.startsWith('mcp__')) return;
@@ -189,6 +194,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const openFile = () => { if (sha && selected) postMessage({ type: 'changeFileOpen', sha, toSha, path: selected }); };
     return <section className="changes-review" hidden={!expanded} aria-label={t('surfaceChanges')}>
         <div className="review-head"><span>{t('surfaceSinceCheckpoint')}</span>{!!files.length && <span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span>}
+            {!!files.length && userIndex !== undefined && <button type="button" className="settings-ghost-action review-restore" disabled={busy} onClick={() => { if (sha) postMessage({ type: 'restoreCheckpoint', userIndex, sha }); }} title={t('restoreCheckpointHint')}><RotateCcw size={12} />{t('restoreCheckpoint')}</button>}
             <button type="button" className="icon-btn" onClick={refresh} aria-label={t('surfaceRefresh')} disabled={!sha || loading}><RefreshCw size={12} /></button>
         </div>
         <div className="review-body">

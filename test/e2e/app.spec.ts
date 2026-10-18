@@ -310,7 +310,7 @@ test('the edit pill open-diff button posts the call to the host', async ({ page 
     });
 });
 
-test('the outcome reviews the turn checkpoint without extra message-footer actions', async ({ page }) => {
+test('the outcome reviews the turn checkpoint and the user footer restores it', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
@@ -332,7 +332,8 @@ test('the outcome reviews the turn checkpoint without extra message-footer actio
     const review = page.locator('.outcome-review');
     await expect(review).toBeVisible();
     await expect(page.locator('.msg-footer button[aria-label="Review changes"]')).toHaveCount(0);
-    await expect(page.locator('button[aria-label="Restore files"]')).toHaveCount(0);
+    await page.locator('button[aria-label="Restore files"]').click();
+    await expect.poll(async () => (await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>).filter(message => message.type === 'restoreCheckpoint').at(-1)).toMatchObject({ userIndex: 0, sha: 'abc1234' });
     await expect(page.locator('button[aria-label="Regenerate response"]')).toHaveCount(0);
     await review.click();
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;

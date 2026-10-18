@@ -226,8 +226,9 @@ export function App() {
     const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
     const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
     const reviewTurns = useMemo(() => {
-        const turns = chat.messages.filter(message => message.role === 'user' && message.cp);
-        return turns.map((message, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.cp, number: index + 1 }));
+        const users = chat.messages.filter(message => message.role === 'user');
+        const turns = users.map((message, userIndex) => ({ message, userIndex })).filter(({ message }) => message.cp);
+        return turns.map(({ message, userIndex }, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.message.cp, number: index + 1, userIndex }));
     }, [chat.messages]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [turnFiles, setTurnFiles] = useState<{ session: string | null; files: Record<string, ReviewChange[]> }>({ session: null, files: {} });

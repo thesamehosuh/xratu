@@ -1938,8 +1938,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         if (!this._checkpointActionCurrent(context, userIndex)) return;
         const choice = await this.confirmBanner(
-            'checkpointScopeConfirm',
-            ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
+            context.engine === 'opencode' ? 'notifRestoreConfirm' : 'checkpointScopeConfirm',
+            context.engine === 'opencode' ? ['checkpointScopeFiles', 'notifCancel'] : ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
+            { target: sha },
         );
         if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
         await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
@@ -1963,6 +1964,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 let emptySeed = false;
                 try {
                     const result = await this._checkpoints.restoreCheckpoint(context.root, resolved);
+                    this._view?.webview.postMessage({ type: 'checkpointRestored', sessionId: this._sessionId });
                     if (result.changed) this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
                 } catch (e) {
                     if (e instanceof EmptySeedError) emptySeed = true;

@@ -26,6 +26,7 @@ import {
     Paperclip,
     PencilLine,
     Plus,
+    RotateCcw,
     Trash2,
     TriangleAlert,
     X,
@@ -2111,7 +2112,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2393,6 +2394,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
+                    {!busy && userIndex !== undefined && message.cp && onRestoreCheckpoint && <button type="button" className="icon-btn" onClick={() => onRestoreCheckpoint(userIndex, message.cp!)} aria-label={t('restoreCheckpoint')} title={t('restoreCheckpointHint')}><RotateCcw size={13} /></button>}
                     {showEditBtn && (
                         <button
                             type="button"

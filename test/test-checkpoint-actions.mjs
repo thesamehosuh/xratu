@@ -31,7 +31,7 @@ function harness() {
     host._dropOrphanedTaskListEdit = () => {};
     host._persistLocalSession = async () => {};
     const confirm = deferred(), shown = deferred();
-    host.confirmBanner = () => { shown.resolve(); return confirm.promise; };
+    host.confirmBanner = (...args) => { shown.resolve(args); return confirm.promise; };
     return { host, notices, messages, restores, truncations, confirm, shown };
 }
 try {
@@ -112,10 +112,13 @@ try {
         const t = harness();
         t.host._activeEngine = 'opencode';
         const request = t.host._restoreCheckpointAt(0, sha.slice(0, 12));
-        await t.shown.promise;
+        const confirmation = await t.shown.promise;
+        assert.equal(confirmation[0], 'notifRestoreConfirm');
+        assert.deepEqual(Array.from(confirmation[1]), ['checkpointScopeFiles', 'notifCancel']);
         t.confirm.resolve(choice);
         await request;
         assert.equal(t.restores.length, choice === 'checkpointScopeFiles' ? 1 : 0);
+        assert.equal(t.messages.filter(message => message.type === 'checkpointRestored' && message.sessionId === 'A').length, choice === 'checkpointScopeFiles' ? 1 : 0);
         assert.equal(t.truncations.length, 0);
     }
     console.log('ok native files-only restore remains supported; native chat rewind cannot write');
