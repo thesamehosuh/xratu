@@ -74,8 +74,8 @@ export function SubagentsPanel({ runs, selectedId, onSelect, visible, panelClass
     const mounted = new Set([...opened, ...(selected && visible ? [selected.id] : [])]);
     return <div className={`agents-pane ${panelClass}`} id="surface-panel-agents" role="tabpanel" aria-labelledby="surface-tab-agents" aria-hidden={!visible || undefined}>
         {runs.length === 0 ? (
-            <div className="agent-empty-pane" role="status">
-                <div className="agent-empty-icon" aria-hidden="true"><Bot size={22} /></div>
+            <div className="agent-empty-pane surface-empty-state" role="status">
+                <div className="agent-empty-icon surface-empty-icon" aria-hidden="true"><Bot size={22} /></div>
                 <strong className="agent-empty-title">{t('surfaceNoAgents')}</strong>
                 <p className="agent-empty-hint">{t('agentEmptyHint')}</p>
                 <button type="button" className="secondary-btn" onClick={onConversation}>{t('surfaceBackToConversation')}</button>

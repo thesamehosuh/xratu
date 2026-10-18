@@ -369,5 +369,7 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
 - Keep Settings concise: omit conversation detail preview prose and the
   always-visible approvals explanation. Keep conversation reset a compact action
   beside the Conversation heading, not a full-width preference row.
-- The composer stop/cancel action uses a red background with white content in
-  both idle and hover states; never inherit the send action's teal hover fill.
+- The composer stop/cancel action stays neutral: transparent background with
+  the foreground icon at rest, and a soft red tint with an error-foreground
+  icon on hover; never inherit the send action's teal hover fill, and never
+  fill it solid red either.

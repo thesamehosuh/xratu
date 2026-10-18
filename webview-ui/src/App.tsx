@@ -7,6 +7,7 @@ import { SubagentsPanel } from './components/SubagentsPanel';
 import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AgentsPage } from './components/AgentsPage';
+import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
@@ -1686,6 +1687,7 @@ export function App() {
             </div>
             </div>
             <div className="compose-dock">
+            {dock.mainActive !== 'pullRequests' && dock.sideActive !== 'pullRequests' && <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />}
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}

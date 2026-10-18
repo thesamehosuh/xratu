@@ -2510,8 +2510,8 @@ export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, fi
     const isFiltered = filter !== 'all' || Boolean(search.trim());
     if (!activity.length) {
         return (
-            <div className="activity-empty" role="status">
-                <div className="activity-empty-icon" aria-hidden="true">
+            <div className="activity-empty surface-empty-state" role="status">
+                <div className="activity-empty-icon surface-empty-icon" aria-hidden="true">
                     <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M2 10h3.5l2.3-5.2 4.1 10.4 2.6-5.2H18" />
                     </svg>

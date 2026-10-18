@@ -51,8 +51,8 @@ export function PullRequestsPanel({ visible, panelClass, busy, state, pending, e
                 <div className="pr-actions"><button type="button" className="secondary-btn" disabled={pending || busy || running || state.offline} onClick={() => action('resume')}>{t('prContinue')}</button><button type="button" className="settings-ghost-action" disabled={pending || running} onClick={() => action('dismiss')}>{t('prDismiss')}</button></div>
             </section>}
             {state.links.length === 0 && !error && (
-                <div className="pr-empty-state" role="status">
-                    <div className="pr-empty-icon" aria-hidden="true">
+                <div className="pr-empty-state surface-empty-state" role="status">
+                    <div className="pr-empty-icon surface-empty-icon" aria-hidden="true">
                         <GitPullRequest size={22} />
                     </div>
                     <strong className="pr-empty-title">{t('prEmptyTitle')}</strong>

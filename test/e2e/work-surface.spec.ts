@@ -54,6 +54,76 @@ const openReview = async (page: Page, prompt = 'Fix this') => {
     await expect(page.locator('.review-diff')).toBeVisible();
 };
 
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`restore controls and stable, shared empty states (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        // A user row without a checkpoint must not shift the restore target.
+        await post(page, { type: 'restoreUser', value: 'Earlier context' });
+        await openReview(page);
+        await expect(page.locator('.review-current .review-restore')).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await page.screenshot({ path: info.outputPath('restore-files.png') });
+        await page.locator('.review-current .review-restore').click();
+        await expect.poll(async () => (await sent(page)).filter(message => message.type === 'restoreCheckpoint').at(-1)).toMatchObject({ sha, userIndex: 1 });
+        const beforeRestore = await latest(page, 'changesGetState');
+        await post(page, { type: 'checkpointRestored', sessionId: null });
+        const request = await latest(page, 'changesGetState', beforeRestore.requestId);
+        await post(page, { ...request, type: 'changesState', files: [] });
+        const empty = page.locator('.changes-pane .surface-empty-state');
+        await expect(empty).toBeVisible();
+        await page.locator('.review-current .review-head .icon-btn').click();
+        const refresh = await latest(page, 'changesGetState', request.requestId);
+        // Keep a refresh pending: the settled empty state must stay visible.
+        await expect(empty).toBeVisible();
+        await expect(page.locator('.review-current .review-empty')).toHaveCount(0);
+        await page.screenshot({ path: info.outputPath('changes-empty-refresh.png') });
+        await post(page, { ...refresh, type: 'changesState', files: [] });
+        for (const panel of ['activity', 'agents', 'background', 'pullRequests']) {
+            if (!await page.locator(`#surface-tab-${panel}`).count()) {
+                await page.locator('.dock-tabs.main .dock-add-button').click();
+                await page.locator(`.new-tab-pane:not(.panel-hidden) [data-open-panel="${panel}"]`).click();
+            } else await page.locator(`#surface-tab-${panel}`).click();
+            const state = page.locator(`#surface-panel-${panel} .surface-empty-state`);
+            await expect(state).toBeVisible();
+            await expect(state).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+            await expect(state).toHaveCSS('border-top-width', '0px');
+            await page.screenshot({ path: info.outputPath(`${panel}-empty.png`) });
+        }
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.msg.user .icon-btn').filter({ has: page.locator('.lucide-rotate-ccw') })).toHaveCount(1);
+        await post(page, { type: 'startResponse' });
+        await expect(page.locator('.msg.user .lucide-rotate-ccw')).toHaveCount(0);
+        await page.locator('#surface-tab-changes').click();
+        await expect(empty).toBeVisible();
+    });
+
+    test(`summary icons and cancel hover feedback (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'restoreUser', value: 'Inspect the code' });
+        await post(page, { type: 'startResponse' });
+        const stop = page.locator('.send-btn.is-stop');
+        await expect(stop).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await stop.hover();
+        await expect(stop).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await page.screenshot({ path: info.outputPath('cancel-hover.png') });
+        await page.mouse.move(0, 0);
+        await post(page, { type: 'toolCall', tool: 'read_file', args: '{"path":"src/example.ts"}', callId: 'read' });
+        await post(page, { type: 'toolResult', tool: 'read_file', output: 'export const value = 1;', callId: 'read' });
+        await post(page, { type: 'fullResponse', persian: 'Inspected the file.' });
+        const summary = page.locator('.completed-steps > summary');
+        await summary.click();
+        await page.mouse.move(0, 0);
+        const accent = await summary.locator('svg').first().evaluate(element => getComputedStyle(element).color);
+        const icon = page.locator('.compact-step > svg').first();
+        await expect(icon).not.toHaveCSS('color', accent);
+        await page.screenshot({ path: info.outputPath('summary-expanded.png') });
+        await page.locator('.compact-step').first().hover();
+        await expect(icon).toHaveCSS('color', accent);
+        await expect(summary.locator('svg').first()).toHaveCSS('color', accent);
+    });
+}
+
 test.beforeEach(async ({ page }) => {
     await installVscodeTheme(page);
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -240,7 +310,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         await openReview(page);
         const previousList = await latest(page, 'changesGetState');
         const previousFile = await latest(page, 'changeFileGet');
-        await page.locator('.review-head button').click();
+        await page.locator('.review-head .icon-btn').click();
         const request = await latest(page, 'changesGetState', previousList.requestId);
         await post(page, { ...request, type: 'changesState', files: changes });
         const longCode = `const url = "https://example.com/${'segment'.repeat(150)}";`;
@@ -616,7 +686,7 @@ test('review diffs omit patch metadata, grow taller and stay bounded in the main
     await openReview(page);
     const list = await latest(page, 'changesGetState');
     const file = await latest(page, 'changeFileGet');
-    await page.locator('.review-head button').click();
+    await page.locator('.review-head .icon-btn').click();
     const request = await latest(page, 'changesGetState', list.requestId);
     await post(page, { ...request, type: 'changesState', files: changes });
     await replyFile(page, 'Long source line\n'.repeat(100), file.requestId);
