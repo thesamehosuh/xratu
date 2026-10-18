@@ -360,6 +360,63 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     check('release settles the slot (cancel cannot hang a caller)', released, '');
 }
 
+// Windows mkdir can return EPERM while another process removes the lock.
+// Inject it so every CI platform covers recovery, timeout, and cancellation.
+{
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'windows-delete-race');
+    const nativeFs = require('node:fs');
+    const oldMkdir = nativeFs.mkdirSync;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    let failures = 0;
+    let entered = 0;
+    let waits = 0;
+    let clock = 0;
+    nativeFs.mkdirSync = (target, ...args) => {
+        if (target === lock && failures-- > 0) {
+            const error = new Error('directory deletion pending');
+            error.code = 'EPERM';
+            throw error;
+        }
+        return oldMkdir(target, ...args);
+    };
+    const opts = {
+        timeoutMs: 15, sleepMs: 5, nowMs: () => clock,
+        sleep: async (ms) => { waits++; clock += ms; },
+    };
+    const work = async () => { entered++; return 'ok'; };
+    try {
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        failures = 2;
+        check('Windows deletion race retries then acquires', await withDirectoryLock(lock, opts, work), 'ok');
+        check('Windows deletion race yields between attempts', waits, 2);
+        check('Windows deletion race enters only after mkdir succeeds', entered, 1);
+        check('Windows deletion race releases the acquired lock', fs.existsSync(lock), false);
+
+        failures = Infinity;
+        entered = 0; waits = 0; clock = 0;
+        const timeout = await withDirectoryLock(lock, opts, work).catch((e) => e);
+        check('persistent Windows EPERM respects deadline', timeout.name, 'LockTimeoutError');
+        check('persistent Windows EPERM yields until deadline', waits, 3);
+        check('persistent Windows EPERM never enters critical section', entered, 0);
+
+        const controller = new AbortController();
+        const cancelled = await withDirectoryLock(lock, {
+            ...opts, signal: controller.signal,
+            sleep: async () => { controller.abort(); },
+        }, work).catch((e) => e);
+        check('Windows EPERM retry honors cancellation', cancelled.name, 'AbortError');
+        check('cancelled Windows EPERM never enters critical section', entered, 0);
+
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        const denied = await withDirectoryLock(lock, opts, work).catch((e) => e);
+        check('POSIX EPERM is still propagated', denied.code, 'EPERM');
+    } finally {
+        nativeFs.mkdirSync = oldMkdir;
+        Object.defineProperty(process, 'platform', platform);
+    }
+}
+
 // --- two REAL processes against one store (Cline's process.test.ts bar) -------
 {
     const { spawn } = await import('child_process');

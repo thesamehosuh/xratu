@@ -142,7 +142,11 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
             fs.mkdirSync(lockPath);
             break; // acquired
         } catch (err) {
-            if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+            const code = (err as NodeJS.ErrnoException)?.code;
+            // Windows can report EPERM while another process deletes the
+            // directory. Retry through the same deadline/abort path; only a
+            // successful mkdir grants ownership, never the error itself.
+            if (code !== 'EEXIST' && !(process.platform === 'win32' && code === 'EPERM')) throw err;
         }
 
         const owner = readOwner(lockPath);
