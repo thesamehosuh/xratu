@@ -12,6 +12,18 @@ const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
     }).toBe(true);
     return (await sent(page)).filter((m) => m.type === type).at(-1)!;
 };
+/** Resolved computed color for a CSS value - custom properties keep their raw
+ *  source string, so assertions compare resolved colors only. */
+const computedColor = (page: Page, cssValue: string) =>
+    page.evaluate((value) => {
+        const probe = document.createElement('span');
+        probe.style.color = value;
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+    }, cssValue);
+const varColor = (page: Page, name: string) => computedColor(page, `var(${name})`);
 const dragToSidebar = async (page: Page, selector: string) => {
     const tab = page.locator(selector);
     // Wait for layout and locale changes to settle before starting the gesture.
@@ -86,7 +98,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
             const state = page.locator(`#surface-panel-${panel} .surface-empty-state`);
             await expect(state).toBeVisible();
             await expect(state).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-            await expect(state).toHaveCSS('border-top-width', '0px');
+            for (const side of ['top', 'right', 'bottom', 'left']) await expect(state).toHaveCSS(`border-${side}-width`, '0px');
             await page.screenshot({ path: info.outputPath(`${panel}-empty.png`) });
         }
         await page.locator('#surface-tab-conversation').click();
@@ -105,11 +117,39 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         const stop = page.locator('.send-btn.is-stop');
         await expect(stop).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
         await stop.hover();
-        await expect(stop).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        // Approved stop style: error-foreground icon on a SOFT red tint. An
+        // opaque fill - the solid red or the send action's teal - must fail,
+        // not just a transparent one.
+        await expect(stop).toHaveCSS('color', await varColor(page, '--vscode-errorForeground'));
+        const hoverBackground = await stop.evaluate((element) => getComputedStyle(element).backgroundColor);
+        const alpha = (() => {
+            const slash = hoverBackground.match(/\/\s*([\d.]+)\s*\)/); // color(srgb r g b / a)
+            if (slash) return Number(slash[1]);
+            const channels = hoverBackground.match(/rgba?\(([^)]*)\)/)?.[1].split(',').map(part => part.trim());
+            return channels?.length === 4 ? Number(channels[3]) : 1; // opaque rgb()
+        })();
+        expect(alpha, `stop hover keeps a soft tint, got ${hoverBackground}`).toBeGreaterThan(0);
+        expect(alpha, `stop hover must stay translucent, got ${hoverBackground}`).toBeLessThan(1);
         await page.screenshot({ path: info.outputPath('cancel-hover.png') });
         await page.mouse.move(0, 0);
         await post(page, { type: 'toolCall', tool: 'read_file', args: '{"path":"src/example.ts"}', callId: 'read' });
         await post(page, { type: 'toolResult', tool: 'read_file', output: 'export const value = 1;', callId: 'read' });
+        // The work group's own summary icons carry the same dim-at-rest /
+        // accent-on-hover contract on a different selector - and they exist
+        // only while the turn is live, since the finished turn folds its tool
+        // rows into the compact list asserted below.
+        const workGroup = page.locator('.transcript-pane .conversation-work-group');
+        await expect(workGroup).toBeVisible();
+        if (!await workGroup.evaluate((element) => (element as HTMLDetailsElement).open)) {
+            await workGroup.locator(':scope > summary').click();
+        }
+        const nestedSummary = workGroup.locator('.step-group-body .step > summary').first();
+        const nestedIcon = nestedSummary.locator('.step-icon').first();
+        await expect(nestedIcon).toHaveCSS('color', await varColor(page, '--vscode-descriptionForeground'));
+        await nestedSummary.hover();
+        await expect(nestedIcon).toHaveCSS('color', await varColor(page, '--surface-accent'));
+        await page.screenshot({ path: info.outputPath('work-group-hover.png') });
+        await page.mouse.move(0, 0);
         await post(page, { type: 'fullResponse', persian: 'Inspected the file.' });
         const summary = page.locator('.completed-steps > summary');
         await summary.click();
