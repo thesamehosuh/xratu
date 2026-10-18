@@ -16,13 +16,14 @@ export async function collectProjectRules(): Promise<string> {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return '';
 
-    let rootFsPath = folders[0].uri.fsPath;
+    // Built-in tools and checkpoints execute in the first workspace folder.
+    // An editor in another workspace must not supply that run's instructions.
+    const rootFsPath = folders[0].uri.fsPath;
     let activeFsPath: string | null = null;
     const editor = vscode.window.activeTextEditor;
     if (editor && editor.document.uri.scheme === 'file') {
-        const wf = vscode.workspace.getWorkspaceFolder(editor.document.uri);
-        if (wf) {
-            rootFsPath = wf.uri.fsPath;
+        const relative = path.relative(path.resolve(rootFsPath), path.resolve(editor.document.uri.fsPath));
+        if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)) {
             activeFsPath = editor.document.uri.fsPath;
         }
     }
@@ -52,24 +53,18 @@ export async function collectProjectRules(): Promise<string> {
         dirs.push(path.resolve(rootFsPath));
     }
 
-    const PER_FILE_CAP = 4000;
-    const TOTAL_CAP = 8000;
     const sections: string[] = [];
-    let total = 0;
     for (const dir of dirs) {
         const file = path.join(dir, 'AGENTS.md');
         try {
-            let text = await fs.promises.readFile(file, 'utf-8');
-            if (text.length > PER_FILE_CAP) {
-                const fullLen = text.length;
-                text = text.slice(0, PER_FILE_CAP)
-                    + `\n… (truncated - showing first ${PER_FILE_CAP} of ${fullLen} chars; read the file directly for the rest)`;
-            }
-            total += text.length;
-            if (total > TOTAL_CAP) break;
+            const text = (await fs.promises.readFile(file, 'utf-8')).replace(/^\uFEFF/, '');
             const rel = path.relative(rootFsPath, dir);
             sections.push(`## ${rel && rel !== '' ? rel + '/' : ''}AGENTS.md\n${text.trim()}`);
-        } catch { /* no rules at this level */ }
+        } catch (error) {
+            // Missing rules are normal; unreadable rules must not disappear.
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
     }
     return sections.join('\n\n');
 }

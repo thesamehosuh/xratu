@@ -238,7 +238,17 @@ export class OpenCodeEngine implements AgentEngine {
         this.mcpBridge?.activate(sessionID, turn.plan, turn.signal);
         try {
             const stream = await subscribeEvents(baseUrl, headers, streamController.signal);
-            const prompt = await this.attachments.prepare(sessionID, [turn.context, turn.prompt].filter(Boolean).join('\n\n'), turn.attachments, turn.signal);
+            // Native instructions persist separately from conversation messages.
+            // Read them on resume too: a previous process may have installed an
+            // older policy (or build-mode tools before switching to plan mode).
+            const entries = await client.session.instructions.entry.list({ sessionID }, options);
+            const current = entries.find((entry) => entry.key === 'xratu.policy');
+            if (turn.context) {
+                if (current?.value !== turn.context) await client.session.instructions.entry.put({ sessionID, key: 'xratu.policy', value: turn.context }, options);
+            } else if (current) {
+                await client.session.instructions.entry.remove({ sessionID, key: 'xratu.policy' }, options);
+            }
+            const prompt = await this.attachments.prepare(sessionID, turn.prompt, turn.attachments, turn.signal);
             await client.session.prompt({ sessionID, ...prompt }, options);
             this.active = active;
             for (const message of host.steer?.drain() ?? []) await this.steer(message);
