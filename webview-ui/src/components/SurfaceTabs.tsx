@@ -163,6 +163,8 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             {panels.map((panel) => {
                 const Icon = isNewTab(panel) ? FilePlus2 : PANEL_ICONS[panel];
                 return <div key={panel} className={`dock-tab${active === panel ? ' active' : ''}`} data-panel={panel}
+                    // Windows starts autoscroll on mousedown, before auxclick can close the tab.
+                    onMouseDown={event => { if (event.button === 1) event.preventDefault(); }}
                     onAuxClick={event => { if (event.button === 1) { event.preventDefault(); onClose([panel]); } }}>
                 <button type="button" data-panel={panel} id={`surface-tab-${panel}`} title={tabLabel(panel)} className={`surface-tab ${isNewTab(panel) ? 'new-tab' : panel}${active === panel ? ' active' : ''}`} role="tab" aria-selected={active === panel} tabIndex={active === panel ? 0 : -1} aria-controls={`surface-panel-${panel}`} draggable={wide && panel !== 'conversation'}
                     onPointerDown={event => {

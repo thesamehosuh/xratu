@@ -973,7 +973,11 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.getByRole('menuitem', { name: locale === 'en' ? 'Reopen closed tab' : 'باز کردن دوباره تب بسته شده', exact: true }).click();
         await expect(page.locator('#surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
         await expect(page.locator('.activity-search-box input')).toHaveValue('Retained filter');
+        await page.evaluate(() => window.addEventListener('mousedown', event => {
+            if (event.button === 1) document.documentElement.dataset.middleClickPrevented = String(event.defaultPrevented);
+        }, { once: true }));
         await page.locator('#surface-tab-browser').click({ button: 'middle' });
+        await expect(page.locator('html')).toHaveAttribute('data-middle-click-prevented', 'true');
         await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
         await page.locator('[role=tab][data-panel^="new-"]').click();
         await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=browser]').click();
