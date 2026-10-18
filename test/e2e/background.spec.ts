@@ -85,8 +85,9 @@ test('the background tab lists live jobs and stops them', async ({ page }) => {
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat' });
 
-    // Nothing until the host reports jobs.
-    await expect(page.locator('.bg-jobs')).toHaveCount(0);
+    // The retained view stays hidden until the user opens its tab.
+    await expect(page.locator('.bg-jobs')).toBeHidden();
+    await expect(page.locator('#surface-tab-background')).toHaveCount(0);
 
     await hostMessage(page, {
         type: 'backgroundJobs',
@@ -124,10 +125,11 @@ test('removing the last job hides the background tab', async ({ page }) => {
         type: 'backgroundJobs',
         jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3 }],
     });
-    await expect(page.locator('.bg-jobs')).toHaveCount(1);
+    await expect(page.locator('#surface-tab-background')).toHaveCount(1);
 
     await hostMessage(page, { type: 'backgroundJobs', jobs: [] });
-    await expect(page.locator('.bg-jobs')).toHaveCount(0);
+    await expect(page.locator('#surface-tab-background')).toHaveCount(0);
+    await expect(page.locator('.bg-jobs')).toBeHidden();
 });
 
 test('the background tab respects English direction', async ({ page }) => {

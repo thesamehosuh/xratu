@@ -63,13 +63,13 @@ function TaskLog({ job, visible }: { job: BackgroundJobView; visible: boolean })
 }
 
 /** Live processes and recent results; movable independently of the composer. */
-export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass }: { jobs: BackgroundJobView[]; onStop: (jobId: string) => void; visible: boolean; panelClass: string }) {
+export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass, onConversation }: { jobs: BackgroundJobView[]; onStop: (jobId: string) => void; visible: boolean; panelClass: string; onConversation?: () => void }) {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const selected = jobs.find(job => job.jobId === selectedId) ?? jobs.find(job => job.running) ?? jobs[0];
     const running = jobs.filter(job => job.running);
     const [opened, setOpened] = useState<string[]>([]);
     const selectedKey = selected?.jobId;
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (selectedKey && visible) setOpened(current => current.includes(selectedKey) ? current : [...current.slice(-7), selectedKey]);
     }, [selectedKey, visible]);
     const mounted = new Set([...opened, ...(visible && selectedKey ? [selectedKey] : [])]);
@@ -77,8 +77,9 @@ export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass }: { jo
         {jobs.length === 0 ? (
             <div className="bg-panel-empty" role="status">
                 <div className="bg-empty-icon" aria-hidden="true"><SquareTerminal size={22} /></div>
-                <strong className="bg-empty-title">{t('surfaceNoActivity')}</strong>
+                <strong className="bg-empty-title">{t('surfaceNoBackground')}</strong>
                 <p className="bg-empty-hint">{t('bgEmptyHint')}</p>
+                {onConversation && <button type="button" className="secondary-btn" onClick={onConversation}>{t('surfaceBackToConversation')}</button>}
             </div>
         ) : (
             <div className="background-layout"><nav className="background-task-list" aria-label={t('surfaceBackground')}>
