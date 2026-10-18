@@ -1037,9 +1037,18 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
     const selectedFits = () => list.evaluate(el => {
         const selected = el.querySelector('[role=tab][aria-selected=true]')!.closest('.dock-tab')!.getBoundingClientRect();
         const bounds = el.getBoundingClientRect();
-        return selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1;
+        return {
+            fits: selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1,
+            selectedLeft: selected.left,
+            selectedRight: selected.right,
+            listLeft: bounds.left,
+            listRight: bounds.right,
+            scrollLeft: el.scrollLeft,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+        };
     });
-    await expect.poll(selectedFits).toBe(true);
+    await expect.poll(selectedFits).toMatchObject({ fits: true });
     await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(10);
     await nav.locator('[role=tab][aria-selected=true]').press('Tab');
     if (process.platform === 'darwin') {
@@ -1074,13 +1083,13 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
     await expect(previous).toBeEnabled();
     await nav.locator('[role=tab][aria-selected=true]').press('Home');
     await expect(page.locator('#surface-tab-conversation')).toBeFocused();
-    await expect.poll(selectedFits).toBe(true);
+    await expect.poll(selectedFits).toMatchObject({ fits: true });
     await page.locator('#surface-tab-conversation').press('End');
-    await expect.poll(selectedFits).toBe(true);
+    await expect.poll(selectedFits).toMatchObject({ fits: true });
     await page.setViewportSize({ width: 1080, height: 900 });
-    await expect.poll(selectedFits).toBe(true);
+    await expect.poll(selectedFits).toMatchObject({ fits: true });
     await page.setViewportSize({ width: 420, height: 900 });
-    await expect.poll(selectedFits).toBe(true);
+    await expect.poll(selectedFits).toMatchObject({ fits: true });
     expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
 });
 

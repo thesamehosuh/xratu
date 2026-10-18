@@ -97,15 +97,35 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1;
             list.scrollBy(event.deltaY * unit * (locale === 'fa' ? -1 : 1), 0);
         };
+        let revealFrame = 0;
+        const revealActiveTab = () => {
+            cancelAnimationFrame(revealFrame);
+            revealFrame = requestAnimationFrame(() => {
+                const tab = document.getElementById(`surface-tab-${active}`)?.closest<HTMLElement>('.dock-tab');
+                if (!tab) return;
+                tab.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+                // Recheck after nearest alignment settles; if an edge remains
+                // clipped, align the active tab to the logical start instead.
+                revealFrame = requestAnimationFrame(() => {
+                    const bounds = list.getBoundingClientRect();
+                    const tabBounds = tab.getBoundingClientRect();
+                    if (tabBounds.left < bounds.left - 1 || tabBounds.right > bounds.right + 1) {
+                        tab.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'start' });
+                    }
+                });
+            });
+        };
         measure();
         const observer = new ResizeObserver(() => {
             measure();
-            document.getElementById(`surface-tab-${active}`)?.closest('.dock-tab')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            // Run after the responsive layout settles so a shrinking tab strip
+            // does not leave the selected tab clipped outside its scrollport.
+            revealActiveTab();
         });
         observer.observe(list);
         list.addEventListener('scroll', measure);
         list.addEventListener('wheel', wheel, { passive: false });
-        return () => { observer.disconnect(); list.removeEventListener('scroll', measure); list.removeEventListener('wheel', wheel); };
+        return () => { cancelAnimationFrame(revealFrame); observer.disconnect(); list.removeEventListener('scroll', measure); list.removeEventListener('wheel', wheel); };
     }, [active, locale, panels.length]);
     useEffect(() => {
         const frame = requestAnimationFrame(() => document.getElementById(`surface-tab-${active}`)?.closest('.dock-tab')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
