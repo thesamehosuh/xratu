@@ -572,34 +572,30 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             if (state.streamingId) {
                 // Cancellation/errors must NEVER wipe what already streamed:
                 // keep text/steps, mark status, and close any pending tool
-                // rows so nothing spins forever.  But if nothing streamed yet
-                // (connection died before first chunk), show the error text so
-                // the bubble is not empty.
+                // rows so nothing spins forever.
                 return {
                     ...state,
-                    messages: state.messages.map((m) =>
-                        m.id === state.streamingId
-                            ? {
-                                  ...m,
-                                  text: m.text || value,
-                                  // Keep the streamed content AND the reason:
-                                  // red styling with no explanation reads as
-                                  // a silent death ("stopped red without an
-                                  // error message"). Streamed content can
-                                  // live in steps/renderedHtml alone - m.text
-                                  // is NOT a complete indicator.
-                                  errorText: (m.text || m.renderedHtml || m.steps.length > 0) ? value : undefined,
-                                  retryStatus: null,
-                                  steps: m.steps.map((st) =>
-                                      st.kind === 'toolCall' && st.result === undefined
-                                          ? { ...st, result: t('resultCancelled') }
-                                          : st
-                                  ),
-                                  status: 'error' as const,
-                                  tone: 'error' as const,
-                              }
-                            : m
-                    ),
+                    messages: state.messages.map((m) => {
+                        if (m.id !== state.streamingId) return m;
+                        // The reason lands in exactly ONE place: as the bubble
+                        // body when nothing streamed at all, otherwise as the
+                        // error line UNDER the streamed content/pills. Filling
+                        // both rendered "Request cancelled" twice.
+                        const streamed = !!(m.text || m.renderedHtml || m.steps.length > 0);
+                        return {
+                            ...m,
+                            text: streamed ? m.text : value,
+                            errorText: streamed ? value : undefined,
+                            retryStatus: null,
+                            steps: m.steps.map((st) =>
+                                st.kind === 'toolCall' && st.result === undefined
+                                    ? { ...st, result: t('resultCancelled') }
+                                    : st
+                            ),
+                            status: 'error' as const,
+                            tone: 'error' as const,
+                        };
+                    }),
                     busy: false,
                     streamingId: null,
                 };

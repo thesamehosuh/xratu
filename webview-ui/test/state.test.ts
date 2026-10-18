@@ -65,6 +65,7 @@ ok(s.messages[0].steps[0].endedAt === replayedAt + 4000, 'activity keeps its per
 s = createInitialChatState();
 s = reduceChat(s, M('error', { value: 'boom' }));
 ok(s.messages.length === 1 && s.messages[0].status === 'error' && !s.busy, 'error without stream');
+ok(s.messages[0].text === 'boom' && !s.messages[0].errorText, 'empty bubble shows the reason once, as its body');
 
 // 5. Error during streaming
 s = createInitialChatState();
@@ -86,6 +87,7 @@ s = reduceChat(s, M('error', { value: 'html failed' }));
 st = s.messages.find((m) => m.id === sid3)!;
 ok(st.status === 'error' && st.renderedHtml === '<p>md</p>', 'renderedHtml content preserved');
 ok(st.errorText === 'html failed', 'renderedHtml-only failure reason kept');
+ok(!st.text, 'renderedHtml-only failure never repeats the reason as body text');
 
 s = createInitialChatState();
 s = reduceChat(s, M('startResponse'));
@@ -99,6 +101,7 @@ ok(
     'error path keeps the original tool step with its result'
 );
 ok(st.errorText === 'tools failed', 'steps-only failure reason kept');
+ok(!st.text, 'steps-only failure never repeats the reason as body text (cancel duplicate regression)');
 
 // 5c. sendFailed with steps-only content - same predicate.
 s = createInitialChatState();

@@ -460,7 +460,7 @@ test('large review updates have bounded excerpts while the durable cursor still 
     assert.equal((await f.load()).events.length, 1);
 });
 
-test('crashed continuations remain interrupted across reloads until explicitly retried', async () => {
+test('crashed continuations are marked interrupted across reloads and never replayed silently', async () => {
     const f = await fixture();
     await f.service.watch(context, target, execution);
     f.update({ mergeability: 'conflicting' }); await f.service.sweep();
@@ -490,6 +490,47 @@ test('a failed continuation is not automatically retried, while explicit retry i
     assert.equal(runs, 1);
     success = true;
     await controller.resume(true);
+    assert.equal(runs, 2);
+    assert.equal((await f.load()).events.length, 0);
+});
+
+test('a crashed continuation is reclaimed on the next idle resume, not stranded', async () => {
+    const f = await fixture();
+    let runs = 0;
+    const identity = { ...context, epoch: 1, busy: true, plan: false };
+    const controller = new PullRequestController({ identity: () => identity, ensureSession: async () => {}, execution: async () => execution, run: async () => { runs++; return true; }, publish: () => {}, diagnostic: () => {} }, f.storage, f.provider);
+    await controller.service.watch(context, target, execution);
+    f.update({ mergeability: 'conflicting' }); await controller.service.sweep();
+    identity.busy = false;
+    const ids = (await f.load()).events.map(event => event.id);
+    await f.store.update(context.sessionId, context.workspace, state => { state.delivery = { ids, status: 'interrupted', owner: process.pid }; });
+    await controller.resume(false);
+    assert.equal(runs, 1, 'an interrupted claim must not wait for a removed UI control');
+    const state = await f.load();
+    assert.equal(state.events.length, 0);
+    assert.equal(state.delivery, undefined);
+});
+
+test('a failed continuation waits for fresh updates instead of looping', async () => {
+    const f = await fixture(), second = target.replace('42', '43');
+    let runs = 0, success = false;
+    const identity = { ...context, epoch: 1, busy: true, plan: false };
+    const controller = new PullRequestController({ identity: () => identity, ensureSession: async () => {}, execution: async () => execution, run: async () => { runs++; return success; }, publish: () => {}, diagnostic: () => {} }, f.storage, f.provider);
+    await controller.service.watch(context, target, execution);
+    f.update({ mergeability: 'conflicting' }); await controller.service.sweep();
+    identity.busy = false;
+    await controller.resume(false);
+    assert.equal(runs, 1);
+    assert.equal((await f.load()).delivery.status, 'failed');
+    await controller.resume(false);
+    assert.equal(runs, 1, 'a failed delivery alone never re-runs the agent');
+    // Fresh news on another watched PR un-sticks the queue.
+    await f.service.watch(context, second, execution);
+    f.update({ mergeability: 'clean' }); await f.service.sweep();
+    f.update({ mergeability: 'conflicting' }); await f.service.sweep();
+    assert.ok((await f.load()).events.length >= 2);
+    success = true;
+    await controller.resume(false);
     assert.equal(runs, 2);
     assert.equal((await f.load()).events.length, 0);
 });
