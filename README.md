@@ -62,7 +62,8 @@ conversation rewind and offline mode remain unavailable with OpenCode.
 ## Approvals and privacy
 
 Edits, commands, and tool actions use approval controls. **YOLO mode removes
-those approval prompts**; enable it only when you want tools to run unattended.
+those approval prompts for the root request**; enable it only when you want
+tools to run unattended. Delegated native children still ask before a mutation.
 Checkpoints use separate shadow git storage and leave your repository's git
 index and history alone.
 
