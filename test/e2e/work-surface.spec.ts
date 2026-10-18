@@ -13,8 +13,10 @@ const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
     return (await sent(page)).filter((m) => m.type === type).at(-1)!;
 };
 const dragToSidebar = async (page: Page, selector: string) => {
-    const source = (await page.locator(selector).boundingBox())!;
-    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    const tab = page.locator(selector);
+    // Wait for layout and locale changes to settle before starting the gesture.
+    await tab.hover();
+    const source = (await tab.boundingBox())!;
     await page.mouse.down();
     await page.mouse.move(source.x + source.width / 2 + 15, source.y + source.height / 2, { steps: 3 });
     await expect(page.locator('.dock-sidebar.drag-target')).toBeVisible();
