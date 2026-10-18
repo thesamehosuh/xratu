@@ -65,8 +65,8 @@ test.beforeEach(async ({ page }) => {
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
     for (const panel of ['Activity', 'Browser']) {
-        await page.locator('.dock-tabs.main .dock-layout-button').click();
-        await page.getByRole('menuitem', { name: `${panel} Main tabs`, exact: true }).click();
+        await page.locator('.dock-tabs.main .dock-add-button').click();
+        await page.locator(`.new-tab-pane:not(.panel-hidden) [data-open-panel="${panel.toLowerCase()}"]`).click();
     }
     await page.locator('#surface-tab-conversation').click();
 });
@@ -421,76 +421,40 @@ for (const locale of ['en', 'fa']) {
 }
 
 for (const locale of ['en', 'fa']) {
-    test(`Conversation docks beside the main Browser without losing its draft or transcript (${locale})`, async ({ page }) => {
+    test(`Conversation stays anchored while panels move without losing drafts or scroll (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await post(page, { type: 'locale', locale });
-        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
         await openReview(page, 'Keep this conversation');
         await page.locator('.composer-input').fill('Keep this draft');
-        await page.locator('.composer-input').evaluate((el) => { (el as HTMLElement).dataset.retained = 'yes'; });
-        await dragToSidebar(page, '#surface-tab-conversation');
-        await page.locator('#surface-tab-browser').click();
-        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
-        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        await page.locator('.composer-input').evaluate(el => { (el as HTMLElement).dataset.retained = 'yes'; });
+        await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('draggable', 'false');
+        await page.locator('#surface-tab-conversation').click({ button: 'right' });
+        await expect(page.locator('.dock-layout-menu [role=menuitem]')).toHaveCount(3);
+        await page.keyboard.press('Escape');
+        await dragToSidebar(page, '#surface-tab-browser');
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-side')).toBeVisible();
         await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
         await expect(page.locator('.composer-input')).toHaveAttribute('data-retained', 'yes');
-        await expect(page.locator('.conversation-panel .msg.user')).toContainText('Keep this conversation');
-        await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
-        await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
-        await expect(page.locator('.conversation-panel .chat-stage')).toBeVisible();
-        await expect(page.locator('.conversation-panel .msg.user')).toBeVisible();
-        await dragToSidebar(page, '#surface-tab-changes');
-        await page.locator('#surface-tab-conversation').click();
-        await page.locator('#surface-tab-browser').click();
-        for (let i = 0; i < 12; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap in the sidebar` });
-        await expect(page.locator('.conversation-panel .msg.user')).toHaveCount(13);
+        for (let i = 0; i < 16; i++) await post(page, { type: 'restoreUser', value: `Saved message ${i} with enough text to wrap` });
         const transcript = page.locator('.messages');
-        const distanceFromTail = () => transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
-        await expect.poll(distanceFromTail).toBeLessThan(2);
         await transcript.hover();
         await page.mouse.wheel(0, -300);
-        await expect.poll(distanceFromTail).toBeGreaterThan(100);
-        await expect(page.locator('.jump-btn')).toBeVisible();
-        const scroll = await page.locator('.messages').evaluate(el => el.scrollTop);
-        await page.locator('#surface-tab-changes').click();
+        await expect.poll(() => transcript.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(100);
+        const scroll = await transcript.evaluate(el => el.scrollTop);
+        await page.locator('#surface-tab-activity').click();
         await page.locator('#surface-tab-conversation').click();
-        await expect.poll(() => page.locator('.messages').evaluate(el => el.scrollTop)).toBe(scroll);
-        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
-        await expect(page.locator('.dock-tabs.drop-over')).toHaveCount(0);
-        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
-        const divider = await page.locator('.dock-sidebar').evaluate(el => getComputedStyle(el).outlineStyle);
-        expect(divider).toBe('none');
-        await page.locator('.review-resize').focus();
-        await page.keyboard.press('Home');
-        expect(await page.locator('.conversation-panel').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        await expect.poll(() => transcript.evaluate(el => el.scrollTop)).toBe(scroll);
         await page.setViewportSize({ width: 420, height: 900 });
-        await page.locator('#surface-tab-conversation').click();
-        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
         await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
         await page.setViewportSize({ width: 1280, height: 900 });
-        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
-        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-side')).toBeVisible();
         const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
         await page.addInitScript(value => Object.assign(window, { __xratuUiState: value }), saved);
         await page.reload();
         await post(page, { type: 'showChat' });
-        await expect(page.locator('.conversation-panel.panel-side')).toBeVisible();
-        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
-        // Cancellation away from the original tab must remove the drag outline.
-        await page.locator('#surface-tab-conversation').dispatchEvent('dragstart', { dataTransfer: await page.evaluateHandle(() => new DataTransfer()) });
-        await expect(page.locator('.work-surface')).toHaveClass(/docking/);
-        await page.keyboard.press('Escape');
-        await expect(page.locator('.work-surface')).not.toHaveClass(/docking/);
-        await expect(page.locator('.dock-sidebar')).not.toHaveClass(/drag-target/);
-        await dragToSidebar(page, '#surface-tab-activity');
-        await dragToSidebar(page, '#surface-tab-browser');
-        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(0);
-        await expect(page.locator('.dock-tabs.main .dock-drop-label')).toBeVisible();
-        await expect(page.locator('#surface-tab-browser')).toBeFocused();
-        await page.locator('#surface-tab-browser').press('Shift+F10');
-        await expect(page.locator('.dock-layout-menu [role=menuitem]').first()).toBeFocused();
-        await page.keyboard.press('Enter');
-        await expect(page.locator('.browser-pane.panel-main')).toBeVisible();
+        await expect(page.locator('.conversation-panel.panel-main')).toBeVisible();
+        await expect(page.locator('.browser-pane.panel-side')).toBeVisible();
     });
 }
 
@@ -705,7 +669,7 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
 }
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`Changes stays hidden until a diff arrives and retains expandable previous turns (${locale}, ${width})`, async ({ page }, info) => {
+    test(`Changes opens for a diff and retains its view when the content becomes empty (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
         await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
@@ -748,7 +712,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await turn.locator('summary').click();
         await post(page, { type: 'truncateFromUser', userIndex: 0 });
         await expect(page.locator('.review-turn')).toHaveCount(0);
-        await expect(page.locator('#surface-tab-changes')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-changes')).toBeVisible();
+        await expect(page.locator('.changes-pane .surface-empty-state')).toBeVisible();
     });
 }
 
@@ -948,20 +913,23 @@ test('live changes follow the latest edited file and preserve a manual selection
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`empty tabs stay hidden and the panel picker opens any panel (${locale}, ${width})`, async ({ page }) => {
-        // Clear the explicitly opened legacy fixture tabs.
+    test(`new tabs choose panels and empty views explain what to do (${locale}, ${width})`, async ({ page }) => {
         await page.locator('.dock-tabs.main .dock-layout-button').click();
         await page.getByRole('menuitem', { name: 'Reset layout', exact: true }).click();
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await expect(page.locator('[role="tab"]')).toHaveCount(1);
-        await page.locator('.dock-tabs.main .dock-layout-button').click();
-        const picker = page.locator('.dock-layout-menu [role="menuitem"]');
-        // Browser is the sixth panel; wide windows offer main and sidebar destinations.
-        await picker.nth(width >= 860 ? 11 : 5).click();
-        await expect(page.locator('.browser-pane')).toBeVisible();
-        if (width >= 860) await expect(page.locator('.browser-pane')).toHaveClass(/panel-side/);
-        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        for (const panel of ['agents', 'background', 'changes', 'activity', 'pullRequests', 'browser']) {
+            await page.locator('.dock-tabs.main .dock-add-button').click();
+            const blank = page.locator('.new-tab-pane:not(.panel-hidden)');
+            await expect(blank.locator('h2')).not.toBeEmpty();
+            await expect(blank.locator('.new-tab-choice')).toHaveCount(7);
+            await blank.locator(`[data-open-panel="${panel}"]`).click();
+            await expect(page.locator(`#surface-tab-${panel}`)).toHaveAttribute('aria-selected', 'true');
+            await expect(page.locator(`#surface-panel-${panel}`)).toBeVisible();
+            await expect(page.locator(`#surface-panel-${panel} p`).first()).not.toBeEmpty();
+            await expect(page.locator('[role="tab"][data-panel^="new-"]')).toHaveCount(0);
+        }
         expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
     });
 }
@@ -980,4 +948,149 @@ for (const locale of ['en', 'fa']) test(`assistant ask-review hides while the di
     await page.setViewportSize({ width: 420, height: 900 });
     await expect(page.locator('.changes-pane')).toBeHidden();
     await expect(page.locator('.outcome-actions button')).toHaveCount(2);
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`tabs add, reuse, close, reopen and restore without losing content (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await page.locator('.composer-input').fill('Keep my draft');
+        const add = page.locator('.dock-tabs.main .dock-add-button');
+        await add.click();
+        await add.click();
+        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(2);
+        await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=activity]').click();
+        await expect(page.locator('#surface-tab-activity')).toHaveCount(1);
+        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(1);
+        await page.locator('.activity-search-box input').fill('Retained filter');
+        const activityTab = page.locator('.dock-tab[data-panel=activity]');
+        await activityTab.hover();
+        await expect(activityTab.locator('.dock-tab-close')).toHaveCSS('opacity', '1');
+        await activityTab.locator('.dock-tab-close').click();
+        await expect(page.locator('#surface-tab-activity')).toHaveCount(0);
+        await expect(page.locator('.activity-pane')).toBeHidden();
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        await page.getByRole('menuitem', { name: locale === 'en' ? 'Reopen closed tab' : 'باز کردن دوباره تب بسته شده', exact: true }).click();
+        await expect(page.locator('#surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('.activity-search-box input')).toHaveValue('Retained filter');
+        await page.evaluate(() => window.addEventListener('mousedown', event => {
+            if (event.button === 1) document.documentElement.dataset.middleClickPrevented = String(event.defaultPrevented);
+        }, { once: true }));
+        await page.locator('#surface-tab-browser').click({ button: 'middle' });
+        await expect(page.locator('html')).toHaveAttribute('data-middle-click-prevented', 'true');
+        await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
+        await page.locator('[role=tab][data-panel^="new-"]').click();
+        await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=browser]').click();
+        await expect(page.locator('#surface-tab-browser')).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(0);
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        const menu = page.locator('.dock-layout-menu');
+        await expect(menu.getByRole('menuitem')).toHaveCount(width >= 860 ? 5 : 4);
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.dock-tabs.main .dock-layout-button')).toBeFocused();
+        await page.locator('#surface-tab-browser').press('Delete');
+        await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
+        await page.locator('#surface-tab-conversation').click();
+        await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
+        await add.click();
+        const blankId = await page.locator('[role=tab][data-panel^="new-"]').getAttribute('id');
+        const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
+        await page.addInitScript(value => Object.assign(window, { __xratuUiState: value }), saved);
+        await page.reload();
+        await post(page, { type: 'showChat' });
+        await expect(page.locator(`#${blankId}`)).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('.new-tab-pane:not(.panel-hidden)')).toBeVisible();
+        await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
+        await post(page, { type: 'locale', locale: 'en' });
+        await page.getByRole('button', { name: 'New chat', exact: true }).click();
+        await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('aria-selected', 'true');
+        expect(await sent(page)).toContainEqual({ type: 'newSession' });
+    });
+
+    test(`tab actions target the selected tab and close other tabs (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await page.locator('#surface-tab-activity').click({ button: 'right' });
+        await page.getByRole('menuitem', { name: locale === 'en' ? 'Close other tabs' : 'بستن تب های دیگه', exact: true }).click();
+        await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-conversation')).toBeVisible();
+        await expect(page.locator('#surface-tab-activity')).toHaveAttribute('aria-selected', 'true');
+        await page.locator('.dock-tabs.main .dock-layout-button').click();
+        await page.getByRole('menuitem', { name: locale === 'en' ? 'Close tab' : 'بستن تب', exact: true }).click();
+        await expect(page.locator('#surface-tab-activity')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-conversation')).toBeFocused();
+        await expect(page.locator('.conversation-panel')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, wheel and keyboard (${locale})`, async ({ page }) => {
+    await post(page, { type: 'locale', locale });
+    const nav = page.locator('.dock-tabs.main');
+    const list = nav.locator('.dock-tab-list');
+    for (let i = 0; i < 8; i++) await nav.locator('.dock-add-button').click();
+    const previous = nav.getByRole('button', { name: locale === 'en' ? 'Scroll to previous tabs' : 'نمایش تب های قبلی', exact: true });
+    const next = nav.getByRole('button', { name: locale === 'en' ? 'Scroll to next tabs' : 'نمایش تب های بعدی', exact: true });
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+    const selectedFits = () => list.evaluate(el => {
+        const selected = el.querySelector('[role=tab][aria-selected=true]')!.closest('.dock-tab')!.getBoundingClientRect();
+        const bounds = el.getBoundingClientRect();
+        return selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1;
+    });
+    await expect.poll(selectedFits).toBe(true);
+    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(10);
+    await nav.locator('[role=tab][aria-selected=true]').press('Tab');
+    await expect(nav.locator('.dock-add-button')).toBeFocused();
+    for (let i = 0; i < 15; i++) {
+        const before = await list.evaluate(el => Math.abs(el.scrollLeft));
+        if (before <= 1) break;
+        await expect(previous).toBeEnabled();
+        await previous.click();
+        await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeLessThan(before - 1);
+    }
+    await expect(previous).toBeDisabled();
+    await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeLessThanOrEqual(1);
+    await list.hover();
+    await page.mouse.wheel(0, 180);
+    await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeGreaterThan(100);
+    await previous.click();
+    for (let i = 0; i < 15; i++) {
+        const remaining = await list.evaluate(el => el.scrollWidth - el.clientWidth - Math.abs(el.scrollLeft));
+        if (remaining <= 1) break;
+        await expect(next).toBeEnabled();
+        await next.click();
+        await expect.poll(() => list.evaluate(el => el.scrollWidth - el.clientWidth - Math.abs(el.scrollLeft))).toBeLessThan(remaining - 1);
+    }
+    await expect(next).toBeDisabled();
+    await expect(previous).toBeEnabled();
+    await nav.locator('[role=tab][aria-selected=true]').press('Home');
+    await expect(page.locator('#surface-tab-conversation')).toBeFocused();
+    await expect.poll(selectedFits).toBe(true);
+    await page.locator('#surface-tab-conversation').press('End');
+    await expect.poll(selectedFits).toBe(true);
+    await page.setViewportSize({ width: 1080, height: 900 });
+    await expect.poll(selectedFits).toBe(true);
+    await page.setViewportSize({ width: 420, height: 900 });
+    await expect.poll(selectedFits).toBe(true);
+    expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`closing Background keeps its process and retained view alive (${locale}, ${width})`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await post(page, { type: 'locale', locale });
+    await post(page, { type: 'backgroundJobs', jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 3, output: 'Ready' }] });
+    await page.locator('#surface-tab-background').click();
+    await expect(page.locator('.background-output')).toContainText('Ready');
+    await page.locator('.background-output').evaluate(el => { (el as HTMLElement).dataset.retained = 'yes'; });
+    await page.locator('#surface-tab-background').press('Delete');
+    await expect(page.locator('#surface-tab-background')).toHaveCount(0);
+    await post(page, { type: 'backgroundJobs', jobs: [{ jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 4, output: 'Ready\nStill running' }] });
+    await expect(page.locator('#surface-tab-background')).toHaveCount(0);
+    expect((await sent(page)).some(message => message.type === 'killBackgroundJob')).toBe(false);
+    await page.locator('.dock-tabs.main .dock-add-button').click();
+    await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=background]').click();
+    await expect(page.locator('.background-output')).toContainText('Still running');
+    await expect(page.locator('.background-output')).toHaveAttribute('data-retained', 'yes');
+    await page.locator('.bg-job-stop').click();
+    expect(await sent(page)).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
 });

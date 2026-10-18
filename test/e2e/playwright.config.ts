@@ -76,9 +76,11 @@ export default defineConfig({
             const executablePath = localChromiumExecutable();
             // Host fontconfig defaults differ even on Linux. Keep snapshot
             // text grayscale and unhinted so the bundled font renders alike.
-            const args = process.env.XRATU_VISUAL === '1'
-                ? ['--disable-lcd-text', '--font-render-hinting=none'] : undefined;
-            return executablePath || args ? { launchOptions: { executablePath, args } } : {};
+            // Exercise Windows middle-click autoscroll on every OS so Linux
+            // and macOS catch tab-closing regressions before the Windows leg.
+            const args = ['--enable-blink-features=MiddleClickAutoscroll', ...(process.env.XRATU_VISUAL === '1'
+                ? ['--disable-lcd-text', '--font-render-hinting=none'] : [])];
+            return { launchOptions: { executablePath, args } };
         })(),
     },
     webServer: {

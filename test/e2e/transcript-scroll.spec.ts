@@ -131,8 +131,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         // Switching panels hides the composer without dropping the draft.
         await page.locator('.composer-input').fill('Draft survives');
         // This prose-only run has no Activity rows; open the empty panel explicitly.
-        await page.locator('.dock-tabs.main .dock-layout-button').click();
-        await page.locator('.dock-layout-menu [role=menuitem]').nth(width >= 860 ? 4 : 2).click();
+        await page.locator('.dock-tabs.main .dock-add-button').click();
+        await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=activity]').click();
         await expect(page.locator('.composer-input')).toBeHidden();
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toHaveValue('Draft survives');
