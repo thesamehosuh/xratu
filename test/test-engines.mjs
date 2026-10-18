@@ -63,6 +63,9 @@ async function harness(mode = 'complete', mcpSource) {
             { id: 'big-pickle', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
             { id: 'paid-model', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 1, output: 1, cache: { read: 0, write: 0 } }] },
         ]); return; }
+        if (req.url === '/api/session/active') { json({}); return; }
+        if (req.url.endsWith('/inbox')) { json([]); return; }
+        if (req.url.startsWith('/api/shell')) { json([]); return; }
         if (req.url === '/api/session' || (req.method === 'GET' && req.url === '/api/session/native-1')) { json({ id: 'native-1', location: { directory: root } }); return; }
         if (req.url.split('?')[0].endsWith('/interrupt')) {
             stopping = true;
@@ -372,7 +375,7 @@ try {
     assert.equal(display.path, nativeInput.filePath);
     assert.equal(display.old_text, 'before');
     assert.equal(nativeInput.path, undefined, 'display normalization cannot mutate native arguments');
-    assert.equal(ENGINE_CAPABILITIES.opencode.subagents, false);
+    assert.equal(ENGINE_CAPABILITIES.opencode.subagents, true);
     const serviceCalls = [];
     const serviceBridge = new OpenCodeMcpBridge({ listTools: async () => services, callTool: async (name, args, signal, context) => {
         serviceCalls.push({ name, context });
@@ -392,6 +395,12 @@ try {
         assert.equal(serviceCalls.length, 4);
         assert.deepEqual(serviceCalls[0].context, { sessionID: 'native-plan', plan: true });
         assert.equal(serviceBridge.planActions().length, 4, 'only curated, plan-safe Xratu services get native permission rules');
+        serviceBridge.activate('native-child', false, serviceController.signal, 'native-plan');
+        for (const name of ['update_task_list', 'exit_plan_mode']) assert.equal((await call(name, 'native-child')).isError, true, 'children cannot reach parent coordination through MCP');
+        assert.notEqual((await call('skill', 'native-child')).isError, true);
+        assert.deepEqual(serviceCalls.at(-1).context, { sessionID: 'native-child', rootSessionID: 'native-plan', plan: false });
+        serviceBridge.deactivate('native-child');
+        assert.equal((await call('skill', 'native-child')).isError, true);
         const planEngine = await harness('plan', { listTools: async () => services, callTool: async () => ({ text: '', images: [] }) });
         try {
             for await (const _event of planEngine.engine.runTurn({ ...baseTurn, plan: true, signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
@@ -517,7 +526,7 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_requestLocalApproval', '_requestLocalDecision', '_resolveLocalDecision', '_releaseDecisionCard', '_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
     const moduleLoad = Module._load;
     let sharedExecutorModule;
@@ -529,7 +538,7 @@ try {
         sharedExecutorModule = require('../out/mcp.js');
     } finally { Module._load = moduleLoad; }
     const skillModule = require('../out/skills.js');
-    const sandbox = { externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeDefinitionsMethod = sandbox.Host.prototype._nativeServiceDefinitions;
     const nativeExecutorMethod = sandbox.Host.prototype._nativeServiceExecutor;
@@ -933,6 +942,30 @@ try {
     assert.ok(released);
     assert.equal(approvalHost._localApprovalResolvers[approvalID], undefined);
     console.log('ok real host OpenCode approval dispatch');
+    {
+        const gateHost = new sandbox.Host(); const shown = []; const cards = [];
+        Object.assign(gateHost, { _sessionApprovedKinds: new Set(), _localApprovalResolvers: {}, _approvalCloseItems: {}, _approvalCardRelease: new Map(), _approvalCardChain: Promise.resolve(), _view: { webview: { postMessage: message => cards.push(message) } }, _processNeedsApproval: async value => { shown.push(value.approval_id); gateHost._approvalCloseItems[value.approval_id] = []; } });
+        const first = new AbortController(); const second = new AbortController();
+        const one = gateHost._requestLocalApproval('first', [{ tool_call_id: 'one', tool_name: 'run_terminal_command', args: { command: 'echo one' } }], undefined, first.signal);
+        const two = gateHost._requestLocalApproval('second', [{ tool_call_id: 'two', tool_name: 'run_terminal_command', args: { command: 'echo two' } }], undefined, second.signal);
+        await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(shown, ['first']);
+        const rejectedOne = assert.rejects(one, { name: 'AbortError' });
+        const reason = new DOMException('Native approval answered elsewhere', 'AbortError'); reason.resolution = 'approved'; first.abort(reason); await rejectedOne;
+        await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(shown, ['first', 'second']);
+        assert.equal(cards.find(card => card.approval_id === 'first').resolution, 'approved');
+        assert.equal(gateHost._approvalCloseItems.first, undefined);
+        gateHost._resolveLocalApproval('second', { two: true }); assert.equal((await two).two, true);
+        Object.assign(gateHost, { _localDecisionResolvers: new Map(), _decisionCardRelease: new Map(), _decisionCardChain: Promise.resolve() });
+        const questionController = new AbortController();
+        const question = gateHost._requestLocalDecision({ header: 'Native child', question: 'Choose', options: [], source: { profile: 'general', parentCallId: 'parent', description: 'Review' } }, questionController.signal);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(cards.find(card => card.type === 'decisionRequest').source.parentCallId, 'parent');
+        const rejectedQuestion = assert.rejects(question, { name: 'AbortError' }); questionController.abort(); await rejectedQuestion;
+        assert.equal(gateHost._localDecisionResolvers.size, 0); assert.equal(gateHost._decisionCardRelease.size, 0);
+        assert.ok(cards.some(card => card.type === 'decisionResolved' && card.answer === null));
+    }
+    console.log('ok real host per-request cancellation releases queued cards and preserves native attribution');
+
     const pingHost = new sandbox.Host();
     pingHost._activeEngine = 'opencode';
     pingHost._sessionEpoch = 1;
@@ -1026,7 +1059,7 @@ try {
     const policy = openCodePermissions(true, true);
     assert.deepEqual(policy[0], { action: '*', resource: '*', effect: 'deny' });
     assert.ok(!policy.some((rule) => ['shell', 'edit', 'subagent', 'mcp__server__write'].includes(rule.action) && rule.effect === 'allow'));
-    assert.equal(openCodePermissions(false, true).at(-1).effect, 'deny');
+    assert.equal(openCodePermissions(false, true).at(-1).effect, 'ask');
     assert.equal(releaseTarget('win32', 'x64'), 'windows-x64-baseline');
     assert.equal(releaseTarget('linux', 'arm64', true), 'linux-arm64-musl');
     assert.throws(() => releaseTarget('linux', 'ia32'), /no supported release/);

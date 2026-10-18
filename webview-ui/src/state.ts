@@ -664,6 +664,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // questions - they collect on the bubble in ask order, and the
             // answered ones collapse into one inline pill row.
             const decision = {
+                source: msg.source,
                 decision_id: msg.decision_id,
                 header: msg.header,
                 question: msg.question,

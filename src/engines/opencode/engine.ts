@@ -18,12 +18,15 @@ import { NativeShellMonitor, type NativeShellUpdate } from './shells';
 import { OpenCodeMcpBridge, type NativeMcpSource } from './mcpBridge';
 import { abortable } from '../../oauth/refreshLock';
 import { OpenCodeAttachmentStore } from './attachments';
+import { NativeDecisions } from './decisions';
+import { NativeSessionCoordinator } from './coordinator';
+import { NativeSessionTree } from './sessionTree';
 
 export class EngineError extends Error {
     constructor(readonly valueKey: string) { super(valueKey); }
 }
 const TOOL_NAMES: Record<string, string> = { shell: 'run_terminal_command', bash: 'run_terminal_command', read: 'read_file', edit: 'edit_file', write: 'write_file', glob: 'glob_search', grep: 'grep_search', websearch: 'web_search', webfetch: 'fetch_url', question: 'ask_user_question' };
-function toolName(name: string): string { return TOOL_NAMES[name] ?? `opencode_${name}`; }
+function toolName(name: string): string { return name === 'subagent' ? 'task' : TOOL_NAMES[name] ?? `opencode_${name}`; }
 function errorText(error: unknown): string {
     if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
     return JSON.stringify(error) ?? 'OpenCode execution failed';
@@ -44,6 +47,7 @@ export class OpenCodeEngine implements AgentEngine {
     private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage> };
     private shellMonitor?: NativeShellMonitor;
     private probing = false;
+    private coordinator?: NativeSessionCoordinator;
     private readonly mcpBridge?: OpenCodeMcpBridge;
     private readonly mcpRegistrations = new WeakMap<OpenCodeClient, Map<string, { fingerprint: string; enabled: boolean }>>();
     private mcpSync: Promise<void> = Promise.resolve();
@@ -223,6 +227,14 @@ export class OpenCodeEngine implements AgentEngine {
                 if (isSessionNotFoundError(error)) throw new EngineError('engineSessionMissing');
                 throw error;
             }
+            // Fence the previous execution tree before changing its model/mode.
+            const restored = new NativeSessionTree(client, sessionID, turn.workspace);
+            try {
+                const running = await restored.active(turn.signal);
+                if (running.length) await restored.stop(running, AbortSignal.any([turn.signal, AbortSignal.timeout(30_000)]));
+                else await restored.drainPending(sessionID, turn.signal);
+                await restored.stopChildShells(turn.signal);
+            } catch (error) { await this.server.dispose(); throw error; }
             await client.session.switchModel({ sessionID, model }, options);
             await client.session.switchAgent({ sessionID, agent: turn.plan ? 'plan' : 'build' }, options);
             await client.session.update({ sessionID, permissions }, options);
@@ -231,8 +243,14 @@ export class OpenCodeEngine implements AgentEngine {
             sessionID = session.id;
         }
         await host.onSession?.({ engineId: 'opencode', nativeSessionId: sessionID, workspace: turn.workspace, binaryPath: this.binary });
+        const tree = new NativeSessionTree(client, sessionID, turn.workspace);
         const streamController = new AbortController();
         const abort = () => streamController.abort(turn.signal.reason);
+        let decisionFailure: { error: unknown } | undefined;
+        const decisions = new NativeDecisions(turn.signal, error => {
+            decisionFailure ??= { error };
+            streamController.abort(error);
+        });
         turn.signal.addEventListener('abort', abort, { once: true });
         if (turn.signal.aborted) abort();
         const calls = new Map<string, { name: string; input: Record<string, unknown>; nativeEdit?: boolean }>();
@@ -243,6 +261,12 @@ export class OpenCodeEngine implements AgentEngine {
         let executionStarted = false;
         let heldSuccess = false;
         let failedEdits = 0;
+        const coordinator = new NativeSessionCoordinator(sessionID, turn.model, displayToolName,
+            (callId, trace) => host.onObservation?.(callId, trace), id => {
+                this.mcpBridge?.activate(id, turn.plan, turn.signal, sessionID);
+                this.shellMonitor?.watch(id, turn.workspace);
+            });
+        this.coordinator = coordinator;
         this.mcpBridge?.activate(sessionID, turn.plan, turn.signal);
         try {
             const stream = await subscribeEvents(baseUrl, headers, streamController.signal);
@@ -261,161 +285,250 @@ export class OpenCodeEngine implements AgentEngine {
             this.active = active;
             for (const message of host.steer?.drain() ?? []) await this.steer(message);
             yield { type: 'status', value: 'running' };
-            for await (const event of stream) {
-                turn.signal.throwIfAborted();
-                const data = event.data;
-                const form = data.form as FormInfo1 | undefined;
-                if ((event.type === 'form.created' ? form?.sessionID : data.sessionID) !== sessionID) continue;
-                switch (event.type) {
-                    case 'session.execution.started': executionStarted = true; heldSuccess = false; break;
-                    case 'session.retry.scheduled':
-                        if (this.probing) throw new Error(errorText(data.error));
-                        if (typeof data.attempt === 'number' && typeof data.at === 'number' && Number.isFinite(data.attempt) && Number.isFinite(data.at)) {
-                            yield { type: 'retrying', attempt: Math.max(1, data.attempt), maxAttempts: 0, nextRetryInMs: Math.max(0, data.at - Date.now()) };
-                        }
-                        break;
-                    case 'session.step.started': yield { type: 'attempting' }; break;
-                    case 'session.compaction.started': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacting' }; break;
-                    case 'session.compaction.ended': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacted' }; break;
-                    case 'session.compaction.failed': yield { type: 'engineNotice', kind: 'warning', valueKey: 'engineCompactionFailed', params: { error: errorText(data.error) } }; break;
-                    case 'session.inbox.delivered': {
-                        const message = active.steers.get(String(data.inboxID));
-                        if (message) { active.steers.delete(String(data.inboxID)); yield { type: 'steer', ...message }; }
-                        break;
-                    }
-                    case 'session.inbox.cancelled': {
-                        const message = active.steers.get(String(data.inboxID));
-                        if (message) { active.steers.delete(String(data.inboxID)); host.onSteerRejected?.(message.steerId); }
-                        if (heldSuccess && active.steers.size === 0) {
+            for await (const streamedEvent of stream) {
+                const queue = [streamedEvent];
+                for (let index = 0; index < queue.length; index++) {
+                    const event = queue[index];
+                    turn.signal.throwIfAborted();
+                    if (decisionFailure) throw decisionFailure.error;
+                    const data = event.data;
+                    const form = data.form as FormInfo1 | undefined;
+                    const eventSessionID = String(event.type === 'form.created' ? form?.sessionID : data.sessionID);
+                    if (eventSessionID === sessionID && !executionStarted && event.type !== 'session.execution.started') continue;
+                    const childEvent = coordinator.accept(event);
+                    queue.push(...coordinator.drain());
+                    if (!coordinator.owns(eventSessionID)) continue;
+                    if (!coordinator.bound(eventSessionID)) continue;
+                    if (event.type.startsWith('session.execution.') && !event.type.endsWith('started')) decisions.settleSession(eventSessionID);
+                    if (event.type === 'permission.replied') decisions.settle(`${eventSessionID}:permission:${String(data.requestID)}`, data.reply === 'reject' ? 'rejected' : 'approved');
+                    if (event.type === 'form.replied' || event.type === 'form.cancelled') decisions.settle(`${eventSessionID}:form:${String(data.id)}`);
+                    if (childEvent && !['permission.asked', 'form.created', 'session.step.ended'].includes(event.type)) {
+                        const shellID = (data.metadata as { shellID?: unknown } | undefined)?.shellID;
+                        if (typeof shellID === 'string') await this.shellMonitor?.track(shellID, eventSessionID, coordinator.displayID(eventSessionID, String(data.id)), true).catch(() => undefined);
+                        if (heldSuccess && !active.steers.size && !coordinator.pendingWork() && (event.type.startsWith('session.execution.') || event.type === 'session.inbox.cancelled')) {
                             completed = true;
                             yield { type: 'assistantMessage', text, toolCalls: [] };
                             yield { type: 'status', value: 'done' };
                             return;
                         }
-                        break;
+                        continue;
                     }
-                    case 'session.text.delta':
-                        if (typeof data.delta === 'string') { text += data.delta; yield { type: 'chunk', value: data.delta }; }
-                        break;
-                    case 'session.reasoning.delta':
-                        if (typeof data.delta === 'string') { reasoning += data.delta; yield { type: 'thinking', value: reasoning }; }
-                        break;
-                    case 'session.tool.input.started':
-                        if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(data.id, { name: displayToolName(data.name), input: {}, nativeEdit: ['edit', 'write', 'apply_patch', 'multiedit'].includes(data.name) });
-                        break;
-                    case 'session.tool.called': {
-                        const id = String(data.id);
-                        const call = calls.get(id) ?? { name: 'opencode_tool', input: {} };
-                        call.input = data.input && typeof data.input === 'object' ? data.input as Record<string, unknown> : {};
-                        calls.set(id, call);
-                        if (call.name === 'run_terminal_command') active.calls.add(id);
-                        yield { type: 'toolCall', id, tool: call.name, args: nativeToolDisplayArgs(call.name, call.input) };
-                        break;
+                    switch (event.type) {
+                        case 'session.execution.started':
+                            if (executionStarted && text) { text += '\n\n'; yield { type: 'chunk', value: '\n\n' }; }
+                            executionStarted = true; heldSuccess = false; reasoning = ''; break;
+                        case 'session.retry.scheduled':
+                            if (this.probing) throw new Error(errorText(data.error));
+                            if (typeof data.attempt === 'number' && typeof data.at === 'number' && Number.isFinite(data.attempt) && Number.isFinite(data.at)) {
+                                yield { type: 'retrying', attempt: Math.max(1, data.attempt), maxAttempts: 0, nextRetryInMs: Math.max(0, data.at - Date.now()) };
+                            }
+                            break;
+                        case 'session.step.started': yield { type: 'attempting' }; break;
+                        case 'session.compaction.started': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacting' }; break;
+                        case 'session.compaction.ended': yield { type: 'engineNotice', kind: 'info', valueKey: 'engineCompacted' }; break;
+                        case 'session.compaction.failed': yield { type: 'engineNotice', kind: 'warning', valueKey: 'engineCompactionFailed', params: { error: errorText(data.error) } }; break;
+                        case 'session.inbox.delivered': {
+                            const message = active.steers.get(String(data.inboxID));
+                            if (message) { active.steers.delete(String(data.inboxID)); yield { type: 'steer', ...message }; }
+                            break;
+                        }
+                        case 'session.inbox.cancelled': {
+                            const message = active.steers.get(String(data.inboxID));
+                            if (message) { active.steers.delete(String(data.inboxID)); host.onSteerRejected?.(message.steerId); }
+                            if (heldSuccess && active.steers.size === 0 && !coordinator.pendingWork()) {
+                                completed = true;
+                                yield { type: 'assistantMessage', text, toolCalls: [] };
+                                yield { type: 'status', value: 'done' };
+                                return;
+                            }
+                            break;
+                        }
+                        case 'session.text.delta':
+                            if (typeof data.delta === 'string') { text += data.delta; yield { type: 'chunk', value: data.delta }; }
+                            break;
+                        case 'session.reasoning.delta':
+                            if (typeof data.delta === 'string') { reasoning += data.delta; yield { type: 'thinking', value: reasoning }; }
+                            break;
+                        case 'session.tool.input.started':
+                            if (typeof data.id === 'string' && typeof data.name === 'string') calls.set(coordinator.displayID(sessionID, data.id), { name: displayToolName(data.name), input: {}, nativeEdit: ['edit', 'write', 'apply_patch', 'multiedit'].includes(data.name) });
+                            break;
+                        case 'session.tool.called': {
+                            const id = coordinator.displayID(sessionID, String(data.id));
+                            const call = calls.get(id) ?? { name: 'opencode_tool', input: {} };
+                            call.input = data.input && typeof data.input === 'object' ? data.input as Record<string, unknown> : {};
+                            calls.set(id, call);
+                            if (call.name === 'run_terminal_command') active.calls.add(id);
+                            yield { type: 'toolCall', id, tool: call.name, args: nativeToolDisplayArgs(call.name, call.input) };
+                            break;
+                        }
+                        case 'session.tool.progress': {
+                            const metadata = data.metadata as { shellID?: string } | undefined;
+                            if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, coordinator.displayID(sessionID, String(data.id)), calls.get(coordinator.displayID(sessionID, String(data.id)))?.input.background === true).catch(() => undefined);
+                            break;
+                        }
+                        case 'session.tool.success':
+                        case 'session.tool.failed': {
+                            const id = coordinator.displayID(sessionID, String(data.id));
+                            const call = calls.get(id);
+                            const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
+                            if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
+                            const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
+                            if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
+                            // V2 represents MCP images as file parts with data URIs.
+                            // Reuse shared image bounds; never fetch native file/HTTP URIs.
+                            const content = mapMcpToolContent(Array.isArray(data.content) ? data.content.map(part => part?.type === 'file' && typeof part.uri === 'string' && /^data:image\//i.test(part.uri) ? { type: 'text', text: part.uri } : part) : [], call?.name);
+                            yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}) };
+                            calls.delete(id);
+                            active.calls.delete(id);
+                            // Native tools own their arguments and retries. Stop a
+                            // failing edit loop through the normal interrupt/wait
+                            // cleanup rather than rewriting or replaying edits.
+                            if (failedEdits >= 3) throw new EngineError('engineRepeatedEditFailures');
+                            break;
+                        }
+                        case 'permission.asked': {
+                            const approvalId = `opencode:${eventSessionID}:${String(data.id)}`;
+                            const source = data.source as { type?: string; id?: string } | undefined;
+                            const nativeID = source?.type === 'tool' && source.id ? source.id : approvalId;
+                            const id = coordinator.displayID(eventSessionID, nativeID);
+                            const call = coordinator.call(eventSessionID, nativeID);
+                            const name = call ? displayToolName(call.name) : displayToolName(String(data.action));
+                            const args = nativeToolDisplayArgs(name, { ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}), ...call?.input, action: data.action, resources: data.resources });
+                            decisions.start(`${eventSessionID}:permission:${String(data.id)}`, async (signal, answering) => {
+                                let allowed = !turn.plan;
+                                if (data.action === 'subagent') {
+                                    // Model-supplied native ids may name another chat.
+                                    // Replace a reused child's old mode before admission.
+                                    allowed &&= call?.name === 'subagent';
+                                    const childID = call?.input.sessionID;
+                                    if (allowed && typeof childID === 'string' && childID) {
+                                        const child = await client.session.get({ sessionID: childID }, { signal });
+                                        allowed = child.parentID === eventSessionID && child.location.directory === turn.workspace;
+                                        if (allowed) allowed = !(childID in await client.session.active({ signal })) && coordinator.reusable(childID) && coordinator.claim(childID, eventSessionID, nativeID);
+                                        if (allowed) {
+                                            await tree.drainPending(childID, signal);
+                                            await client.session.update({ sessionID: childID, permissions }, { signal });
+                                            coordinator.admit(childID, eventSessionID, child.model ? `${child.model.providerID}/${child.model.id}` : turn.model, child.agent ?? '');
+                                        }
+                                    }
+                                }
+                                const attribution = coordinator.source(eventSessionID);
+                                const unattended = turn.yolo && eventSessionID === sessionID;
+                                if (allowed && !unattended) coordinator.waiting(eventSessionID, approvalId, name, nativeID);
+                                const decision = !allowed ? {} : unattended ? { [id]: true } : await abortable(host.approvals.requestApproval(approvalId, [{ id, name, arguments: args, argumentsJson: JSON.stringify(args) }], attribution, signal), signal);
+                                if (!decision[id] && typeof call?.input.sessionID === 'string') coordinator.release(call.input.sessionID, eventSessionID, nativeID);
+                                signal.throwIfAborted();
+                                answering();
+                                // A bare reject is OpenCode's Stop. A declined tool
+                                // should return control to the model, like Xratu.
+                                await client.permission.reply({ sessionID: eventSessionID, requestID: String(data.id), decision: decision[id] ? 'once' : 'reject', ...(!decision[id] ? { message: !allowed ? 'This tool is unavailable in this session or mode.' : 'The user declined this request. Do not retry it.' } : {}) }, { signal });
+                            });
+                            break;
+                        }
+                        case 'form.created':
+                            if (form) {
+                                coordinator.waiting(eventSessionID, form.id, 'ask_user_question');
+                                decisions.start(`${eventSessionID}:form:${form.id}`, (signal, answering) => this.answerForm(client, form, host, signal, answering, coordinator.source(eventSessionID), error => { decisionFailure ??= { error }; }));
+                            }
+                            break;
+                        case 'session.step.ended': {
+                            const tokens = data.tokens as { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
+                            if (tokens && [tokens.input, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) {
+                                const usage: LocalAgentEvent = { type: 'usage', usage: { promptTokens: tokens.input + tokens.cache.read + tokens.cache.write, completionTokens: tokens.output + tokens.reasoning, cachedTokens: tokens.cache.read, cacheWriteTokens: tokens.cache.write, totalTokens: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning, ...(typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0 ? { costUsd: data.cost } : {}) } };
+                                coordinator.usage(eventSessionID, usage);
+                                yield usage;
+                            }
+                            break;
+                        }
+                        case 'session.execution.failed': if (executionStarted) throw new Error(errorText(data.error)); break;
+                        case 'session.execution.interrupted': if (executionStarted) throw new DOMException('OpenCode interrupted', 'AbortError'); break;
+                        case 'session.execution.succeeded':
+                            if (!executionStarted) break;
+                            // OpenCode can finish one execution before delivering a steer.
+                            // Its following execution belongs to this same Xratu turn.
+                            if (active.steers.size || coordinator.pendingWork()) { heldSuccess = true; break; }
+                            completed = true;
+                            yield { type: 'assistantMessage', text, toolCalls: [] };
+                            yield { type: 'status', value: 'done' };
+                            return;
                     }
-                    case 'session.tool.progress': {
-                        const metadata = data.metadata as { shellID?: string } | undefined;
-                        if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, String(data.id), calls.get(String(data.id))?.input.background === true).catch(() => undefined);
-                        break;
-                    }
-                    case 'session.tool.success':
-                    case 'session.tool.failed': {
-                        const id = String(data.id);
-                        const call = calls.get(id);
-                        const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
-                        if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
-                        const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
-                        if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
-                        // V2 represents MCP images as file parts with data URIs.
-                        // Reuse shared image bounds; never fetch native file/HTTP URIs.
-                        const content = mapMcpToolContent(Array.isArray(data.content) ? data.content.map(part => part?.type === 'file' && typeof part.uri === 'string' && /^data:image\//i.test(part.uri) ? { type: 'text', text: part.uri } : part) : [], call?.name);
-                        yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}) };
-                        calls.delete(id);
-                        active.calls.delete(id);
-                        // Native tools own their arguments and retries. Stop a
-                        // failing edit loop through the normal interrupt/wait
-                        // cleanup rather than rewriting or replaying edits.
-                        if (failedEdits >= 3) throw new EngineError('engineRepeatedEditFailures');
-                        break;
-                    }
-                    case 'permission.asked': {
-                        const approvalId = `opencode:${sessionID}:${String(data.id)}`;
-                        const source = data.source as { type?: string; id?: string } | undefined;
-                        const id = source?.type === 'tool' && source.id ? source.id : approvalId;
-                        const args = { action: data.action, resources: data.resources, ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}) };
-                        const name = displayToolName(String(data.action));
-                        const decision = turn.plan ? {} : await abortable(host.approvals.requestApproval(approvalId, [{ id, name, arguments: args, argumentsJson: JSON.stringify(args) }]), turn.signal);
-                        await client.permission.reply({ sessionID, requestID: String(data.id), decision: decision[id] ? 'once' : 'reject' }, options);
-                        break;
-                    }
-                    case 'form.created':
-                        if (form) await this.answerForm(client, form, host, turn.signal);
-                        break;
-                    case 'session.step.ended': {
-                        const tokens = data.tokens as { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
-                        if (tokens && [tokens.input, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) yield { type: 'usage', usage: { promptTokens: tokens.input + tokens.cache.read + tokens.cache.write, completionTokens: tokens.output + tokens.reasoning, cachedTokens: tokens.cache.read, cacheWriteTokens: tokens.cache.write, totalTokens: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning, ...(typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0 ? { costUsd: data.cost } : {}) } };
-                        break;
-                    }
-                    case 'session.execution.failed': if (executionStarted) throw new Error(errorText(data.error)); break;
-                    case 'session.execution.interrupted': if (executionStarted) throw new DOMException('OpenCode interrupted', 'AbortError'); break;
-                    case 'session.execution.succeeded':
-                        if (!executionStarted) break;
-                        // OpenCode can finish one execution before delivering a steer.
-                        // Its following execution belongs to this same Xratu turn.
-                        if (active.steers.size) { heldSuccess = true; break; }
-                        completed = true;
-                        yield { type: 'assistantMessage', text, toolCalls: [] };
-                        yield { type: 'status', value: 'done' };
-                        return;
                 }
             }
+        } catch (error) {
+            throw decisionFailure?.error ?? error;
         } finally {
             if (this.active === active) this.active = undefined;
-            this.mcpBridge?.deactivate(sessionID);
+            for (const id of coordinator.sessions.keys()) this.mcpBridge?.deactivate(id);
+            if (this.coordinator === coordinator) this.coordinator = undefined;
             for (const message of active.steers.values()) host.onSteerRejected?.(message.steerId);
             turn.signal.removeEventListener('abort', abort);
             streamController.abort();
+            await decisions.close();
+            coordinator.finish(turn.signal.aborted ? 'cancelled' : decisionFailure ? 'error' : 'interrupted');
             // Interrupt also on a broken stream: never leave a native agent running unseen.
             if (!completed) {
                 try {
-                    await client.session.interrupt({ sessionID, resume: false }, { signal: AbortSignal.timeout(5000) });
-                    // interrupt acknowledges before native finalizers and the terminal event.
-                    // Keep this turn claimed until settlement; a new prompt must not race it.
-                    await client.session.wait({ sessionID }, { signal: AbortSignal.timeout(30_000) });
+                    await tree.stop(coordinator.sessions.keys(), AbortSignal.timeout(30_000));
                 } catch {
                     // A stuck runtime cannot keep running unseen or poison the next turn.
                     // Native session identity/history survives the managed server restart.
                     await this.server.dispose();
                 }
             }
+            try { await tree.stopChildShells(AbortSignal.timeout(5000)); }
+            catch { await this.server.dispose(); }
+            for (const id of coordinator.sessions.keys()) if (id !== sessionID) this.shellMonitor?.unwatch(id);
         }
     }
-    private async answerForm(client: OpenCodeClient, form: FormInfo1, host: EngineHost, signal: AbortSignal): Promise<void> {
+    private async answerForm(client: OpenCodeClient, form: FormInfo1, host: EngineHost, signal: AbortSignal, answering: () => void, source?: import('../../subagentObservation').SubagentApprovalSource, noteFailure?: (error: unknown) => void): Promise<void> {
         const answer: Record<string, string | number | boolean | string[]> = {};
         try {
+            // Validate the whole form before displaying any of its fields.
+            // Partial answers cannot represent hidden or conditional fields.
+            const keys = new Set<string>();
+            for (const field of form.fields) {
+                if (field.type === 'external' || field.hidden || field.when?.length || keys.has(field.key)) throw new EngineError('engineFormUnsupported');
+                keys.add(field.key);
+                if (field.type === 'string' || field.type === 'multiselect') {
+                    const labels = field.options?.map(option => option.label) ?? [];
+                    const values = field.options?.map(option => option.value) ?? [];
+                    if (new Set(labels).size !== labels.length || new Set(values).size !== values.length || labels.some(label => !label.trim())) throw new EngineError('engineFormUnsupported');
+                }
+            }
             for (const field of form.fields) {
                 if (field.type === 'external' || field.hidden || field.when?.length) throw new EngineError('engineFormUnsupported');
                 const options = field.type === 'string' || field.type === 'multiselect' ? field.options ?? [] : [];
-                const outcome = await abortable(host.questions.ask({ header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', minItems: field.type === 'multiselect' ? field.minItems : undefined, maxItems: field.type === 'multiselect' ? field.maxItems : undefined, allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) }), signal);
+                const outcome = await abortable(host.questions.ask({ source, header: form.title, question: [field.title ?? field.key, field.description].filter(Boolean).join('\n'), multiSelect: field.type === 'multiselect', minItems: field.type === 'multiselect' ? field.minItems : undefined, maxItems: field.type === 'multiselect' ? field.maxItems : undefined, allowCustomAnswer: (field.type === 'string' || field.type === 'multiselect') ? field.custom === true || options.length === 0 : true, options: options.map((option) => ({ label: option.label, description: option.description ?? '', recommended: false })) }, signal), signal);
                 signal.throwIfAborted();
-                if (outcome.kind === 'dismissed') { await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal }); return; }
+                if (outcome.kind === 'dismissed') { answering(); await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal }); return; }
                 const value = outcome.kind === 'selected' ? options.find((option) => option.label === outcome.label)?.value ?? outcome.label : outcome.text;
                 if (field.type === 'multiselect') {
                     const labels: unknown = outcome.kind === 'custom' ? JSON.parse(outcome.text) : [outcome.label];
-                    if (!Array.isArray(labels) || labels.some((label) => typeof label !== 'string')) throw new EngineError('engineFormUnsupported');
+                    if (!Array.isArray(labels) || labels.some((label) => typeof label !== 'string') || new Set(labels).size !== labels.length) throw new EngineError('engineFormInvalidAnswer');
                     const values = labels.map((label) => options.find((option) => option.label === label)?.value ?? label);
-                    if ((field.minItems !== undefined && values.length < field.minItems) || (field.maxItems !== undefined && values.length > field.maxItems) || (field.custom !== true && values.some((item) => !options.some((option) => option.value === item)))) throw new EngineError('engineFormUnsupported');
+                    if ((field.minItems !== undefined && values.length < field.minItems) || (field.maxItems !== undefined && values.length > field.maxItems) || (options.length > 0 && field.custom !== true && values.some((item) => !options.some((option) => option.value === item)))) throw new EngineError('engineFormInvalidAnswer');
                     answer[field.key] = values;
                 } else if (field.type === 'number' || field.type === 'integer') {
                     const number = Number(value);
-                    if (!Number.isFinite(number) || (field.type === 'integer' && !Number.isInteger(number))) throw new EngineError('engineFormUnsupported');
+                    if (!value.trim() || !Number.isFinite(number) || (field.type === 'integer' && !Number.isInteger(number)) || (field.minimum !== undefined && number < field.minimum) || (field.maximum !== undefined && number > field.maximum)) throw new EngineError('engineFormInvalidAnswer');
                     answer[field.key] = number;
                 } else if (field.type === 'boolean') {
-                    if (!['true', 'false'].includes(value.toLowerCase())) throw new EngineError('engineFormUnsupported');
+                    if (!['true', 'false'].includes(value.toLowerCase())) throw new EngineError('engineFormInvalidAnswer');
                     answer[field.key] = value.toLowerCase() === 'true';
-                } else answer[field.key] = value;
+                } else {
+                    if (field.type !== 'string' || (options.length > 0 && field.custom !== true && !options.some(option => option.value === value)) || (field.minLength !== undefined && value.length < field.minLength) || (field.maxLength !== undefined && value.length > field.maxLength)) throw new EngineError('engineFormInvalidAnswer');
+                    answer[field.key] = value;
+                }
             }
+            signal.throwIfAborted();
+            answering();
             await client.session.form.reply({ sessionID: form.sessionID, formID: form.id, answer }, { signal });
         } catch (error) {
+            // An external reply/cancel or terminal event already owns native
+            // settlement. Never send a second answer from a stale UI card.
+            if (signal.aborted) throw error;
+            noteFailure?.(error);
+            answering();
             await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
             throw error;
         }

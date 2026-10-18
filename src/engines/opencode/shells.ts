@@ -31,6 +31,10 @@ export class NativeShellMonitor {
         void this.refresh().catch(() => undefined);
         if (first) void this.restore(sessionID).catch(() => undefined);
     }
+    unwatch(sessionID: string): void {
+        this.sessions.delete(sessionID);
+        if (!this.sessions.size) { clearInterval(this.timer); this.timer = undefined; }
+    }
     private async restore(sessionID: string): Promise<void> {
         const client = await this.connect();
         const messages = await client.message.list({ sessionID, limit: 50 }, { signal: this.signal() });

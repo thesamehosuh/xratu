@@ -238,6 +238,7 @@
     "test:e2e": "npm run build:webview && playwright test -c test/e2e/playwright.config.ts",
     "test:host": "node test/run-host-tests.mjs",
     "test:engines": "node test/test-engines.mjs",
+    "test:opencode-coordinator": "node test/test-opencode-coordinator.mjs",
     "test:sanitizer": "node test/test-sanitizer.mjs",
     "test:endpoint-guard": "node test/test-endpoint-guard.mjs",
     "test:ssrf-guard": "node test/test-ssrf-guard.mjs",

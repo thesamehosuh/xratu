@@ -828,7 +828,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 ],
                 callTool: async (name, args, signal, context) => {
                     const active = this._nativeToolContext;
-                    if (!active || active.sessionID !== context.sessionID || active.plan !== context.plan || active.signal !== signal || signal.aborted
+                    if (!active || active.sessionID !== (context.rootSessionID ?? context.sessionID) || active.plan !== context.plan || active.signal !== signal || signal.aborted
+                        || (context.rootSessionID && ['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(name))
                         || (context.plan && !isNativePlanTool(name))) {
                         return { text: 'Xratu service is unavailable in this turn.', images: [], isError: true };
                     }
@@ -3775,7 +3776,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  the suspended local agent generator would hang forever.
      *  Calls whose kind was allowed for this session resolve silently; only
      *  the remainder reach the approval card. */
-    private _requestLocalApproval(approvalId: string, approvals: Array<{ tool_call_id: string; tool_name: string; args: Record<string, unknown> }>, source?: SubagentApprovalSource): Promise<Record<string, boolean>> {
+    private _requestLocalApproval(approvalId: string, approvals: Array<{ tool_call_id: string; tool_name: string; args: Record<string, unknown> }>, source?: SubagentApprovalSource, signal?: AbortSignal): Promise<Record<string, boolean>> {
+        if (signal?.aborted) return Promise.reject(signal.reason);
         const preDecided: Record<string, boolean> = {};
         const pending = approvals.filter((a) => {
             if (isSessionApproved(a.tool_name, a.args, this._sessionApprovedKinds)) {
@@ -3785,11 +3787,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return true;
         });
         if (pending.length === 0) return Promise.resolve(preDecided);
-        return new Promise((resolve, reject) => {
+        const cancel = () => {
+            const resolver = this._localApprovalResolvers[approvalId];
+            if (!resolver) return;
+            delete this._localApprovalResolvers[approvalId];
+            resolver.reject(signal!.reason);
+            delete this._approvalCloseItems[approvalId];
+            const resolution = signal?.reason && typeof signal.reason === 'object' && signal.reason.resolution === 'approved' ? 'approved' : 'rejected';
+            this._view?.webview.postMessage({ type: 'approvalResolved', approval_id: approvalId, resolution });
+            this._releaseApprovalCard(approvalId);
+        };
+        const request = new Promise<Record<string, boolean>>((resolve, reject) => {
             this._localApprovalResolvers[approvalId] = {
                 resolve: (decisions) => resolve({ ...preDecided, ...decisions }),
                 reject,
             };
+            signal?.addEventListener('abort', cancel, { once: true });
             // The webview renders ONE approval card at a time: a second
             // concurrent needsApproval post would replace the first and
             // orphan its promise (parallel subagents request approvals at the
@@ -3811,9 +3824,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         args: a.args,
                     })),
                     auto: [],
-                });
+                }, signal);
             }));
         });
+        return request.finally(() => signal?.removeEventListener('abort', cancel));
     }
 
     /** Free the single approval-card slot after a decision or cancel. */
@@ -3853,10 +3867,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  pending promise is tracked so a cancel can reject it - the tool call
      *  is suspended on it inside the agent loop. Cards are presented one at
      *  a time, mirroring the approval-card chain. */
-    private _requestLocalDecision(question: UserQuestion): Promise<UserQuestionOutcome> {
-        return new Promise((resolve, reject) => {
-            const decisionId = `dec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    private _requestLocalDecision(question: UserQuestion, signal?: AbortSignal): Promise<UserQuestionOutcome> {
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        const decisionId = `dec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const cancel = () => {
+            const resolver = this._localDecisionResolvers.get(decisionId);
+            if (!resolver) return;
+            this._localDecisionResolvers.delete(decisionId);
+            resolver.reject(signal!.reason);
+            this._view?.webview.postMessage({ type: 'decisionResolved', decision_id: decisionId, answer: null });
+            this._releaseDecisionCard(decisionId);
+        };
+        const request = new Promise<UserQuestionOutcome>((resolve, reject) => {
             this._localDecisionResolvers.set(decisionId, { resolve, reject, question });
+            signal?.addEventListener('abort', cancel, { once: true });
             this._decisionCardChain = this._decisionCardChain.then(() => new Promise<void>((release) => {
                 if (!this._localDecisionResolvers.has(decisionId)) {
                     release();
@@ -3873,9 +3897,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     minItems: question.minItems,
                     maxItems: question.maxItems,
                     allowCustomAnswer: question.allowCustomAnswer,
+                    source: question.source,
                 });
             }));
         });
+        return request.finally(() => signal?.removeEventListener('abort', cancel));
     }
 
     /** Free the single decision-card slot after an answer or cancel. */
@@ -4822,8 +4848,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
             const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
-                approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
-                questions: { ask: (question) => this._requestLocalDecision(question) },
+                approvals: { requestApproval: (id, calls, source, signal) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments })), source, signal) },
+                questions: { ask: (question, signal) => this._requestLocalDecision(question, signal) },
                 onSession: async (session) => {
                     this._engineSession = session;
                     this._nativeToolContext = { sessionID: session.nativeSessionId!, plan: runPlanMode, signal: controller.signal, executor };
@@ -4832,6 +4858,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 },
                 steer: { drain: () => this._localSteerQueue.splice(0).map((entry) => ({ text: entry.text, attachments: entry.images, steerId: entry.steerId })) },
                 onSteerRejected: (steerId) => this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId }),
+                onObservation: (callId, trace) => {
+                    if (epoch !== this._sessionEpoch) return;
+                    const event = outcome.events.find(e => e?.type === 'tool_call' && e.id === callId)
+                        ?? this._history.flatMap(row => row.events ?? []).find(e => e?.type === 'tool_call' && e.id === callId);
+                    if (event) event.subagent = trace;
+                    this._view?.webview.postMessage({ type: 'subagentState', callId, trace: ['running', 'waiting'].includes(trace.status) ? trace : this._subagentDisplayTrace(trace) });
+                    this._scheduleLocalPartialPersist();
+                },
             });
             for await (const event of agent) this._handleLocalAgentEvent(event, outcome);
         } catch (error) {
@@ -7551,7 +7585,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
 
-    private async _processNeedsApproval(parsed: any) {
+    private async _processNeedsApproval(parsed: any, signal?: AbortSignal) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : '';
         const out: any[] = [];
@@ -7615,6 +7649,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 tool_name: auto.tool_name ?? 'tool'
             });
         }
+        if (signal?.aborted) return;
         this._approvalCloseItems[parsed.approval_id] = closeItems;
 
         this._view?.webview.postMessage({

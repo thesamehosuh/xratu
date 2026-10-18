@@ -9,6 +9,11 @@ orchestration-v2/pullRequestWatch.ts and its evaluator test scenarios,
 pullRequest/gitHubPullRequestJson.ts check queries, and the linked PR panel
 row/actions pattern from ThreadPullRequestsPanel.tsx, and the shared inline
 status pattern from ThreadPullRequestBadgeControl and ThreadDetailsPrRow.
+Also adapted: native session-tree ownership, pending request settlement and
+background subagent report routing from v2/adapter.ts, and lifecycle regression
+scenarios from OpenCode2AdapterV2.test.ts. The SDK event frames in
+test/fixtures/opencode2-nested-background.jsonl are extracted from T3 Code's
+orchestration-v2/testkit/fixtures/opencode2_nested_background recording.
 Xratu adapts these patterns to its VS Code host, Promise SDK and decision cards.
 
 MIT License

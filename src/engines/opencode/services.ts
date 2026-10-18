@@ -25,6 +25,7 @@ export function nativeServiceTools(tools: LocalToolDefinition[]): AggregatedTool
 
 /** Display metadata only. Never pass translated arguments back to native execution. */
 export function nativeToolDisplayArgs(name: string, input: Record<string, unknown>): Record<string, unknown> {
+    if (name === 'task') return { ...input, subagent_type: input.agent, ...(typeof input.sessionID === 'string' ? { task_id: input.sessionID } : {}) };
     if (!['read_file', 'edit_file', 'write_file'].includes(name)) return input;
     return {
         ...input,
