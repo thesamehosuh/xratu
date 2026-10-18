@@ -1484,7 +1484,7 @@ export function App() {
     }
 
     if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
-        if (!ENGINE_CAPABILITIES[settingsEngine].subagents && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
+        if (ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
         overlay = <div className="scoped-page"><EngineScope engine={settingsEngine} onChange={setSettingsEngine} />{overlay}</div>;
     }
     const taskControl = taskProgress && taskListView && (

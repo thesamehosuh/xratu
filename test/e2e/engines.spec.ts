@@ -57,7 +57,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Agent files' : 'فایل های ایجنت', exact: true }).click();
         await replyNative();
         await expect(page.locator('.native-inventory')).toContainText('Explore');
-        await expect(page.locator('.native-inventory')).toContainText(locale === 'en' ? 'execution disabled' : 'اجرا غیرفعاله');
+        await expect(page.locator('.native-inventory')).toContainText(locale === 'en' ? 'Native subagent' : 'زیرعامل بومی');
         await page.screenshot({ path: testInfo.outputPath('native-agent-inventory.png') });
         expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
         await page.getByRole('button', { name: locale === 'en' ? 'Manage Xratu agent files' : 'مدیریت فایل های ایجنت Xratu', exact: true }).click();

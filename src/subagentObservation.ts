@@ -100,6 +100,7 @@ export class SubagentTraceCollector {
     private sequence = 0;
     private lastEmit = 0;
     constructor(public trace: SubagentTrace, private publish: (trace: SubagentTrace) => void, private now = Date.now) { this.emit(true); }
+    flush(): void { this.emit(true); }
     private emit(force = false) {
         const now = this.now();
         this.trace.updatedAt = now;
@@ -109,20 +110,21 @@ export class SubagentTraceCollector {
         this.trace = { ...snapshot, entries: snapshot.entries.map(entry => ({ ...entry })) };
         this.publish(snapshot);
     }
-    receive(event: LocalAgentEvent) {
+    receive(event: LocalAgentEvent, sourceId?: string) {
         const trace = this.trace;
         const now = this.now();
         const last = trace.entries.at(-1);
+        const sameSource = !sourceId || last?.id.startsWith(`${sourceId}:`);
         switch (event.type) {
             case 'chunk':
                 if (last?.kind === 'thinking' && !last.endedAt) last.endedAt = now;
-                if (last?.kind === 'text' && !last.endedAt) last.text = (last.text + event.value).slice(-12_000);
-                else trace.entries.push({ id: `text-${++this.sequence}`, kind: 'text', text: event.value, startedAt: now });
+                if (last?.kind === 'text' && !last.endedAt && sameSource) last.text = (last.text + event.value).slice(-12_000);
+                else trace.entries.push({ id: `${sourceId ? `${sourceId}:` : ''}text-${++this.sequence}`, kind: 'text', text: event.value, startedAt: now });
                 break;
             case 'thinking':
                 if (last?.kind === 'text' && !last.endedAt) last.endedAt = now;
-                if (last?.kind === 'thinking' && !last.endedAt) last.text = event.value.slice(-12_000);
-                else trace.entries.push({ id: `think-${++this.sequence}`, kind: 'thinking', text: event.value.slice(-12_000), startedAt: now });
+                if (last?.kind === 'thinking' && !last.endedAt && sameSource) last.text = event.value.slice(-12_000);
+                else trace.entries.push({ id: `${sourceId ? `${sourceId}:` : ''}think-${++this.sequence}`, kind: 'thinking', text: event.value.slice(-12_000), startedAt: now });
                 break;
             case 'assistantMessage':
                 if (last?.kind === 'thinking' && !last.endedAt) last.endedAt = now;

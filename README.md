@@ -54,13 +54,16 @@ To change your connection later, open **Settings → Providers**. Use
 The built-in Xratu engine supports local models, subagents, and conversation
 rewind. OpenCode shares Xratu’s MCP servers, marketplace installs, browser,
 task list, and enabled skills while keeping its own credentials and native
-sessions; subagents,
-conversation rewind, and offline mode are currently unavailable with that engine.
+sessions. Its native subagents appear in Agents with live traces and attributed
+approvals/questions; Stop covers nested and background children. The turn stays
+active until their reports settle. Delegation is unavailable in Plan mode;
+conversation rewind and offline mode remain unavailable with OpenCode.
 
 ## Approvals and privacy
 
 Edits, commands, and tool actions use approval controls. **YOLO mode removes
-those approval prompts**; enable it only when you want tools to run unattended.
+those approval prompts for the root request**; enable it only when you want
+tools to run unattended. Delegated native children still ask before a mutation.
 Checkpoints use separate shadow git storage and leave your repository's git
 index and history alone.
 

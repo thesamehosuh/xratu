@@ -10,6 +10,7 @@ import { memo, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, u
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 import {
     Brain,
+    Bot,
     Check,
     ChevronDown,
     ChevronLeft,
@@ -1998,6 +1999,7 @@ function DecisionCard({
     payload: DecisionPayload;
     onDecide?: (decisionId: string, answer?: string, dismissed?: boolean) => void;
 }) {
+    const openAgent = useContext(AgentNavigation);
     const answered = !!payload.answered;
     const [otherOpen, setOtherOpen] = useState(false);
     const [otherText, setOtherText] = useState('');
@@ -2028,6 +2030,7 @@ function DecisionCard({
 
     return (
         <section className="decision-card pending" aria-label={title}>
+            {payload.source && <div className="approval-source"><Bot size={12} /><strong dir="auto">{payload.source.profile}</strong><span dir="auto" title={payload.source.description}>{payload.source.description}</span>{openAgent && <button type="button" onClick={() => openAgent(payload.source!.parentCallId)}>{t('agentObserve')}</button>}</div>}
             <div className="decision-head">
                 <span className="decision-state-icon">
                     <HelpCircle size={14} />

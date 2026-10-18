@@ -185,7 +185,16 @@ Inspect the actual UI in both locales at narrow and wide widths as above.
   ID. Resume with that identity rather than the currently selected engine.
 - OpenCode owns its credentials, tools, compaction, and native history. Never
   copy Xratu provider keys into it. Native provider authentication uses its SDK;
-  native MCP/Skills remain read-only and native subagents remain unavailable.
+  native MCP/Skills/agent inventories remain read-only. OpenCode native children
+  use the session coordinator: bind by parent native call/session identity,
+  attribute approvals/questions, keep observations out of the parent ledger,
+  and retain Stop until the entire tree and queued reports settle. Plan still
+  denies delegation. Native children use native agent definitions and inherit
+  native permission rules; child mutations still require real approvals in
+  YOLO. Xratu profile allowlists and budgets apply only to
+  the built-in runner. Bridged parent controls stay denied to native children.
+  Stream failures, restore, and cancellation must settle the whole tree or
+  restart the managed server. Run `test:opencode-coordinator` for this boundary.
 - Preserve native permission/form identity and steering delivery boundaries.
   Plan deterministically rejects mutation and unknown tools; offline mode
   blocks native execution because Xratu cannot isolate its network access.

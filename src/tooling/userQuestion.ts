@@ -13,6 +13,7 @@ export interface UserQuestionOption {
 }
 
 export interface UserQuestion {
+    source?: import('../subagentObservation').SubagentApprovalSource;
     multiSelect?: boolean;
     minItems?: number;
     maxItems?: number;
@@ -33,7 +34,7 @@ export type UserQuestionOutcome =
  *  correlates by id, awaits the user, and rejects with an `AbortError` when
  *  the run is cancelled while the card is open. */
 export interface UserQuestionGate {
-    ask(question: UserQuestion): Promise<UserQuestionOutcome>;
+    ask(question: UserQuestion, signal?: AbortSignal): Promise<UserQuestionOutcome>;
 }
 
 /** Prompt-level bounds: models overrun these regularly and an oversized card

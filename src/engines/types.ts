@@ -1,5 +1,6 @@
 import type { LocalAgentEvent, LocalAgentRequest, LocalApprovalGate, LocalImageAttachment, LocalSteerFeed, LocalToolExecutor } from '../local/localTypes';
 import type { UserQuestionGate } from '../tooling/userQuestion';
+import type { SubagentTrace } from '../subagentObservation';
 
 export type EngineId = 'xratu' | 'opencode';
 export interface EngineSessionRef {
@@ -19,7 +20,7 @@ export interface EngineCapabilities {
 /** Shared by runtime admission, setup, and settings; readiness is separate. */
 export const ENGINE_CAPABILITIES: Record<EngineId, EngineCapabilities> = {
     xratu: { steering: true, rewind: true, localTools: true, nativeConfiguration: false, offline: true, subagents: true },
-    opencode: { steering: true, rewind: false, localTools: false, nativeConfiguration: true, offline: false, subagents: false },
+    opencode: { steering: true, rewind: false, localTools: false, nativeConfiguration: true, offline: false, subagents: true },
 };
 export interface EngineTurn {
     prompt: string;
@@ -43,6 +44,7 @@ export interface EngineHost {
     steer?: LocalSteerFeed;
     onSession?: (session: EngineSessionRef) => Promise<void>;
     onSteerRejected?: (steerId: string | undefined) => void;
+    onObservation?: (callId: string, trace: SubagentTrace) => void;
 }
 export interface AgentEngine {
     readonly id: EngineId;

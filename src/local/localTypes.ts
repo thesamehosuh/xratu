@@ -354,6 +354,7 @@ export interface LocalApprovalGate {
         approvalId: string,
         calls: LocalToolCall[],
         source?: SubagentApprovalSource,
+        signal?: AbortSignal,
     ): Promise<Record<string, boolean>>;
 }
 
