@@ -38,7 +38,7 @@ async function openSession(page: Page, locale = 'en') {
 }
 
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
-    test(`agent-linked PRs stay out of chat and open through the panel command ${locale} ${width}`, async ({ page }, info) => {
+    test(`agent-linked PRs show compact chat status and open the panel ${locale} ${width}`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await openSession(page, locale);
         await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
@@ -51,14 +51,16 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         const resume = { workspace: '/project', branch: 'fix/session-updates', engine: 'xratu', model: 'provider/model', credential: 'account', nativeSessionId: null, binaryPath: null };
         await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([{ ...link, watch: watching, resume }]) });
         await host(page, { type: 'fullResponse', persian: 'PR linked and watching.' });
-        await expect(page.locator('.pr-indicator')).toHaveCount(0);
+        await expect(page.locator('.pr-indicator')).toHaveCount(1);
         await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
         await expect(page.locator('.pr-panel')).toBeHidden();
         await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-chat-${locale}-${width}.png`) });
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-timeline details.step')).toBeVisible();
+        await expect(page.locator('.pr-indicator')).toHaveCount(1);
+        await page.locator('#surface-tab-conversation').click();
+        await page.locator('.pr-indicator-row').click();
         await expect(page.locator('.pr-indicator')).toHaveCount(0);
-        await host(page, { type: 'openPullRequests' });
         await expect(page.locator('.pr-panel')).toBeVisible();
         await expect(page.locator('.pr-panel')).toHaveClass(/panel-main/);
         await expect(page.locator('.pr-row')).toContainText('Make session updates reliable');
@@ -102,7 +104,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
 test('pending updates stay inside the PR panel and interrupted continuation stays explicit', async ({ page }) => {
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: { ...state([link]), delivery: { ids: ['event'], status: 'interrupted', owner: 1 }, events: [{ id: 'event', key: 'github.com/example/repo#42', url, number: 42, createdAt: '2026-01-01T12:00:00Z', headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }] } });
-    await expect(page.locator('.pr-indicator')).toHaveCount(0);
+    await expect(page.locator('.pr-indicator')).toHaveCount(1);
     await host(page, { type: 'openPullRequests' });
     await expect(page.locator('.pr-updates')).toContainText('interrupted');
     await host(page, { type: 'startResponse' });

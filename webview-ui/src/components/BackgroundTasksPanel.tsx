@@ -75,8 +75,8 @@ export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass, onConv
     const mounted = new Set([...opened, ...(visible && selectedKey ? [selectedKey] : [])]);
     return <div className={`background-pane bg-jobs ${panelClass}`} id="surface-panel-background" role="tabpanel" aria-labelledby="surface-tab-background" aria-hidden={!visible || undefined}>
         {jobs.length === 0 ? (
-            <div className="bg-panel-empty" role="status">
-                <div className="bg-empty-icon" aria-hidden="true"><SquareTerminal size={22} /></div>
+            <div className="bg-panel-empty surface-empty-state" role="status">
+                <div className="bg-empty-icon surface-empty-icon" aria-hidden="true"><SquareTerminal size={22} /></div>
                 <strong className="bg-empty-title">{t('surfaceNoBackground')}</strong>
                 <p className="bg-empty-hint">{t('bgEmptyHint')}</p>
                 {onConversation && <button type="button" className="secondary-btn" onClick={onConversation}>{t('surfaceBackToConversation')}</button>}

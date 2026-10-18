@@ -26,6 +26,7 @@ import {
     Paperclip,
     PencilLine,
     Plus,
+    RotateCcw,
     Trash2,
     TriangleAlert,
     X,
@@ -2111,7 +2112,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2393,6 +2394,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
+                    {!busy && userIndex !== undefined && message.cp && onRestoreCheckpoint && <button type="button" className="icon-btn" onClick={() => onRestoreCheckpoint(userIndex, message.cp!)} aria-label={t('restoreCheckpoint')} title={t('restoreCheckpointHint')}><RotateCcw size={13} /></button>}
                     {showEditBtn && (
                         <button
                             type="button"
@@ -2508,8 +2510,8 @@ export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, fi
     const isFiltered = filter !== 'all' || Boolean(search.trim());
     if (!activity.length) {
         return (
-            <div className="activity-empty" role="status">
-                <div className="activity-empty-icon" aria-hidden="true">
+            <div className="activity-empty surface-empty-state" role="status">
+                <div className="activity-empty-icon surface-empty-icon" aria-hidden="true">
                     <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M2 10h3.5l2.3-5.2 4.1 10.4 2.6-5.2H18" />
                     </svg>

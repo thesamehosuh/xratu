@@ -2,10 +2,6 @@
 .pr-panel { grid-row:2 / span 2; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--page-canvas); }
 .pr-panel.panel-hidden { display:none; }
 .pr-scroll { flex:1; overflow:auto; padding:18px 20px 24px; min-height:0; width:100%; max-width:760px; margin-inline:auto; scrollbar-width:thin; }
-.pr-empty-state { display:flex; flex-direction:column; align-items:center; text-align:center; gap:8px; max-width:440px; margin:24px auto; padding:28px 20px; background:var(--page-surface); border:1px solid var(--page-line); border-radius:10px; }
-.pr-empty-icon { width:42px; height:42px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--xratu-accent-faint); color:var(--surface-accent); margin-block-end:4px; }
-.pr-empty-title { font-size:13px; font-weight:600; color:var(--vscode-foreground); }
-.pr-empty-hint { margin:0; font-size:12px; line-height:1.6; color:var(--vscode-descriptionForeground); }
 .pr-help { color:var(--vscode-descriptionForeground); font-size:12px; line-height:1.6; margin:8px 0; }
 .pr-notice { padding:12px 14px; margin-block-end:14px; background:var(--page-surface); border:1px solid var(--page-line); border-radius:9px; font-size:12px; line-height:1.6; }
 .pr-updates { display:flex; flex-direction:column; gap:6px; padding:14px 16px; margin-block-end:14px; background:var(--page-surface); border:1px solid var(--page-line); border-radius:10px; font-size:12px; line-height:1.6; }
@@ -171,7 +167,8 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .completed-steps[open] > summary > svg:last-child { transform:rotate(180deg); }
 .compact-step-list { display:flex; flex-direction:column; gap:5px; margin-block-start:10px; padding:10px; border:1px solid var(--page-line); border-radius:7px; background:var(--page-surface); }
 .compact-step { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:10px; min-width:0; }
-.compact-step > svg:first-child { color:var(--surface-accent); flex-shrink:0; }
+.compact-step > svg:first-child { color:var(--vscode-descriptionForeground); flex-shrink:0; }
+.compact-step:hover > svg:first-child { color:var(--surface-accent); }
 .compact-step-label { flex-shrink:0; }
 .compact-step > code { flex:1; min-width:0; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--vscode-descriptionForeground); font-size:9px; background:transparent; padding:0; border:0; }
 .compact-step > .ok { color:var(--vscode-testing-iconPassed, #8bbaa6); margin-inline-start:auto; }
@@ -181,10 +178,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .activity-pane { min-height:0; min-width:0; padding:0 18px 24px; overflow:auto; background:var(--page-canvas); }
 .activity-timeline { width:100%; max-width:700px; margin-inline:auto; display:flex; flex-direction:column; gap:14px; }
 .activity-pane .activity-timeline > .msg.assistant { padding:12px 14px; background:var(--page-surface); border:1px solid var(--page-line); border-radius:10px; }
-.activity-empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:8px; max-width:440px; margin:24px auto; padding:28px 20px; background:var(--page-surface); border:1px solid var(--page-line); border-radius:10px; font-size:12px; color:var(--vscode-descriptionForeground); }
-.activity-empty-icon { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--xratu-accent-faint); color:var(--surface-accent); margin-block-end:4px; }
-.activity-empty-title { font-size:13px; font-weight:600; color:var(--vscode-foreground); }
-.activity-empty-hint { margin:0; font-size:12px; line-height:1.6; color:var(--vscode-descriptionForeground); }
 .activity-reset-btn { margin-block-start:4px; padding:5px 12px; font-size:12px; border-radius:6px; }
 .activity-entry { min-width:0; margin-block-end:6px; padding-block-end:6px; border-block-end:1px solid color-mix(in srgb,var(--page-line) 55%,transparent); }
 .activity-entry:last-child { margin-block-end:0; padding-block-end:0; border-block-end:0; }
@@ -243,8 +236,8 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .composer .send-btn { width:28px; height:27px; min-width:28px; padding:0; border:0; border-radius:6px; color:var(--surface-accent); background:transparent; }
 .composer .send-btn:hover:not(:disabled):not(.is-stop) { background:var(--xratu-accent-faint); }
 .composer .send-btn:disabled { color:var(--vscode-disabledForeground); background:transparent; }
-.composer .send-btn.is-stop { color:#fff; background:#b42332; }
-.composer .send-btn.is-stop:hover:not(:disabled) { color:#fff; background:#d12d3e; }
+.composer .send-btn.is-stop { color:var(--vscode-foreground); background:transparent; }
+.composer .send-btn.is-stop:hover:not(:disabled) { color:var(--vscode-errorForeground); background:color-mix(in srgb,var(--vscode-errorForeground) 16%,transparent); }
 .task-list-chip-wrap { width:fit-content; margin:0; padding:0; position:relative; }
 .task-list-chip { min-height:24px; padding:3px 5px; font-size:10px; gap:5px; }
 .task-list-chip-bar { width:35px; }
@@ -280,9 +273,11 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .changes-pane { position:relative; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--page-canvas); }
 .review-resize { display:none; }
 .changes-review,.changes-history { display:flex; flex-direction:column; min-height:0; width:100%; }
-.review-head { display:flex; align-items:center; gap:10px; min-height:38px; padding:8px 18px 0; flex-shrink:0; font-size:11px; color:var(--vscode-descriptionForeground); }
+.review-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; min-height:38px; padding:8px 18px 0; flex-shrink:0; font-size:11px; color:var(--vscode-descriptionForeground); }
 .review-head > span:first-child { flex:1; }
 .review-head > .icon-btn { width:24px; height:24px; }
+.review-head .review-restore { display:inline-flex; align-items:center; gap:6px; min-height:26px; padding:4px 7px; line-height:16px; background:var(--xratu-surface-inset); }
+.review-restore > svg { display:block; flex-shrink:0; }
 .review-body { flex:1; padding:16px 18px; overflow:auto; min-height:0; display:flex; flex-direction:column; align-items:stretch; gap:12px; font-size:11px; scrollbar-width:thin; }
 .review-body > * { flex-shrink:0; }
 .review-body > .spinner { align-self:flex-start; inline-size:10px; block-size:10px; max-inline-size:10px; }

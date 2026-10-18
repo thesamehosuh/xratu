@@ -7,6 +7,7 @@ import { SubagentsPanel } from './components/SubagentsPanel';
 import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AgentsPage } from './components/AgentsPage';
+import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
 import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
@@ -226,8 +227,9 @@ export function App() {
     const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
     const [activeReviewSha, setActiveReviewSha] = useState<string | null>(null);
     const reviewTurns = useMemo(() => {
-        const turns = chat.messages.filter(message => message.role === 'user' && message.cp);
-        return turns.map((message, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.cp, number: index + 1 }));
+        const users = chat.messages.filter(message => message.role === 'user');
+        const turns = users.map((message, userIndex) => ({ message, userIndex })).filter(({ message }) => message.cp);
+        return turns.map(({ message, userIndex }, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.message.cp, number: index + 1, userIndex }));
     }, [chat.messages]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [turnFiles, setTurnFiles] = useState<{ session: string | null; files: Record<string, ReviewChange[]> }>({ session: null, files: {} });
@@ -1685,6 +1687,7 @@ export function App() {
             </div>
             </div>
             <div className="compose-dock">
+            {dock.mainActive !== 'pullRequests' && dock.sideActive !== 'pullRequests' && <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />}
             <div className="composer-support">
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}

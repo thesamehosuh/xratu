@@ -939,9 +939,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** `_localReplayUserTurns` captured when the current run started; the run
      *  reports its CUMULATIVE dropped count against this baseline. */
     private _compactionRunReplayBase: number | null = null;
-    /** Session-frozen project rules for the local system prompt. Recomputed
-     *  per turn it rewrote the cacheable prefix on every active-file change
-     *  (see `RulesSnapshot`). */
+    /** Coalesce concurrent rules reads; refresh the files for each new turn. */
     private _localRulesSnapshot = new RulesSnapshot();
     /** Steered user messages waiting to join the LIVE run. Built-in text
      *  attachments are fenced into `text`; native runs retain every file's
@@ -1866,6 +1864,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private _checkpointRestoreActive = false;
+    /** One restore request at a time, CONFIRMATION included. The user-bubble
+     *  and changes-panel controls target the same checkpoint and the confirm
+     *  banner is non-modal, so a second admission could replay the older tree
+     *  over edits made after the first restore settled. */
+    private _restoreRequestActive = false;
 
     private _captureCheckpointAction(userIndex?: number, sha?: string, allowConversationOnly = false): CheckpointActionContext | undefined {
         if (userIndex !== undefined && !this._view) return;
@@ -1928,23 +1931,30 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  conversation rewind to before that turn - then reuses the same shadow
      *  restore + ledger truncation as edit/resend. */
     async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
-        const context = this._captureCheckpointAction(userIndex, sha);
-        if (!context) return;
-        let resolved: string;
+        if (this._restoreRequestActive) return;
+        this._restoreRequestActive = true;
         try {
-            validateReviewCheckpoint(sha);
-            resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
-        } catch {
-            this.notifyBanner('warning', 'checkpointTurnGone');
-            return;
+            const context = this._captureCheckpointAction(userIndex, sha);
+            if (!context) return;
+            let resolved: string;
+            try {
+                validateReviewCheckpoint(sha);
+                resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
+            } catch {
+                this.notifyBanner('warning', 'checkpointTurnGone');
+                return;
+            }
+            if (!this._checkpointActionCurrent(context, userIndex)) return;
+            const choice = await this.confirmBanner(
+                context.engine === 'opencode' ? 'notifRestoreConfirm' : 'checkpointScopeConfirm',
+                context.engine === 'opencode' ? ['checkpointScopeFiles', 'notifCancel'] : ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
+                { target: sha },
+            );
+            if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
+            await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
+        } finally {
+            this._restoreRequestActive = false;
         }
-        if (!this._checkpointActionCurrent(context, userIndex)) return;
-        const choice = await this.confirmBanner(
-            'checkpointScopeConfirm',
-            ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
-        );
-        if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
-        await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
     }
 
     private async _applyCheckpointRestore(context: CheckpointActionContext, sha: string, rewindChat: boolean, userIndex?: number): Promise<void> {
@@ -1965,6 +1975,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 let emptySeed = false;
                 try {
                     const result = await this._checkpoints.restoreCheckpoint(context.root, resolved);
+                    this._view?.webview.postMessage({ type: 'checkpointRestored', sessionId: this._sessionId });
                     if (result.changed) this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
                 } catch (e) {
                     if (e instanceof EmptySeedError) emptySeed = true;
@@ -3634,22 +3645,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    /** Project rules for the run, resolved ONCE per session so the system
-     *  prompt stays byte-stable across turns (see `RulesSnapshot`). Recomputing
-     *  them per turn from the active editor's directory chain rewrote the
-     *  cacheable prefix whenever a nested AGENTS.md was crossed, dropping the
-     *  session cache rate under 50%. */
+    /** Read current project rules once for this run; they remain stable
+     *  across its model requests and are refreshed on the next user turn. */
     private _localRulesContext(): Promise<string> {
-        // Key on the SAME root `collectProjectRules()` resolves from - the
-        // active editor's workspace folder, else the first workspace folder -
-        // so switching workspace folders (multi-root) recomputes, while moving
-        // between files inside one root does not.
         const editor = vscode.window.activeTextEditor;
-        const folder = (editor && editor.document.uri.scheme === 'file'
-            ? vscode.workspace.getWorkspaceFolder(editor.document.uri)
-            : undefined) ?? vscode.workspace.workspaceFolders?.[0];
-        const root = folder?.uri.fsPath ?? '';
-        return this._localRulesSnapshot.resolve(root, () => collectProjectRules());
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        const directory = editor && editor.document.uri.scheme === 'file'
+            ? path.dirname(editor.document.uri.fsPath)
+            : root;
+        return this._localRulesSnapshot.resolve(JSON.stringify([root, directory]), () => collectProjectRules());
     }
 
     /** Convert extension history to local agent message format (no image base64).
@@ -4326,7 +4330,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         planMode?: boolean,
         hiddenPrompt?: boolean,
     ): Promise<StreamOutcome> {
-        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, rulesContext, attachments, existingController, planMode, hiddenPrompt);
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt);
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
@@ -4760,7 +4764,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return outcome;
     }
 
-    private async _runOpenCodeAgent(prompt: string, rulesContext: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean): Promise<StreamOutcome> {
+    private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean): Promise<StreamOutcome> {
         const epoch = this._sessionEpoch;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
@@ -4784,7 +4788,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
             const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
             this._nativeTurnActive = true;
-            const agent = engine.runTurn({ prompt, context: buildNativeSystemContext(rulesContext, planMode ?? this._planMode), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+            const agent = engine.runTurn({ prompt, context: buildNativeSystemContext(planMode ?? this._planMode, this._resolveReplyLanguage()), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: planMode ?? this._planMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
                 questions: { ask: (question) => this._requestLocalDecision(question) },
                 onSession: async (session) => { this._engineSession = session; this._observeNativeShells(engine, session.nativeSessionId!, workspace); await this._persistLocalSession(); },
@@ -7150,7 +7154,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     return;
                 }
 
-                const rulesContext = await this._localRulesContext();
+                // Native engines discover project rules in their own workspace.
+                let rulesContext = '';
+                if (this._activeEngine !== 'opencode') {
+                    try {
+                        rulesContext = await this._localRulesContext();
+                    } catch (error) {
+                        // Unreadable rules fail LOUDLY and once. startResponse is
+                        // already posted, so rethrowing would strand the webview
+                        // in its typing state and the turn would die unreported
+                        // (an AGENTS.md that is a directory, unreadable, ...).
+                        // The outer/inner finally release the run state.
+                        console.error('xratu: project rules read failed:', error);
+                        if (epoch === this._sessionEpoch) {
+                            this._view?.webview.postMessage({
+                                type: 'error',
+                                valueKey: 'rulesReadFailed',
+                                params: { error: error instanceof Error ? error.message : String(error) },
+                            });
+                        }
+                        return;
+                    }
+                }
 
                 if (controller.signal.aborted) {
                     this._abortControllers.delete('chat');

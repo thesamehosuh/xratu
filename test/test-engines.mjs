@@ -27,6 +27,7 @@ async function harness(mode = 'complete', mcpSource) {
     let settlement;
     let disposed = false;
     const nativeServers = new Map();
+    const instructions = new Map([['other.policy', 'Keep native integrations intact']]);
     const emit = (type, data) => stream.write(`data: ${JSON.stringify({ type, data })}\r\n\r\n`);
     const finish = () => {
         emit('session.text.delta', { sessionID: 'native-1', delta: 'OK' });
@@ -73,6 +74,17 @@ async function harness(mode = 'complete', mcpSource) {
             await settlement;
             res.writeHead(204).end();
             return;
+        }
+        if (req.url.includes('/instructions/entries')) {
+            if (mode === 'instructionsFailed' || (mode === 'instructionWriteFailed' && req.method === 'PUT')) { res.writeHead(500).end(); return; }
+            const key = decodeURIComponent(req.url.split('/instructions/entries/')[1] ?? '');
+            if (req.method === 'GET') { json([...instructions].map(([key, value]) => ({ key, value }))); return; }
+            if (req.method === 'PUT') {
+                assert.match(key, /^[a-z0-9][a-z0-9._-]*$/, 'native instruction keys reject slashes despite the SDK string type');
+                instructions.set(key, body.value);
+            }
+            if (req.method === 'DELETE') instructions.delete(key);
+            res.writeHead(204).end(); return;
         }
         if (req.url.endsWith('/prompt')) {
             assert.ok(subscribed, 'subscribe before prompt');
@@ -130,11 +142,46 @@ async function harness(mode = 'complete', mcpSource) {
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const client = OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' } });
     const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client }), dispose: async () => { disposed = true; stopping = false; } }, mcpSource, join(root, 'attachments # نمونه'));
-    return { engine, requests, wasDisposed: () => disposed, close: async () => { await engine.dispose(); stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
+    return { engine, requests, instructions, wasDisposed: () => disposed, close: async () => { await engine.dispose(); stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
 const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
 try {
+    const nativePolicy = await harness('resume');
+    try {
+        let session;
+        const run = async (context, prompt = 'you okay?') => {
+            for await (const _event of nativePolicy.engine.runTurn({ ...baseTurn, context, prompt, session, signal: AbortSignal.timeout(5000) }, { ...host, onSession: async ref => { session = ref; } })) { /* drain */ }
+        };
+        await run('Build policy');
+        assert.equal(nativePolicy.requests.find(request => request.path.endsWith('/prompt')).body.text, 'you okay?', 'native user text must be byte-identical to the user request');
+        assert.equal(nativePolicy.instructions.get('xratu.policy'), 'Build policy');
+        const puts = () => nativePolicy.requests.filter(request => request.method === 'PUT' && request.path.includes('/instructions/entries/'));
+        assert.equal(puts().length, 1);
+        const firstPut = nativePolicy.requests.indexOf(puts()[0]);
+        assert.ok(firstPut < nativePolicy.requests.findIndex(request => request.path.endsWith('/prompt')), 'instructions must be installed before generation');
+        await run('Build policy', 'Follow up');
+        assert.equal(puts().length, 1, 'unchanged policy must not rewrite the native instruction prefix');
+        // Simulate a restored session whose persisted policy differs from memory.
+        nativePolicy.instructions.set('xratu.policy', 'Stale build policy');
+        await run('Plan policy', 'Plan only');
+        assert.equal(nativePolicy.instructions.get('xratu.policy'), 'Plan policy', 'resume replaces stale policy instead of retaining build-mode instructions');
+        assert.equal(puts().length, 2);
+        await run(undefined, 'No host policy');
+        assert.equal(nativePolicy.instructions.has('xratu.policy'), false, 'absent context clears the previous host policy');
+        assert.equal(nativePolicy.instructions.get('other.policy'), 'Keep native integrations intact');
+        assert.deepEqual(nativePolicy.requests.filter(request => request.path.endsWith('/prompt')).map(request => request.body.text), ['you okay?', 'Follow up', 'Plan only', 'No host policy']);
+    } finally { await nativePolicy.close(); }
+    for (const mode of ['instructionsFailed', 'instructionWriteFailed']) {
+        const policyFailure = await harness(mode);
+        try {
+            await assert.rejects(async () => {
+                for await (const _event of policyFailure.engine.runTurn({ ...baseTurn, context: 'Required policy', signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
+            });
+            assert.ok(!policyFailure.requests.some(request => request.path.endsWith('/prompt')), 'instruction failures cannot silently start a turn without policy');
+        } finally { await policyFailure.close(); }
+    }
+    console.log('ok native instructions are separate, persistent, updated on resume, and fail before generation');
     const edits = await harness('editFailures');
     try {
         const events = [];
@@ -211,6 +258,8 @@ try {
                         assert.deepEqual(events.find((event) => event.type === 'steer'), { type: 'steer', text: 'Change direction', attachments: [codeAttachment], steerId: 'steer-ui-1' });
                         const steer = test.requests.find((request) => request.body?.delivery === 'steer').body;
                         assert.equal(await readFile(fileURLToPath(steer.files[0].uri), 'utf8'), codeText, 'steers stage complete code files too');
+                        assert.ok(steer.text.startsWith('Change direction\n\n[Attached file '), 'steering text contains only the user request and attachment reference');
+                        assert.ok(!steer.text.includes('Final responses:'), 'steers do not duplicate host instructions');
                     }
                     else assert.deepEqual(rejected, ['steer-ui-1']);
                     assert.equal(await test.engine.steer({ text: 'After settlement' }), false);
@@ -481,13 +530,13 @@ try {
         Object.assign(nativeHost, {
             _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(), _localSteerQueue: [],
             _view: { webview: { postMessage: (message) => messages.push(message) } },
-            _getOpenCodeEngine: async () => nativeTurn.engine, _nativeVariants: () => ({}),
+            _getOpenCodeEngine: async () => nativeTurn.engine, _nativeVariants: () => ({}), _resolveReplyLanguage: () => 'en',
             _postEngineState: () => {}, _persistLocalSession: async () => {}, _observeNativeShells: () => {},
         });
         for (let attempt = 0; attempt < 2; attempt++) {
             const controller = new AbortController();
             nativeHost._handleLocalAgentEvent = (event) => { if (event.type === 'toolCall') controller.abort(); };
-            const cancelled = await nativeHost._runOpenCodeAgent('Stop this', '', undefined, controller);
+            const cancelled = await nativeHost._runOpenCodeAgent('Stop this', undefined, controller);
             assert.equal(cancelled.aborted, true);
             assert.equal(messages.filter((message) => message.type === 'error' && message.valueKey === 'requestCancelled').length, attempt + 1, 'real host cancellation must send the terminal envelope that releases webview typing and tool spinners');
             assert.equal(nativeHost._runInFlight, false);
@@ -495,18 +544,20 @@ try {
             assert.equal(nativeHost._abortControllers.size, 0);
             const events = [];
             nativeHost._handleLocalAgentEvent = (event) => events.push(event);
-            await nativeHost._runOpenCodeAgent('Continue', '');
+            await nativeHost._runOpenCodeAgent('Continue');
             assert.equal(events.at(-1).value, 'done', 'the real host can continue the same native session');
         }
         nativeHost._handleLocalAgentEvent = () => {};
-        await nativeHost._runOpenCodeAgent('Read the attached code', '', [codeAttachment]);
+        await nativeHost._runOpenCodeAgent('Read the attached code', [codeAttachment]);
         const nativePrompt = nativeTurn.requests.filter((request) => request.path.endsWith('/prompt')).at(-1).body;
-        assert.ok(JSON.stringify(nativePrompt).includes('Never ask the user to paste a PR into a form'), 'the real native host includes the agent-owned PR linking instructions');
+        assert.ok(nativeTurn.instructions.get('xratu.policy').includes('Never ask the user to paste a PR into a form'), 'the real native host installs the agent-owned PR policy as instructions');
+        assert.ok(nativeTurn.instructions.get('xratu.policy').includes('Language: reply to the user in English.'), 'native policy respects the reply-language setting');
+        assert.ok(!JSON.stringify(nativePrompt).includes('Never ask the user to paste a PR into a form'), 'host policy never becomes user text');
         assert.equal(await readFile(fileURLToPath(nativePrompt.files[0].uri), 'utf8'), codeText, 'the host forwards code attachment bytes instead of dropping them with an image-only filter');
         const terminalCount = messages.length;
         const stale = new AbortController();
         nativeHost._handleLocalAgentEvent = (event) => { if (event.type === 'toolCall') { nativeHost._sessionEpoch++; stale.abort(); } };
-        assert.equal((await nativeHost._runOpenCodeAgent('Old session', '', undefined, stale)).aborted, true);
+        assert.equal((await nativeHost._runOpenCodeAgent('Old session', undefined, stale)).aborted, true);
         assert.equal(messages.length, terminalCount, 'an old session cancellation cannot terminate the new view');
         console.log('ok real host cancellation publishes terminal UI state and allows repeated same-session continuation');
     } finally { await nativeTurn.close(); }
@@ -517,11 +568,11 @@ try {
         Object.assign(failedHost, {
             _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(), _localSteerQueue: [],
             _view: { webview: { postMessage: message => messages.push(message) } },
-            _getOpenCodeEngine: async () => failedTurn.engine, _nativeVariants: () => ({}),
+            _getOpenCodeEngine: async () => failedTurn.engine, _nativeVariants: () => ({}), _resolveReplyLanguage: () => 'auto',
             _postEngineState: () => {}, _persistLocalSession: async () => {}, _observeNativeShells: () => {},
             _handleLocalAgentEvent: event => events.push(event),
         });
-        const stopped = await failedHost._runOpenCodeAgent('Fix this file', '');
+        const stopped = await failedHost._runOpenCodeAgent('Fix this file');
         assert.equal(stopped.errorEvent.error_key, 'engineRepeatedEditFailures');
         assert.ok(messages.some(message => message.type === 'error' && message.valueKey === 'engineRepeatedEditFailures'), 'the real host releases the UI with a localized terminal error');
         assert.equal(events.filter(event => event.type === 'toolResult' && event.isError).length, 3);
@@ -539,7 +590,7 @@ try {
         failedHost._commitUnfinishedLocalTurn('Provider failure', undefined, undefined, { events: [], errorEvent: { error: 'Raw provider message' } }, false, '[interrupted]');
         assert.equal(failedHost._history.at(-1).events.at(-1).error, 'Raw provider message');
         const sessionID = failedHost._engineSession.nativeSessionId;
-        await failedHost._runOpenCodeAgent('Continue with a corrected edit', '');
+        await failedHost._runOpenCodeAgent('Continue with a corrected edit');
         assert.equal(failedHost._engineSession.nativeSessionId, sessionID);
         assert.equal(events.at(-1).value, 'done');
     } finally { await failedTurn.close(); }

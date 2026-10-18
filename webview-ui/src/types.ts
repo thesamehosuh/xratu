@@ -393,6 +393,7 @@ export type FromExtensionMessage =
     | { type: 'browserState'; state: BrowserState }
     | { type: 'browserFrame'; frame: BrowserFrame }
     | { type: 'browserActionError'; sessionId: string; browserId: string; errorKey: string; detail: string }
+    | { type: 'checkpointRestored'; sessionId: string | null }
     | { type: 'changesState'; sha: string; requestId: string; files: ReviewChange[]; errorKey?: string }
     | { type: 'changeFileState'; sha: string; requestId: string; file?: ReviewFile; errorKey?: string }
     | { type: 'agentsState'; profiles: AgentProfileView[]; errorKey?: string }

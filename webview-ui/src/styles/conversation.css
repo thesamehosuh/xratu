@@ -53,3 +53,6 @@
     outline:1px solid var(--vscode-focusBorder);
     outline-offset:2px;
 }
+
+.conversation-work-group .step > summary .step-icon { color:var(--vscode-descriptionForeground); }
+.conversation-work-group .step > summary:hover .step-icon { color:var(--surface-accent); }

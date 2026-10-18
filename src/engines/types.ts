@@ -21,6 +21,7 @@ export interface EngineTurn {
     signal: AbortSignal;
     plan: boolean;
     yolo: boolean;
+    /** Host policy, delivered through native instructions, never user text. */
     context?: string;
     /** Built-in turns carry images; native turns also stage text/code files. */
     attachments?: LocalImageAttachment[];

@@ -27,6 +27,7 @@ test/
 # Machine-local agent tooling - see .gitignore. Gitignored is NOT enough.
 .kilo/
 .playwright-mcp/
+.playwright-cli/
 kilo.json
 
 # Lint/format/commit-hook tooling. Contributor-only: none of it is loaded by
@@ -44,6 +45,7 @@ out/
 # Test output and reports
 test-results/
 playwright-report/
+output/playwright/
 dist-tests/
 
 # Environment files and logs must never ship
