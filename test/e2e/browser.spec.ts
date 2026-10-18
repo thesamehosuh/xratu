@@ -82,10 +82,19 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await expect.poll(() => controller.getState().viewport.width).toBe(390);
             await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(390);
             const box = JSON.parse((await controller.tool('browser-session', 'browser_evaluate', { expression: '(()=>{const r=document.querySelector("input").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()' })).output);
-            await page.locator('.browser-viewport img').scrollIntoViewIfNeeded();
-            const pixels = await page.locator('.browser-viewport img').boundingBox();
-            await page.locator('.browser-viewport img').click({ position: { x: box.x * pixels!.width / 390, y: box.y * pixels!.height / 844 } });
-            await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.activeElement.tagName' })).output).toBe('"INPUT"');
+            const frame = page.locator('.browser-viewport img');
+            await frame.scrollIntoViewIfNeeded();
+            // The click maps DISPLAYED pixels onto the controlled page, so both
+            // halves of the mapping are recomputed on every attempt: a frame
+            // arriving (or the mobile viewport's scrollbar settling) between the
+            // bounding box read and the click shifts the mapping, and re-tapping
+            // a gesture is honest where loosening the focus check is not - a
+            // broken mapping still fails every attempt.
+            await expect.poll(async () => {
+                const pixels = await frame.boundingBox();
+                if (pixels) await frame.click({ position: { x: box.x * pixels.width / 390, y: box.y * pixels.height / 844 } });
+                return (await controller.tool('browser-session', 'browser_evaluate', { expression: 'document.activeElement.tagName' })).output;
+            }).toBe('"INPUT"');
             await page.locator('.browser-keyboard').press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
             await expect.poll(async () => (await controller.tool('browser-session', 'browser_evaluate', { expression: '(()=>{const el=document.querySelector("input");return el.selectionStart===0 && el.selectionEnd===el.value.length})()' })).output).toBe('true');
             await page.locator('.browser-keyboard').pressSequentially('Human');

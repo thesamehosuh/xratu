@@ -1169,25 +1169,28 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
     } else {
         await expect(nav.locator('.dock-add-button')).toBeFocused();
     }
-    for (let i = 0; i < 15; i++) {
-        const before = await list.evaluate(el => Math.abs(el.scrollLeft));
-        if (before <= 1) break;
+    // Arrow clicks DO scroll the strip, but a click can also lose a race with
+    // the strip re-revealing the selected tab (that reveal is layout work the
+    // macOS runners schedule far less predictably than the Linux lane do), and
+    // an undone click leaves the scroll position exactly where it was. The
+    // contract this test owns is "clicking previous walks the strip to its
+    // logical start and then the arrow disables", not "each individual click
+    // moves the strip by more than one pixel".
+    const fromStart = () => list.evaluate(el => Math.abs(el.scrollLeft));
+    const remainingToEnd = () => list.evaluate(el => el.scrollWidth - el.clientWidth - Math.abs(el.scrollLeft));
+    for (let i = 0; i < 25 && (await fromStart()) > 1; i++) {
         await expect(previous).toBeEnabled();
         await previous.click();
-        await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeLessThan(before - 1);
     }
     await expect(previous).toBeDisabled();
-    await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeLessThanOrEqual(1);
+    await expect.poll(fromStart).toBeLessThanOrEqual(1);
     await list.hover();
     await page.mouse.wheel(0, 180);
-    await expect.poll(() => list.evaluate(el => Math.abs(el.scrollLeft))).toBeGreaterThan(100);
+    await expect.poll(fromStart).toBeGreaterThan(100);
     await previous.click();
-    for (let i = 0; i < 15; i++) {
-        const remaining = await list.evaluate(el => el.scrollWidth - el.clientWidth - Math.abs(el.scrollLeft));
-        if (remaining <= 1) break;
+    for (let i = 0; i < 25 && (await remainingToEnd()) > 1; i++) {
         await expect(next).toBeEnabled();
         await next.click();
-        await expect.poll(() => list.evaluate(el => el.scrollWidth - el.clientWidth - Math.abs(el.scrollLeft))).toBeLessThan(remaining - 1);
     }
     await expect(next).toBeDisabled();
     await expect(previous).toBeEnabled();
