@@ -103,8 +103,20 @@ export class NativeSessionCoordinator {
     }
     drain(): NativeEvent[] { return this.replay.splice(0); }
     bound(id: string): boolean { return id === this.root.id || !!this.sessions.get(id)?.delegation; }
+    /** A child announced before its owner's `subagent` call carried
+     *  `metadata.sessionID` can only ever bind through an UNFINISHED delegation
+     *  of its parent - `attach()` runs from that delegation's tool progress or
+     *  success. Once every delegation of the parent has finished (or the parent
+     *  never delegated at all), its buffered events can never be replayed, and
+     *  counting them as work would hold the turn open forever after the root
+     *  execution already succeeded. */
+    private bindable(state: NativeSession): boolean {
+        const parent = state.parentID ? this.sessions.get(state.parentID) : undefined;
+        return !!parent && [...parent.delegations.values()].some(call => !call.finished);
+    }
     pendingWork(): boolean {
-        return [...this.sessions.values()].some(state => state.running || state.reports.size || state.pending.length
+        return [...this.sessions.values()].some(state => state.running || state.reports.size
+            || (state.pending.length > 0 && (!!state.delegation || this.bindable(state)))
             || [...state.delegations.values()].some(call => !call.finished));
     }
     private finishGroups(): void {

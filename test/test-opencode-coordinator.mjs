@@ -114,6 +114,23 @@ try {
         console.log('ok T3 real native nested-background recording, through the final child follow-up');
     }
     {
+        // A child announced before its `subagent` call ever carried
+        // metadata.sessionID buffers its events. Once the owner's delegation
+        // finishes, attach() can never run, so those events must not hold the
+        // turn open (heldSuccess would never clear).
+        const coordinator = new NativeSessionCoordinator('root', 'opencode/big-pickle', name => name, () => {}, () => {});
+        coordinator.accept({ type: 'session.created', data: { sessionID: 'child', parentID: 'root', agent: 'general', model: { providerID: 'opencode', id: 'child-model' } } });
+        coordinator.accept({ type: 'session.tool.called', data: { sessionID: 'child', id: 'unbound-call', name: 'read' } });
+        coordinator.accept({ type: 'session.tool.called', data: { sessionID: 'root', id: 'delegation-call', name: 'subagent', input: { agent: 'general', description: 'Inspect', prompt: 'Explore' } } });
+        const child = coordinator.sessions.get('child');
+        assert.ok(child.pending.length > 0, 'the announced child buffers its events until a binding arrives');
+        assert.ok(coordinator.pendingWork(), 'while the owner can still bind it, its events are real pending work');
+        coordinator.accept({ type: 'session.tool.success', data: { sessionID: 'root', id: 'delegation-call', metadata: { status: 'completed' }, content: [{ type: 'text', text: 'finished without a sessionID' }] } });
+        assert.equal(coordinator.sessions.get('root').delegations.get('delegation-call').child, undefined, 'the owner never bound the announced child');
+        assert.equal(coordinator.pendingWork(), false, 'an unbound child of a finished owner cannot block turn completion');
+        console.log('ok a never-bound native child cannot hold the turn open once its owner finishes');
+    }
+    {
         const controller = new AbortController(); const failures = []; let firstSignal; let release; let ownSignal;
         const decisions = new NativeDecisions(controller.signal, error => failures.push(error));
         decisions.start('root:permission:first', async signal => { firstSignal = signal; await new Promise(() => {}); });
