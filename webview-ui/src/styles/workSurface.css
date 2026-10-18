@@ -47,7 +47,11 @@
 .pr-detail summary > svg { flex-shrink:0; display:block; color:var(--vscode-descriptionForeground); transition:transform .12s; }
 .pr-detail:not([open]) summary > svg { transform:rotate(-90deg); }
 .app[dir=rtl] .pr-detail:not([open]) summary > svg { transform:rotate(90deg); }
-.pr-detail summary > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--vscode-descriptionForeground); margin-inline-start:auto; font-weight:400; font-size:11px; }
+/* The label and the trailing counts are BOTH `> span`: an `auto` margin on the
+ * label too splits the free space in two and floats the label into the middle
+ * of the row in both directions. Only the trailing span gets the auto margin. */
+.pr-detail summary > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--vscode-descriptionForeground); font-weight:400; font-size:11px; }
+.pr-detail summary > span:last-child { margin-inline-start:auto; }
 .pr-detail li { display:flex; align-items:center; gap:8px; padding-block:6px; border-block-start:1px solid color-mix(in srgb,var(--page-line) 65%,transparent); font-size:12px; }
 .pr-detail ul > li:first-child { border-block-start:0; }
 .pr-detail li > a,.pr-detail li > span[dir=auto] { min-width:0; overflow-wrap:anywhere; color:var(--vscode-foreground); text-decoration:none; }
