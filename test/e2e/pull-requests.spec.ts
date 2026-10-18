@@ -78,6 +78,31 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         // stay more specific or every status label renders in the description
         // colour instead of its own tone.
         await expect(page.locator('.pr-check-badge.is-failure')).toHaveCSS('color', 'rgb(248, 81, 73)');
+        // The label and the trailing counts in a `.pr-detail summary` are BOTH
+        // `> span`, so a blanket `margin-inline-start:auto` puts an auto margin
+        // on the label too: the two auto margins split the free space and the
+        // label floats into the middle of the row in RTL and LTR alike. Only
+        // the trailing span may take the margin, and the label hugs the chevron.
+        for (const index of [0, 1]) {
+            const summary = await details.nth(index).locator('summary').evaluate(el => {
+                const [icon, label] = [...el.children] as HTMLElement[];
+                const iconBox = icon.getBoundingClientRect();
+                const labelBox = label.getBoundingClientRect();
+                return {
+                    gap: Math.round(Math.min(Math.abs(labelBox.left - iconBox.right), Math.abs(labelBox.right - iconBox.left))),
+                    labelMargin: getComputedStyle(label).getPropertyValue('margin-inline-start').trim(),
+                    // Only meaningful when the row has free space to absorb: a
+                    // packed row (the comment summary at sidebar width) resolves
+                    // every auto margin to 0px.
+                    trailingMargin: getComputedStyle(el.lastElementChild!).getPropertyValue('margin-inline-start').trim(),
+                };
+            });
+            expect(summary.labelMargin).toBe('0px');
+            expect(summary.gap).toBeLessThanOrEqual(10);
+            // The checks row is short enough to always keep free space, so the
+            // trailing counts still absorb it at the inline end.
+            if (index === 0) expect(summary.trailingMargin).not.toBe('0px');
+        }
         await expect(page.locator('.pr-comments')).toContainText('<script>');
         await expect(page.locator('.pr-comments p')).toBeVisible();
         await page.locator('.pr-comments p').scrollIntoViewIfNeeded();
