@@ -131,7 +131,16 @@ export class PullRequestController {
         try {
             const context = { sessionId: before.sessionId, workspace: before.workspace };
             const state = await this.service.store.load(context.sessionId, context.workspace);
-            if (state.delivery && (!manual || state.delivery.status === 'running')) return;
+            const existing = state.delivery;
+            if (existing) {
+                // A live owner is delivering: never steal it. A crashed claim
+                // ('interrupted') is reclaimed here instead of waiting for the
+                // panel's removed Continue button, and a failed one is retried
+                // only once fresh updates arrive, so a run that keeps failing
+                // cannot loop on every settle.
+                if (existing.status === 'running') return;
+                if (!manual && existing.status === 'failed' && !state.events.some(event => !existing.ids.includes(event.id))) return;
+            }
             const candidates = state.events.filter(event => manual || event.resume).slice(0, 8);
             if (!candidates.length) return;
             // Automatic continuation wakes only the exact context that armed the
@@ -149,7 +158,7 @@ export class PullRequestController {
             }
             const current = this.host.identity();
             if (current.epoch !== before.epoch || current.sessionId !== context.sessionId || current.workspace !== context.workspace || current.busy || current.plan) return;
-            const events = await this.service.beginDelivery(context, candidates.map(event => event.id), manual);
+            const events = await this.service.beginDelivery(context, candidates.map(event => event.id), manual || existing !== undefined);
             if (!events.length) return;
             delivery = { context, ids: events.map(event => event.id) };
             if (generation !== this.resumeGeneration) return;

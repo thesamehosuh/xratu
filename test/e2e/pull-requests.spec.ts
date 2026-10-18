@@ -101,16 +101,18 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
     });
 }
 
-test('pending updates stay inside the PR panel and interrupted continuation stays explicit', async ({ page }) => {
+test('pending updates stay agent-facing and never add a card to the PR panel', async ({ page }) => {
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: { ...state([link]), delivery: { ids: ['event'], status: 'interrupted', owner: 1 }, events: [{ id: 'event', key: 'github.com/example/repo#42', url, number: 42, createdAt: '2026-01-01T12:00:00Z', headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }] } });
     await expect(page.locator('.pr-indicator')).toHaveCount(1);
     await host(page, { type: 'openPullRequests' });
-    await expect(page.locator('.pr-updates')).toContainText('interrupted');
-    await host(page, { type: 'startResponse' });
-    await expect(page.getByRole('button', { name: 'Review with agent', exact: true })).toBeDisabled();
-    await page.getByRole('button', { name: 'Dismiss updates', exact: true }).click();
-    expect((await sent(page)).at(-1)).toMatchObject({ action: 'dismiss', sessionId: 'session-a' });
+    await expect(page.locator('.pr-panel')).toBeVisible();
+    // The update notice is agent-facing: the panel shows the PR rows (which
+    // carry the visible status) and never a separate queue card.
+    await expect(page.locator('.pr-updates')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Review with agent', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Dismiss updates', exact: true })).toHaveCount(0);
+    await expect(page.locator('.pr-row')).toContainText('Make session updates reliable');
 });
 
 test('unlinking the last PR leaves the explicitly opened empty panel and preserves the draft', async ({ page }) => {

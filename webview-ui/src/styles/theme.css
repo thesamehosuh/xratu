@@ -1393,6 +1393,10 @@ button {
     white-space: nowrap;
     color: var(--xratu-accent-strong);
     font-size: var(--xratu-fs-sm);
+    /* Bare path, not a chip - see engineScope.css on VS Code's default <code>. */
+    background: transparent;
+    padding: 0;
+    border: 0;
 }
 
 .approval-action-preview pre {

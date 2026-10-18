@@ -33,7 +33,12 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         }
         await post(page, { type: 'error', valueKey: 'engineRepeatedEditFailures' });
         await post(page, { type: 'enginesState', state });
-        await expect(page.locator('.msg-content.msg-text').filter({ hasText: locale === 'en' ? /OpenCode stopped after three consecutive/ : /OpenCode بعد از سه ویرایش ناموفق/ })).toBeVisible();
+        // The stop reason is read from the message's error line, and exactly
+        // once - it must not also repeat as the bubble body.
+        const failure = locale === 'en' ? /OpenCode stopped after three consecutive/ : /OpenCode بعد از سه ویرایش ناموفق/;
+        const stopped = page.locator('.msg.assistant').last();
+        await expect(stopped.locator('.msg-error-text')).toContainText(failure);
+        await expect(stopped.getByText(failure)).toHaveCount(1);
         await expect(page.locator('.send-btn')).not.toHaveClass(/is-stop/);
         await page.locator('.composer-input').fill('Continue with a corrected edit');
         await expect(page.locator('.send-btn')).toBeEnabled();
