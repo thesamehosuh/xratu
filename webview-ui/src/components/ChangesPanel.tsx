@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, TriangleAlert } from 'lucide-react';
+import { ChevronDown, CodeXml, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -193,7 +193,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         </div>
         <div className="review-body">
             {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} />{tOrRaw(errorKey)}<button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
-            {!errorKey && !files.length && <p className="review-empty">{loading ? t('working') : t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p>}
+            {!errorKey && !files.length && (loading ? <p className="review-empty" role="status">{t('working')}</p> : <div className="surface-empty-state" role="status"><span className="surface-empty-icon" aria-hidden="true"><CodeXml size={22} /></span><strong>{t('surfaceNoChangesTitle')}</strong><p>{t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p><span>{t('surfaceChangesHint')}</span></div>)}
             {!!files.length && <>
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={selected === change.path} onClick={() => setSelected(change.path)}>
                     <FileText size={12} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
