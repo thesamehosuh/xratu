@@ -4816,9 +4816,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
             const runPlanMode = planMode ?? this._planMode;
             const executor = this._nativeServiceExecutor(workspace, controller.signal, runPlanMode);
+            // Same catalog the bridge registers for this session, so the prompt
+            // never names a bridged tool that is not actually exposed (skill).
+            const bridgedTools = this._nativeServiceDefinitions();
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
-            const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage()), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+            const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 approvals: { requestApproval: (id, calls) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments }))) },
                 questions: { ask: (question) => this._requestLocalDecision(question) },
                 onSession: async (session) => {
