@@ -180,7 +180,7 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
                     onContextMenu={(event) => { event.preventDefault(); returnFocus.current = event.currentTarget; setMenu(panel); }}>
                     <Icon size={13} /><span>{tabLabel(panel)}</span>{panel === 'background' && backgroundCount > 0 && <span className="tab-count" dir="ltr">{backgroundCount}</span>}{panel === 'agents' && agentCount > 0 && <span className="tab-count" dir="ltr">{agentCount}</span>}{panel === 'changes' && count > 0 && <span className="tab-count" dir="ltr">{count}</span>}
                 </button>
-                {panel !== 'conversation' && <button type="button" className="dock-tab-close" aria-label={tf('surfaceCloseNamedTab', { tab: tabLabel(panel) })} title={t('surfaceCloseTab')} onClick={() => onClose([panel])}><X size={12} /></button>}
+                {panel !== 'conversation' && <button type="button" tabIndex={-1} className="dock-tab-close" aria-label={tf('surfaceCloseNamedTab', { tab: tabLabel(panel) })} title={t('surfaceCloseTab')} onClick={() => onClose([panel])}><X size={12} /></button>}
                 </div>;
             })}
         </div>

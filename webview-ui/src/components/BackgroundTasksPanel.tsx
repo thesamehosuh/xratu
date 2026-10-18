@@ -69,7 +69,7 @@ export function BackgroundTasksPanel({ jobs, onStop, visible, panelClass, onConv
     const running = jobs.filter(job => job.running);
     const [opened, setOpened] = useState<string[]>([]);
     const selectedKey = selected?.jobId;
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (selectedKey && visible) setOpened(current => current.includes(selectedKey) ? current : [...current.slice(-7), selectedKey]);
     }, [selectedKey, visible]);
     const mounted = new Set([...opened, ...(visible && selectedKey ? [selectedKey] : [])]);

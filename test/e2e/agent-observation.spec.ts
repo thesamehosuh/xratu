@@ -157,7 +157,9 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await expect(page.locator('.bg-job-stop')).toHaveCount(1);
         await post(page,{type:'backgroundJobStopped',jobId:'watch'});
         await post(page,{type:'backgroundJobs',jobs:[]});
-        await expect(page.locator('.bg-jobs')).toHaveCount(0);
+        await expect(page.locator('.bg-panel-empty')).toBeVisible();
+        await expect(page.locator('#surface-tab-background')).toHaveAttribute('aria-selected','true');
+        await expect(page.locator('.bg-job')).toHaveCount(0);
         expect((await sent(page)).filter(m=>m.type==='askQuestion')).toHaveLength(0);
     });
 }

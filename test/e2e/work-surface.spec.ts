@@ -1034,6 +1034,9 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
         return selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1;
     });
     await expect.poll(selectedFits).toBe(true);
+    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(10);
+    await nav.locator('[role=tab][aria-selected=true]').press('Tab');
+    await expect(nav.locator('.dock-add-button')).toBeFocused();
     for (let i = 0; i < 15; i++) {
         const before = await list.evaluate(el => Math.abs(el.scrollLeft));
         if (before <= 1) break;
