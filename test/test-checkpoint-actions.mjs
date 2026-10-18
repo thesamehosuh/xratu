@@ -15,6 +15,12 @@ const names = ['_gitCheckout', '_rewindAndResend', 'restoreCheckpointFlow', '_re
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
 const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
+    AbortController, console,
+    // Turn preflight in _handleChatRequest resolves these module helpers before
+    // the rules step; the suite stubs their results through them.
+    resolveReferenceAttachments: async () => null,
+    validateHostAttachments: () => null,
+    extractPdfAttachments: async () => ({ error: null, attachments: undefined }),
     validateReviewCheckpoint: sha => { if (!/^[a-f0-9]{7,40}$/i.test(sha)) throw Error('Invalid checkpoint'); },
     vscode: { window: { showQuickPick: async entries => entries[0] }, workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
 vm.runInNewContext(ts.transpileModule(`class Host { ${members.map(node => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
@@ -122,6 +128,41 @@ try {
         assert.equal(t.truncations.length, 0);
     }
     console.log('ok native files-only restore remains supported; native chat rewind cannot write');
+
+    // The user-bubble and changes-panel restore controls target the same
+    // checkpoint and the confirm banner is non-modal: a second request that
+    // arrives while the first confirmation is open must not queue a second
+    // restore over edits made in between.
+    const double = harness();
+    const first = double.host._restoreCheckpointAt(0, sha.slice(0, 12));
+    const second = double.host._restoreCheckpointAt(0, sha.slice(0, 12));
+    await double.shown.promise;
+    double.confirm.resolve('checkpointScopeFiles');
+    await Promise.all([first, second]);
+    assert.equal(double.restores.length, 1, 'a concurrent restore request must not queue a second write');
+    console.log('ok concurrent restore requests collapse into one confirmation and one write');
+
+    // Unreadable project rules must end the turn with a visible, localized
+    // terminal error instead of stranding the webview's typing state.
+    const rules = harness();
+    Object.assign(rules.host, {
+        _sessionTitle: 'T', _localSteerQueue: [], _pendingJobNotices: [],
+        _resetLiveSegments: () => {}, _discardQueuedSteers: () => {},
+        _postEngineState: () => {}, _settleLocalRun: () => {},
+        _localRulesContext: async () => { throw new Error('EISDIR: illegal operation on a directory, read'); },
+        _runLocalAgent: async () => { throw new Error('the agent must not start without project rules'); },
+    });
+    rules.host._checkpoints.createCheckpoint = async () => sha;
+    rules.host._checkpoints.beginTurn = () => {};
+    await rules.host._handleChatRequest('with rules');
+    const failure = rules.messages.find(message => message.type === 'error');
+    assert.ok(rules.messages.some(message => message.type === 'startResponse'), 'the turn was admitted before rules failed');
+    assert.ok(failure, 'a terminal error must release the typing state');
+    assert.equal(failure.valueKey, 'rulesReadFailed');
+    assert.match(failure.params.error, /EISDIR/, 'the underlying read failure stays visible');
+    assert.equal(rules.host._localRunActive, false, 'the outer finally released run ownership');
+    assert.equal(rules.host._abortControllers.size, 0, 'the chat controller was cleaned up');
+    console.log('ok unreadable project rules end the turn with a localized terminal error');
 
     const serial = harness(), entered = deferred(), finish = deferred();
     serial.host._checkpoints.restoreCheckpoint = async (...args) => { serial.restores.push(args); entered.resolve(); await finish.promise; return { changed: true, sha, safety: 'safe' }; };

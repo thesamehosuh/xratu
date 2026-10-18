@@ -1864,6 +1864,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private _checkpointRestoreActive = false;
+    /** One restore request at a time, CONFIRMATION included. The user-bubble
+     *  and changes-panel controls target the same checkpoint and the confirm
+     *  banner is non-modal, so a second admission could replay the older tree
+     *  over edits made after the first restore settled. */
+    private _restoreRequestActive = false;
 
     private _captureCheckpointAction(userIndex?: number, sha?: string, allowConversationOnly = false): CheckpointActionContext | undefined {
         if (userIndex !== undefined && !this._view) return;
@@ -1926,24 +1931,30 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  conversation rewind to before that turn - then reuses the same shadow
      *  restore + ledger truncation as edit/resend. */
     async _restoreCheckpointAt(userIndex: number, sha: string): Promise<void> {
-        const context = this._captureCheckpointAction(userIndex, sha);
-        if (!context) return;
-        let resolved: string;
+        if (this._restoreRequestActive) return;
+        this._restoreRequestActive = true;
         try {
-            validateReviewCheckpoint(sha);
-            resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
-        } catch {
-            this.notifyBanner('warning', 'checkpointTurnGone');
-            return;
+            const context = this._captureCheckpointAction(userIndex, sha);
+            if (!context) return;
+            let resolved: string;
+            try {
+                validateReviewCheckpoint(sha);
+                resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
+            } catch {
+                this.notifyBanner('warning', 'checkpointTurnGone');
+                return;
+            }
+            if (!this._checkpointActionCurrent(context, userIndex)) return;
+            const choice = await this.confirmBanner(
+                context.engine === 'opencode' ? 'notifRestoreConfirm' : 'checkpointScopeConfirm',
+                context.engine === 'opencode' ? ['checkpointScopeFiles', 'notifCancel'] : ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
+                { target: sha },
+            );
+            if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
+            await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
+        } finally {
+            this._restoreRequestActive = false;
         }
-        if (!this._checkpointActionCurrent(context, userIndex)) return;
-        const choice = await this.confirmBanner(
-            context.engine === 'opencode' ? 'notifRestoreConfirm' : 'checkpointScopeConfirm',
-            context.engine === 'opencode' ? ['checkpointScopeFiles', 'notifCancel'] : ['checkpointScopeFiles', 'checkpointScopeFilesAndChat', 'notifCancel'],
-            { target: sha },
-        );
-        if (choice !== 'checkpointScopeFiles' && choice !== 'checkpointScopeFilesAndChat') return;
-        await this._applyCheckpointRestore(context, resolved, choice === 'checkpointScopeFilesAndChat', userIndex);
     }
 
     private async _applyCheckpointRestore(context: CheckpointActionContext, sha: string, rewindChat: boolean, userIndex?: number): Promise<void> {
@@ -7144,7 +7155,27 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }
 
                 // Native engines discover project rules in their own workspace.
-                const rulesContext = this._activeEngine === 'opencode' ? '' : await this._localRulesContext();
+                let rulesContext = '';
+                if (this._activeEngine !== 'opencode') {
+                    try {
+                        rulesContext = await this._localRulesContext();
+                    } catch (error) {
+                        // Unreadable rules fail LOUDLY and once. startResponse is
+                        // already posted, so rethrowing would strand the webview
+                        // in its typing state and the turn would die unreported
+                        // (an AGENTS.md that is a directory, unreadable, ...).
+                        // The outer/inner finally release the run state.
+                        console.error('xratu: project rules read failed:', error);
+                        if (epoch === this._sessionEpoch) {
+                            this._view?.webview.postMessage({
+                                type: 'error',
+                                valueKey: 'rulesReadFailed',
+                                params: { error: error instanceof Error ? error.message : String(error) },
+                            });
+                        }
+                        return;
+                    }
+                }
 
                 if (controller.signal.aborted) {
                     this._abortControllers.delete('chat');
