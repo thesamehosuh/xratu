@@ -357,9 +357,10 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
 - Format elapsed times with the shared locale-aware `formatDuration`: seconds,
   then minutes and seconds, then hours and minutes. Never show unbounded seconds.
 - Vertically center text and icons together in buttons, tabs, badges and status
-  rows; wrap icon-adjacent labels in spans so shared font-leading trimming also
-  reaches their flex items. Inspect actual glyph alignment in English and Persian,
-  narrow and wide; `align-items: center` alone does not center visible glyphs.
+  rows; wrap icon-adjacent labels in spans and align them with flexbox. Preserve
+  enough line height for accents and descenders; do not trim font metrics, which
+  can clip Persian marks and tall glyphs. Inspect actual glyph alignment in
+  English and Persian, narrow and wide.
 - Dim teal backgrounds require bright teal content. Use neutral surfaces for
   secondary gray text, or white text where stronger neutral contrast is needed.
 - Text actions must size to their labels, with padding and no cramped wrapping.

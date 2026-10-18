@@ -275,7 +275,7 @@ body {
 button {
     font-family: inherit;
     cursor: pointer;
-    line-height: 1.2;
+    line-height: 1.35;
 }
 
 /* ---------------------------------------------------------------------------
@@ -768,13 +768,10 @@ button {
     flex-shrink: 0;
 }
 
-/* Center the visible glyphs, not the font's extra leading. Apply this to
-   every icon/text block, including labels nested in their own flex items. */
-:where(button, summary, a, label, [class]):has(> svg, > img) {
-    text-box: trim-both cap alphabetic;
-}
+/* Keep labels and icons aligned while leaving enough line space for accents
+   and descenders. Trimming font metrics clips Persian marks and tall glyphs. */
 :where(button, summary, a, label, [class]):has(> svg, > img, > :is(span, div) > svg:only-child) > :where(span, strong, code):not(:has(*)) {
-    text-box: trim-both cap alphabetic;
+    line-height: 1.35;
 }
 :where(button, summary, [role="tab"]):has(> svg) {
     align-items: center;
