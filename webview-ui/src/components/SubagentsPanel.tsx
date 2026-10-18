@@ -73,14 +73,23 @@ export function SubagentsPanel({ runs, selectedId, onSelect, visible, panelClass
     useEffect(() => { if (selectedKey && visible) setOpened(current => current.includes(selectedKey) ? current : [...current.slice(-7), selectedKey]); }, [selectedKey, visible]);
     const mounted = new Set([...opened, ...(selected && visible ? [selected.id] : [])]);
     return <div className={`agents-pane ${panelClass}`} id="surface-panel-agents" role="tabpanel" aria-labelledby="surface-tab-agents" aria-hidden={!visible || undefined}>
-        <div className="agents-layout"><nav className="agent-run-list" aria-label={t('surfaceAgentRuns')}>{runs.map(run => {
-            const current = run.trace?.entries.filter(entry => entry.kind === 'tool').at(-1);
-            return <button type="button" className={`agent-run-card${run.id === selected?.id ? ' selected' : ''}`} key={run.id} aria-pressed={run.id === selected?.id} onClick={() => onSelect(run.id)}>
-                <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.profile}</strong><RunStatus status={run.status} /></span>
-                <span className="agent-card-title" dir="auto">{run.title}</span>
-                <span className="agent-card-foot"><span>{agentStatusLabel(run.status)}</span><span dir="ltr">{run.trace?.toolCalls ?? 0}<List size={10} /></span></span>
-                {current && ['running', 'waiting'].includes(run.status) && <code className="agent-current-tool" dir="ltr">{current.tool}</code>}
-            </button>;
-        })}</nav><div className="agent-run-detail">{runs.filter(run => mounted.has(run.id)).map(run => <RunView key={run.id} run={run} visible={visible && selected?.id === run.id} onConversation={onConversation} prefs={prefs} locale={locale} />)}</div></div>
+        {runs.length === 0 ? (
+            <div className="agent-empty-pane" role="status">
+                <div className="agent-empty-icon" aria-hidden="true"><Bot size={22} /></div>
+                <strong className="agent-empty-title">{t('surfaceNoActivity')}</strong>
+                <p className="agent-empty-hint">{t('agentEmptyHint')}</p>
+            </div>
+        ) : (
+            <div className="agents-layout"><nav className="agent-run-list" aria-label={t('surfaceAgentRuns')}>{runs.map(run => {
+                const current = run.trace?.entries.filter(entry => entry.kind === 'tool').at(-1);
+                return <button type="button" className={`agent-run-card${run.id === selected?.id ? ' selected' : ''}`} key={run.id} aria-pressed={run.id === selected?.id} onClick={() => onSelect(run.id)}>
+                    <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.profile}</strong><RunStatus status={run.status} /></span>
+                    <span className="agent-card-title" dir="auto">{run.title}</span>
+                    <span className="agent-card-foot"><span>{agentStatusLabel(run.status)}</span><span dir="ltr">{run.trace?.toolCalls ?? 0}<List size={10} /></span></span>
+                    {current && ['running', 'waiting'].includes(run.status) && <code className="agent-current-tool" dir="ltr">{current.tool}</code>}
+                </button>;
+            })}</nav><div className="agent-run-detail">{runs.filter(run => mounted.has(run.id)).map(run => <RunView key={run.id} run={run} visible={visible && selected?.id === run.id} onConversation={onConversation} prefs={prefs} locale={locale} />)}</div></div>
+        )}
     </div>;
 }
+

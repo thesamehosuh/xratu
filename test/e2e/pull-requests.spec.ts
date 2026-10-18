@@ -30,6 +30,10 @@ async function openSession(page: Page, locale = 'en') {
     await host(page, { type: 'showChat' });
     await host(page, { type: 'sessionState', id: 'session-a', title: 'Session A' });
     await expect(page.locator('.composer-input')).toBeVisible();
+    await page.waitForFunction(() => {
+        const reads = ((window as unknown as { __xratuHostMessages: Array<{ type: string; refresh?: boolean }> }).__xratuHostMessages || []).filter(message => message.type === 'pullRequestsGetState');
+        return reads.length > 0 && reads[reads.length - 1].refresh === true;
+    });
     await reply(page, state());
 }
 
@@ -67,6 +71,11 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await details.nth(0).locator('summary').click();
         await details.nth(1).locator('summary').click();
         await expect(page.locator('.pr-check-dot.failure')).toBeVisible();
+        // Badges are the last `span` in `.pr-detail li`, so the generic
+        // `span:last-child` rule matches them too: the badge selectors have to
+        // stay more specific or every status label renders in the description
+        // colour instead of its own tone.
+        await expect(page.locator('.pr-check-badge.is-failure')).toHaveCSS('color', 'rgb(248, 81, 73)');
         await expect(page.locator('.pr-comments')).toContainText('<script>');
         await expect(page.locator('.pr-comments p')).toBeVisible();
         await page.locator('.pr-comments p').scrollIntoViewIfNeeded();

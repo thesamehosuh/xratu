@@ -20,19 +20,20 @@ export function reviewLines(file: ReviewFile): { rows: Array<{ kind: 'context' |
         const hunk = hunks[h];
         if (h > 0 && !append('gap', '')) return { rows, truncated: true };
         const start = Math.max(through, hunk.oldStart - 4, 0);
-        for (let line = start; line < hunk.oldStart - 1; line++) {
-            if (!append('context', before[line], line + 1)) return { rows, truncated: true };
+        const contextEnd = Math.min(hunk.oldStart - 1, before.length);
+        for (let line = start; line < contextEnd; line++) {
+            if (!append('context', before[line] ?? '', line + 1)) return { rows, truncated: true };
         }
         for (let line = 0; line < hunk.removedLines.length; line++) {
-            if (!append('del', hunk.removedLines[line], hunk.oldStart + line)) return { rows, truncated: true };
+            if (!append('del', hunk.removedLines[line] ?? '', hunk.oldStart + line)) return { rows, truncated: true };
         }
         for (let line = 0; line < hunk.addedLines.length; line++) {
-            if (!append('add', hunk.addedLines[line], hunk.newStart + line)) return { rows, truncated: true };
+            if (!append('add', hunk.addedLines[line] ?? '', hunk.newStart + line)) return { rows, truncated: true };
         }
         through = Math.max(0, hunk.oldStart - 1) + hunk.oldCount;
         const end = Math.min(through + 3, before.length, hunks[h + 1] ? hunks[h + 1].oldStart - 1 : before.length);
         for (let line = through; line < end; line++) {
-            if (!append('context', before[line], line + 1)) return { rows, truncated: true };
+            if (!append('context', before[line] ?? '', line + 1)) return { rows, truncated: true };
         }
         through = end;
     }

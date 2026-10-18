@@ -1,0 +1,5 @@
+{
+  "name": "Xratu — Open-Source AI Coding Assistant",
+  "description": "Open-source AI coding assistant for VS Code supporting BYOK, local runtimes (Ollama, LM Studio, vLLM, llama.cpp), and OpenCode 2.",
+  "requestFramePermissions": []
+}
