@@ -36,7 +36,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
                                     <span>{profile.source === 'builtin' && profile.name === 'explore' ? t('surfaceReadOnly') : profile.source === 'builtin' && profile.name === 'general' ? t('surfaceEditVerify') : profile.description}</span>
                                 </span>
                                 {!profile.error && !profile.warning && <Check size={12} className="agent-ready" />}
-                                <ChevronRight size={12} className={getLocale() === 'fa' ? 'rtl-flip' : undefined} />
+                                {expanded === id ? <ChevronDown size={12} /> : <ChevronRight size={12} className={getLocale() === 'fa' ? 'rtl-flip' : undefined} />}
                             </button>
                             {expanded === id && <div className="agent-profile-details">
                                 {profile.error && <p className="mcp-row-error" role="alert">{profile.error}</p>}

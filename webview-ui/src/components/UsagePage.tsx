@@ -163,12 +163,9 @@ function formatAxis(value: number, currency: Currency, step: number): string {
     }).format(value);
 }
 
-/** Usage cost in the currency it was actually billed in (Toman wins when both
- *  ledgers have entries: it is the one a local user reads). */
-function usageCost(cost: { USD: number; IRT: number }): string {
-    if (cost.IRT > 0) return formatCost({ amount: cost.IRT, currency: 'IRT' }) ?? '-';
-    if (cost.USD > 0) return formatCost({ amount: cost.USD, currency: 'USD' }) ?? '-';
-    return '-';
+function UsageAmounts({ totals }: { totals: { USD: number; IRT: number } }) {
+    const amounts = [formatCost({ amount: totals.IRT, currency: 'IRT' }), formatCost({ amount: totals.USD, currency: 'USD' })].filter(Boolean);
+    return <span className="usage-amounts">{amounts.length ? amounts.map((amount) => <span dir="ltr" key={amount}>{amount}</span>) : <span dir="ltr">—</span>}</span>;
 }
 
 const RATE_SOURCE_LABEL = {
@@ -263,7 +260,7 @@ function RateRow({
                     <span className="pricing-badge currency" dir="ltr">{rate.currency}</span>
                 </span>
                 <span className="rate-head-end">
-                    <span className="usage-cost" dir="ltr">{usageCost(rate)}</span>
+                    <span className="usage-cost rate-spend"><small>{t('usageAllTime')}</small><UsageAmounts totals={rate} /></span>
                     <button
                         type="button"
                         className="icon-btn"
@@ -459,7 +456,7 @@ function AddModelForm({ onSave, onCancel }: { onSave: UsagePageProps['onSaveMode
 export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveModel }: UsagePageProps) {
     const locale = getLocale();
     const history = state?.history ?? [];
-    const providers = state?.providers ?? [];
+    const providers = useMemo(() => state?.providers ?? [], [state?.providers]);
     const rates = state?.rates ?? [];
     const allTime = state?.allTime;
     const plan = state?.chatgpt;
@@ -486,6 +483,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
     const [modelFilter, setModelFilter] = useState('all');
     const [hostFilter, setHostFilter] = useState('all');
     const [currencyChoice, setCurrencyChoice] = useState<'auto' | Currency>('auto');
+    const [chartMetric, setChartMetric] = useState<'cost' | 'tokens'>('cost');
     const [activeDay, setActiveDay] = useState<string | null>(null);
     /** Model segment under the cursor - narrows the detail line to that one. */
     const [activeModel, setActiveModel] = useState<string | null>(null);
@@ -520,7 +518,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
 
     const axisDays = useMemo(() => axis?.days ?? [], [axis]);
 
-    /** Cells of the selected month that pass the model/provider filters. */
+    /** Cells of the selected period that pass the model/provider filters. */
     const filteredCells = useMemo(() => {
         const out: Array<{ day: string; cell: LedgerDay['cells'][number] }> = [];
         for (const day of axisDays) {
@@ -533,7 +531,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
         return out;
     }, [axisDays, dayCells, modelFilter, hostFilter]);
 
-    const monthTotals = useMemo(() => {
+    const periodTotals = useMemo(() => {
         const totals = { USD: 0, IRT: 0, tokens: 0 };
         for (const { cell } of filteredCells) {
             totals.USD += cell.USD;
@@ -543,16 +541,32 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
         return totals;
     }, [filteredCells]);
 
+    const periodProviders = useMemo(() => {
+        const grouped = new Map<string, ProviderUsageView>();
+        for (const { cell } of filteredCells) {
+            let row = grouped.get(cell.host);
+            if (!row) {
+                const provider = providers.find((entry) => entry.host === cell.host);
+                row = { host: cell.host, label: provider?.label ?? cell.host, iranian: provider?.iranian ?? false, input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
+                grouped.set(cell.host, row);
+            }
+            for (const key of ['input', 'output', 'cached', 'USD', 'IRT'] as const) row[key] += cell[key];
+        }
+        return [...grouped.values()].sort((a, b) => totalTokens(b) - totalTokens(a));
+    }, [filteredCells, providers]);
+    const hasFilters = modelFilter !== 'all' || hostFilter !== 'all';
+    const clearFilters = () => { setModelFilter('all'); setHostFilter('all'); setActiveDay(null); setActiveModel(null); };
+
     // Toman is the default when a Toman-billed provider contributed, since that
     // is the money the user actually pays; USD providers fall back to USD.
-    const autoCurrency: Currency = monthTotals.IRT > 0 ? 'IRT' : 'USD';
+    const autoCurrency: Currency = periodTotals.IRT > 0 ? 'IRT' : 'USD';
     // A manual choice only sticks while that currency HAS usage in the viewed
     // month. Otherwise stepping to a single-currency month (where the toggle is
     // hidden) would draw an empty chart for a month that really did cost money.
-    const currency: Currency = currencyChoice !== 'auto' && monthTotals[currencyChoice] > 0
+    const currency: Currency = currencyChoice !== 'auto' && periodTotals[currencyChoice] > 0
         ? currencyChoice
         : autoCurrency;
-    const bothCurrencies = monthTotals.USD > 0 && monthTotals.IRT > 0;
+    const bothCurrencies = periodTotals.USD > 0 && periodTotals.IRT > 0;
 
     /** One stacked column per day of the month, in the active currency. */
     const series = useMemo(() => {
@@ -564,14 +578,14 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                 if (modelFilter !== 'all' && cell.model !== modelFilter) continue;
                 if (hostFilter !== 'all' && cell.host !== hostFilter) continue;
                 tokens += totalTokens(cell);
-                const value = currency === 'IRT' ? cell.IRT : cell.USD;
+                const value = chartMetric === 'tokens' ? totalTokens(cell) : currency === 'IRT' ? cell.IRT : cell.USD;
                 if (value <= 0) continue;
                 byModel.set(cell.model, (byModel.get(cell.model) ?? 0) + value);
                 total += value;
             }
             return { day, byModel, total, tokens };
         });
-    }, [axisDays, dayCells, modelFilter, hostFilter, currency]);
+    }, [axisDays, dayCells, modelFilter, hostFilter, currency, chartMetric]);
 
     const max = useMemo(() => niceMax(Math.max(0, ...series.map((d) => d.total))), [series]);
 
@@ -588,6 +602,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
 
     const active = activeDay ? series.find((d) => d.day === activeDay) ?? null : null;
     const axisTicks = Array.from({ length: GRID_LINES + 1 }, (_, i) => (max * i) / GRID_LINES).reverse();
+    const chartValue = (value: number) => chartMetric === 'tokens' ? formatTokens(value) : formatCost({ amount: value, currency }) ?? '-';
 
     return (
         <div className="settings-page usage-page">
@@ -607,11 +622,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
             </header>
 
             <div className="settings-scroll">
-                {allTime && <div className="usage-metrics" aria-label={t('miniTotal')}>
-                    <div><span>{t('usageCost')}</span><strong dir="ltr">{formatCost({amount:allTime.USD,currency:'USD'}) ?? '$0'}{allTime.IRT > 0 && <small>{formatCost({amount:allTime.IRT,currency:'IRT'})}</small>}</strong></div>
-                    <div><span>{t('usageTokens')}</span><strong dir="ltr">{formatTokens(totalTokens(allTime))}</strong></div>
-                    <div><span>{t('providersTitle')}</span><strong dir="ltr">{providers.length}</strong></div>
-                </div>}
+                {!state && <p className="usage-loading" role="status">{t('working')}</p>}
                 {showPlan && (
                     <section className="settings-card usage-plan">
                         <div className="settings-section-head">
@@ -648,16 +659,16 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                         </div>
                     </section>
                 )}
-                <details className="usage-api" open={showPlan ? history.length > 0 : true}>
+                {state && <details className="usage-api" open={showPlan ? history.length > 0 : true}>
                     <summary hidden={!showPlan}>{t('usageApiTitle')}</summary>
-                <section className="settings-card">
+                <section className="settings-card usage-overview">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Activity size={15} />
                         </div>
                         <div>
-                            <h3>{t('costChartTitle')}</h3>
-                            <p>{t('costChartDesc')}</p>
+                            <h3>{t(chartMetric === 'tokens' ? 'usageTokensOverTime' : 'costChartTitle')}</h3>
+                            <p>{t('usageChartPeriod')}</p>
                         </div>
                     </div>
 
@@ -725,9 +736,20 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 ]}
                                 onChange={(next) => { setHostFilter(next); setActiveDay(null); }}
                             />
+                            {hasFilters && <button type="button" className="settings-ghost-action usage-clear-filters" onClick={clearFilters}>{t('usageClearFilters')}</button>}
                         </div>
 
-                        {bothCurrencies && (
+                        <div className="usage-metrics" aria-label={t('usageSelectedPeriod')}>
+                            <div className="usage-period-cost"><span>{t('usageRecordedCost')}</span><strong><UsageAmounts totals={periodTotals} /></strong></div>
+                            <div><span>{t('usageTokens')}</span><strong dir="ltr">{formatTokens(periodTotals.tokens)}</strong></div>
+                            <div><span>{t('providersTitle')}</span><strong dir="ltr">{formatTokens(periodProviders.length)}</strong></div>
+                        </div>
+
+                        <div className="usage-chart-controls">
+                            <div className="usage-metric-choice" role="group" aria-label={t('usageChartMetric')}>
+                                {(['cost', 'tokens'] as const).map((metric) => <button key={metric} type="button" className={`usage-range${chartMetric === metric ? ' active' : ''}`} aria-pressed={chartMetric === metric} onClick={() => { setChartMetric(metric); setActiveDay(null); setActiveModel(null); }}><span>{t(metric === 'cost' ? 'usageCost' : 'usageTokens')}</span></button>)}
+                            </div>
+                        {bothCurrencies && chartMetric === 'cost' && (
                             <div className="cost-currencies" role="group" aria-label={t('usageCost')}>
                                 <button
                                     type="button"
@@ -747,22 +769,23 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 </button>
                             </div>
                         )}
+                        </div>
 
                         {legend.length > 0 ? (
                             <>
                                 <div className="cost-chart" dir="ltr">
                                     <div className="cost-axis" aria-hidden="true">
                                         {axisTicks.map((tick, i) => (
-                                            <span key={i}>{formatAxis(tick, currency, max / GRID_LINES)}</span>
+                                            <span key={i}>{chartMetric === 'tokens' ? new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tick) : formatAxis(tick, currency, max / GRID_LINES)}</span>
                                         ))}
                                     </div>
                                     <div className="cost-plot">
                                         <div className="cost-grid" aria-hidden="true">
                                             {axisTicks.map((_, i) => <span key={i} />)}
                                         </div>
-                                        <div className="cost-cols" role="group" aria-label={t('costChartAria')}>
+                                        <div className="cost-cols" role="group" aria-label={t(chartMetric === 'tokens' ? 'usageTokenChartAria' : 'costChartAria')}>
                                             {series.map((day) => {
-                                                const label = `${formatCalendarDate(localDayTimestamp(day.day))} · ${formatCost({ amount: day.total, currency }) ?? '-'}`;
+                                                const label = `${formatCalendarDate(localDayTimestamp(day.day))} · ${chartValue(day.total)}`;
                                                 return (
                                                     <button
                                                         key={day.day}
@@ -792,12 +815,17 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                     </div>
                                 </div>
 
+                                <div className="cost-dates" dir="ltr" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${axisDays.length}, minmax(0, 1fr))` }}>
+                                    {axisDays.map((day, index) => index === 0 || index === axisDays.length - 1 || index % Math.ceil((axisDays.length - 1) / 5) === 0
+                                        ? <span key={day} style={{ gridColumn: index + 1 }}>{new Intl.DateTimeFormat(calendarName(), { day: 'numeric' }).format(new Date(localDayTimestamp(day)))}</span> : null)}
+                                </div>
+
                                 <div className="cost-legend">
                                     {legend.map(([model, value]) => (
                                         <span className="cost-legend-item" key={model}>
                                             <span className="cost-swatch" style={{ background: colorFor(model) }} aria-hidden="true" />
                                             <span dir="ltr">{model}</span>
-                                            <span className="cost-legend-cost" dir="ltr">{formatCost({ amount: value, currency }) ?? '-'}</span>
+                                            <span className="cost-legend-cost" dir="ltr">{chartValue(value)}</span>
                                         </span>
                                     ))}
                                 </div>
@@ -817,10 +845,10 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                                             <i style={{ background: colorFor(activeModel) }} aria-hidden="true" />
                                                             <span dir="ltr">{activeModel}</span>
                                                         </span>
-                                                        <span dir="ltr">{formatCost({ amount: hovered, currency }) ?? '-'}</span>
+                                                        <span dir="ltr">{chartValue(hovered)}</span>
                                                     </>
                                                 ) : (
-                                                    <span dir="ltr">{formatCost({ amount: active.total, currency }) ?? '-'}</span>
+                                                    <span dir="ltr">{chartValue(active.total)}</span>
                                                 )}
                                             </>
                                         );
@@ -828,24 +856,28 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 </p>
                             </>
                         ) : (
-                            <p className="usage-empty">{t('costNoData')}</p>
+                            <div className="usage-chart-empty">
+                                <p className="usage-empty">{t(periodTotals.tokens > 0 ? 'usageNoRecordedCost' : history.length > 0 ? chartMetric === 'tokens' ? 'usageNoPeriodData' : 'costNoData' : 'usageEmpty')}</p>
+                                {periodTotals.tokens > 0 && chartMetric === 'cost' && <button type="button" className="settings-ghost-action" onClick={() => setChartMetric('tokens')}>{t('usageViewTokens')}</button>}
+                                {hasFilters && <button type="button" className="settings-ghost-action" onClick={clearFilters}>{t('usageClearFilters')}</button>}
+                            </div>
                         )}
                     </div>
                 </section>
 
-                <section className="settings-card">
+                <section className="settings-card usage-providers">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Coins size={15} />
                         </div>
                         <div>
                             <h3>{t('providersTitle')}</h3>
-                            <p>{t('providersDesc')}</p>
+                            <p>{t('usageProvidersPeriod')}</p>
                         </div>
                     </div>
 
                     <div className="settings-card-body">
-                        {providers.length > 0 ? providers.map((p) => {
+                        {periodProviders.length > 0 ? periodProviders.map((p) => {
                             const tokens = totalTokens(p);
                             const uncached = uncachedInput(p.input, p.cached);
                             const share = (value: number) => `${tokens > 0 ? (value / tokens) * 100 : 0}%`;
@@ -857,7 +889,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                             {p.iranian && <span className="pricing-badge">{t('pricingIranianBadge')}</span>}
                                             <span className="prov-host" dir="ltr">{p.host}</span>
                                         </span>
-                                        <span className="usage-cost" dir="ltr">{usageCost(p)}</span>
+                                        <span className="usage-cost"><UsageAmounts totals={p} /></span>
                                     </div>
                                     {tokens > 0 && (
                                         <span className="prov-bar" dir="ltr" aria-hidden="true">
@@ -874,23 +906,19 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 </div>
                             );
                         }) : (
-                            <p className="usage-empty">{t('usageEmpty')}</p>
+                            <p className="usage-empty">{t('usageNoProviders')}</p>
                         )}
 
-                        {allTime && (
-                            <p className="usage-alltime">
-                                {t('usageAllTime')}: {formatTokens(totalTokens(allTime))} {t('usageTokens')}
-                                {(allTime.USD > 0 || allTime.IRT > 0) && (
-                                    <> · {[formatCost({ amount: allTime.USD, currency: 'USD' }), formatCost({ amount: allTime.IRT, currency: 'IRT' })]
-                                        .filter((v): v is string => v != null)
-                                        .join(' · ')}</>
-                                )}
-                            </p>
-                        )}
                     </div>
                 </section>
 
-                <details className="settings-card rate-disclosure"><summary><span>{t('miniPricing')}</span><ChevronDown size={12}/></summary>
+                {allTime && <section className="usage-lifetime" aria-label={t('usageAllTime')}>
+                    <span>{t('usageAllTime')}</span>
+                    <span><bdi dir="ltr">{formatTokens(totalTokens(allTime))}</bdi> {t('usageTokens')}</span>
+                    <UsageAmounts totals={allTime} />
+                </section>}
+
+                <details className="settings-card rate-disclosure"><summary><span><strong>{t('miniPricing')}</strong><small>{t('ratesDesc')}</small></span><ChevronDown size={12}/></summary>
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Tag size={15} />
@@ -925,7 +953,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                     </div>
                 </details>
 
-                </details>
+                </details>}
                 {/* Fine print lives at the footer, like the MCP/Skills page. */}
                 <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
 
