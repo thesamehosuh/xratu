@@ -317,7 +317,7 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
     expect(geo.h).toBe('24px');
     expect(geo.pad).toBe('10px');
     expect(geo.r).toBe('5px');          // --xratu-radius-xs
-    expect(geo.fs).toBe('11px');        // --xratu-fs-sm
+    expect(geo.fs).toBe('12px');        // --xratu-fs-sm
     expect(geo.min).toBe('92px');
 
     // The accent, NOT --vscode-button-background. In Dark Modern that token is
@@ -394,11 +394,11 @@ test('the ledger and the row table keep the approved metrics', async ({ page }) 
         page.locator(sel).first().evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
     expect(await read('.approval-head', 'min-height')).toBe('30px');
     expect(await read('.approval-item summary', 'min-height')).toBe('26px');
-    expect(await read('.approval-title', 'font-size')).toBe('12px');   // --xratu-fs-md
+    expect(await read('.approval-title', 'font-size')).toBe('13px');   // --xratu-fs-md
     expect(await read('.approval-title', 'font-weight')).toBe('650');
-    expect(await read('.approval-ledger', 'font-size')).toBe('10.5px'); // --xratu-fs-xs
-    expect(await read('.approval-path', 'font-size')).toBe('10.5px');
-    expect(await read('.approval-session', 'font-size')).toBe('10.5px');
+    expect(await read('.approval-ledger', 'font-size')).toBe('11px'); // --xratu-fs-xs
+    expect(await read('.approval-path', 'font-size')).toBe('11px');
+    expect(await read('.approval-session', 'font-size')).toBe('11px');
     // The ledger aligns like a diffstat.
     expect(await read('.approval-ledger .n', 'font-variant-numeric')).toContain('tabular-nums');
     // No nested chrome: the block is not a frame.
