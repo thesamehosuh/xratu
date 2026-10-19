@@ -192,8 +192,11 @@ Inspect the actual UI in both locales at narrow and wide widths as above.
   attribute approvals/questions, keep observations out of the parent ledger,
   and retain Stop until the entire tree and queued reports settle. Plan still
   denies delegation. Native children use native agent definitions and inherit
-  native permission rules; child mutations still require real approvals in
-  YOLO. Xratu profile allowlists and budgets apply only to
+  native permission rules; with YOLO off, their mutations still reach real
+  approval cards. YOLO is one live grant read per request, so while it is on it
+  covers the whole native tree exactly like the built-in runner's children, and
+  turning it off makes child requests ask again. Xratu profile allowlists and
+  budgets apply only to
   the built-in runner. Bridged parent controls stay denied to native children.
   Stream failures, restore, and cancellation must settle the whole tree or
   restart the managed server. A per-agent stop settles ONLY that delegation:

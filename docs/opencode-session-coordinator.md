@@ -45,10 +45,12 @@ cancelled. A declined permission carries a message so OpenCode treats it as a
 declined tool rather than a user Stop.
 
 Native children inherit native permissions at creation. Plan deterministically
-denies delegation; probe sessions also deny it. Normal child mutations retain
-real approval gates even when the root uses YOLO. Native session rules keep
-mutations asking; Xratu silently approves only the root's requests in YOLO.
-This differs from the built-in Xratu runner: native agent files, nesting and
+denies delegation; probe sessions also deny it. With YOLO off, child mutations
+retain real approval cards attributed to the delegation that asked. YOLO is one
+live grant read at request time: while it is on, Xratu silently approves the
+whole native tree, the same as the built-in runner's children, and turning it
+off makes child requests ask again. Native session rules keep mutations asking
+underneath. This differs from the built-in Xratu runner: native agent files, nesting and
 native tools remain OpenCode's responsibility; Xratu profile tool allowlists,
 round budgets and parallel-wave limits are not native configuration.
 
