@@ -12,7 +12,6 @@ import {
     Eye,
     Filter,
     File,
-    Gauge,
     Link,
     Paperclip,
     Wrench,
@@ -1208,21 +1207,20 @@ export function InputBar({
                         )}
                         <ChevronUp size={12} />
                     </button>
-                    {/* With the meter off, the preset menu stays reachable: it is
-                        the only place a context-window override can be set. */}
-                    <span className="ctx-wrap" ref={ctxWrapRef}>
-                        <button
-                            type="button"
-                            className={`chip-btn tok-meter${showContextMeter ? '' : ' ctx-trigger'}`}
-                            onClick={() => setCtxOpen((s) => !s)}
-                            aria-haspopup="menu"
-                            aria-expanded={ctxOpen}
-                            aria-label={t('ctxAria')}
-                            title={showContextMeter
-                                ? `${t('ctxMeterLabel')} · ${fmtCompact(usedTokens)} / ${fmtWindow(limit)}`
-                                : `${t('ctxAria')} · ${fmtWindow(limit)}`}
-                        >
-                            {showContextMeter ? <>
+                    {/* The meter and its window-preset menu are one control:
+                        with the meter off in settings, the composer shows
+                        nothing here at all. */}
+                    {showContextMeter && (
+                        <span className="ctx-wrap" ref={ctxWrapRef}>
+                            <button
+                                type="button"
+                                className="chip-btn tok-meter"
+                                onClick={() => setCtxOpen((s) => !s)}
+                                aria-haspopup="menu"
+                                aria-expanded={ctxOpen}
+                                aria-label={t('ctxAria')}
+                                title={`${t('ctxMeterLabel')} · ${fmtCompact(usedTokens)} / ${fmtWindow(limit)}`}
+                            >
                                 <svg className="tok-ring" viewBox="0 0 20 20" aria-hidden="true">
                                     <circle className="tok-ring-bg" cx="10" cy="10" r="8" />
                                     <circle
@@ -1238,46 +1236,46 @@ export function InputBar({
                                         {fmtCompact(usedTokens)}
                                 </span>
                                 <ChevronUp size={12} />
-                            </> : <Gauge size={13} />}
-                        </button>
-                        {ctxOpen && (
-                            <div className="ctx-menu" role="menu" aria-label={t('ctxAria')}>
-                                <button
-                                    type="button"
-                                    role="menuitemradio"
-                                    aria-checked={!ctxOverridden}
-                                    disabled={defaultTooSmall}
-                                    aria-disabled={defaultTooSmall || undefined}
-                                    title={defaultTooSmall ? t('ctxOptBelowUsage') : undefined}
-                                    className={`ctx-opt${!ctxOverridden ? ' selected' : ''}`}
-                                    onClick={() => pickCtx(null)}
-                                >
-                                    <span>{t('ctxOptDefault')}</span>
-                                    {!ctxOverridden && <Check size={12} />}
-                                </button>
-                                {CTX_PRESETS.map((p) => {
-                                    const active = ctxOverridden && limit === p.value;
-                                    const tooSmall = occupied > 0 && p.value < occupied;
-                                    return (
-                                        <button
-                                            key={p.label}
-                                            type="button"
-                                            role="menuitemradio"
-                                            aria-checked={active}
-                                            disabled={tooSmall}
-                                            aria-disabled={tooSmall || undefined}
-                                            title={tooSmall ? t('ctxOptBelowUsage') : undefined}
-                                            className={`ctx-opt${active ? ' selected' : ''}`}
-                                            onClick={() => pickCtx(p.value)}
-                                        >
-                                            <span dir="ltr">{p.label}</span>
-                                            {active && <Check size={12} />}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </span>
+                            </button>
+                            {ctxOpen && (
+                                <div className="ctx-menu" role="menu" aria-label={t('ctxAria')}>
+                                    <button
+                                        type="button"
+                                        role="menuitemradio"
+                                        aria-checked={!ctxOverridden}
+                                        disabled={defaultTooSmall}
+                                        aria-disabled={defaultTooSmall || undefined}
+                                        title={defaultTooSmall ? t('ctxOptBelowUsage') : undefined}
+                                        className={`ctx-opt${!ctxOverridden ? ' selected' : ''}`}
+                                        onClick={() => pickCtx(null)}
+                                    >
+                                        <span>{t('ctxOptDefault')}</span>
+                                        {!ctxOverridden && <Check size={12} />}
+                                    </button>
+                                    {CTX_PRESETS.map((p) => {
+                                        const active = ctxOverridden && limit === p.value;
+                                        const tooSmall = occupied > 0 && p.value < occupied;
+                                        return (
+                                            <button
+                                                key={p.label}
+                                                type="button"
+                                                role="menuitemradio"
+                                                aria-checked={active}
+                                                disabled={tooSmall}
+                                                aria-disabled={tooSmall || undefined}
+                                                title={tooSmall ? t('ctxOptBelowUsage') : undefined}
+                                                className={`ctx-opt${active ? ' selected' : ''}`}
+                                                onClick={() => pickCtx(p.value)}
+                                            >
+                                                <span dir="ltr">{p.label}</span>
+                                                {active && <Check size={12} />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </span>
+                    )}
                     {formatCost(sessionCost) && (
                         <button
                             type="button"

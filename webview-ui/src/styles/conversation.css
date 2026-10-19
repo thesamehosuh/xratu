@@ -22,12 +22,13 @@
 .activity-filters > .dropdown { flex:0 1 auto; max-width:45%; min-width:124px; }
 .conversation-preference { align-items:center; gap:12px; }
 .preferences-page .conversation-preference .settings-nav-main { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+.preferences-page .conversation-preference .preference-description { display:none; }
 .preference-description { font-size:var(--xratu-fs-sm); line-height:1.6; color:var(--vscode-descriptionForeground); font-weight:400; }
 .conversation-preference > .dropdown { flex:0 0 160px; max-width:48%; }
 .conversation-advanced { margin-block:8px 16px; }
 .conversation-advanced > summary { cursor:pointer; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); padding-block:5px; }
 .settings-section-head > .conversation-reset { width:auto; margin-block:0; min-height:24px; padding:2px 6px; gap:5px; font-size:var(--xratu-fs-sm); }
-@media(max-width:520px) {
+@container settings-page (max-width:350px) {
     .conversation-preference:has(.dropdown) { align-items:stretch; flex-direction:column; gap:8px; }
     .conversation-preference > .dropdown { flex:0 0 auto; max-width:100%; width:100%; }
 }

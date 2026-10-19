@@ -171,6 +171,7 @@ export function SettingsPage({
                             <button
                                 type="button"
                                 className={locale === 'fa' ? 'lang-chip active' : 'lang-chip'}
+                                aria-pressed={locale === 'fa'}
                                 onClick={() => onSetLocale('fa')}
                             >
                                 فارسی
@@ -178,6 +179,7 @@ export function SettingsPage({
                             <button
                                 type="button"
                                 className={locale === 'en' ? 'lang-chip active' : 'lang-chip'}
+                                aria-pressed={locale === 'en'}
                                 onClick={() => onSetLocale('en')}
                             >
                                 English
@@ -195,6 +197,7 @@ export function SettingsPage({
                             <button
                                 type="button"
                                 className={replyLanguage === 'fa' ? 'lang-chip active' : 'lang-chip'}
+                                aria-pressed={replyLanguage === 'fa'}
                                 onClick={() => onSetReplyLanguage?.('fa')}
                             >
                                 فارسی
@@ -202,6 +205,7 @@ export function SettingsPage({
                             <button
                                 type="button"
                                 className={replyLanguage === 'en' ? 'lang-chip active' : 'lang-chip'}
+                                aria-pressed={replyLanguage === 'en'}
                                 onClick={() => onSetReplyLanguage?.('en')}
                             >
                                 English
@@ -209,6 +213,7 @@ export function SettingsPage({
                             <button
                                 type="button"
                                 className={replyLanguage === 'auto' ? 'lang-chip active' : 'lang-chip'}
+                                aria-pressed={replyLanguage === 'auto'}
                                 onClick={() => onSetReplyLanguage?.('auto')}
                             >
                                 {t('settingsReplyAuto')}

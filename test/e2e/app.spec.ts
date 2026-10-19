@@ -553,7 +553,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-period-label')).toContainText('–');
     await page.getByLabel('هفته قبل').click();
     // The previous week really has no usage, so the empty state is correct.
-    await expect(page.locator('.usage-empty')).toBeVisible();
+    await expect(page.locator('.usage-overview .usage-empty')).toBeVisible();
     // Two more weeks back is the window that holds the July usage.
     await page.getByLabel('هفته قبل').click();
     await page.getByLabel('هفته قبل').click();
@@ -562,17 +562,16 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await page.locator('.cost-granularity .usage-range', { hasText: 'ماه' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(31);
 
-    // Provider usage: one stat block per provider, with the Iranian badge, its
-    // cost, and the input/output/cached split under a composition bar.
+    // Provider rows follow the same period and filters as the chart. Lifetime
+    // usage from Metis must not leak into the August view.
     const providerRows = page.locator('.prov-row');
-    await expect(providerRows).toHaveCount(2);
+    await expect(providerRows).toHaveCount(1);
     await expect(providerRows.first()).toContainText('Avalai');
-    await expect(providerRows.locator('.pricing-badge')).toHaveCount(2);
-    await expect(providerRows.nth(1)).toContainText('تومان');
+    await expect(providerRows.locator('.pricing-badge')).toHaveCount(1);
     await expect(providerRows.first().locator('.prov-bar > span')).toHaveCount(2);
-    // Metis has cached input too, so its bar carries the third segment.
-    await expect(providerRows.nth(1).locator('.prov-bar > span')).toHaveCount(3);
-    await expect(page.locator('.usage-metrics')).toBeVisible();
+    await expect(page.locator('.usage-metrics')).toContainText('۳۳۰');
+    await expect(page.locator('.usage-lifetime')).toContainText('۱٬۱۵۵');
+    await expect(page.locator('.cost-dates')).toBeVisible();
     await page.locator('.rate-disclosure > summary').click();
 
     // Rate sheet: the effective rate per model with its origin, edited inline.
@@ -724,13 +723,11 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
-    // The meter readout is hidden by default, but the window-preset menu must
-    // stay reachable: it is the only place to set a context-window override.
+    // The meter is off by default, and with it the window-preset control:
+    // the composer keeps nothing in that slot.
     await expect(page.locator('.tok-pct')).toHaveCount(0);
-    await page.locator('.ctx-trigger').click();
-    await expect(page.locator('.ctx-menu')).toBeVisible();
-    await page.locator('.ctx-trigger').click();
-    await expect(page.locator('.ctx-menu')).toHaveCount(0);
+    await expect(page.locator('.ctx-wrap')).toHaveCount(0);
+    await expect(page.locator('.ctx-trigger')).toHaveCount(0);
     await hostMessage(page, { type: 'restoreUser', value: 'build it' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });

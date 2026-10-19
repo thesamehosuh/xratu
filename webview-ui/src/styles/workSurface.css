@@ -224,11 +224,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .composer .ctx-wrap { margin-inline-start:auto; flex-shrink:0; }
 .composer-chips:not(:has(.ctx-wrap)) > .session-cost { margin-inline-start:auto; }
 .composer .tok-meter { padding:3px; gap:4px; font-size:var(--xratu-fs-xs); min-height:27px; background:transparent; border:0; }
-/* Meter hidden: the same trigger stays as a compact icon so the window
-   presets keep a home. */
-.composer .tok-meter.ctx-trigger { padding-inline:6px; gap:0; color:var(--vscode-descriptionForeground); }
-.composer .tok-meter.ctx-trigger:hover { color:var(--vscode-foreground); }
-.composer .tok-text,.composer .tok-meter:not(.ctx-trigger) > svg:last-child { display:none; }
+.composer .tok-text,.composer .tok-meter > svg:last-child { display:none; }
 .composer-buttons { flex-shrink:0; gap:3px; margin-inline-start:3px; }
 .composer .send-btn { width:28px; height:27px; min-width:28px; padding:0; border:0; border-radius:6px; color:var(--surface-accent); background:transparent; }
 .composer .send-btn:hover:not(:disabled):not(.is-stop) { background:var(--xratu-accent-faint); }
@@ -245,10 +241,12 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .sidebar-back { margin-block-end:16px; font-size:var(--xratu-fs-md); white-space:nowrap; }
 .sidebar-item > span { min-width:0; overflow-wrap:break-word; }
 .sidebar-item:hover,.sidebar-back:hover { background:var(--vscode-list-hoverBackground); color:var(--vscode-foreground); }
-.sidebar-item.active { background:var(--vscode-list-inactiveSelectionBackground); color:var(--vscode-foreground); }
+.sidebar-item { position:relative; }
+.sidebar-item.active { background:color-mix(in srgb,var(--surface-accent) 8%,var(--page-canvas)); color:var(--vscode-foreground); }
+.sidebar-item.active::before { content:''; position:absolute; inset-inline-start:0; inset-block:9px; inline-size:2px; border-radius:2px; background:var(--surface-accent); }
 .sidebar-item.active svg { color:var(--surface-accent); }
 .sidebar-item > svg,.sidebar-back > svg { flex-shrink:0; }
-.page-content { position:relative; flex:1; min-width:0; min-height:0; container-type:inline-size; container-name:settings-page; }
+.page-content { --page-gutter:20px; position:relative; flex:1; min-width:0; min-height:0; container-type:inline-size; container-name:settings-page; }
 .page-content > .settings-page,.page-content > .cred-page { height:100%; }
 .agents-content { display:flex; flex-direction:column; gap:20px; }
 .agent-loading { display:flex; align-items:center; gap:7px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); }
@@ -327,7 +325,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
     .conversation-panel .task-list-chip-bar { display:none; }
 }
 @media(min-width:1100px) { .composer .tok-text { display:inline; } }
-@media(max-width:700px) { .page-sidebar { padding:13px 6px; } .sidebar-item { padding:8px 6px; font-size:var(--xratu-fs-md); gap:7px; } .settings-head,.cred-head { padding-inline:12px; } .settings-scroll { padding:14px 12px; } }
+@media(max-width:700px) { .page-sidebar { padding:13px 6px; } .sidebar-item { padding:8px 6px; font-size:var(--xratu-fs-md); gap:7px; } .page-content { --page-gutter:16px; } }
 @media(max-width:450px) { .toolbar { padding-inline:16px; } .toolbar-heading { gap:7px; } .session-btn { max-width:75%; } .toolbar-tools-label { display:none; } .surface-tabs { gap:20px; } }
 @media(max-width:360px) { .page-sidebar { padding-inline:4px; } .sidebar-item { font-size:var(--xratu-fs-sm); padding-inline:4px; } .workspace-breadcrumb { display:none; } .session-btn { max-width:100%; } .composer .picker-chip { gap:3px; } .composer .chip-think { font-size:var(--xratu-fs-xs); } .composer .chip-think svg { display:none; } .task-list-chip-bar { display:none; } .composer-policy { font-size:var(--xratu-fs-xs); gap:3px; padding-inline:4px; } }
 @media(prefers-reduced-motion:reduce) { .workbench *, .workbench *::before, .workbench *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
@@ -477,3 +475,11 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 
 .dock-layout-menu { max-height:min(70vh,540px); overflow-y:auto; }
 .dock-layout-menu [role="menuitem"] { justify-content:flex-start; gap:8px; }
+
+/* The sidebar becomes an icon rail inside the extension's narrow panel. */
+@media(max-width:560px) {
+    .page-sidebar { inline-size:48px; padding:12px 6px; align-items:stretch; gap:4px; }
+    .page-sidebar :is(.sidebar-back,.sidebar-item) { justify-content:center; min-height:36px; padding:8px; }
+    .page-sidebar .sidebar-back { min-height:34px; margin-block-end:12px; }
+    .page-sidebar :is(.sidebar-back,.sidebar-item) > span { position:absolute; inline-size:1px; block-size:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+}

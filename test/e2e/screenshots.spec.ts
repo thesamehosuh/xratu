@@ -451,7 +451,7 @@ async function usageScreen(page: Page, locale: Locale): Promise<Locator> {
     // The chart's month axis is built from the LEDGER, never from `new Date()`,
     // so 31 columns for the last (August) month is a fixed, reviewable state.
     await expect(page.locator('.cost-col')).toHaveCount(31);
-    await expect(page.locator('.prov-row')).toHaveCount(2);
+    await expect(page.locator('.prov-row')).toHaveCount(1);
     return view;
 }
 
@@ -513,6 +513,7 @@ test.describe('theme contract', () => {
                     const subject = await drive(page, locale);
                     await expect(subject).toBeVisible();
                     await freezeFonts(page);
+                    if (process.env.XRATU_SCREENSHOTS) await page.screenshot({ path: join(OUT, `page-${name}-${locale}-${widthLabel}.png`) });
 
                     // R3: direction is locale-driven on the root, never
                     // hardcoded on an inner component.
