@@ -58,6 +58,26 @@ export class OpenCodeEngine implements AgentEngine {
     }
     backgroundJobs() { return this.shellMonitor?.views() ?? []; }
     stopShell(jobID: string): Promise<boolean> { return this.shellMonitor?.stop(jobID) ?? Promise.resolve(false); }
+    /** Stop one delegated native child by the parent call identity published to
+     *  the observation. Sibling children and the parent turn keep running. */
+    async stopSubagent(callId: string): Promise<boolean> {
+        const active = this.active;
+        const coordinator = this.coordinator;
+        if (!active || !coordinator) return false;
+        return coordinator.requestStop(callId, sessionID => { void this.interruptSubagent(active.client, active.signal, sessionID); });
+    }
+    private async interruptSubagent(client: OpenCodeClient, turnSignal: AbortSignal, sessionID: string): Promise<void> {
+        const signal = AbortSignal.any([turnSignal, AbortSignal.timeout(15_000)]);
+        try {
+            await client.session.interrupt({ sessionID, resume: false }, { signal });
+            // Inputs queued for the stopped child must not run on the next turn.
+            const inbox = await client.session.inbox.list({ sessionID }, { signal });
+            for (const item of inbox) await client.session.inbox.cancel({ sessionID, inboxID: item.id }, { signal });
+        } catch {
+            // A child that already settled is fine; whole-tree settlement
+            // failures stay owned by the turn's Stop path.
+        }
+    }
     constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>, private readonly mcpSource?: NativeMcpSource, attachmentRoot = path.join(tmpdir(), 'xratu-opencode-attachments')) {
         this.server = server ?? new OpenCodeServer(binary, env);
         this.attachments = new OpenCodeAttachmentStore(attachmentRoot);

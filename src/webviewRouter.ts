@@ -70,6 +70,7 @@ export interface WebviewMessageHost {
     manageAgentFiles(): Promise<void>;
     _backgroundTerminalCall(callId: string | undefined): void;
     _cancelActiveRequests(): void;
+    _stopSubagent(callId: string): void;
     _clearAllSessions(): Promise<void>;
     _confirmSteer(steerId: string | undefined, mode?: 'steer' | 'turn' | 'drop'): void;
     _createSkillScaffold(): Promise<string | null>;
@@ -354,6 +355,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'killBackgroundJob':
                     void host._killBackgroundJob(data.jobId);
+                    break;
+                case 'stopAgent':
+                    if (typeof data.callId === 'string' && data.callId) host._stopSubagent(data.callId);
                     break;
                 case 'cancelRequest':
                     void host._stopPullRequestWatches?.();

@@ -60,6 +60,16 @@ built-in services, not OpenCode's native tools.
 
 ## Stop, restore and transport failures
 
+Stopping one agent is not Stop. The Agents panel sends the parent `task` call
+id: a built-in child aborts only its own nested loop (its report becomes a
+cancelled task result, still resumable by `task_id`), and a native child is
+interrupted with `resume:false` together with its descendants while the parent
+turn and sibling agents keep running. A native child that has only been
+announced is interrupted when its parent call binds it, so a model-supplied id
+is never interrupted before admission. A stopped delegation settles as
+`cancelled` even when a background launch never delivers a parent tool result,
+which is what lets the turn end.
+
 Stop reaches announced children, nested background descendants and the root.
 The adapter checks OpenCode's active sessions and SDK ancestry too, so an event
 lost before its child announcement cannot leave work unobserved. It waits for

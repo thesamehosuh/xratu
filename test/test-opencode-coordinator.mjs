@@ -35,7 +35,7 @@ async function harness() {
         let raw = ''; for await (const chunk of req) raw += chunk;
         const body = raw ? JSON.parse(raw) : undefined;
         const url = new URL(req.url, 'http://localhost'); const route = url.pathname;
-        requests.push({ route, method: req.method, body });
+        requests.push({ route, method: req.method, body, search: url.search });
         const json = value => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: value })); };
         if (route === '/api/event') { stream = res; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': heartbeat\n\n'); return; }
         if (route === '/api/session/active') { json(Object.fromEntries([...active].map(id => [id, {}]))); return; }
@@ -381,4 +381,31 @@ try {
             console.log('ok whole-form preflight, ambiguous choices, typed bounds and rejected forged answers');
         } finally { await test.close(); }
     }
+    {
+        const test = await harness();
+        try {
+            const done = test.run({}, {});
+            await test.ready(); test.emit('session.execution.started', 'root');
+            await until(() => test.events.some(event => event.type === 'status' && event.value === 'running'));
+            test.tool('root', 'early-stop', 'subagent', { agent: 'general', description: 'Stoppable', prompt: 'Work' });
+            await until(() => test.engine.coordinator?.root.delegations.has('early-stop'));
+            assert.equal(await test.engine.stopSubagent('early-stop'), true, 'a live delegation accepts a stop');
+            assert.equal(await test.engine.stopSubagent('missing'), false, 'an unknown call is never stoppable');
+            // The child is announced only after the stop request: the interrupt
+            // must be deferred until the parent call binds it.
+            test.emit('session.created', 'early-child', { parentID: 'root', agent: 'general', model: { providerID: 'opencode', id: 'child-model' } });
+            test.emit('session.tool.progress', 'root', { id: 'early-stop', metadata: { sessionID: 'early-child', status: 'running' } });
+            await until(() => test.requests.some(request => request.route === '/api/session/early-child/interrupt'));
+            assert.ok(test.requests.find(request => request.route === '/api/session/early-child/interrupt').search.includes('resume=false'), 'a stopped child does not resume queued work');
+            test.emit('session.execution.started', 'early-child');
+            test.emit('session.execution.interrupted', 'early-child');
+            test.emit('session.execution.succeeded', 'root');
+            await done;
+            assert.equal(test.outcome(), 'done', 'a stopped child must not hold the parent turn open');
+            assert.equal(test.observations.at(-1).trace.status, 'cancelled');
+            assert.ok(!test.observations.at(-1).trace.error, 'a user stop is not painted as a runtime error');
+            console.log('ok one native child is stopped alone, even before it attaches, without holding the turn');
+        } finally { await test.close(); }
+    }
+
 } finally { await rm(root, { recursive: true, force: true }); }

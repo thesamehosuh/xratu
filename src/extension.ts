@@ -896,6 +896,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _sessionApprovedKinds = new Set<string>();
     /** One controller per in-flight request kind: cancel can never hit the wrong stream. */
     private _abortControllers = new Map<'chat' | 'approve', AbortController>();
+    /** Per-delegated-agent stop controls, keyed by the parent `task` call id.
+     *  Only built-in runs register here; a native child is stopped through the
+     *  engine so its whole native subtree is interrupted. */
+    private _agentStops = new Map<string, () => void>();
     /** Bumped whenever the visible session is wiped (new session, logout,
      *  account inactive). In-flight run handlers compare their captured
      *  value before writing history or posting follow-ups, so a cancelled
@@ -4495,7 +4499,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // needs consent surfaces as the same webview approval card. YOLO is
         // consulted LIVE per call (mid-run toggles apply from the next call).
         const localApprovalGate: LocalApprovalGate = {
-            requestApproval: (id, calls, source) => {
+            requestApproval: (id, calls, source, signal) => {
                 if (this._yoloMode && !runPlanMode) {
                     return Promise.resolve(
                         Object.fromEntries(calls.map((c) => [c.id, true]))
@@ -4505,6 +4509,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     id,
                     calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments })),
                     source,
+                    signal,
                 );
             },
         };
@@ -4614,6 +4619,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // fold them into the turn/session/global ledgers exactly
                     // like parent rounds.
                     this._handleLocalAgentEvent({ type: 'usage', usage, estimated: false }, outcome);
+                },
+                onControl: (callId, stop) => {
+                    if (!callId) return;
+                    if (stop) this._agentStops.set(callId, stop);
+                    else this._agentStops.delete(callId);
                 },
             },
             subagentDefs,
@@ -6936,8 +6946,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             controller.abort();
         }
         this._abortControllers.clear();
+        this._agentStops.clear();
         this._rejectPendingLocalApprovals();
         this._rejectPendingLocalDecisions();
+    }
+    /** Stop ONE delegated agent from the Agents surface. The parent turn and
+     *  sibling agents keep running; a built-in child settles as a cancelled
+     *  task result, a native child as an interrupted native subtree. */
+    _stopSubagent(callId: string): void {
+        const stop = this._agentStops.get(callId);
+        if (stop) { this._agentStops.delete(callId); stop(); return; }
+        if (this._activeEngine === 'opencode') void this._openCodeEngine?.stopSubagent(callId);
     }
 
     private _displayAssistantResponse(parsed: any) {

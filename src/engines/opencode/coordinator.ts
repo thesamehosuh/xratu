@@ -10,6 +10,12 @@ interface NativeCall { name: string; input: Record<string, unknown> }
 interface Delegation {
     owner: NativeSession; id: string; nativeID: string; input: Record<string, unknown>; child?: NativeSession;
     finished: boolean; error: boolean; report?: string; collector?: SubagentTraceCollector;
+    /** Set when the user stopped this child; the observation ends cancelled. */
+    stopped?: boolean;
+    /** Interrupt for the attached child, or the deferred one for a child that
+     *  has only been announced so far. */
+    stop?: (sessionID: string) => void;
+    stopRequested?: boolean;
 }
 export interface NativeSession {
     id: string; parentID?: string; model: string; agent: string; running: boolean; execution: number;
@@ -66,6 +72,25 @@ export class NativeSessionCoordinator {
         const below = (state: NativeSession): boolean => state.id === id || !!state.parentID && below(this.sessions.get(state.parentID)!);
         return ![...this.sessions.values()].some(state => below(state) && (state.running || state.reports.size || [...state.delegations.values()].some(call => !call.finished)));
     }
+    /** Stop ONE delegated child (and its descendants). A child that has only
+     *  been announced is interrupted as soon as `attach()` binds it, because a
+     *  model-supplied id is never trusted before admission. The parent's turn
+     *  keeps running; only this subtree is asked to end. */
+    requestStop(callId: string, interrupt: (sessionID: string) => void): boolean {
+        const call = this.root.delegations.get(callId);
+        if (!call || call.finished) return false;
+        call.stopped = true;
+        call.stop = interrupt;
+        if (call.child) this.interruptSubtree(call.child, interrupt);
+        else call.stopRequested = true;
+        return true;
+    }
+    private interruptSubtree(state: NativeSession, interrupt: (sessionID: string) => void, seen = new Set<string>()): void {
+        if (seen.has(state.id) || seen.size >= 128) return;
+        seen.add(state.id);
+        interrupt(state.id);
+        for (const session of this.sessions.values()) if (session.parentID === state.id) this.interruptSubtree(session, interrupt, seen);
+    }
     source(sessionID: string): SubagentApprovalSource | undefined {
         const group = this.group(this.sessions.get(sessionID));
         return group ? { parentCallId: group.id, profile: group.collector?.trace.profile ?? text(group.input.agent), description: text(group.input.description) } : undefined;
@@ -93,6 +118,7 @@ export class NativeSessionCoordinator {
         if (!child || child.parentID !== call.owner.id || (child.delegation && child.delegation !== call && !child.delegation.finished)) throw new Error('OpenCode child session ownership mismatch');
         if (call.child === child) return;
         call.child = child; child.delegation = call;
+        if (call.stopRequested) { call.stopRequested = false; call.stop?.(child.id); }
         if (call.owner === this.root) {
             call.collector ??= this.collector(call);
             Object.assign(call.collector.trace, { taskId: child.id, model: child.model, profile: text(call.input.agent) || child.agent, status: 'running', pendingTools: undefined });
@@ -124,7 +150,18 @@ export class NativeSessionCoordinator {
             if (!call.collector || !call.finished || call.collector.trace.endedAt) continue;
             const under = (state: NativeSession) => this.group(state) === call;
             if ([...this.sessions.values()].some(state => under(state) && (state.running || state.reports.size || [...state.delegations.values()].some(nested => !nested.finished)))) continue;
-            call.collector.finish(call.error ? 'error' : 'done', call.report);
+            call.collector.finish(call.stopped ? 'cancelled' : call.error ? 'error' : 'done', call.report);
+        }
+    }
+    /** A stopped child may never produce a parent tool result (background
+     *  launches already returned). Settle the delegation once its subtree is
+     *  idle so `pendingWork()` releases the turn instead of holding Stop. */
+    private settleStopped(): void {
+        for (const call of this.root.delegations.values()) {
+            if (!call.stopped || call.finished || !call.child) continue;
+            const under = (state: NativeSession) => this.group(state) === call;
+            if ([...this.sessions.values()].some(state => under(state) && (state.running || state.reports.size || [...state.delegations.values()].some(nested => !nested.finished)))) continue;
+            call.finished = true; call.error = true; call.report = 'Stopped by the user.';
         }
     }
     finish(status: 'cancelled' | 'interrupted' | 'error'): void {
@@ -161,7 +198,9 @@ export class NativeSessionCoordinator {
             case 'session.execution.failed':
             case 'session.execution.interrupted':
                 state.running = false;
-                if (child && event.type !== 'session.execution.succeeded') this.emit(state, { type: 'error', value: text(record(data.error).message) || event.type });
+                // A user-stopped child ends interrupted by design; only a real
+                // runtime failure should paint an error on its observation.
+                if (child && event.type !== 'session.execution.succeeded' && !this.group(state)?.stopped) this.emit(state, { type: 'error', value: text(record(data.error).message) || event.type });
                 break;
             case 'session.model.selected':
             case 'session.step.started': {
@@ -234,6 +273,7 @@ export class NativeSessionCoordinator {
                 break;
             case 'session.inbox.cancelled': state.reports.delete(text(data.inboxID)); break;
         }
+        this.settleStopped();
         this.finishGroups();
         return child;
     }

@@ -147,9 +147,11 @@ mounted across page changes so drafts and scroll positions survive.
 - Subagent observations (`src/subagentObservation.ts`) are bounded display
   traces attached to the parent's task call, never model-ledger messages.
   Keep approval source attribution, call identity across steers/parallel waves,
-  immutable snapshots, and interrupted states on restore. Agents uses the same
-  docking registry and remains read-only. Run `test:subagent-observation` and
-  the loader/runner suites for this pipeline.
+  immutable snapshots, and interrupted states on restore. Per-agent stop is
+  keyed by the parent `task` call id — address it through `run.call.callId`,
+  never the row's generated `id`. Agents uses the same docking registry and
+  remains read-only otherwise. Run `test:subagent-observation` and the
+  loader/runner suites for this pipeline.
 - Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
   detailed outputs as a read-only view. Intermediate assistant prose stays in
   Conversation until the turn finishes, then earlier prose folds into Activity.
@@ -194,7 +196,9 @@ Inspect the actual UI in both locales at narrow and wide widths as above.
   YOLO. Xratu profile allowlists and budgets apply only to
   the built-in runner. Bridged parent controls stay denied to native children.
   Stream failures, restore, and cancellation must settle the whole tree or
-  restart the managed server. Run `test:opencode-coordinator` for this boundary.
+  restart the managed server. A per-agent stop settles ONLY that delegation:
+  the parent turn and sibling children keep running. Run
+  `test:opencode-coordinator` for this boundary.
 - Preserve native permission/form identity and steering delivery boundaries.
   Plan deterministically rejects mutation and unknown tools; offline mode
   blocks native execution because Xratu cannot isolate its network access.

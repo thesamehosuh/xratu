@@ -1135,6 +1135,11 @@ export function App() {
         (jobId: string) => send({ type: 'killBackgroundJob', jobId }),
         [send]
     );
+    // One agent, one stop: the parent turn (and its siblings) keeps running.
+    const handleStopAgent = useCallback(
+        (callId: string) => send({ type: 'stopAgent', callId }),
+        [send]
+    );
 
     // Filtered once: the count is needed for the badge's accessible name, and
     // `t()` does not interpolate - only `tf()` does, so the count has to be
@@ -1836,7 +1841,7 @@ export function App() {
             </div>
             </div>
             {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />
+            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />
             <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={showConversation} />
             <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
             {(pullRequests.state.links.length > 0 || dock.allPanels.includes('pullRequests')) && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} />}

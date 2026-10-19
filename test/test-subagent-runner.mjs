@@ -41,6 +41,13 @@ const check = (name, actual, expected) => {
     if (!okv) failed++;
     console.log(`${okv ? 'ok  ' : 'FAIL'} ${name}${okv ? '' : ` (got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)})`}`);
 };
+const until = async (predicate) => {
+    const end = Date.now() + 3000;
+    while (!predicate()) {
+        if (Date.now() > end) throw new Error('Timed out waiting for the runner');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Mock transport: scripted chat-completions SSE, one handler per fetch call.
@@ -270,10 +277,11 @@ function childContext(extra = {}) {
     const approvals = [];
     let executed = false;
     ctx.onObservation = (id,trace) => observations.push({id,trace});
-    ctx.approvalGate = {requestApproval:async (id,calls,source) => { approvals.push({id,calls,source}); return Object.fromEntries(calls.map(call => [call.id,false])); }};
+    ctx.approvalGate = {requestApproval:async (id,calls,source,signal) => { approvals.push({id,calls,source,signal}); return Object.fromEntries(calls.map(call => [call.id,false])); }};
     ctx.executor = {execute:async()=>{executed=true;return {output:'should not execute'};}};
     const {result} = await withMockFetch([()=>toolReply('edit_file',{path:'a.ts',patch:'old to new'}),()=>textReply('Edit was denied; reporting findings instead.')],()=>runSubagentTask(ctx,DEFS,{subagentType:'general',description:'Fix auth',prompt:'Fix expiry',parentCallId:'parent-approval'},new Map()));
     ok('child approval identifies its parent/profile/task', approvals.length === 1 && approvals[0].source.parentCallId === 'parent-approval' && approvals[0].source.profile === 'general' && approvals[0].source.description === 'Fix auth');
+    ok('child approval carries the run signal so a stop retracts its card', approvals[0].signal instanceof AbortSignal);
     ok('child never bypasses a denied tool', !executed);
     ok('trace exposes approval wait', observations.some(item=>item.trace.status==='waiting'));
     ok('trace retains denied tool error', observations.at(-1).trace.entries.some(entry=>entry.kind==='tool' && entry.isError));
@@ -337,7 +345,54 @@ function childContext(extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 5b. Per-agent model/effort: the factory receives the PROFILE, so the child
+// 5b. Stopping ONE agent settles only that task call; its sibling completes.
+// ---------------------------------------------------------------------------
+{
+    const { ctx } = childContext();
+    const stops = new Map();
+    const observations = [];
+    ctx.onControl = (callId, stop) => {
+        if (!callId) return;
+        if (stop) stops.set(callId, stop);
+        else stops.delete(callId);
+    };
+    ctx.onObservation = (id, trace) => observations.push({ id, trace });
+    let aDialed = false;
+    let releaseA;
+    const handlers = [
+        // The first child hangs at its first request until the test settles it.
+        () => { aDialed = true; return new Promise((resolve) => { releaseA = resolve; }); },
+        () => textReply('B finished'),
+    ];
+    const results = await withMockFetch(handlers, async () => {
+        const a = runSubagentTask(ctx, DEFS, {
+            subagentType: 'explore', parentCallId: 'agent-a', description: 'slow', prompt: 'Do A.',
+        }, new Map());
+        await until(() => aDialed);
+        const b = runSubagentTask(ctx, DEFS, {
+            subagentType: 'explore', parentCallId: 'agent-b', description: 'fast', prompt: 'Do B.',
+        }, new Map());
+        await until(() => stops.has('agent-a') && stops.has('agent-b'));
+        stops.get('agent-a')();
+        const aborted = new Error('The operation was aborted');
+        aborted.name = 'AbortError';
+        releaseA(Promise.reject(aborted));
+        return [await a, await b];
+    });
+    const [a, b] = results.result;
+    ok('stopped agent reports cancellation', a.isError === true && a.output.includes('cancelled'), a.output);
+    ok('stopped agent keeps its resumable task id', /\[task_id: \w+/.test(a.output), a.output);
+    ok('sibling agent still delivers its report', b.output.startsWith('B finished'), b.output);
+    ok('sibling agent is not an error', !b.isError);
+    check('stopped observation ends cancelled',
+        observations.filter((item) => item.id === 'agent-a').at(-1)?.trace.status, 'cancelled');
+    check('sibling observation ends done',
+        observations.filter((item) => item.id === 'agent-b').at(-1)?.trace.status, 'done');
+    ok('stop control is released after the run', !stops.has('agent-a'));
+}
+
+// ---------------------------------------------------------------------------
+// 5c. Per-agent model/effort: the factory receives the PROFILE, so the child
 // can run on its own model (and that model's caps/window), not the parent's.
 // ---------------------------------------------------------------------------
 {
