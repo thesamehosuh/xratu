@@ -31,7 +31,8 @@ the native session ID and subsequent execution scope; equal call IDs in differen
 Nested work stays on that root observation. Step usage contributes once to
 the shared spend ledger and to its observation, never to parent model text.
 Native children use their own native models; observations record the model
-reported by their session.
+reported by their session. Reports from a reused session settle its current
+delegation rather than an earlier call that used the same child ID.
 
 Permission and form requests run concurrently with event consumption. Each
 request owns a cancellation signal and a native session/request identity.
@@ -51,8 +52,8 @@ This differs from the built-in Xratu runner: native agent files, nesting and
 native tools remain OpenCode's responsibility; Xratu profile tool allowlists,
 round budgets and parallel-wave limits are not native configuration.
 
-The authenticated MCP bridge binds children to the same root turn and frozen
-signal. Shared browser, skill and configured MCP services remain available.
+The authenticated MCP bridge verifies the same root turn while giving each
+child its own cancellation signal. Shared browser, skill and configured MCP services remain available.
 `task`, `update_task_list`, `exit_plan_mode` and `ask_user_question` on the
 Xratu bridge are structurally denied to children. Native delegation/questions
 use the native coordinator instead. Xratu's file/SSRF guards still protect
@@ -68,7 +69,10 @@ turn and sibling agents keep running. A native child that has only been
 announced is interrupted when its parent call binds it, so a model-supplied id
 is never interrupted before admission. A stopped delegation settles as
 `cancelled` even when a background launch never delivers a parent tool result,
-which is what lets the turn end.
+which is what lets the turn end. Stop remains available until the full subtree
+settles, even after its direct child has returned. Built-in foreground commands
+and native bridged services receive the individual run signal; stopping a run
+does not cancel a sibling's tools.
 
 Stop reaches announced children, nested background descendants and the root.
 The adapter checks OpenCode's active sessions and SDK ancestry too, so an event

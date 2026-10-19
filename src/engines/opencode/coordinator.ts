@@ -78,7 +78,7 @@ export class NativeSessionCoordinator {
      *  keeps running; only this subtree is asked to end. */
     requestStop(callId: string, interrupt: (sessionID: string) => void): boolean {
         const call = this.root.delegations.get(callId);
-        if (!call || call.finished) return false;
+        if (!call || call.collector?.trace.endedAt || (call.finished && (!call.child || call.child.delegation !== call))) return false;
         call.stopped = true;
         call.stop = interrupt;
         if (call.child) this.interruptSubtree(call.child, interrupt);
@@ -118,7 +118,10 @@ export class NativeSessionCoordinator {
         if (!child || child.parentID !== call.owner.id || (child.delegation && child.delegation !== call && !child.delegation.finished)) throw new Error('OpenCode child session ownership mismatch');
         if (call.child === child) return;
         call.child = child; child.delegation = call;
-        if (call.stopRequested) { call.stopRequested = false; call.stop?.(child.id); }
+        this.childAdded(child.id);
+        if (call.stopRequested) { call.stopRequested = false; if (call.stop) this.interruptSubtree(child, call.stop); }
+        const group = this.group(child);
+        if (group !== call && group?.stopped && group.stop) this.interruptSubtree(child, group.stop);
         if (call.owner === this.root) {
             call.collector ??= this.collector(call);
             Object.assign(call.collector.trace, { taskId: child.id, model: child.model, profile: text(call.input.agent) || child.agent, status: 'running', pendingTools: undefined });
@@ -259,8 +262,8 @@ export class NativeSessionCoordinator {
             case 'session.inbox.enqueued': {
                 const item = record(data.item); const payload = record(item.payload); const metadata = record(payload.metadata);
                 if (item.type !== 'synthetic' || metadata.source !== 'subagent') break;
-                const call = [...state.delegations.values()].find(call => call.child?.id === metadata.childID);
-                if (!call) break;
+                const call = this.sessions.get(text(metadata.childID))?.delegation;
+                if (!call || call.owner !== state) break;
                 state.reports.add(text(data.inboxID));
                 call.finished = true; call.error = metadata.state === 'error' || metadata.state === 'cancelled'; call.report = reportText(text(payload.text));
                 if (typeof call.input.sessionID === 'string') this.release(call.input.sessionID, sessionID, call.nativeID);

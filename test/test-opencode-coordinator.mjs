@@ -318,12 +318,12 @@ try {
             test.tool('child', 'child-shell', 'shell', { command: 'echo child' });
             test.emit('permission.asked', 'child', { id: 'child-permission', action: 'shell', source: { type: 'tool', id: 'child-shell' } });
             await until(() => test.requests.filter(request => request.route.includes('/permission/')).length === 2);
-            assert.equal(approvals.length, 1); assert.equal(approvals[0].id, 'opencode:child:child-permission'); assert.equal(approvals[0].source.parentCallId, 'parent-call');
+            assert.equal(approvals.length, 0, 'live YOLO covers native child tools as well as root tools');
             const policy = test.requests.find(request => request.route === '/api/session' && request.method === 'POST').body.permissions;
-            assert.equal(policy[0].effect, 'ask', 'children cannot inherit blanket YOLO approval');
+            assert.equal(policy[0].effect, 'ask', 'OpenCode permissions remain explicit while the live host YOLO grant covers the full tree');
             test.result('child', 'child-shell'); test.emit('session.execution.succeeded', 'child'); test.result('root', 'parent-call', 'child'); test.result('root', 'root-shell'); test.emit('session.execution.succeeded', 'root'); await done;
             assert.equal(test.outcome(), 'done');
-            console.log('ok YOLO silently approves root tools while child mutation approvals remain real');
+            console.log('ok live YOLO silently approves root and native child tools');
         } finally { await test.close(); }
     }
     {
@@ -405,6 +405,102 @@ try {
             assert.equal(test.observations.at(-1).trace.status, 'cancelled');
             assert.ok(!test.observations.at(-1).trace.error, 'a user stop is not painted as a runtime error');
             console.log('ok one native child is stopped alone, even before it attaches, without holding the turn');
+        } finally { await test.close(); }
+    }
+
+
+    {
+        const test = await harness();
+        let yolo = true;
+        const prompted = [];
+        try {
+            const done = test.run({ isYolo: () => yolo, approvals: { requestApproval: async (_id, calls, source) => {
+                prompted.push(source?.parentCallId ?? 'root');
+                return Object.fromEntries(calls.map(call => [call.id, false]));
+            } } }, { yolo: true });
+            await test.ready(); test.emit('session.execution.started', 'root');
+            test.child('root', 'delegate', 'child');
+            const ask = (session, id) => {
+                test.tool(session, id, 'shell', { command: 'echo test' });
+                test.emit('permission.asked', session, { id, action: 'shell', source: { type: 'tool', id } });
+            };
+            const replies = () => test.requests.filter(request => request.route.includes('/permission/') && request.route.endsWith('/reply'));
+            ask('root', 'auto-root'); ask('child', 'auto-child');
+            await until(() => replies().length === 2);
+            assert.deepEqual(prompted, []);
+            yolo = false;
+            ask('root', 'ask-root'); ask('child', 'ask-child');
+            await until(() => replies().length === 4);
+            assert.deepEqual(prompted.sort(), ['delegate', 'root']);
+            assert.ok(replies().slice(2).every(reply => reply.body.decision === 'reject'));
+            yolo = true;
+            ask('root', 'auto-again'); await until(() => replies().length === 5);
+            assert.equal(replies().at(-1).body.decision, 'once');
+            test.emit('session.execution.succeeded', 'child'); test.result('root', 'delegate', 'child');
+            test.emit('session.execution.succeeded', 'root'); await done;
+            assert.equal(test.outcome(), 'done');
+            console.log('ok live YOLO revocation and re-enabling cover native root and child requests');
+        } finally { await test.close(); }
+    }
+    {
+        const test = await harness();
+        try {
+            const done = test.run(); await test.ready(); test.emit('session.execution.started', 'root');
+            test.child('root', 'first', 'reused', true); test.result('root', 'first', 'reused', true);
+            test.emit('session.execution.succeeded', 'reused'); test.report('root', 'first-report', 'reused');
+            test.emit('session.inbox.delivered', 'root', { inboxID: 'first-report' });
+            test.tool('root', 'second', 'subagent', { agent: 'general', sessionID: 'reused', background: true });
+            test.emit('permission.asked', 'root', { id: 'reuse-permission', action: 'subagent', source: { type: 'tool', id: 'second' } });
+            await until(() => test.requests.some(request => request.route.includes('/permission/reuse-permission/reply')));
+            test.emit('session.tool.progress', 'root', { id: 'second', metadata: { sessionID: 'reused' } });
+            test.emit('session.execution.started', 'reused'); test.result('root', 'second', 'reused', true);
+            test.emit('session.execution.succeeded', 'reused'); test.report('root', 'second-report', 'reused');
+            test.emit('session.inbox.delivered', 'root', { inboxID: 'second-report' });
+            test.emit('session.execution.succeeded', 'root'); await done;
+            assert.equal(test.outcome(), 'done', 'a resumed background child releases the turn');
+            assert.equal(test.observations.filter(value => value.callId === 'first').at(-1).trace.status, 'done');
+            assert.equal(test.observations.filter(value => value.callId === 'second').at(-1).trace.status, 'done');
+            console.log('ok successive background reports settle the current native delegation after reuse');
+        } finally { await test.close(); }
+    }
+    {
+        const test = await harness();
+        const signals = new Map();
+        // Observe the exact cancellation signals the adapter gives its MCP bridge.
+        test.engine.mcpBridge = { trustedActions: () => [], toolNames: () => new Map(), activate: (id, _plan, signal) => signals.set(id, signal), deactivate: () => {}, dispose: async () => {} };
+        try {
+            const done = test.run(); await test.ready(); test.emit('session.execution.started', 'root');
+            test.child('root', 'parent-call', 'child'); test.child('child', 'nested-call', 'grandchild', true);
+            test.child('root', 'sibling-call', 'sibling');
+            test.result('child', 'nested-call', 'grandchild', true); test.emit('session.execution.succeeded', 'child');
+            test.result('root', 'parent-call', 'child');
+            await until(() => test.engine.coordinator?.root.delegations.get('parent-call')?.finished);
+            assert.equal(await test.engine.stopSubagent('parent-call'), true, 'live grandchildren keep Stop available');
+            assert.equal(signals.get('child').aborted, true); assert.equal(signals.get('grandchild').aborted, true);
+            assert.equal(signals.get('root').aborted, false); assert.equal(signals.get('sibling').aborted, false);
+            test.tool('child', 'late-tool', 'shell', { command: 'echo late' });
+            test.emit('permission.asked', 'child', { id: 'late-permission', action: 'shell', source: { type: 'tool', id: 'late-tool' } });
+
+            await until(() => ['child', 'grandchild'].every(id => test.requests.some(request => request.route === `/api/session/${id}/interrupt`)));
+            test.emit('session.execution.interrupted', 'grandchild');
+            test.report('child', 'stopped-report', 'grandchild'); test.emit('session.inbox.cancelled', 'child', { inboxID: 'stopped-report' });
+            test.emit('session.execution.interrupted', 'child');
+            await until(() => test.observations.some(value => value.callId === 'parent-call' && value.trace.status === 'cancelled'));
+            test.tool('root', 'resume-stopped', 'subagent', { agent: 'general', sessionID: 'child' });
+            test.emit('permission.asked', 'root', { id: 'resume-stopped-permission', action: 'subagent', source: { type: 'tool', id: 'resume-stopped' } });
+            await until(() => test.requests.some(request => request.route.includes('/permission/resume-stopped-permission/reply')));
+            test.emit('session.tool.progress', 'root', { id: 'resume-stopped', metadata: { sessionID: 'child' } });
+            await until(() => signals.get('child')?.aborted === false);
+            test.emit('session.execution.started', 'child'); test.emit('session.execution.succeeded', 'child');
+            test.result('root', 'resume-stopped', 'child');
+            test.emit('session.execution.succeeded', 'sibling'); test.result('root', 'sibling-call', 'sibling');
+            test.emit('session.execution.succeeded', 'root'); await done;
+            assert.equal(test.outcome(), 'done');
+            assert.equal(test.observations.filter(value => value.callId === 'parent-call').at(-1).trace.status, 'cancelled');
+            assert.equal(test.observations.filter(value => value.callId === 'sibling-call').at(-1).trace.status, 'done');
+            assert.equal(await test.engine.stopSubagent('parent-call'), false);
+            assert.ok(!test.requests.some(request => request.route.includes('/permission/late-permission/reply')), 'a stopped child cannot start another approval');
+            console.log('ok native subtree Stop cancels child bridge tools while preserving root and sibling signals');
         } finally { await test.close(); }
     }
 

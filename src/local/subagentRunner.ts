@@ -60,8 +60,9 @@ export interface SubagentHostContext {
      *  layer only enforces the per-agent allow-list and the recursion deny). */
     tools(def: SubagentDefinition): LocalToolDefinition[];
     systemPrompt(def: SubagentDefinition): string;
-    /** Child tool executor WITHOUT a SubagentRunner attached. */
-    executor: LocalToolExecutor;
+    /** One executor per run, bound to its cancellation signal, WITHOUT a
+     *  SubagentRunner attached. */
+    executor(signal: AbortSignal): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
     onUsage?(usage: LocalUsage): void;
@@ -300,7 +301,7 @@ export async function runSubagentTask(
     try {
         for await (const event of runLocalAgent(
             request,
-            wrapRestrictedExecutor(ctx.executor, allowed),
+            wrapRestrictedExecutor(ctx.executor(signal), allowed),
             { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined, signal) },
         )) {
             observation.receive(event);

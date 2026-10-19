@@ -38,6 +38,8 @@ export interface EngineTurn {
     localRequest?: LocalAgentRequest;
 }
 export interface EngineHost {
+    /** Live approval policy; Plan remains frozen for the current turn. */
+    isYolo?: () => boolean;
     approvals: LocalApprovalGate;
     questions: UserQuestionGate;
     executor?: LocalToolExecutor;

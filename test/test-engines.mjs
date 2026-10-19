@@ -378,7 +378,8 @@ try {
     assert.equal(ENGINE_CAPABILITIES.opencode.subagents, true);
     const serviceCalls = [];
     const serviceBridge = new OpenCodeMcpBridge({ listTools: async () => services, callTool: async (name, args, signal, context) => {
-        serviceCalls.push({ name, context });
+        serviceCalls.push({ name, context, signal });
+        if (args.wait) return new Promise(() => {});
         return { text: 'Updated', images: [] };
     } });
     const serviceClient = new Client({ name: 'services-test', version: '1.0.0' });
@@ -395,10 +396,22 @@ try {
         assert.equal(serviceCalls.length, 4);
         assert.deepEqual(serviceCalls[0].context, { sessionID: 'native-plan', plan: true });
         assert.equal(serviceBridge.planActions().length, 4, 'only curated, plan-safe Xratu services get native permission rules');
-        serviceBridge.activate('native-child', false, serviceController.signal, 'native-plan');
+        const childController = new AbortController();
+        serviceBridge.activate('native-child', false, childController.signal, 'native-plan', serviceController.signal);
         for (const name of ['update_task_list', 'exit_plan_mode']) assert.equal((await call(name, 'native-child')).isError, true, 'children cannot reach parent coordination through MCP');
         assert.notEqual((await call('skill', 'native-child')).isError, true);
-        assert.deepEqual(serviceCalls.at(-1).context, { sessionID: 'native-child', rootSessionID: 'native-plan', plan: false });
+        assert.deepEqual(serviceCalls.at(-1).context, { sessionID: 'native-child', rootSessionID: 'native-plan', rootSignal: serviceController.signal, plan: false });
+        assert.equal(serviceCalls.at(-1).signal, childController.signal);
+        const pendingChild = serviceClient.callTool({ name: 'skill', arguments: { wait: true }, _meta: { 'ai.opencode/sessionID': 'native-child' } }).then(result => result.isError, () => true);
+        const childDeadline = Date.now() + 3000;
+        while (serviceCalls.filter(call => call.context.sessionID === 'native-child').length < 2) {
+            if (Date.now() > childDeadline) throw new Error('child service never started');
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        childController.abort();
+        assert.equal(await pendingChild, true, 'child cancellation settles even an uncooperative bridged service');
+        assert.equal((await call('skill', 'native-child')).isError, true, 'stopping one child fences its bridge');
+        assert.notEqual((await call('skill')).isError, true, 'a child stop leaves root services available');
         serviceBridge.deactivate('native-child');
         assert.equal((await call('skill', 'native-child')).isError, true);
         const planEngine = await harness('plan', { listTools: async () => services, callTool: async () => ({ text: '', images: [] }) });
@@ -635,6 +648,22 @@ try {
     assert.equal((await invoke('skill', 'bound-session', false)).isError, true);
     assert.equal((await invoke('skill', 'bound-session', true, new AbortController().signal)).isError, true);
     assert.equal(executions.length, 2, 'wrong session, policy or cancellation identity never reaches the executor');
+
+    const originalServiceExecutor = resumed.host._nativeServiceExecutor;
+    let childServiceSignal;
+    resumed.host._nativeServiceExecutor = (_workspace, signal) => {
+        childServiceSignal = signal;
+        return { execute: async () => ({ output: 'Child executed' }) };
+    };
+    const childService = new AbortController();
+    const childContext = { sessionID: 'bound-child', rootSessionID: 'bound-session', rootSignal: serviceSignal.signal, plan: true };
+    assert.equal((await boundSource.callTool('skill', {}, childService.signal, childContext)).text, 'Child executed');
+    assert.equal(childServiceSignal, childService.signal, 'native host binds service execution to the child signal');
+    assert.equal((await boundSource.callTool('skill', {}, childService.signal, { ...childContext, rootSignal: new AbortController().signal })).isError, true, 'a child signal cannot replace turn ownership');
+    childService.abort();
+    assert.equal((await boundSource.callTool('skill', {}, childService.signal, childContext)).isError, true);
+    resumed.host._nativeServiceExecutor = originalServiceExecutor;
+
     serviceSignal.abort();
     assert.equal((await invoke('skill')).isError, true);
     resumed.host._nativeToolContext = undefined;

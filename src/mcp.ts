@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { abortable } from './oauth/refreshLock';
 import { BROWSER_MUTATING_TOOLS, BROWSER_TOOL_DEFINITIONS } from './browserPolicy';
 import type { BrowserController } from './browserController';
 import { isOfflineMode } from './networkPolicy';
@@ -725,7 +726,9 @@ async function dispatchTool(
     /** True inside a delegated subagent. A child gets its own tools but not
      *  the parent's ability to leave work running behind it. */
     nested = false,
+    signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
+    signal?.throwIfAborted();
     if (name === 'edit_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
         // fs work and before a checkpoint is taken. This used to silently
@@ -829,6 +832,7 @@ async function dispatchTool(
         return { content: [{ type: 'text', text: header + body + more }] };
     } else if (name === 'run_terminal_command') {
         await ensureTurnSnapshot(workspaceRoot, 'before terminal command');
+        signal?.throwIfAborted();
         const command = String(args.command ?? '').trim();
         if (!command) {
             return { content: [{ type: 'text', text: 'Error: Empty command' }], isError: true };
@@ -901,18 +905,22 @@ async function dispatchTool(
         // waiting on `finished` alone is what used to hang a turn on a dev
         // server until the idle cap killed it.
         const job = spawnTerminalJob({ workspaceRoot, command, onOutput, callId });
-        if (await job.released === 'backgrounded') {
-            // The user can release the turn at the same moment the command
-            // exits. If it has already finished, hand back its REAL result -
-            // a handoff saying "output so far, still running" about a command
-            // that just exited misreports it, and the exit code is the whole
-            // point of the call.
-            if (job.status === 'running') {
-                return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+        const cancel = () => { if (!job.background && job.status === 'running') job.kill('cancelled by the user'); };
+        signal?.addEventListener('abort', cancel, { once: true });
+        try {
+            if (await job.released === 'backgrounded') {
+                // The user can release the turn at the same moment the command
+                // exits. If it has already finished, hand back its REAL result -
+                // a handoff saying "output so far, still running" about a command
+                // that just exited misreports it, and the exit code is the whole
+                // point of the call.
+                if (job.status === 'running') {
+                    return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+                }
             }
-        }
-        const result = await awaitTerminalJob(job, process.platform);
-        return { content: [{ type: 'text', text: result.text }], isError: result.isError };
+            const result = await awaitTerminalJob(job, process.platform);
+            return { content: [{ type: 'text', text: result.text }], isError: result.isError };
+        } finally { signal?.removeEventListener('abort', cancel); }
     } else if (name === 'process') {
         return await dispatchProcessTool(args);
     } else if (name === 'grep_search') {
@@ -1361,13 +1369,14 @@ async function dispatchTool(
         }
     } else if (name === 'web_search' || name === 'fetch_url') {
         // Local-runtime web tools (never advertised over the MCP bridge).
-        const result = await executeWebTool(name, args ?? {});
+        const result = await executeWebTool(name, args ?? {}, undefined, signal);
         return { content: [{ type: 'text', text: result.output }], isError: result.isError };
     } else if (XRATU_EXPANSION_TOOLS.some((tool) => tool.name === name)) {
         const expansionRuntime: ExpansionToolRuntime = {
             workspaceRoot,
             sanitizePath,
             ensureTurnSnapshot,
+            signal,
         };
         return await handleExpansionTool(name, args ?? {}, expansionRuntime);
     }
@@ -1400,8 +1409,10 @@ export async function executeLocalTool(
     decisionGate?: UserQuestionGate,
     callId?: string,
     nested?: boolean,
+    signal?: AbortSignal,
 ): Promise<LocalToolResult> {
     try {
+        signal?.throwIfAborted();
         if (isOfflineMode() && (name === 'web_search' || name === 'fetch_url' || name.startsWith(EXTERNAL_PREFIX))) {
             return { output: 'Error: this network tool is disabled in offline mode.', isError: true };
         }
@@ -1409,16 +1420,17 @@ export async function executeLocalTool(
             if (!externalMcp) {
                 return { output: 'Error: external MCP servers are not available in this session.', isError: true };
             }
-            const r = await externalMcp.callTool(name, args ?? {});
+            const r = await externalMcp.callTool(name, args ?? {}, signal);
             return { output: r.text, ...(r.images.length ? { images: r.images } : {}) };
         }
         // Resolve model-drift tool NAMES first (write_file -> edit_file etc.),
         // then fill `path` from known aliases: a model that sends `file_path`
         // used to hit a raw Node TypeError deep in sanitizePath.
         const named = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
-        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested);
+        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested, signal);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
+        signal?.throwIfAborted();
         return { output: `Error: ${err.message}`, isError: true };
     }
 }
@@ -1435,19 +1447,29 @@ export function createLocalToolExecutor(
     /** Marks this executor as a delegated child's. */
     opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor },
 ): import('./local/localAgent').LocalToolExecutor {
+    const snapshot = async (root: string, reason: string) => {
+        opts?.signal?.throwIfAborted();
+        await ensureTurnSnapshot(root, reason);
+        opts?.signal?.throwIfAborted();
+    };
+    const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (PULL_REQUEST_TOOLS.some(tool => tool.name === call.name)) {
+            if ((opts?.plan || opts?.nested) && PULL_REQUEST_MUTATIONS.has(call.name)) return { output: 'PR session changes are unavailable in plan mode and subagents.', isError: true };
+            if (!opts?.pullRequests) return { output: 'PR tools are unavailable in this context.', isError: true };
+            return opts.pullRequests(call.name, call.arguments);
+        }
+        if (call.name.startsWith('browser_')) {
+            if (opts?.plan && BROWSER_MUTATING_TOOLS.has(call.name)) return { output: 'Error: browser actions are disabled in plan mode.', isError: true };
+            if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };
+            return opts.browser.tool(opts.sessionId, call.name, call.arguments, opts.signal);
+        }
+        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal);
+    };
     return {
-        execute: async (call, onOutput) => {
-            if (PULL_REQUEST_TOOLS.some(tool => tool.name === call.name)) {
-                if ((opts?.plan || opts?.nested) && PULL_REQUEST_MUTATIONS.has(call.name)) return { output: 'PR session changes are unavailable in plan mode and subagents.', isError: true };
-                if (!opts?.pullRequests) return { output: 'PR tools are unavailable in this context.', isError: true };
-                return opts.pullRequests(call.name, call.arguments);
-            }
-            if (call.name.startsWith('browser_')) {
-                if (opts?.plan && BROWSER_MUTATING_TOOLS.has(call.name)) return { output: 'Error: browser actions are disabled in plan mode.', isError: true };
-                if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };
-                return opts.browser.tool(opts.sessionId, call.name, call.arguments, opts.signal);
-            }
-            return executeLocalTool(workspaceRoot, call.name, call.arguments, ensureTurnSnapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested);
+        execute: (call, onOutput) => {
+            opts?.signal?.throwIfAborted();
+            const work = execute(call, onOutput);
+            return opts?.signal ? abortable(work, opts.signal) : work;
         },
     };
 }
