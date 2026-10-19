@@ -7,7 +7,7 @@
  */
 
 import * as vscode from 'vscode';
-import MarkdownIt from 'markdown-it';
+import MarkdownIt, { type Renderer, type Token } from 'markdown-it';
 import { createHighlighter } from 'shiki';
 import { escapeHtml } from './sanitizeHtml';
 import { ui } from './uiStrings';
@@ -186,14 +186,14 @@ function renderFence(token: any, live: boolean): string {
     );
 }
 
-function configureMarkdownRenderer(renderer: MarkdownIt['renderer'], live: boolean): void {
-    renderer.rules.fence = (tokens, idx) => renderFence(tokens[idx], live);
+function configureMarkdownRenderer(renderer: Renderer, live: boolean): void {
+    renderer.rules.fence = (tokens: Token[], idx: number) => renderFence(tokens[idx], live);
 
     // Indented code blocks emit a bare <pre><code> - route them through the
     // same shell so they get the padded surface instead of raw browser styles.
-    renderer.rules.code_block = (tokens, idx) => renderFence(tokens[idx], live);
+    renderer.rules.code_block = (tokens: Token[], idx: number) => renderFence(tokens[idx], live);
 
-    renderer.rules.code_inline = (tokens, idx) => {
+    renderer.rules.code_inline = (tokens: Token[], idx: number) => {
         const value = tokens[idx].content;
         const classes = [
             'xratu-inline-code',
