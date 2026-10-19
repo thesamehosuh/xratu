@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
     Activity,
     RotateCcw,
@@ -70,6 +70,17 @@ export function SettingsPage({
 }: SettingsPageProps) {
     const [confirmClear, setConfirmClear] = useState(false);
     const options = transcriptOptions(transcriptPrefs);
+    // The switch follows the host echo, so two clicks before that echo would
+    // send the same `true` twice. Track the requested value until it lands.
+    const [pendingToggles, setPendingToggles] = useState<Record<string, boolean>>({});
+    useEffect(() => {
+        const settled = transcriptOptions(transcriptPrefs);
+        setPendingToggles((current) => {
+            const unanswered = Object.entries(current).filter(([id, value]) => settled[id as keyof typeof settled] !== value);
+            if (unanswered.length === Object.keys(current).length) return current;
+            return Object.fromEntries(unanswered);
+        });
+    }, [transcriptPrefs]);
     const displayPrefs = conversationPrefs(transcriptPrefs);
     function choice<K extends 'detail' | 'reasoning' | 'commands' | 'progress'>(id: K, label: StringKey, description: StringKey, choices: readonly [TranscriptOptions[K], StringKey][]) {
         return <div className="settings-nav-row conversation-preference">
@@ -79,8 +90,9 @@ export function SettingsPage({
                 onChange={value => onSetTranscriptOptions?.({ [id]: value })} />
         </div>;
     }
-    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps', label: StringKey, description: StringKey) {
-        return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong><span className="preference-description" id={`tx-${id}-hint`}>{t(description)}</span></div><button type="button" className={`mcp-switch${options[id] ? ' on' : ''}`} role="switch" aria-checked={options[id]} aria-label={t(label)} aria-describedby={`tx-${id}-hint`} onClick={() => onSetTranscriptOptions?.({ [id]: !options[id] })}><span className="mcp-switch-knob" /></button></div>;
+    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps' | 'showContextMeter', label: StringKey, description: StringKey) {
+        const value = pendingToggles[id] ?? options[id];
+        return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong><span className="preference-description" id={`tx-${id}-hint`}>{t(description)}</span></div><button type="button" className={`mcp-switch${value ? ' on' : ''}`} role="switch" aria-checked={value} aria-label={t(label)} aria-describedby={`tx-${id}-hint`} onClick={() => { const next = !value; setPendingToggles((current) => ({ ...current, [id]: next })); onSetTranscriptOptions?.({ [id]: next }); }}><span className="mcp-switch-knob" /></button></div>;
     }
 
     return (
@@ -130,6 +142,7 @@ export function SettingsPage({
                         <button type="button" className="settings-ghost-action conversation-reset" aria-label={t('txReset')} title={t('txReset')} onClick={onResetTranscriptPrefs}><RotateCcw size={12} /><span>{t('txResetShort')}</span></button>
                     </div>
                     {choice('detail', 'txDetail', 'txDetailDesc', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
+                    {toggle('showContextMeter', 'txShowContextMeter', 'txShowContextMeterDesc')}
                     <details className="conversation-advanced"><summary>{t('txAdvanced')}</summary>
                         {choice('reasoning', 'miniThinking', 'txReasoningDesc', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
                         <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong><span className="preference-description" id="tx-diffs-hint">{t('txDiffsDesc')}</span></label><Dropdown id="tx-diffs" label={t('miniFiles')} describedBy="tx-diffs-hint" value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>

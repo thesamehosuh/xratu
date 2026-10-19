@@ -130,7 +130,7 @@ interface StoredCredential {
 import { openEditDiff } from './editDiffView';
 import { insecureRemoteHttpError, isLikelyLocalUrl } from './endpointGuard';
 import { sessionApprovalKind, isSessionApproved } from './sessionApproval';
-import { parseTranscriptPrefs, withTranscriptPref, withTranscriptOptions, emptyTranscriptPrefs } from './transcriptPrefs';
+import { parseTranscriptPrefs, withTranscriptPref, withTranscriptOptions, emptyTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs';
 import { ShadowCheckpointStore, EmptySeedError, setCheckpointDiagnostics, type ChangedFile } from './shadowGit';
 import { ExternalMcpManager, type AggregatedTool } from './externalMcp';
 import { McpConfigStore, type ExternalServerConfig, type McpSaveTarget } from './mcpConfig';
@@ -6064,20 +6064,31 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         });
     }
 
+    /** Transcript pref writes are read-modify-write against one stored blob,
+     *  and router messages are handled independently: two changes can arrive
+     *  before the first write lands, and both would patch the same snapshot.
+     *  Serialize them so a later write always merges over the earlier one. */
+    _transcriptPrefsWrites: Promise<void> = Promise.resolve();
+    private _writeTranscriptPrefs(build: () => TranscriptPrefs): Promise<void> {
+        const run = this._transcriptPrefsWrites.then(async () => {
+            await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(build()));
+        });
+        this._transcriptPrefsWrites = run.catch(() => undefined);
+        return run;
+    }
+
     async _setTranscriptPref(id: string, enabled: boolean): Promise<void> {
-        const prefs = withTranscriptPref(
+        await this._writeTranscriptPrefs(() => withTranscriptPref(
             parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')),
             id,
             enabled,
-        );
-        await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(prefs));
+        ));
     }
 
     async _setTranscriptOptions(options: unknown, reset = false): Promise<void> {
-        const prefs = reset ? emptyTranscriptPrefs() : withTranscriptOptions(
+        await this._writeTranscriptPrefs(() => reset ? emptyTranscriptPrefs() : withTranscriptOptions(
             parseTranscriptPrefs(this._globalState.get<string>('xratu.transcriptPrefs')), options,
-        );
-        await this._globalState.update('xratu.transcriptPrefs', JSON.stringify(prefs));
+        ));
     }
 
     /** Push the Skills page view: discovered skills (valid, invalid, and

@@ -12,6 +12,7 @@ export interface TranscriptOptions {
     compactCompleted: boolean;
     followActivity: boolean;
     timestamps: boolean;
+    showContextMeter: boolean;
 }
 
 export interface TranscriptPrefs {
@@ -29,7 +30,7 @@ export function sanitizeTranscriptOptions(raw: unknown): Partial<TranscriptOptio
     if (typeof input.reasoning === 'string' && ['activity', 'collapsed', 'expanded'].includes(input.reasoning)) options.reasoning = input.reasoning as TranscriptOptions['reasoning'];
     if (typeof input.commands === 'string' && ['collapsed', 'errors', 'expanded'].includes(input.commands)) options.commands = input.commands as TranscriptOptions['commands'];
     if (input.progress === 'latest' || input.progress === 'all') options.progress = input.progress;
-    for (const key of ['compactCompleted', 'followActivity', 'timestamps'] as const) {
+    for (const key of ['compactCompleted', 'followActivity', 'timestamps', 'showContextMeter'] as const) {
         if (typeof input[key] === 'boolean') options[key] = input[key];
     }
     return options;

@@ -89,7 +89,7 @@ check('fold beyond cap is a no-op', withTranscriptPref(full, 'terminal', true), 
 check('toggling a full map still works', withTranscriptPref(full, 'k0', false).expand.k0, false);
 check('empty helper', emptyTranscriptPrefs(), { expand: {} });
 
-const options = { detail: 'minimal', reasoning: 'activity', commands: 'errors', progress: 'latest', compactCompleted: false, followActivity: false, timestamps: false };
+const options = { detail: 'minimal', reasoning: 'activity', commands: 'errors', progress: 'latest', compactCompleted: false, followActivity: false, timestamps: false, showContextMeter: true };
 check('presentation options round trip', parseTranscriptPrefs(JSON.stringify({ expand: { edit: true }, options })), { expand: { edit: true }, options });
 check('unknown presentation keys and invalid values dropped', sanitizeTranscriptOptions({ detail: 'quiet', reasoning: true, commands: 1, progress: 'some', compactCompleted: 'yes', unknown: true }), {});
 check('presentation enum must be a string', sanitizeTranscriptOptions({ detail: ['minimal'] }), {});

@@ -12,6 +12,7 @@ import {
     Eye,
     Filter,
     File,
+    Gauge,
     Link,
     Paperclip,
     Wrench,
@@ -299,6 +300,7 @@ interface InputBarProps {
     /** Persist (or clear with null) a thinking level for the selected model. */
     onSetThinkingLevel?: (level: string | null) => void;
     usage?: TokenUsage | null;
+    showContextMeter?: boolean;
     /** Summed cost of the conversation so far (null when unknown). */
     sessionCost?: Cost | null;
     /** Open the usage page (the cost pill is a shortcut into it). */
@@ -364,6 +366,7 @@ export function InputBar({
     thinkingLevel,
     onSetThinkingLevel,
     usage,
+    showContextMeter = false,
     sessionCost,
     onOpenUsage,
     contextWindow,
@@ -1205,31 +1208,37 @@ export function InputBar({
                         )}
                         <ChevronUp size={12} />
                     </button>
+                    {/* With the meter off, the preset menu stays reachable: it is
+                        the only place a context-window override can be set. */}
                     <span className="ctx-wrap" ref={ctxWrapRef}>
                         <button
                             type="button"
-                            className="chip-btn tok-meter"
+                            className={`chip-btn tok-meter${showContextMeter ? '' : ' ctx-trigger'}`}
                             onClick={() => setCtxOpen((s) => !s)}
                             aria-haspopup="menu"
                             aria-expanded={ctxOpen}
                             aria-label={t('ctxAria')}
-                            title={`${t('ctxMeterLabel')} · ${fmtCompact(usedTokens)} / ${fmtWindow(limit)}`}
+                            title={showContextMeter
+                                ? `${t('ctxMeterLabel')} · ${fmtCompact(usedTokens)} / ${fmtWindow(limit)}`
+                                : `${t('ctxAria')} · ${fmtWindow(limit)}`}
                         >
-                            <svg className="tok-ring" viewBox="0 0 20 20" aria-hidden="true">
-                                <circle className="tok-ring-bg" cx="10" cy="10" r="8" />
-                                <circle
-                                    className={`tok-ring-fill${usagePercent > 90 ? ' danger' : usagePercent > 70 ? ' warn' : ''}`}
-                                    cx="10" cy="10" r="8"
-                                    strokeDasharray={`${(Math.min(usagePercent / 100, 1) * RING_CIRC).toFixed(2)} ${RING_CIRC.toFixed(2)}`}
-                                />
-                            </svg>
-                            <span className="tok-pct" dir="ltr">
-                                    ({Math.round(usagePercent)}%)
-                            </span>
-                            <span className="tok-text" dir="ltr">
-                                    {fmtCompact(usedTokens)}
-                            </span>
-                            <ChevronUp size={12} />
+                            {showContextMeter ? <>
+                                <svg className="tok-ring" viewBox="0 0 20 20" aria-hidden="true">
+                                    <circle className="tok-ring-bg" cx="10" cy="10" r="8" />
+                                    <circle
+                                        className={`tok-ring-fill${usagePercent > 90 ? ' danger' : usagePercent > 70 ? ' warn' : ''}`}
+                                        cx="10" cy="10" r="8"
+                                        strokeDasharray={`${(Math.min(usagePercent / 100, 1) * RING_CIRC).toFixed(2)} ${RING_CIRC.toFixed(2)}`}
+                                    />
+                                </svg>
+                                <span className="tok-pct" dir="ltr">
+                                        ({Math.round(usagePercent)}%)
+                                </span>
+                                <span className="tok-text" dir="ltr">
+                                        {fmtCompact(usedTokens)}
+                                </span>
+                                <ChevronUp size={12} />
+                            </> : <Gauge size={13} />}
                         </button>
                         {ctxOpen && (
                             <div className="ctx-menu" role="menu" aria-label={t('ctxAria')}>

@@ -26,6 +26,7 @@ export function transcriptOptions(prefs?: TranscriptPrefs): TranscriptOptions {
         compactCompleted: true,
         followActivity: true,
         timestamps: true,
+        showContextMeter: false,
         ...prefs?.options,
     };
 }

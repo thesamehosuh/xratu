@@ -401,6 +401,7 @@ test('agent loading stays compact while profile discovery is pending', async ({ 
 for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
     test(`composer menus stay inside the viewport and Escape preserves a running turn (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 640 });
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'modelInfo', defaultModel: 'coder', selectedModel: 'coder', models: ['coder', 'another-coder'], contextWindows: { coder: 32768 } });
         await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
