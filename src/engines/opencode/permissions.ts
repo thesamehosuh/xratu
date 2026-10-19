@@ -10,9 +10,9 @@ export function openCodePermissions(plan: boolean, _yolo: boolean): PermissionRu
             { action: 'external_directory', resource: '*', effect: 'deny' },
         ];
     }
-    // Children atomically inherit this session ruleset. Keep mutations asking
-    // even in YOLO: the adapter silently approves the root's requests only,
-    // while child approvals remain real. Never inherit a blanket YOLO allow.
+    // Children atomically inherit this session ruleset. Keep mutations asking:
+    // the adapter applies YOLO live on each request, so a ruleset must never
+    // bake in a blanket allow that outlives the grant.
     return [
         { action: '*', resource: '*', effect: 'ask' },
         ...['read', 'glob', 'grep', 'list', 'lsp', 'skill', 'question'].map(action => ({ action, resource: '*', effect: 'allow' as const })),

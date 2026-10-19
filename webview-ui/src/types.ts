@@ -93,6 +93,9 @@ export type ToExtensionMessage =
     | { type: 'renameSession'; id: string; title: string }
     | { type: 'deleteSession'; id: string }
     | { type: 'cancelRequest' }
+    /** Stop ONE delegated agent (a `task` call) without ending the parent
+     *  turn. `callId` is that call's id, the same key the observation uses. */
+    | { type: 'stopAgent'; callId: string }
     /** Restore workspace files to a shadow checkpoint. With no sha, the host
      *  shows its checkpoint QuickPick; with a sha, it restores that turn's
      *  checkpoint after a confirm (files only, or files + rewind chat). */

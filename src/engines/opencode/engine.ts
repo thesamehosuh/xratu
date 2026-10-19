@@ -44,7 +44,7 @@ export class OpenCodeEngine implements AgentEngine {
     readonly id = 'opencode' as const;
     readonly capabilities = ENGINE_CAPABILITIES.opencode;
     private readonly server: Pick<OpenCodeServer, 'connect' | 'dispose'>;
-    private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage> };
+    private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage>; cancelChild: (id: string) => void };
     private shellMonitor?: NativeShellMonitor;
     private probing = false;
     private coordinator?: NativeSessionCoordinator;
@@ -58,6 +58,26 @@ export class OpenCodeEngine implements AgentEngine {
     }
     backgroundJobs() { return this.shellMonitor?.views() ?? []; }
     stopShell(jobID: string): Promise<boolean> { return this.shellMonitor?.stop(jobID) ?? Promise.resolve(false); }
+    /** Stop one delegated native child by the parent call identity published to
+     *  the observation. Sibling children and the parent turn keep running. */
+    async stopSubagent(callId: string): Promise<boolean> {
+        const active = this.active;
+        const coordinator = this.coordinator;
+        if (!active || !coordinator) return false;
+        return coordinator.requestStop(callId, sessionID => { active.cancelChild(sessionID); void this.interruptSubagent(active.client, active.signal, sessionID); });
+    }
+    private async interruptSubagent(client: OpenCodeClient, turnSignal: AbortSignal, sessionID: string): Promise<void> {
+        const signal = AbortSignal.any([turnSignal, AbortSignal.timeout(15_000)]);
+        try {
+            await client.session.interrupt({ sessionID, resume: false }, { signal });
+            // Inputs queued for the stopped child must not run on the next turn.
+            const inbox = await client.session.inbox.list({ sessionID }, { signal });
+            for (const item of inbox) await client.session.inbox.cancel({ sessionID, inboxID: item.id }, { signal });
+        } catch {
+            // A child that already settled is fine; whole-tree settlement
+            // failures stay owned by the turn's Stop path.
+        }
+    }
     constructor(readonly binary: string, env?: NodeJS.ProcessEnv, server?: Pick<OpenCodeServer, 'connect' | 'dispose'>, private readonly mcpSource?: NativeMcpSource, attachmentRoot = path.join(tmpdir(), 'xratu-opencode-attachments')) {
         this.server = server ?? new OpenCodeServer(binary, env);
         this.attachments = new OpenCodeAttachmentStore(attachmentRoot);
@@ -254,7 +274,12 @@ export class OpenCodeEngine implements AgentEngine {
         turn.signal.addEventListener('abort', abort, { once: true });
         if (turn.signal.aborted) abort();
         const calls = new Map<string, { name: string; input: Record<string, unknown>; nativeEdit?: boolean }>();
-        const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>() };
+        const childControllers = new Map<string, AbortController>();
+        const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>(), cancelChild: (id: string) => {
+            childControllers.get(id)?.abort();
+            decisions.settleSession(id);
+            this.mcpBridge?.deactivate(id);
+        } };
         let text = '';
         let reasoning = '';
         let completed = false;
@@ -263,7 +288,9 @@ export class OpenCodeEngine implements AgentEngine {
         let failedEdits = 0;
         const coordinator = new NativeSessionCoordinator(sessionID, turn.model, displayToolName,
             (callId, trace) => host.onObservation?.(callId, trace), id => {
-                this.mcpBridge?.activate(id, turn.plan, turn.signal, sessionID);
+                let controller = childControllers.get(id);
+                if (!controller || controller.signal.aborted) { controller = new AbortController(); childControllers.set(id, controller); }
+                this.mcpBridge?.activate(id, turn.plan, AbortSignal.any([turn.signal, controller.signal]), sessionID, turn.signal);
                 this.shellMonitor?.watch(id, turn.workspace);
             });
         this.coordinator = coordinator;
@@ -299,6 +326,7 @@ export class OpenCodeEngine implements AgentEngine {
                     queue.push(...coordinator.drain());
                     if (!coordinator.owns(eventSessionID)) continue;
                     if (!coordinator.bound(eventSessionID)) continue;
+                    if (childControllers.get(eventSessionID)?.signal.aborted && ['permission.asked', 'form.created'].includes(event.type)) continue;
                     if (event.type.startsWith('session.execution.') && !event.type.endsWith('started')) decisions.settleSession(eventSessionID);
                     if (event.type === 'permission.replied') decisions.settle(`${eventSessionID}:permission:${String(data.requestID)}`, data.reply === 'reject' ? 'rejected' : 'approved');
                     if (event.type === 'form.replied' || event.type === 'form.cancelled') decisions.settle(`${eventSessionID}:form:${String(data.id)}`);
@@ -413,7 +441,11 @@ export class OpenCodeEngine implements AgentEngine {
                                     }
                                 }
                                 const attribution = coordinator.source(eventSessionID);
-                                const unattended = turn.yolo && eventSessionID === sessionID;
+                                // YOLO is one live grant for the whole run tree, so a
+                                // native child runs unattended exactly like the built-in
+                                // runner's children. Plan still denies above, and a
+                                // `subagent` request still had to pass ownership checks.
+                                const unattended = host.isYolo?.() ?? turn.yolo;
                                 if (allowed && !unattended) coordinator.waiting(eventSessionID, approvalId, name, nativeID);
                                 const decision = !allowed ? {} : unattended ? { [id]: true } : await abortable(host.approvals.requestApproval(approvalId, [{ id, name, arguments: args, argumentsJson: JSON.stringify(args) }], attribution, signal), signal);
                                 if (!decision[id] && typeof call?.input.sessionID === 'string') coordinator.release(call.input.sessionID, eventSessionID, nativeID);
@@ -458,6 +490,7 @@ export class OpenCodeEngine implements AgentEngine {
             throw decisionFailure?.error ?? error;
         } finally {
             if (this.active === active) this.active = undefined;
+            for (const controller of childControllers.values()) controller.abort();
             for (const id of coordinator.sessions.keys()) this.mcpBridge?.deactivate(id);
             if (this.coordinator === coordinator) this.coordinator = undefined;
             for (const message of active.steers.values()) host.onSteerRejected?.(message.steerId);

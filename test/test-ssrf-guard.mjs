@@ -150,6 +150,23 @@ try {
             !/Refusing non-public|Host could not be resolved/.test(pubV6.out),
             pubV6.out.replace(/\s+/g, ' ').slice(0, 70));
     }
+    // Cancellation reaches the underlying fetch without changing URL guards.
+    for (const name of ['fetch_url', 'web_search']) {
+        const controller = new AbortController();
+        let requestSignal;
+        proxyFetchModule.proxyFetch = async (_url, init) => {
+            requestSignal = init.signal;
+            return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }));
+        };
+        const work = executeWebTool(name, name === 'fetch_url' ? { url: 'http://198.18.0.1/' } : { query: 'test' }, { provider: 'brave', searchUrl: '', searchApiKey: 'test' }, controller.signal);
+        const deadline = Date.now() + 3000;
+        while (!requestSignal) {
+            if (Date.now() > deadline) throw new Error('web request never started');
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        controller.abort(); await work;
+        ok(`${name}: stopping the run aborts the underlying request`, requestSignal.aborted);
+    }
 } finally {
     delete process.env[FAKE_SYSTEM_PROXY];
     globalThis.fetch = realFetch;

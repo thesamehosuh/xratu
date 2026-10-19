@@ -38,6 +38,8 @@ export interface EngineTurn {
     localRequest?: LocalAgentRequest;
 }
 export interface EngineHost {
+    /** Live approval policy; Plan remains frozen for the current turn. */
+    isYolo?: () => boolean;
     approvals: LocalApprovalGate;
     questions: UserQuestionGate;
     executor?: LocalToolExecutor;
@@ -50,6 +52,10 @@ export interface AgentEngine {
     readonly id: EngineId;
     readonly capabilities: EngineCapabilities;
     runTurn(turn: EngineTurn, host: EngineHost): AsyncIterable<LocalAgentEvent>;
+    /** Stop ONE delegated child, addressed by the parent `task` call identity
+     *  that published it. Returns false when this run owns no such live child
+     *  (already settled, restored session, or a different engine). */
+    stopSubagent?(callId: string): Promise<boolean>;
     dispose(): Promise<void>;
 }
 

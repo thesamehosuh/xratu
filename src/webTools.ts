@@ -185,7 +185,8 @@ function cleanHtml(text: string): string {
 function fetchWithTimeout(url: string, init: RequestInit, connectTimeoutMs = CONNECT_TIMEOUT_MS): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), connectTimeoutMs);
-    return proxyFetch(url, withProxy({ ...init, signal: controller.signal }, url)).finally(() => clearTimeout(timer));
+    const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+    return proxyFetch(url, withProxy({ ...init, signal }, url)).finally(() => clearTimeout(timer));
 }
 
 /** Read with a per-read idle deadline: the fetch timeout above only covers
@@ -222,7 +223,7 @@ async function readBodyWithIdleTimeout(response: Response, controller: AbortCont
     return concatChunks(chunks, received);
 }
 
-async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
+async function fetchUrlLocal(url: string, maxChars: number, signal?: AbortSignal): Promise<string> {
     if (!Number.isFinite(maxChars) || maxChars < 1000 || maxChars > 120000) {
         return 'Error: max_chars must be between 1000 and 120000.';
     }
@@ -233,6 +234,7 @@ async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
         return `Error: ${e instanceof Error ? e.message : String(e)}`;
     }
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        signal?.throwIfAborted();
         // Controller lives for the WHOLE hop (headers + body) so the idle
         // deadline below can abort a stalled read, not just the fetch.
         const controller = new AbortController();
@@ -244,7 +246,7 @@ async function fetchUrlLocal(url: string, maxChars: number): Promise<string> {
                     response = await proxyFetch(current, withProxy({
                         redirect: 'manual',
                         headers: { 'User-Agent': 'Xratu/1.0' },
-                        signal: controller.signal,
+                        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
                     }, current));
                 } finally {
                     clearTimeout(timer);
@@ -308,7 +310,7 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
     return out;
 }
 
-async function webSearchLocal(query: string, maxResults: number, domains: string[], config: WebToolConfig): Promise<string> {
+async function webSearchLocal(query: string, maxResults: number, domains: string[], config: WebToolConfig, signal?: AbortSignal): Promise<string> {
     query = query.trim();
     if (!query) return 'Error: query cannot be empty.';
     maxResults = Math.max(1, Math.min(Math.floor(maxResults) || 8, 20));
@@ -330,6 +332,7 @@ async function webSearchLocal(query: string, maxResults: number, domains: string
             const resp = await fetchWithTimeout(
                 'https://api.parallel.ai/v1/search',
                 {
+                    signal,
                     method: 'POST',
                     headers: {
                         'x-api-key': config.searchApiKey,
@@ -367,7 +370,7 @@ async function webSearchLocal(query: string, maxResults: number, domains: string
         try {
             const resp = await fetchWithTimeout(
                 'https://api.search.brave.com/res/v1/web/search?q=' + encodeURIComponent(q) + `&count=${maxResults}`,
-                { headers: { 'X-Subscription-Token': config.searchApiKey, 'Accept': 'application/json' } },
+                { signal, headers: { 'X-Subscription-Token': config.searchApiKey, 'Accept': 'application/json' } },
                 TIMEOUT_MS,
             );
             if (resp.status === 401) return 'Error: Brave Search API key is invalid (HTTP 401).';
@@ -394,7 +397,7 @@ async function webSearchLocal(query: string, maxResults: number, domains: string
     try {
         const resp = await fetchWithTimeout(
             `${endpoint}?${params.toString()}`,
-            { headers: { 'User-Agent': 'Xratu/1.0' } },
+            { signal, headers: { 'User-Agent': 'Xratu/1.0' } },
             TIMEOUT_MS,
         );
         if (resp.status === 403) return 'Error: search endpoint returned HTTP 403. JSON output format may be disabled in SearXNG.';
@@ -417,18 +420,20 @@ export async function executeWebTool(
     name: string,
     args: Record<string, unknown>,
     config: WebToolConfig = getWebToolConfig(),
+    signal?: AbortSignal,
 ): Promise<{ output: string; isError?: boolean }> {
     try {
+        signal?.throwIfAborted();
         if (name === 'web_search') {
             const query = String(args.query ?? '');
             const maxResults = Number(args.max_results ?? 8);
             const domains = Array.isArray(args.domains) ? args.domains.map(String) : [];
-            return { output: await webSearchLocal(query, maxResults, domains, config) };
+            return { output: await webSearchLocal(query, maxResults, domains, config, signal) };
         }
         if (name === 'fetch_url') {
             const url = String(args.url ?? '');
             const maxChars = Number(args.max_chars ?? 30000);
-            return { output: await fetchUrlLocal(url, maxChars) };
+            return { output: await fetchUrlLocal(url, maxChars, signal) };
         }
         return { output: `Unknown tool: ${name}`, isError: true };
     } catch (e) {

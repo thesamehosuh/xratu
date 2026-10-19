@@ -1,6 +1,6 @@
 import { toolArgs } from './ToolDetails';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Check, ChevronDown, Clock3, Cpu, Gauge, GitBranch, List, MessageSquare, ShieldAlert, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, Clock3, Cpu, Gauge, GitBranch, List, MessageSquare, ShieldAlert, Square, X } from 'lucide-react';
 import type { TranscriptPrefs } from '../transcriptPrefs';
 import { agentMessage, type AgentRun } from '../subagentView';
 import { MessageItem } from './MessageItem';
@@ -64,7 +64,7 @@ const RunView = memo(function RunView({ run, visible, onConversation, prefs, loc
     </section>;
 }, (a, b) => a.run.call === b.run.call && a.run.status === b.run.status && a.visible === b.visible && a.onConversation === b.onConversation && a.prefs === b.prefs && a.locale === b.locale);
 
-export function SubagentsPanel({ runs, selectedId, onSelect, visible, panelClass, onConversation, prefs, sessionKey }: { runs: AgentRun[]; selectedId: string | null; onSelect: (id: string) => void; visible: boolean; panelClass: string; onConversation: () => void; prefs: TranscriptPrefs; sessionKey: string | null }) {
+export function SubagentsPanel({ runs, selectedId, onSelect, onStop, visible, panelClass, onConversation, prefs, sessionKey }: { runs: AgentRun[]; selectedId: string | null; onSelect: (id: string) => void; onStop: (id: string) => void; visible: boolean; panelClass: string; onConversation: () => void; prefs: TranscriptPrefs; sessionKey: string | null }) {
     const locale = getLocale();
     const selected = runs.find(run => run.id === selectedId) ?? runs.find(run => ['running', 'waiting'].includes(run.status)) ?? runs.at(-1);
     const [opened, setOpened] = useState<string[]>([]);
@@ -83,12 +83,19 @@ export function SubagentsPanel({ runs, selectedId, onSelect, visible, panelClass
         ) : (
             <div className="agents-layout"><nav className="agent-run-list" aria-label={t('surfaceAgentRuns')}>{runs.map(run => {
                 const current = run.trace?.entries.filter(entry => entry.kind === 'tool').at(-1);
-                return <button type="button" className={`agent-run-card${run.id === selected?.id ? ' selected' : ''}`} key={run.id} aria-pressed={run.id === selected?.id} onClick={() => onSelect(run.id)}>
-                    <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.profile}</strong><RunStatus status={run.status} pendingTools={run.trace?.pendingTools} /></span>
-                    <span className="agent-card-title" dir="auto">{run.title}</span>
-                    <span className="agent-card-foot"><span>{agentStatusLabel(run.status, run.trace?.pendingTools)}</span><span dir="ltr">{run.trace?.toolCalls ?? 0}<List size={10} /></span></span>
-                    {current && ['running', 'waiting'].includes(run.status) && <code className="agent-current-tool" dir="ltr">{current.tool}</code>}
-                </button>;
+                const live = ['running', 'waiting'].includes(run.status);
+                // Stop is addressed by the parent `task` call id only; a row id
+                // would find no host entry and the button would silently do nothing.
+                const stopId = run.call.callId;
+                return <div className={`agent-run-card${run.id === selected?.id ? ' selected' : ''}`} key={run.id}>
+                    <button type="button" className="agent-run-select" aria-pressed={run.id === selected?.id} onClick={() => onSelect(run.id)}>
+                        <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.profile}</strong><RunStatus status={run.status} pendingTools={run.trace?.pendingTools} /></span>
+                        <span className="agent-card-title" dir="auto">{run.title}</span>
+                        <span className="agent-card-foot"><span>{agentStatusLabel(run.status, run.trace?.pendingTools)}</span><span dir="ltr">{run.trace?.toolCalls ?? 0}<List size={10} /></span></span>
+                        {current && live && <code className="agent-current-tool" dir="ltr">{current.tool}</code>}
+                    </button>
+                    {live && stopId && <button type="button" className="agent-run-stop" title={t('agentStop')} aria-label={t('agentStop')} onClick={() => onStop(stopId)}><Square size={10} /><span>{t('agentStop')}</span></button>}
+                </div>;
             })}</nav><div className="agent-run-detail">{runs.filter(run => mounted.has(run.id)).map(run => <RunView key={run.id} run={run} visible={visible && selected?.id === run.id} onConversation={onConversation} prefs={prefs} locale={locale} />)}</div></div>
         )}
     </div>;

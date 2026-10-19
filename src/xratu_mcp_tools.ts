@@ -12,6 +12,7 @@ import { TASK_LIST_MAX_ITEMS, TASK_LIST_MAX_LABEL, TASK_LIST_STATUSES, taskListL
 const execFile = promisify(cp.execFile);
 
 export interface ExpansionToolRuntime {
+    signal?: AbortSignal;
     workspaceRoot: string;
     sanitizePath: (inputPath: string, workspaceRoot: string) => string;
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>;
@@ -150,12 +151,17 @@ function full(runtime: ExpansionToolRuntime, p: string): string {
 }
 
 async function git(runtime: ExpansionToolRuntime, args: string[], timeout = GIT_TIMEOUT): Promise<{ stdout: string; stderr: string; code: number }> {
+    runtime.signal?.throwIfAborted();
+    const work = execFile('git', ['-C', runtime.workspaceRoot, ...args], { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+    const cancel = () => { void killTree(work.child.pid); };
+    runtime.signal?.addEventListener('abort', cancel, { once: true });
     try {
-        const r = await execFile('git', ['-C', runtime.workspaceRoot, ...args], { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+        const r = await work;
         return { stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? ''), code: 0 };
     } catch (e: any) {
+        runtime.signal?.throwIfAborted();
         return { stdout: String(e.stdout ?? ''), stderr: String(e.stderr ?? e.message ?? ''), code: Number.isInteger(e.code) ? e.code : 1 };
-    }
+    } finally { runtime.signal?.removeEventListener('abort', cancel); }
 }
 
 function clip(s: string, max = MAX_OUTPUT) { return s.length > max ? `${s.slice(0, max)}\n… [truncated]` : s; }
@@ -281,21 +287,18 @@ function commandForFramework(framework: string, target: string, pattern: string,
 }
 
 async function runProcess(runtime: ExpansionToolRuntime, argv: string[], timeoutSeconds: number, cwd?: string) {
+    runtime.signal?.throwIfAborted();
     const timeout = Math.max(1, Math.min(timeoutSeconds || 120, 600)) * 1000;
     return new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
         // cross-spawn resolves Windows .cmd/.bat shims (npm, npx, mvn, gradle,
         // bundle, composer) that plain cp.spawn cannot execute (and since the
         // CVE-2024-27980 patch refuses to, even by full path).
         const child = crossSpawn(argv[0], argv.slice(1), { cwd: cwd || runtime.workspaceRoot, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-        let stdout = '', stderr = '', done = false;
-        const finish = (code: number | null, timedOut = false) => { if (done) return; done = true; clearTimeout(timer); resolve({ stdout, stderr, code, timedOut }); };
-        const timer = setTimeout(() => {
-            try {
-                if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
-                else void killTree(child.pid);
-            } catch { /* already exited */ }
-            finish(null, true);
-        }, timeout);
+        let stdout = '', stderr = '', done = false, timedOut = false;
+        const cancel = () => { void killTree(child.pid).then(() => finish(null)); };
+        const finish = (code: number | null) => { if (done) return; done = true; clearTimeout(timer); runtime.signal?.removeEventListener('abort', cancel); resolve({ stdout, stderr, code, timedOut }); };
+        const timer = setTimeout(() => { timedOut = true; void killTree(child.pid).then(() => finish(null)); }, timeout);
+        runtime.signal?.addEventListener('abort', cancel, { once: true });
         child.stdout?.on('data', d => { stdout += d.toString(); if (stdout.length > MAX_OUTPUT) stdout = stdout.slice(-MAX_OUTPUT); });
         child.stderr?.on('data', d => { stderr += d.toString(); if (stderr.length > MAX_OUTPUT) stderr = stderr.slice(-MAX_OUTPUT); });
         child.on('error', e => { stderr += `\n${e.message}`; finish(null); });

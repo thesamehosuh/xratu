@@ -27,6 +27,8 @@ import { join } from 'path';
 // out/xratu_mcp_tools.js imports `vscode` at the top; stub it so the pure
 // guard logic is testable in plain node.
 const origLoad = Module._load;
+let holdRunner = false;
+let runnerStarted = false;
 Module._load = function (request, parent, isMain) {
     if (request === 'cross-spawn') {
         // This suite checks path guards and runner argv, not installed frameworks.
@@ -34,7 +36,8 @@ Module._load = function (request, parent, isMain) {
         return () => {
             const child = new EventEmitter();
             child.stdout = new PassThrough(); child.stderr = new PassThrough();
-            queueMicrotask(() => child.emit('close', 0));
+            runnerStarted = true;
+            if (!holdRunner) queueMicrotask(() => child.emit('close', 0));
             return child;
         };
     }
@@ -140,6 +143,17 @@ try {
     const def = XRATU_EXPANSION_TOOLS.find((t) => t.name === 'run_tests');
     ok('run_tests advertises that it requires approval',
         /Requires approval\.$/.test(def.description), def.description.slice(-40));
+    holdRunner = true; runnerStarted = false;
+    const controller = new AbortController();
+    const running = handleExpansionTool('run_tests', { framework: 'jest', target: 'tests' }, { ...runtime, signal: controller.signal });
+    const deadline = Date.now() + 3000;
+    while (!runnerStarted) {
+        if (Date.now() > deadline) throw new Error('runner never started');
+        await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    controller.abort();
+    const stopped = JSON.parse(text(await running));
+    ok('individual cancellation releases a running test command', stopped.exit_code === null && stopped.timed_out === false, JSON.stringify(stopped));
 } finally {
     rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

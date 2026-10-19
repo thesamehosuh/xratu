@@ -5,8 +5,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { AggregatedTool, ExternalMcpManager } from '../../externalMcp';
 import { isNativePlanTool } from './services';
+import { abortable } from '../../oauth/refreshLock';
 
-export interface NativeMcpContext { sessionID: string; plan: boolean; rootSessionID?: string }
+export interface NativeMcpContext { sessionID: string; plan: boolean; rootSessionID?: string; rootSignal?: AbortSignal }
 export interface NativeMcpSource {
     listTools: ExternalMcpManager['listTools'];
     callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, context: NativeMcpContext): ReturnType<ExternalMcpManager['callTool']>;
@@ -21,7 +22,7 @@ export class OpenCodeMcpBridge {
     private server?: HttpServer;
     private connection?: Promise<{ url: string; headers: Record<string, string> }>;
     private wireTools = new Map<string, AggregatedTool>();
-    private readonly sessions = new Map<string, { plan: boolean; signal: AbortSignal; rootSessionID?: string }>();
+    private readonly sessions = new Map<string, { plan: boolean; signal: AbortSignal; rootSessionID?: string; rootSignal?: AbortSignal }>();
     private readonly transports = new Set<Server>();
     constructor(private readonly source: NativeMcpSource) {}
 
@@ -44,7 +45,7 @@ export class OpenCodeMcpBridge {
     private planSafe(tool: AggregatedTool): boolean {
         return tool.serverName === 'xratu' && tool.originalName === tool.name && isNativePlanTool(tool.name);
     }
-    activate(sessionID: string, plan: boolean, signal: AbortSignal, rootSessionID?: string): void { this.sessions.set(sessionID, { plan, signal, rootSessionID }); }
+    activate(sessionID: string, plan: boolean, signal: AbortSignal, rootSessionID?: string, rootSignal?: AbortSignal): void { this.sessions.set(sessionID, { plan, signal, rootSessionID, rootSignal }); }
     deactivate(sessionID: string): void { this.sessions.delete(sessionID); }
 
     connect(): Promise<{ url: string; headers: Record<string, string> }> {
@@ -69,7 +70,7 @@ export class OpenCodeMcpBridge {
                 if (!session || session.signal.aborted || !tool || (session.rootSessionID && parentControl) || (session.plan && !this.planSafe(tool))) {
                     return { isError: true, content: [{ type: 'text', text: 'Xratu MCP call is not allowed in this session.' }] };
                 }
-                const result = await this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan, ...(session.rootSessionID ? { rootSessionID: session.rootSessionID } : {}) });
+                const result = await abortable(this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan, ...(session.rootSessionID ? { rootSessionID: session.rootSessionID } : {}), ...(session.rootSignal ? { rootSignal: session.rootSignal } : {}) }), session.signal);
                 return { isError: result.isError === true, content: [
                     ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
                     ...result.images.map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.dataBase64 })),

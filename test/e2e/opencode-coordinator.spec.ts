@@ -34,6 +34,14 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         await expect(page.locator('.agents-pane .decision-card')).toHaveCount(0);
         await expect(page.locator('.agents-pane')).toContainText(locale === 'en' ? 'Awaiting answer' : 'منتظر پاسخ');
         await expect(page.locator('.agents-pane')).toContainText(locale === 'en' ? 'Answer question' : 'پاسخ به سوال');
+        // One agent, one stop: the live run exposes its own control and the
+        // click carries that call's identity (never the whole turn).
+        const stop = page.locator('.agent-run-stop');
+        await expect(stop).toBeVisible();
+        await expect(stop).toHaveText(locale === 'en' ? 'Stop agent' : 'توقف ایجنت');
+        await stop.click();
+        const sent = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type?: string; callId?: string }> }).__xratuHostMessages);
+        expect(sent.some(message => message.type === 'stopAgent' && message.callId === 'native-parent')).toBe(true);
         await page.screenshot({ path: info.outputPath('native-observation.png') });
         await page.locator('#surface-tab-conversation').click();
         await post(page, { type: 'decisionResolved', decision_id: 'native-form', answer: null });
@@ -43,6 +51,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         await post(page, { type: 'approvalResolved', approval_id: 'native-approval', resolution: 'approved' });
         await expect(page.locator('.approval-card.pending')).toHaveCount(0);
         await post(page, { type: 'subagentState', callId: 'native-parent', trace: { ...trace, status: 'done', endedAt: Date.now(), report: 'Review finished' } });
+        await expect(page.locator('.agent-run-stop')).toHaveCount(0);
         await expect(page.locator('.send-btn.is-stop')).toBeVisible();
         await post(page, { type: 'fullResponse', persian: 'Review finished', renderedHtml: '<p>Review finished</p>' });
         await expect(page.locator('.send-btn.is-stop')).toHaveCount(0);

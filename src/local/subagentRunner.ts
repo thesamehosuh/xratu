@@ -60,12 +60,17 @@ export interface SubagentHostContext {
      *  layer only enforces the per-agent allow-list and the recursion deny). */
     tools(def: SubagentDefinition): LocalToolDefinition[];
     systemPrompt(def: SubagentDefinition): string;
-    /** Child tool executor WITHOUT a SubagentRunner attached. */
-    executor: LocalToolExecutor;
+    /** One executor per run, bound to its cancellation signal, WITHOUT a
+     *  SubagentRunner attached. */
+    executor(signal: AbortSignal): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
     onUsage?(usage: LocalUsage): void;
     onObservation?(parentCallId: string, trace: SubagentTrace): void;
+    /** Registers (or clears, with `undefined`) the stop control for ONE live
+     *  task call. The host keeps it keyed by the parent call id so the Agents
+     *  surface can stop that run alone without touching its siblings. */
+    onControl?(parentCallId: string | undefined, stop: (() => void) | undefined): void;
 }
 
 /** Reject tool calls outside the child's toolset. The agent loop executes
@@ -250,6 +255,11 @@ export async function runSubagentTask(
     onOutput?.(`▶ ${def.name}${resumed ? ' (resume)' : ''}\n`);
 
     const base = ctx.baseRequest(def);
+    // One stop control per delegated run. It is combined with the turn signal
+    // so stopping a single agent ends only THIS loop: the parent keeps running
+    // and receives the cancelled report, exactly like a user Stop at the root.
+    const stop = new AbortController();
+    const signal = base.signal ? AbortSignal.any([base.signal, stop.signal]) : stop.signal;
     const observation = new SubagentTraceCollector({
         taskId, profile: def.name, description: req.description, prompt: req.prompt, model: base.model,
         effort: base.reasoningEffort, tools: tools.map(tool => tool.name), resumed,
@@ -257,6 +267,7 @@ export async function runSubagentTask(
     }, trace => { if (req.parentCallId) ctx.onObservation?.(req.parentCallId, trace); });
     const request: LocalAgentRequest = {
         ...base,
+        signal,
         systemPrompt: ctx.systemPrompt(def),
         userText: req.prompt,
         // Fresh context by contract on a NEW run; a resume replays the run's
@@ -280,6 +291,7 @@ export async function runSubagentTask(
     };
 
     rememberRun(registry, taskId, record);
+    ctx.onControl?.(req.parentCallId, () => stop.abort());
     let finalText = '';
     let lastError = '';
     let toolCallCount = 0;
@@ -289,8 +301,8 @@ export async function runSubagentTask(
     try {
         for await (const event of runLocalAgent(
             request,
-            wrapRestrictedExecutor(ctx.executor, allowed),
-            { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined) },
+            wrapRestrictedExecutor(ctx.executor(signal), allowed),
+            { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined, signal) },
         )) {
             observation.receive(event);
             switch (event.type) {
@@ -326,11 +338,12 @@ export async function runSubagentTask(
         }
     } catch (err) {
         commitTurn();
-        // A cancelled parent run aborts the child via the shared signal;
-        // fetch/dropped-stream aborts surface as AbortError or
-        // ResponseAborted. Either way the tool call must settle - and the
-        // task_id note stays so the model can HEAL the run by continuing it.
-        if (base.signal?.aborted
+        // A cancelled parent run or a user stop of THIS agent aborts the child
+        // via the combined signal; fetch/dropped-stream aborts surface as
+        // AbortError or ResponseAborted. Either way the tool call must settle -
+        // and the task_id note stays so the model can HEAL the run by
+        // continuing it.
+        if (signal.aborted
             || (err instanceof Error && (err.name === 'AbortError' || err.name === 'ResponseAborted'))) {
             observation.finish('cancelled');
             return { output: withTaskIdNote('Subagent run cancelled.', taskId, toolCallCount), isError: true };
@@ -341,6 +354,7 @@ export async function runSubagentTask(
         return { output: withTaskIdNote(`Subagent failed: ${msg}`, taskId, toolCallCount), isError: true };
     } finally {
         record.running = false;
+        ctx.onControl?.(req.parentCallId, undefined);
     }
     commitTurn();
     if (finalText.trim()) {

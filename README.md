@@ -55,9 +55,10 @@ The built-in Xratu engine supports local models, subagents, and conversation
 rewind. OpenCode shares Xratu’s MCP servers, marketplace installs, browser,
 task list, and enabled skills while keeping its own credentials and native
 sessions. Its native subagents appear in Agents with live traces and attributed
-approvals/questions; Stop covers nested and background children. The turn stays
-active until their reports settle. Delegation is unavailable in Plan mode;
-conversation rewind and offline mode remain unavailable with OpenCode.
+approvals/questions; each agent can be stopped on its own, and Stop covers
+nested and background children. The turn stays active until their reports
+settle. Delegation is unavailable in Plan mode; conversation rewind and offline
+mode remain unavailable with OpenCode.
 
 ## Approvals and privacy
 

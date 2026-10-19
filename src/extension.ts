@@ -334,7 +334,7 @@ interface CheckpointActionContext {
 }
 
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
-    private _nativeToolContext?: { sessionID: string; plan: boolean; signal: AbortSignal; executor: ReturnType<typeof createLocalToolExecutor> };
+    private _nativeToolContext?: { sessionID: string; workspace: string; plan: boolean; signal: AbortSignal; executor: ReturnType<typeof createLocalToolExecutor> };
 
     private _nativeServiceDefinitions() {
         const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -828,13 +828,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 ],
                 callTool: async (name, args, signal, context) => {
                     const active = this._nativeToolContext;
-                    if (!active || active.sessionID !== (context.rootSessionID ?? context.sessionID) || active.plan !== context.plan || active.signal !== signal || signal.aborted
+                    if (!active || active.sessionID !== (context.rootSessionID ?? context.sessionID) || active.plan !== context.plan || active.signal !== (context.rootSignal ?? signal) || signal.aborted
                         || (context.rootSessionID && ['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(name))
                         || (context.plan && !isNativePlanTool(name))) {
                         return { text: 'Xratu service is unavailable in this turn.', images: [], isError: true };
                     }
                     if (isNativeServiceTool(name)) {
-                        const result = await active.executor.execute({ id: crypto.randomUUID(), name, arguments: args, argumentsJson: JSON.stringify(args) });
+                        const executor = context.rootSessionID ? this._nativeServiceExecutor(active.workspace, signal, context.plan) : active.executor;
+                        const result = await executor.execute({ id: crypto.randomUUID(), name, arguments: args, argumentsJson: JSON.stringify(args) });
                         signal.throwIfAborted();
                         return { text: result.output, images: result.images ?? [], isError: result.isError };
                     }
@@ -896,6 +897,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _sessionApprovedKinds = new Set<string>();
     /** One controller per in-flight request kind: cancel can never hit the wrong stream. */
     private _abortControllers = new Map<'chat' | 'approve', AbortController>();
+    /** Per-delegated-agent stop controls, keyed by the parent `task` call id.
+     *  Only built-in runs register here; a native child is stopped through the
+     *  engine so its whole native subtree is interrupted. */
+    private _agentStops = new Map<string, () => void>();
     /** Bumped whenever the visible session is wiped (new session, logout,
      *  account inactive). In-flight run handlers compare their captured
      *  value before writing history or posting follow-ups, so a cancelled
@@ -4495,7 +4500,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // needs consent surfaces as the same webview approval card. YOLO is
         // consulted LIVE per call (mid-run toggles apply from the next call).
         const localApprovalGate: LocalApprovalGate = {
-            requestApproval: (id, calls, source) => {
+            requestApproval: (id, calls, source, signal) => {
                 if (this._yoloMode && !runPlanMode) {
                     return Promise.resolve(
                         Object.fromEntries(calls.map((c) => [c.id, true]))
@@ -4505,6 +4510,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     id,
                     calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments })),
                     source,
+                    signal,
                 );
             },
         };
@@ -4570,7 +4576,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 },
                 tools: (def) => filterToolsForSubagent(
                     getLocalToolDefinitions({
-                        yolo: this._yoloMode,
+                        // Preserve approval flags; the shared gate reads live YOLO.
+                        yolo: false,
                         plan: runPlanMode,
                         external: externalTools,
                         skills: runSkills,
@@ -4584,7 +4591,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }),
                 // Child executor WITHOUT the subagent runner: `task` is
                 // unexecutable in a child even if the model hallucinates it.
-                executor: createLocalToolExecutor(
+                executor: (signal) => createLocalToolExecutor(
                     workspaceRoot,
                     (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
                     externalMcpInstance ?? undefined,
@@ -4597,7 +4604,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
                     undefined,
-                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool },
+                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool },
                 ),
                 approvalGate: localApprovalGate,
                 onObservation: (callId, trace) => {
@@ -4614,6 +4621,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // fold them into the turn/session/global ledgers exactly
                     // like parent rounds.
                     this._handleLocalAgentEvent({ type: 'usage', usage, estimated: false }, outcome);
+                },
+                onControl: (callId, stop) => {
+                    if (!callId) return;
+                    if (stop) this._agentStops.set(callId, stop);
+                    else this._agentStops.delete(callId);
                 },
             },
             subagentDefs,
@@ -4704,7 +4716,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // the accumulated summary instead of overwriting it.
                     sessionSummary: this._sessionSummary,
                     tools: getLocalToolDefinitions({
-                        yolo: this._yoloMode,
+                        // Preserve approval flags; the shared gate reads live YOLO.
+                        yolo: false,
                         plan: runPlanMode,
                         external: externalTools,
                         // Agent Skills are rescanned per run (tool schemas
@@ -4851,11 +4864,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
             const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+                isYolo: () => this._yoloMode,
                 approvals: { requestApproval: (id, calls, source, signal) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments })), source, signal) },
                 questions: { ask: (question, signal) => this._requestLocalDecision(question, signal) },
                 onSession: async (session) => {
                     this._engineSession = session;
-                    this._nativeToolContext = { sessionID: session.nativeSessionId!, plan: runPlanMode, signal: controller.signal, executor };
+                    this._nativeToolContext = { sessionID: session.nativeSessionId!, workspace, plan: runPlanMode, signal: controller.signal, executor };
                     this._observeNativeShells(engine, session.nativeSessionId!, workspace);
                     await this._persistLocalSession();
                 },
@@ -6936,8 +6950,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             controller.abort();
         }
         this._abortControllers.clear();
+        this._agentStops.clear();
         this._rejectPendingLocalApprovals();
         this._rejectPendingLocalDecisions();
+    }
+    /** Stop ONE delegated agent from the Agents surface. The parent turn and
+     *  sibling agents keep running; a built-in child settles as a cancelled
+     *  task result, a native child as an interrupted native subtree. */
+    _stopSubagent(callId: string): void {
+        const stop = this._agentStops.get(callId);
+        if (stop) { this._agentStops.delete(callId); stop(); return; }
+        if (this._activeEngine === 'opencode') void this._openCodeEngine?.stopSubagent(callId);
     }
 
     private _displayAssistantResponse(parsed: any) {

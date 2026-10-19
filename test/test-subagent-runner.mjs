@@ -41,6 +41,13 @@ const check = (name, actual, expected) => {
     if (!okv) failed++;
     console.log(`${okv ? 'ok  ' : 'FAIL'} ${name}${okv ? '' : ` (got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)})`}`);
 };
+const until = async (predicate) => {
+    const end = Date.now() + 3000;
+    while (!predicate()) {
+        if (Date.now() > end) throw new Error('Timed out waiting for the runner');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Mock transport: scripted chat-completions SSE, one handler per fetch call.
@@ -159,7 +166,7 @@ function childContext(extra = {}) {
                 rulesContext: '',
                 planMode: false,
             }),
-            executor: {
+            executor: () => ({
                 execute: async (call, onOutput) => {
                     if (call.name === 'read_file') {
                         onOutput?.('partial file line\n');
@@ -167,7 +174,7 @@ function childContext(extra = {}) {
                     }
                     return { output: 'ok' };
                 },
-            },
+            }),
             approvalGate: { requestApproval: async () => ({}) },
             onUsage: (usage) => usageEvents.push(usage),
         },
@@ -270,10 +277,11 @@ function childContext(extra = {}) {
     const approvals = [];
     let executed = false;
     ctx.onObservation = (id,trace) => observations.push({id,trace});
-    ctx.approvalGate = {requestApproval:async (id,calls,source) => { approvals.push({id,calls,source}); return Object.fromEntries(calls.map(call => [call.id,false])); }};
-    ctx.executor = {execute:async()=>{executed=true;return {output:'should not execute'};}};
+    ctx.approvalGate = {requestApproval:async (id,calls,source,signal) => { approvals.push({id,calls,source,signal}); return Object.fromEntries(calls.map(call => [call.id,false])); }};
+    ctx.executor = () => ({execute:async()=>{executed=true;return {output:'should not execute'};}});
     const {result} = await withMockFetch([()=>toolReply('edit_file',{path:'a.ts',patch:'old to new'}),()=>textReply('Edit was denied; reporting findings instead.')],()=>runSubagentTask(ctx,DEFS,{subagentType:'general',description:'Fix auth',prompt:'Fix expiry',parentCallId:'parent-approval'},new Map()));
     ok('child approval identifies its parent/profile/task', approvals.length === 1 && approvals[0].source.parentCallId === 'parent-approval' && approvals[0].source.profile === 'general' && approvals[0].source.description === 'Fix auth');
+    ok('child approval carries the run signal so a stop retracts its card', approvals[0].signal instanceof AbortSignal);
     ok('child never bypasses a denied tool', !executed);
     ok('trace exposes approval wait', observations.some(item=>item.trace.status==='waiting'));
     ok('trace retains denied tool error', observations.at(-1).trace.entries.some(entry=>entry.kind==='tool' && entry.isError));
@@ -337,7 +345,54 @@ function childContext(extra = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 5b. Per-agent model/effort: the factory receives the PROFILE, so the child
+// 5b. Stopping ONE agent settles only that task call; its sibling completes.
+// ---------------------------------------------------------------------------
+{
+    const { ctx } = childContext();
+    const stops = new Map();
+    const observations = [];
+    ctx.onControl = (callId, stop) => {
+        if (!callId) return;
+        if (stop) stops.set(callId, stop);
+        else stops.delete(callId);
+    };
+    ctx.onObservation = (id, trace) => observations.push({ id, trace });
+    let aDialed = false;
+    let releaseA;
+    const handlers = [
+        // The first child hangs at its first request until the test settles it.
+        () => { aDialed = true; return new Promise((resolve) => { releaseA = resolve; }); },
+        () => textReply('B finished'),
+    ];
+    const results = await withMockFetch(handlers, async () => {
+        const a = runSubagentTask(ctx, DEFS, {
+            subagentType: 'explore', parentCallId: 'agent-a', description: 'slow', prompt: 'Do A.',
+        }, new Map());
+        await until(() => aDialed);
+        const b = runSubagentTask(ctx, DEFS, {
+            subagentType: 'explore', parentCallId: 'agent-b', description: 'fast', prompt: 'Do B.',
+        }, new Map());
+        await until(() => stops.has('agent-a') && stops.has('agent-b'));
+        stops.get('agent-a')();
+        const aborted = new Error('The operation was aborted');
+        aborted.name = 'AbortError';
+        releaseA(Promise.reject(aborted));
+        return [await a, await b];
+    });
+    const [a, b] = results.result;
+    ok('stopped agent reports cancellation', a.isError === true && a.output.includes('cancelled'), a.output);
+    ok('stopped agent keeps its resumable task id', /\[task_id: \w+/.test(a.output), a.output);
+    ok('sibling agent still delivers its report', b.output.startsWith('B finished'), b.output);
+    ok('sibling agent is not an error', !b.isError);
+    check('stopped observation ends cancelled',
+        observations.filter((item) => item.id === 'agent-a').at(-1)?.trace.status, 'cancelled');
+    check('sibling observation ends done',
+        observations.filter((item) => item.id === 'agent-b').at(-1)?.trace.status, 'done');
+    ok('stop control is released after the run', !stops.has('agent-a'));
+}
+
+// ---------------------------------------------------------------------------
+// 5c. Per-agent model/effort: the factory receives the PROFILE, so the child
 // can run on its own model (and that model's caps/window), not the parent's.
 // ---------------------------------------------------------------------------
 {
@@ -759,6 +814,124 @@ function childContext(extra = {}) {
     check('a serial cap keeps the emitted order', serial.events.join(' '),
         'start:0 end:0 start:1 end:1 start:2 end:2');
     check('a serial cap still runs every call', serial.results.length, 3);
+}
+
+
+// Use the host's actual live gate for both built-in root and delegated loops.
+{
+    const source = require('node:fs').readFileSync(require('node:path').join(process.cwd(), 'src', 'extension.ts'), 'utf8');
+    const start = source.indexOf('const localApprovalGate: LocalApprovalGate = {');
+    const end = source.indexOf('\n        };', start) + '\n        };'.length;
+    const code = require('esbuild').transformSync(source.slice(start, end), { loader: 'ts' }).code;
+    const makeGate = new Function('runPlanMode', code + '\nreturn localApprovalGate;');
+    for (const nested of [false, true]) {
+        const prompted = [], executed = [];
+        const host = { _yoloMode: true, _requestLocalApproval: async (_id, _calls, attribution) => { prompted.push(attribution); return {}; } };
+        const gate = makeGate.call(host, false);
+        const tools = [{ name: 'edit_file', description: 'edit', inputSchema: { type: 'object' }, requiresApproval: true }];
+        const handlers = [
+            () => toolReply('edit_file', {}, 'auto'),
+            () => { host._yoloMode = false; return toolReply('edit_file', {}, 'ask'); },
+            () => { host._yoloMode = true; return toolReply('edit_file', {}, 'auto-again'); },
+            () => textReply('Done'),
+        ];
+        const executor = { execute: async call => { executed.push(call.id); return { output: 'ok' }; } };
+        await withMockFetch(handlers, async () => {
+            if (nested) {
+                const { ctx } = childContext();
+                ctx.tools = () => tools; ctx.executor = () => executor; ctx.approvalGate = gate;
+                await runSubagentTask(ctx, DEFS, { subagentType: 'general', parentCallId: 'live-child', prompt: 'test', description: 'test' }, new Map());
+            } else {
+                for await (const _event of runLocalAgent({ baseUrl: 'https://example.invalid/v1', apiKey: 'k', model: 'test-model', apiStyle: 'chat', contextWindow: 100000, tools, userText: 'test', systemPrompt: '', history: [] }, executor, gate)) { /* drain */ }
+            }
+        });
+        check(`${nested ? 'child' : 'root'} live YOLO revocation prompts once`, prompted.length, 1);
+        check(`${nested ? 'child' : 'root'} live YOLO executes only approved mutations`, executed.join(','), 'auto,auto-again');
+        if (nested) check('live child gate preserves approval attribution', prompted[0]?.parentCallId, 'live-child');
+    }
+}
+
+// Exercise the real executor: model-request cancellation alone cannot stop a shell.
+{
+    const Module = require('module');
+    const originalLoad = Module._load;
+    let createLocalToolExecutor;
+    try {
+        Module._load = function (name, ...args) {
+            if (name === 'vscode') return { workspace: { getConfiguration: () => ({ get: () => undefined }) }, Uri: { file: p => ({ fsPath: p, path: p }) } };
+            return originalLoad.call(this, name, ...args);
+        };
+        ({ createLocalToolExecutor } = require('../out/mcp.js'));
+    } finally { Module._load = originalLoad; }
+    const { mkdtempSync, rmSync } = require('node:fs');
+    const { join } = require('node:path');
+    const { tmpdir } = require('node:os');
+    const { getJobByCallId } = require('../out/tooling/backgroundJobs.js');
+    const root = mkdtempSync(join(tmpdir(), 'xratu-agent-stop-'));
+    const parent = new AbortController();
+    const { ctx } = childContext({ baseRequest: { signal: parent.signal } });
+    const controls = new Map();
+    const observations = [];
+    const registry = new Map();
+    ctx.tools = () => [{ name: 'run_terminal_command', description: 'shell', inputSchema: { type: 'object' }, requiresApproval: true }];
+    ctx.executor = signal => createLocalToolExecutor(root, async () => {}, undefined, undefined, undefined, undefined, { nested: true, signal });
+    ctx.approvalGate = { requestApproval: async (_id, calls) => Object.fromEntries(calls.map(call => [call.id, true])) };
+    ctx.onControl = (id, stop) => { if (stop) controls.set(id, stop); else controls.delete(id); };
+    ctx.onObservation = (id, trace) => observations.push({ id, trace });
+    let aJob, bJob;
+    try {
+        await withMockFetch([
+            () => toolReply('run_terminal_command', { command: 'node -e "console.log(123);setTimeout(() => {}, 30000)"' }, 'real-a'),
+            () => toolReply('run_terminal_command', { command: 'node -e "console.log(456);setTimeout(() => {}, 600)"' }, 'real-b'),
+            () => textReply('Sibling finished'),
+            () => textReply('Resumed after cancellation'),
+        ], async () => {
+            const a = runSubagentTask(ctx, DEFS, { subagentType: 'general', parentCallId: 'real-task-a', prompt: 'A', description: 'A' }, registry);
+            await until(() => (aJob = getJobByCallId('real-a'))?.stdout.includes('123'));
+            const b = runSubagentTask(ctx, DEFS, { subagentType: 'general', parentCallId: 'real-task-b', prompt: 'B', description: 'B' }, registry);
+            await until(() => (bJob = getJobByCallId('real-b'))?.stdout.includes('456'));
+            controls.get('real-task-a')();
+            const result = await a;
+            await aJob.finished;
+            check('individual Stop kills the real child command', aJob.status, 'killed');
+            check('individual Stop leaves a sibling command running', bJob.status, 'running');
+            check('individual Stop leaves the parent signal live', parent.signal.aborted, false);
+            ok('child with a running tool reports cancellation', result.isError && result.output.includes('cancelled'));
+            check('sibling completes after another agent is stopped', (await b).output.startsWith('Sibling finished'), true);
+            const taskId = [...registry.keys()][0];
+            const resumed = await runSubagentTask(ctx, DEFS, { taskId, parentCallId: 'resumed-task', prompt: 'Continue', description: 'Resume' }, registry);
+            ok('a stopped built-in task resumes with a fresh executor signal', resumed.output.startsWith('Resumed after cancellation') && !resumed.isError);
+            check('running-tool observation ends cancelled', observations.filter(value => value.id === 'real-task-a').at(-1).trace.status, 'cancelled');
+        });
+        const controller = new AbortController();
+        let mcpSignal, browserSignal;
+        const pending = (_name, _args, signal) => { mcpSignal = signal; return new Promise(() => {}); };
+        const executor = createLocalToolExecutor(root, async () => {}, { callTool: pending }, undefined, undefined, undefined, {
+            nested: true, signal: controller.signal, sessionId: 'browser-session', browser: { tool: (_session, _name, _args, signal) => { browserSignal = signal; return new Promise(() => {}); } },
+        });
+        const mcp = executor.execute({ id: 'mcp', name: 'mcp__test__wait', arguments: {}, argumentsJson: '{}' }).catch(error => error.name);
+        const browser = executor.execute({ id: 'browser', name: 'browser_snapshot', arguments: {}, argumentsJson: '{}' }).catch(error => error.name);
+        controller.abort();
+        check('external MCP receives the per-agent signal', mcpSignal, controller.signal);
+        check('browser receives the per-agent signal', browserSignal, controller.signal);
+        check('Stop settles an uncooperative external MCP call', await mcp, 'AbortError');
+        check('Stop settles an uncooperative browser call', await browser, 'AbortError');
+        const mutationController = new AbortController();
+        let releaseSnapshot;
+        const mutationExecutor = createLocalToolExecutor(root, () => new Promise(resolve => { releaseSnapshot = resolve; }), undefined, undefined, undefined, undefined, { nested: true, signal: mutationController.signal });
+        const mutation = mutationExecutor.execute({ id: 'late-write', name: 'edit_file', arguments: { path: 'late.txt', mode: 'create', content: 'must not be written' }, argumentsJson: '{}' }).catch(error => error.name);
+        await until(() => !!releaseSnapshot);
+        mutationController.abort(); releaseSnapshot();
+        check('Stop settles a mutation waiting for its checkpoint', await mutation, 'AbortError');
+        await new Promise(resolve => setImmediate(resolve));
+        check('a stopped tool cannot mutate after its checkpoint finishes', require('node:fs').existsSync(join(root, 'late.txt')), false);
+
+    } finally {
+        parent.abort();
+        aJob?.kill('test cleanup'); bJob?.kill('test cleanup');
+        await Promise.all([aJob?.finished, bJob?.finished]);
+        rmSync(root, { recursive: true, force: true });
+    }
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);

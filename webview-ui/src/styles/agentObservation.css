@@ -2,9 +2,12 @@
 .agents-pane { min-width:0; min-height:0; container-type:inline-size; background:var(--page-canvas); }
 .agents-layout { height:100%; min-height:0; display:flex; flex-direction:column; max-width:1120px; margin-inline:auto; }
 .agent-run-list { display:flex; gap:7px; padding:12px; overflow:auto; flex-shrink:0; border-block-end:1px solid var(--page-line); scrollbar-width:thin; }
-.agent-run-card { display:flex; flex-direction:column; gap:7px; text-align:start; flex:0 0 180px; min-width:0; padding:10px 11px; border:1px solid var(--page-line); border-radius:8px; background:transparent; color:var(--vscode-foreground); font:inherit; }
+.agent-run-card { display:flex; flex-direction:column; gap:3px; flex:0 0 180px; min-width:0; padding:4px; border:1px solid var(--page-line); border-radius:8px; background:transparent; color:var(--vscode-foreground); font:inherit; }
 .agent-run-card:hover { background:var(--vscode-list-hoverBackground); }
 .agent-run-card.selected { border-color:color-mix(in srgb,var(--surface-accent) 38%,var(--page-line)); background:color-mix(in srgb,var(--vscode-foreground) 6%,transparent); }
+.agent-run-select { display:flex; flex-direction:column; gap:7px; min-width:0; flex:1; padding:6px 7px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+.agent-run-stop { display:inline-flex; align-items:center; justify-content:center; gap:5px; align-self:flex-start; margin-inline:7px; margin-block-end:3px; padding:2px 7px; border:1px solid var(--page-line); border-radius:5px; background:transparent; color:var(--vscode-descriptionForeground); font:inherit; font-size:10px; line-height:1.7; }
+.agent-run-stop:is(:hover,:focus-visible) { color:var(--vscode-errorForeground); border-color:color-mix(in srgb,var(--vscode-errorForeground) 40%,var(--page-line)); background:var(--xratu-error-faint,transparent); }
 .agent-card-top { display:flex; align-items:center; gap:6px; font-size:11px; }
 .agent-card-top > svg { color:var(--surface-accent); flex-shrink:0; }
 .agent-card-top strong { font-weight:550; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
