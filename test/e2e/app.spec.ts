@@ -724,7 +724,13 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
-    await expect(page.locator('.ctx-wrap')).toHaveCount(0);
+    // The meter readout is hidden by default, but the window-preset menu must
+    // stay reachable: it is the only place to set a context-window override.
+    await expect(page.locator('.tok-pct')).toHaveCount(0);
+    await page.locator('.ctx-trigger').click();
+    await expect(page.locator('.ctx-menu')).toBeVisible();
+    await page.locator('.ctx-trigger').click();
+    await expect(page.locator('.ctx-menu')).toHaveCount(0);
     await hostMessage(page, { type: 'restoreUser', value: 'build it' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });
@@ -737,7 +743,15 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await contextMeter.click();
     expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
         .toContainEqual({ type: 'transcriptOptionsSet', options: { showContextMeter: true } });
+    // The switch flips optimistically, so a second click before the echo turns
+    // the meter back off instead of resending the same value.
+    await expect(contextMeter).toHaveAttribute('aria-checked', 'true');
+    await contextMeter.click();
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
+        .toContainEqual({ type: 'transcriptOptionsSet', options: { showContextMeter: false } });
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: false } } });
     await expect(contextMeter).toHaveAttribute('aria-checked', 'false');
+    await contextMeter.click();
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
     await expect(contextMeter).toHaveAttribute('aria-checked', 'true');
     await page.locator('.conversation-advanced > summary').click();
@@ -752,9 +766,9 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await expect(output).toHaveText('Expanded');
     await hostMessage(page, { type: 'showChat' });
     await expect(command).toHaveAttribute('open', '');
-    await expect(page.locator('.tok-meter')).toBeVisible();
+    await expect(page.locator('.tok-pct')).toBeVisible();
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {} } });
-    await expect(page.locator('.ctx-wrap')).toHaveCount(0);
+    await expect(page.locator('.tok-pct')).toHaveCount(0);
 });
 
 test('the reasoning body stays LTR in fa - reasoning is always English', async ({ page }) => {

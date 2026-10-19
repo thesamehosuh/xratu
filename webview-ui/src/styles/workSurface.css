@@ -224,7 +224,11 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .composer .ctx-wrap { margin-inline-start:auto; flex-shrink:0; }
 .composer-chips:not(:has(.ctx-wrap)) > .session-cost { margin-inline-start:auto; }
 .composer .tok-meter { padding:3px; gap:4px; font-size:10px; min-height:27px; background:transparent; border:0; }
-.composer .tok-text,.composer .tok-meter > svg:last-child { display:none; }
+/* Meter hidden: the same trigger stays as a compact icon so the window
+   presets keep a home. */
+.composer .tok-meter.ctx-trigger { padding-inline:6px; gap:0; color:var(--vscode-descriptionForeground); }
+.composer .tok-meter.ctx-trigger:hover { color:var(--vscode-foreground); }
+.composer .tok-text,.composer .tok-meter:not(.ctx-trigger) > svg:last-child { display:none; }
 .composer-buttons { flex-shrink:0; gap:3px; margin-inline-start:3px; }
 .composer .send-btn { width:28px; height:27px; min-width:28px; padding:0; border:0; border-radius:6px; color:var(--surface-accent); background:transparent; }
 .composer .send-btn:hover:not(:disabled):not(.is-stop) { background:var(--xratu-accent-faint); }
