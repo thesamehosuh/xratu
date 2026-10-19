@@ -371,13 +371,6 @@ function fmtDur(ms?: number): string {
     return formatDuration(ms / 1000);
 }
 
-/** "1.2k"-style token counts for the answer footer. */
-function fmtTok(n: number | null): string {
-    if (n === null || n === undefined) return '–';
-    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
-    return String(n);
-}
-
 function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
     // Results arrive PAIRED onto their call step (Step.result). A standalone
     // toolResult step only exists as an orphan fallback - it renders as an
@@ -2370,11 +2363,6 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
-                    {message.usage && (
-                        <span className="msg-meta" dir="ltr" title={t('tokensTitle')}>
-                            ↑ {fmtTok(message.usage.input_tokens)} ↓ {fmtTok(message.usage.output_tokens)}
-                        </span>
-                    )}
                     {message.usage?.cost && (
                         <span className="msg-meta" dir="auto" title={t('costTitle')}>
                             {formatCost(message.usage.cost)}

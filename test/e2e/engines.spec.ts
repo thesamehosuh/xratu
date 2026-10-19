@@ -213,6 +213,7 @@ for (const locale of ['en', 'fa'] as const) {
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
     test(`native reasoning variants, composer name and search focus (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
         await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });

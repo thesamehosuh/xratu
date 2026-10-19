@@ -66,7 +66,7 @@ import { NotificationBanner } from './components/NotificationBanner';
 import { GitStatusBar } from './components/GitStatusBar';
 import { BranchPicker } from './components/BranchPicker';
 import { getLocale, setLocale, t, tf } from './i18n';
-import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, type TranscriptPrefs } from './transcriptPrefs';
+import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, transcriptOptions, type TranscriptPrefs } from './transcriptPrefs';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
 type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
@@ -1744,6 +1744,7 @@ export function App() {
                 </span>{taskControl}</div>}
                 busy={chat.busy}
                 usage={chat.lastUsage}
+                showContextMeter={transcriptOptions(transcriptPrefs).showContextMeter}
                 sessionCost={chat.sessionCost}
                 onOpenUsage={() => {
                     setUsageReturnTo('chat');

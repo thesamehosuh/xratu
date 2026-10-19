@@ -724,6 +724,7 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
+    await expect(page.locator('.ctx-wrap')).toHaveCount(0);
     await hostMessage(page, { type: 'restoreUser', value: 'build it' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });
@@ -731,6 +732,14 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     const command = page.locator('.transcript-pane details.step').first();
     await expect(command).not.toHaveAttribute('open');
     await hostMessage(page, { type: 'openSettings' });
+    const contextMeter = page.getByRole('switch', { name: 'Show context window meter', exact: true });
+    await expect(contextMeter).toHaveAttribute('aria-checked', 'false');
+    await contextMeter.click();
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
+        .toContainEqual({ type: 'transcriptOptionsSet', options: { showContextMeter: true } });
+    await expect(contextMeter).toHaveAttribute('aria-checked', 'false');
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
+    await expect(contextMeter).toHaveAttribute('aria-checked', 'true');
     await page.locator('.conversation-advanced > summary').click();
     const output = page.locator('#tx-commands');
     await expect(output).toHaveText('On failure');
@@ -739,10 +748,13 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     const messages = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(messages).toContainEqual({ type: 'transcriptOptionsSet', options: { commands: 'expanded' } });
     await expect(output).toHaveText('On failure');
-    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { commands: 'expanded' } } });
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { commands: 'expanded', showContextMeter: true } } });
     await expect(output).toHaveText('Expanded');
     await hostMessage(page, { type: 'showChat' });
     await expect(command).toHaveAttribute('open', '');
+    await expect(page.locator('.tok-meter')).toBeVisible();
+    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {} } });
+    await expect(page.locator('.ctx-wrap')).toHaveCount(0);
 });
 
 test('the reasoning body stays LTR in fa - reasoning is always English', async ({ page }) => {

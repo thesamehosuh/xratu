@@ -299,6 +299,7 @@ interface InputBarProps {
     /** Persist (or clear with null) a thinking level for the selected model. */
     onSetThinkingLevel?: (level: string | null) => void;
     usage?: TokenUsage | null;
+    showContextMeter?: boolean;
     /** Summed cost of the conversation so far (null when unknown). */
     sessionCost?: Cost | null;
     /** Open the usage page (the cost pill is a shortcut into it). */
@@ -364,6 +365,7 @@ export function InputBar({
     thinkingLevel,
     onSetThinkingLevel,
     usage,
+    showContextMeter = false,
     sessionCost,
     onOpenUsage,
     contextWindow,
@@ -1205,7 +1207,7 @@ export function InputBar({
                         )}
                         <ChevronUp size={12} />
                     </button>
-                    <span className="ctx-wrap" ref={ctxWrapRef}>
+                    {showContextMeter && <span className="ctx-wrap" ref={ctxWrapRef}>
                         <button
                             type="button"
                             className="chip-btn tok-meter"
@@ -1268,7 +1270,7 @@ export function InputBar({
                                 })}
                             </div>
                         )}
-                    </span>
+                    </span>}
                     {formatCost(sessionCost) && (
                         <button
                             type="button"

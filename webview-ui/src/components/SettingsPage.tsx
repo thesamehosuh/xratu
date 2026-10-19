@@ -79,7 +79,7 @@ export function SettingsPage({
                 onChange={value => onSetTranscriptOptions?.({ [id]: value })} />
         </div>;
     }
-    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps', label: StringKey, description: StringKey) {
+    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps' | 'showContextMeter', label: StringKey, description: StringKey) {
         return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong><span className="preference-description" id={`tx-${id}-hint`}>{t(description)}</span></div><button type="button" className={`mcp-switch${options[id] ? ' on' : ''}`} role="switch" aria-checked={options[id]} aria-label={t(label)} aria-describedby={`tx-${id}-hint`} onClick={() => onSetTranscriptOptions?.({ [id]: !options[id] })}><span className="mcp-switch-knob" /></button></div>;
     }
 
@@ -130,6 +130,7 @@ export function SettingsPage({
                         <button type="button" className="settings-ghost-action conversation-reset" aria-label={t('txReset')} title={t('txReset')} onClick={onResetTranscriptPrefs}><RotateCcw size={12} /><span>{t('txResetShort')}</span></button>
                     </div>
                     {choice('detail', 'txDetail', 'txDetailDesc', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
+                    {toggle('showContextMeter', 'txShowContextMeter', 'txShowContextMeterDesc')}
                     <details className="conversation-advanced"><summary>{t('txAdvanced')}</summary>
                         {choice('reasoning', 'miniThinking', 'txReasoningDesc', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
                         <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong><span className="preference-description" id="tx-diffs-hint">{t('txDiffsDesc')}</span></label><Dropdown id="tx-diffs" label={t('miniFiles')} describedBy="tx-diffs-hint" value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>
