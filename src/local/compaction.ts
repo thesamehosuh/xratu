@@ -318,6 +318,10 @@ async function summarizeDroppedTurns(
     }
     prompt += `\n\nDropped turns:\n${conversation}\n\nSummary:`;
 
+    const reportCompaction = (active: boolean) => {
+        try { request.onCompactionState?.(active); }
+        catch { /* Display-only callbacks must not change the summary result. */ }
+    };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
     // Cancel the summarizer the moment the run is cancelled - without this the
@@ -328,6 +332,12 @@ async function summarizeDroppedTurns(
         if (outerSignal.aborted) onOuterAbort();
         else outerSignal.addEventListener('abort', onOuterAbort, { once: true });
     }
+    if (controller.signal.aborted) {
+        clearTimeout(timer);
+        outerSignal?.removeEventListener('abort', onOuterAbort);
+        return null;
+    }
+    reportCompaction(true);
     try {
         // Never ask for more than the model can actually emit: the provider/
         // curated output limit only ever LOWERS the window-derived budget (same
@@ -347,6 +357,7 @@ async function summarizeDroppedTurns(
     } finally {
         clearTimeout(timer);
         outerSignal?.removeEventListener('abort', onOuterAbort);
+        reportCompaction(false);
     }
 }
 

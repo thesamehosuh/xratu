@@ -57,3 +57,5 @@
 
 .conversation-work-group .step > summary .step-icon { color:var(--vscode-descriptionForeground); }
 .conversation-work-group .step > summary:hover .step-icon { color:var(--surface-accent); }
+
+.approval-boundary-note { margin-block:8px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); line-height:1.6; }

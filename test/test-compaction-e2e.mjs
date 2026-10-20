@@ -124,17 +124,19 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
     };
 }
 
-async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok', mainUsage = null } = {}) {
+async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok', mainUsage = null, onCompactionState } = {}) {
     const requests = [];
     const original = globalThis.fetch;
     globalThis.fetch = mockFetch(requests, summarizerMode, mainUsage);
     const events = [];
+    const compactionStates = [];
     try {
         for await (const event of runLocalAgent(
             {
                 baseUrl: 'https://example.invalid/v1',
                 apiKey: 'k',
                 model: 'test-model',
+                onCompactionState: active => { compactionStates.push(active); onCompactionState?.(active); },
                 systemPrompt,
                 userText: 'now do it',
                 history,
@@ -153,7 +155,7 @@ async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYST
     } finally {
         globalThis.fetch = original;
     }
-    return { events, requests };
+    return { events, requests, compactionStates };
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +170,14 @@ ok('it reports a positive cumulative dropped count',
 ok('the summary is non-empty', !!compaction && compaction.value.includes('probe goal'));
 
 const summarizerCalls = turn1.requests.filter((r) => r.stream === false);
+ok('compaction lifecycle starts and settles around the summarizer', JSON.stringify(turn1.compactionStates) === '[true,false]');
 ok('exactly one summarizer call', summarizerCalls.length === 1, `got ${summarizerCalls.length}`);
+const throwingDisplay = await drive(makeHistory(), null, { onCompactionState: () => { throw new Error('display unavailable'); } });
+ok('display callback failures cannot abort compaction', throwingDisplay.events.some(event => event.type === 'compactionSummary'));
+ok('display callbacks settle even when both callbacks throw', JSON.stringify(throwingDisplay.compactionStates) === '[true,false]');
+const noSummaryBudget = await drive(makeHistory(), 'x'.repeat(100000));
+ok('no summary budget produces no false loading state', noSummaryBudget.compactionStates.length === 0);
+
 {
     const prompt = summarizerCalls[0]?.messages?.[0]?.content ?? '';
     ok('summarizer input contains the dropped turns',

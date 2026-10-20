@@ -18,6 +18,15 @@ const M = (type: string, extra: Record<string, unknown> = {}): FromExtensionMess
 let s = createInitialChatState();
 ok(s.messages.length === 0 && !s.busy && s.streamingId === null, 'initial state');
 
+// Compaction is a live state and must settle on completion, cancellation, or error.
+for (const end of ['fullResponse', 'byokReset', 'error']) {
+    let compacting = reduceChat(createInitialChatState(), M('startResponse'));
+    compacting = reduceChat(compacting, M('compactionState', { active: true }));
+    ok(compacting.compacting === true, 'compaction starts visibly');
+    compacting = reduceChat(compacting, M(end, { value: 'failed' }));
+    ok(!compacting.compacting, `${end} clears compaction`);
+}
+
 // 2. Happy path
 s = createInitialChatState();
 s = reduceChat(s, M('startResponse'));

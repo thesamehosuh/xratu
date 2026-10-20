@@ -187,7 +187,8 @@ export class BrowserController {
     }
 
     private sendFrame(data: string): void {
-        if (data.length > 4 * 1024 * 1024) return;
+        // Bound IPC payloads while accommodating 2560×2560 JPEGs at quality 70.
+        if (data.length > 12 * 1024 * 1024) return;
         this.latestFrame = data;
         this.flushFrame();
     }
@@ -226,7 +227,7 @@ export class BrowserController {
         if (this.visible && !this.streaming) {
             this.streaming = true;
             try {
-                await this.protocolCommand(cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 1280 }));
+                await this.protocolCommand(cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 2560, maxHeight: 2560 }));
                 if (cdp !== this.cdp || page !== this.page) return;
                 // An idle page may not emit a screencast frame until it changes.
                 this.pendingFrame = null;
@@ -270,6 +271,9 @@ export class BrowserController {
                 case 'resize': {
                     const viewport = browserViewport(command.width, command.height);
                     if (command.mode !== undefined && !['fill', 'fixed'].includes(command.mode)) throw new Error('Invalid viewport mode.');
+                    if (command.expectedMode !== undefined && !['fill', 'fixed'].includes(command.expectedMode)) throw new Error('Invalid expected viewport mode.');
+                    // A queued fit measurement cannot undo a newer explicit resize.
+                    if (command.expectedMode !== undefined && command.expectedMode !== this.state.viewportMode) return;
                     // Chromium can retain a screencast surface at its previous size.
                     // Restart it and seed a still so an idle resized page cannot remain stale.
                     if (this.streaming && this.cdp) {

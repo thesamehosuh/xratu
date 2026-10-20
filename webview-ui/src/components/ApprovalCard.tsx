@@ -197,6 +197,7 @@ export function ApprovalCard({
        returns the NUMBER 0 through `||` short-circuiting, and React renders a
        numeric 0 as literal text while ignoring `false` - so a batch with no
        diffs painted a stray "0" next to the title. */
+    const outsideWorkspace = approvable.some(item => Array.isArray(item.args?.outside_workspace_paths) && item.args.outside_workspace_paths.length);
     const ledgerVisible = !isResolved && (fileCount > 0 || totalAdded > 0 || totalRemoved > 0);
 
     return (
@@ -255,6 +256,7 @@ export function ApprovalCard({
                 )}
             </div>
 
+            {!isResolved && outsideWorkspace && <p className="approval-boundary-note">{t('outsideWorkspaceApproval')}</p>}
             <div className="approval-items">
                 {payload.approvals.map((a) => {
                     const deniedUpFront = preDenied[a.tool_call_id] === false;
@@ -289,7 +291,7 @@ export function ApprovalCard({
                 this one decision, so it never advertises a session-wide approval
                 the host refuses to grant (AGENTS.md: approvals stay real for
                 children). */}
-            {!isResolved && !payload.source && (
+            {!isResolved && !payload.source && !outsideWorkspace && (
                 <div className="approval-foot">
                     <button
                         type="button"

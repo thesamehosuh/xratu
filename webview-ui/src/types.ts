@@ -403,6 +403,7 @@ export type FromExtensionMessage =
     | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
     | ({ type: 'localModelOperation' } & LocalModelOperation)
     | ({ type: 'providerBenchmark' } & ProviderBenchmark)
+    | { type: 'compactionState'; active: boolean }
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
     | { type: 'showWelcome'; path?: SetupPath; canBack?: boolean }
     | { type: 'nativeSetupState'; state: NativeSetupState }

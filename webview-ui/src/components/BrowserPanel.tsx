@@ -45,6 +45,10 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
             } else if (msg.type === 'browserFrame') {
                 const current = stateRef.current;
                 if (msg.frame.sessionId !== current?.sessionId || msg.frame.browserId !== current.browserId) return;
+                if (msg.frame.width !== current.viewport.width || msg.frame.height !== current.viewport.height) {
+                    postMessage({ type: 'browserFrameAck', sessionId: msg.frame.sessionId, browserId: msg.frame.browserId, frameId: msg.frame.frameId });
+                    return;
+                }
                 setFrame(msg.frame);
                 // Bound host traffic even when a hidden panel's image does not repaint.
                 if (!visibleRef.current) postMessage({ type: 'browserFrameAck', sessionId: msg.frame.sessionId, browserId: msg.frame.browserId, frameId: msg.frame.frameId });
@@ -57,6 +61,14 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
         return () => { window.removeEventListener('message', handler); clearTimeout(wheelTimer.current); wheelTimer.current = undefined; wheel.current = null; };
     }, [sessionKey]);
 
+    useEffect(() => {
+        if (!frame || !image.current || !visible) return;
+        // Identical JPEGs do not fire another load event. Acknowledge each
+        // frame after decoding so an idle page never stalls backpressure.
+        const ack = () => postMessage({ type: 'browserFrameAck', sessionId: frame.sessionId, browserId: frame.browserId, frameId: frame.frameId });
+        void image.current.decode().then(ack, ack);
+    }, [frame, visible]);
+
     const sessionId = state?.sessionId, browserId = state?.browserId;
     useEffect(() => {
         if (!sessionId || !browserId) return;
@@ -67,11 +79,11 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
     const fit = useCallback((force = false) => {
         const rect = content.current?.getBoundingClientRect();
         const current = stateRef.current;
-        if (!rect || !current || current.status !== 'ready') return;
+        if (!visibleRef.current || !rect || !rect.width || !rect.height || !current || current.status !== 'ready') return;
         if (!force && (requestedViewportMode.current === 'fixed' || current.viewportMode !== 'fill')) return;
         const width = Math.max(240, Math.min(2560, Math.floor(rect.width)));
         const height = Math.max(240, Math.min(2560, Math.floor(rect.height)));
-        if (width !== current.viewport.width || height !== current.viewport.height || current.viewportMode !== 'fill') command({ action: 'resize', width, height, mode: 'fill' });
+        if (width !== current.viewport.width || height !== current.viewport.height || current.viewportMode !== 'fill') command({ action: 'resize', width, height, mode: 'fill', expectedMode: force ? undefined : current.viewportMode });
     }, [command]);
     useEffect(() => {
         if (!visible || state?.status !== 'ready' || state.viewportMode !== 'fill' || !content.current) return;
@@ -107,7 +119,7 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
             <div className="browser-navigation">
                 <button type="button" className="icon-btn" title={t('browserBack')} aria-label={t('browserBack')} disabled={!ready} onClick={() => command({ action: 'back' })}><Back size={15} /></button>
                 <button type="button" className="icon-btn" title={t('browserForward')} aria-label={t('browserForward')} disabled={!ready} onClick={() => command({ action: 'forward' })}><Forward size={15} /></button>
-                <button type="button" className="icon-btn" title={t('browserReload')} aria-label={t('browserReload')} disabled={!ready || starting} onClick={() => command({ action: 'reload' })}>{state?.loading ? <LoaderCircle size={15} className="spinner" /> : <RotateCw size={15} />}</button>
+                <button type="button" className="icon-btn" title={t('browserReload')} aria-label={t('browserReload')} disabled={!ready || starting} onClick={() => command({ action: 'reload' })}>{state?.loading ? <LoaderCircle size={15} className="spinning" /> : <RotateCw size={15} />}</button>
             </div>
             <input className="browser-address" dir="ltr" aria-label={t('browserAddress')} placeholder={t('browserAddressHint')} value={url} onChange={event => setUrl(event.target.value)} disabled={!state || starting} spellCheck={false} />
             <button className="browser-go" type="submit" disabled={!state || starting || !url.trim()} aria-label={t('browserGo')} title={t('browserGo')}><ArrowRight size={15} /></button>
@@ -127,7 +139,7 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
         </div>
         {errorKey && <div className="browser-error" role="alert"><strong>{tOrRaw(errorKey)}</strong>{errorDetail && <span dir="auto">{errorDetail}</span>}</div>}
         <div className="browser-content" ref={content}>
-            {ready && frame ? <div className="browser-viewport" style={{ maxWidth: state.viewport.width }} onClick={event => { const target = point(event); if (target) { command({ action: 'click', ...target }); typing.current?.focus({ preventScroll: true }); } }}
+            {ready && frame ? <div className="browser-viewport" style={{ maxWidth: state.viewport.width, aspectRatio: `${state.viewport.width} / ${state.viewport.height}` }} onClick={event => { const target = point(event); if (target) { command({ action: 'click', ...target }); typing.current?.focus({ preventScroll: true }); } }}
                 onWheel={event => {
                     const target = point(event); if (!target) return;
                     const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? state.viewport.height : 1;
@@ -135,10 +147,10 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
                     if (wheelTimer.current) return;
                     wheelTimer.current = setTimeout(() => { if (wheel.current) command({ action: 'scroll', ...wheel.current }); wheel.current = null; wheelTimer.current = undefined; }, 50);
                 }}>
-                <img ref={image} src={`data:image/jpeg;base64,${frame.data}`} alt={t('browserPage')} draggable={false} onLoad={() => postMessage({ type: 'browserFrameAck', sessionId: frame.sessionId, browserId: frame.browserId, frameId: frame.frameId })} onError={() => postMessage({ type: 'browserFrameAck', sessionId: frame.sessionId, browserId: frame.browserId, frameId: frame.frameId })} />
+                <img ref={image} src={`data:image/jpeg;base64,${frame.data}`} alt={t('browserPage')} draggable={false} />
                 <textarea ref={typing} className="browser-keyboard" aria-label={t('browserKeyboard')} onKeyDown={press} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={event => { composing.current = false; if (event.currentTarget.value) command({ action: 'type', text: event.currentTarget.value }); event.currentTarget.value = ''; }} onInput={event => { if (!composing.current && event.currentTarget.value) { command({ action: 'type', text: event.currentTarget.value }); event.currentTarget.value = ''; } }} />
             </div> : <div className="browser-empty">
-                {starting ? <LoaderCircle size={30} className="spinner" /> : <Globe size={30} />}
+                {starting ? <LoaderCircle size={30} className="spinning" /> : <Globe size={30} />}
                 <h2>{t(starting ? 'browserStarting' : ready ? 'browserWaiting' : 'browserEmptyTitle')}</h2>
                 <p>{t(ready ? 'browserWaitingHint' : 'browserEmptyHint')}</p>
                 {!ready && !starting && <code dir="ltr">http://localhost:3000</code>}

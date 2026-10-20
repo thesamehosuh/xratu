@@ -36,6 +36,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegDivarDesc',
         docsUrl: 'https://github.com/mmdju/divar-mcp',
         tags: ['iranian'],
+        defaultEnabled: true,
         server: {
             name: 'divar',
             url: 'https://divar-mcp.mmdju2.workers.dev/mcp',
@@ -47,6 +48,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegTorobDesc',
         docsUrl: 'https://github.com/mmdju/torob-mcp',
         tags: ['iranian'],
+        defaultEnabled: true,
         server: {
             name: 'torob',
             connectTimeoutMs: 120_000,
@@ -63,6 +65,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegDigikalaDesc',
         docsUrl: 'https://github.com/sepehr071/digikala-mcp',
         tags: ['iranian'],
+        defaultEnabled: true,
         server: {
             name: 'digikala',
             command: 'uvx',

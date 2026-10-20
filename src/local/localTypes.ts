@@ -244,6 +244,8 @@ export interface LocalAgentMessage {
 }
 
 export interface LocalAgentRequest {
+    /** Display-only lifecycle, emitted only while the summarizer runs. */
+    onCompactionState?: (active: boolean) => void;
     /** OAuth permission to use a ChatGPT plan via the public Responses API. */
     subscription?: boolean;
     baseUrl: string;

@@ -117,6 +117,10 @@ const isWindows = process.platform === 'win32';
 
 /** A command that works the same in cmd.exe and bash. */
 const sh = (posix, windows) => (isWindows ? windows : posix);
+const reportedPid = (output) => {
+    const match = /^([1-9]\d*)\r?\n/.exec(output);
+    return match ? Number(match[1]) : null;
+};
 
 // ---------------------------------------------------------------- pure bits
 
@@ -126,6 +130,9 @@ ok('clipTail is exactly at the cap', clipTail('x'.repeat(10), 10) === 'x'.repeat
 ok('clipTail clips at one char over the cap', clipTail('x'.repeat(11), 10) === 'x'.repeat(10));
 
 ok('the stream cap is 200k', MAX_STREAM_CHARS === 200_000);
+ok('tree readiness accepts short Windows PIDs and waits for a complete line',
+    reportedPid('8\n') === 8 && reportedPid('80\r\n') === 80
+    && reportedPid('8000\n') === 8000 && reportedPid('8') === null && reportedPid('0\n') === null);
 
 // --------------------------------------------------------- result formatting
 
@@ -709,7 +716,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
         "const { spawn } = require('child_process');",
         "const marker = process.argv[2];",
         "const g = spawn(process.execPath, ['-e', 'setTimeout(() => require(\\'fs\\').writeFileSync(process.argv[1], \\'x\\'), 2000)', marker], { stdio: 'ignore', windowsHide: true });",
-        'process.stdout.write(String(g.pid));',
+        'process.stdout.write(String(g.pid) + "\\n");',
     ].join('\n'), 'utf8');
 
     const job = spawnTerminalJob({
@@ -729,8 +736,8 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     const end = Date.now() + 15_000;
     let grandchild = null;
     while (Date.now() < end && !grandchild) {
-        const m = /\b\d{3,}\b/.exec(job.stdout);
-        if (m) grandchild = Number(m[0]);
+        grandchild = reportedPid(job.stdout);
+        if (grandchild) break;
         else await sleep(50);
     }
     ok('the spawned tree reported a grandchild pid', !!grandchild,

@@ -1252,7 +1252,7 @@ export function InputBar({
                                         <span>{t('ctxOptDefault')}</span>
                                         {!ctxOverridden && <Check size={12} />}
                                     </button>
-                                    {CTX_PRESETS.map((p) => {
+                                    {CTX_PRESETS.filter(p => defaultContextWindow == null || p.value <= defaultContextWindow).map((p) => {
                                         const active = ctxOverridden && limit === p.value;
                                         const tooSmall = occupied > 0 && p.value < occupied;
                                         return (
@@ -1325,14 +1325,14 @@ export function InputBar({
                             )}
                             <button
                                 type="button"
-                                className={`ghost-btn small${refreshing ? ' spinning' : ''}`}
+                                className="ghost-btn small"
                                 onClick={onRefreshModels}
                                 disabled={refreshing}
                                 aria-busy={refreshing || undefined}
                                 aria-label={t('refreshModels')}
                                 title={t('refreshTitle')}
                             >
-                                <RefreshCw size={13} />
+                                <RefreshCw size={13} className={refreshing ? 'spinning' : undefined} />
                             </button>
                         </div>
                         <div className="model-list" role="presentation">

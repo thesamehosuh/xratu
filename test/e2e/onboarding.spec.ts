@@ -51,7 +51,9 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await back.click();
         await page.locator('.setup-footer button').click();
         await expect(page.locator('.composer-input')).toHaveValue('existing draft');
+        const previousRequest = (await request(page)).requestId;
         await post(page, { type: 'showWelcome', path: 'free', canBack: true });
+        await expect.poll(async () => (await request(page)).requestId).not.toBe(previousRequest);
         await state(page, { phase: 'ready', models: [available()] });
         await page.screenshot({ path: test.info().outputPath('onboarding-ready.png') });
         await page.locator('.setup-start').click();

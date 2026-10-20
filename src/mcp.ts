@@ -7,7 +7,7 @@ import { PULL_REQUEST_TOOLS, PULL_REQUEST_MUTATIONS, type PullRequestToolExecuto
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { decodeUnicodeEscapes, looksBinary, parsePatchBlocks, repairPatchMarkers, sanitizePath, withPathAlias } from './paths';
+import { decodeUnicodeEscapes, looksBinary, parsePatchBlocks, repairPatchMarkers, sanitizePath as workspaceSanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
 import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
 import { resolveToolName } from './tooling/toolNames';
 import {
@@ -727,8 +727,10 @@ async function dispatchTool(
      *  the parent's ability to leave work running behind it. */
     nested = false,
     signal?: AbortSignal,
+    approvedPaths?: ReadonlySet<string>,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
     signal?.throwIfAborted();
+    const sanitizePath = (input: string, root: string) => workspaceSanitizePath(input, root, approvedPaths);
     if (name === 'edit_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
         // fs work and before a checkpoint is taken. This used to silently
@@ -1393,6 +1395,23 @@ async function dispatchTool(
     };
 }
 
+/** Canonical file operands requiring a separate outside-workspace grant. */
+export function getOutsideWorkspacePaths(workspaceRoot: string, name: string, args: Record<string, unknown>): string[] {
+    const named = resolveToolName(name, getLocalToolDefinitions().map(tool => tool.name)).name;
+    if (!['edit_file', 'replace_in_file', 'apply_patch', 'delete_file', 'move_file', 'copy_file'].includes(named)) return [];
+    const normalized = withPathAlias(args);
+    const paths = new Set<string>();
+    for (const key of ['path', 'source', 'destination']) {
+        if (typeof normalized[key] !== 'string') continue;
+        try { workspaceSanitizePath(normalized[key] as string, workspaceRoot); }
+        catch (error) {
+            if (!(error instanceof OutsideWorkspacePathError)) throw error;
+            paths.add(error.resolvedPath);
+        }
+    }
+    return [...paths];
+}
+
 /** Execute a single built-in or expansion tool outside the MCP bridge.
  *  Used by the local agent runtime. `externalMcp` routes mcp__* calls to
  *  the user's external servers (undefined → external calls error).
@@ -1410,6 +1429,7 @@ export async function executeLocalTool(
     callId?: string,
     nested?: boolean,
     signal?: AbortSignal,
+    approveOutsideWorkspace?: (paths: string[]) => Promise<boolean>,
 ): Promise<LocalToolResult> {
     try {
         signal?.throwIfAborted();
@@ -1427,7 +1447,15 @@ export async function executeLocalTool(
         // then fill `path` from known aliases: a model that sends `file_path`
         // used to hit a raw Node TypeError deep in sanitizePath.
         const named = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
-        const result = await dispatchTool(workspaceRoot, named.name, withPathAlias(args ?? {}), ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested, signal);
+        const normalized = withPathAlias(args ?? {});
+        // Preflight all file operands before any mutation; revalidate them
+        // in the dispatcher against this call's exact canonical grants.
+        const approvedPaths = new Set(getOutsideWorkspacePaths(workspaceRoot, named.name, normalized));
+        if (approvedPaths.size && (!approveOutsideWorkspace || !await approveOutsideWorkspace([...approvedPaths]))) {
+            return { output: 'Error: outside-workspace file access was not approved.', isError: true };
+        }
+        signal?.throwIfAborted();
+        const result = await dispatchTool(workspaceRoot, named.name, normalized, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested, signal, approvedPaths);
         return { output: result.content[0]?.text ?? '', isError: result.isError };
     } catch (err: any) {
         signal?.throwIfAborted();
@@ -1445,7 +1473,7 @@ export function createLocalToolExecutor(
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
     /** Marks this executor as a delegated child's. */
-    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor },
+    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor; approveOutsideWorkspace?: (call: import('./local/localTypes').LocalToolCall, paths: string[]) => Promise<boolean> },
 ): import('./local/localAgent').LocalToolExecutor {
     const snapshot = async (root: string, reason: string) => {
         opts?.signal?.throwIfAborted();
@@ -1463,7 +1491,8 @@ export function createLocalToolExecutor(
             if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };
             return opts.browser.tool(opts.sessionId, call.name, call.arguments, opts.signal);
         }
-        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal);
+        if (opts?.plan && MUTATING_TOOLS.has(resolveToolName(call.name, getLocalToolDefinitions().map(tool => tool.name)).name)) return { output: 'Error: mutating tools are disabled in plan mode.', isError: true };
+        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths) : undefined);
     };
     return {
         execute: (call, onOutput) => {

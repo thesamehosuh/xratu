@@ -1,4 +1,4 @@
-import { SubagentTraceCollector, type SubagentTrace } from '../subagentObservation';
+import { SubagentTraceCollector, type SubagentTrace, type SubagentApprovalSource } from '../subagentObservation';
 /**
  * Nested-run orchestration for the `task` tool: drive a child runLocalAgent
  * loop on behalf of a tool call and collapse it to a single final report.
@@ -62,7 +62,7 @@ export interface SubagentHostContext {
     systemPrompt(def: SubagentDefinition): string;
     /** One executor per run, bound to its cancellation signal, WITHOUT a
      *  SubagentRunner attached. */
-    executor(signal: AbortSignal): LocalToolExecutor;
+    executor(signal: AbortSignal, source?: SubagentApprovalSource): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
     onUsage?(usage: LocalUsage): void;
@@ -301,7 +301,7 @@ export async function runSubagentTask(
     try {
         for await (const event of runLocalAgent(
             request,
-            wrapRestrictedExecutor(ctx.executor(signal), allowed),
+            wrapRestrictedExecutor(ctx.executor(signal, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined), allowed),
             { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined, signal) },
         )) {
             observation.receive(event);
