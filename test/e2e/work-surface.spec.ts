@@ -1042,7 +1042,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
             await blank.locator(`[data-open-panel="${panel}"]`).click();
             await expect(page.locator(`#surface-tab-${panel}`)).toHaveAttribute('aria-selected', 'true');
             await expect(page.locator(`#surface-panel-${panel}`)).toBeVisible();
-            await expect(page.locator(`#surface-panel-${panel} p`).first()).not.toBeEmpty();
+            await expect(page.locator(`#surface-panel-${panel} ${panel === 'downloads' ? 'strong' : 'p'}`).first()).not.toBeEmpty();
             await expect(page.locator('[role="tab"][data-panel^="new-"]')).toHaveCount(0);
         }
         expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
