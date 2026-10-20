@@ -5,6 +5,7 @@ import { installDetailsMotion } from './motion';
 import './styles/theme.css';
 import './styles/subpages.css';
 import './styles/workSurface.css';
+import './styles/downloads.css';
 import './styles/conversation.css';
 import './styles/browser.css';
 import './styles/agentObservation.css';

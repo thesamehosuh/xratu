@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
-import { Bot, ChevronLeft, ChevronRight, CodeXml, FilePlus2, GitPullRequest, Globe, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, Plus, RotateCcw, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, CodeXml, Download, FilePlus2, GitPullRequest, Globe, List, MessageSquare, MoreHorizontal, PanelRight, PanelsTopLeft, Plus, RotateCcw, SquareTerminal, X } from 'lucide-react';
 import { isNewTab, isSurfaceTab, type DockLocation, type SurfaceTab } from '../dockLayout';
 import { getLocale, t, tf } from '../i18n';
 
 export const PANEL_DRAG_TYPE = 'application/x-xratu-panel';
-export const PANEL_LABELS = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity', agents: 'surfaceAgentRuns', background: 'surfaceBackground', browser: 'surfaceBrowser', pullRequests: 'prTitle' } as const;
-export const PANEL_ICONS = { conversation: MessageSquare, changes: CodeXml, activity: List, agents: Bot, background: SquareTerminal, browser: Globe, pullRequests: GitPullRequest };
+export const PANEL_LABELS = { conversation: 'surfaceConversation', changes: 'surfaceChanges', activity: 'surfaceActivity', agents: 'surfaceAgentRuns', background: 'surfaceBackground', downloads: 'surfaceDownloads', browser: 'surfaceBrowser', pullRequests: 'prTitle' } as const;
+export const PANEL_ICONS = { conversation: MessageSquare, changes: CodeXml, activity: List, agents: Bot, background: SquareTerminal, downloads: Download, browser: Globe, pullRequests: GitPullRequest };
 export const tabLabel = (tab: SurfaceTab) => t(isNewTab(tab) ? 'surfaceNewTab' : PANEL_LABELS[tab]);
 interface Props {
     location: DockLocation;

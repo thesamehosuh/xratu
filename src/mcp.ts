@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { abortable } from './oauth/refreshLock';
+import { DOWNLOAD_MUTATIONS, DOWNLOAD_TOOLS } from './downloads/tools';
+import type { DownloadManager } from './downloads/manager';
 import { BROWSER_MUTATING_TOOLS, BROWSER_TOOL_DEFINITIONS } from './browserPolicy';
 import type { BrowserController } from './browserController';
 import { isOfflineMode } from './networkPolicy';
@@ -70,6 +72,7 @@ import {
 const MUTATING_TOOLS = new Set([
     'edit_file', 'replace_in_file', 'apply_patch',
     'run_terminal_command',
+    ...DOWNLOAD_MUTATIONS,
     ...EXPANSION_MUTATING_TOOL_NAMES,
 ]);
 
@@ -597,7 +600,9 @@ export function getLocalToolDefinitions(opts?: {
         .map(tool => ({ ...tool, requiresApproval: BROWSER_MUTATING_TOOLS.has(tool.name) }));
     const pullRequests = PULL_REQUEST_TOOLS.filter(tool => (!plan || !PULL_REQUEST_MUTATIONS.has(tool.name))
         && (!isOfflineMode() || !['get_pull_request', 'watch_pull_request'].includes(tool.name)));
-    return [...builtin, ...web, ...browser, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
+    const downloads = DOWNLOAD_TOOLS.filter(tool => !plan || !DOWNLOAD_MUTATIONS.has(tool.name))
+        .filter(tool => !isOfflineMode() || tool.name !== 'start_download');
+    return [...builtin, ...web, ...browser, ...downloads, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
 }
 
 /**
@@ -1473,7 +1478,7 @@ export function createLocalToolExecutor(
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
     /** Marks this executor as a delegated child's. */
-    opts?: { nested?: boolean; browser?: BrowserController; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor; approveOutsideWorkspace?: (call: import('./local/localTypes').LocalToolCall, paths: string[]) => Promise<boolean> },
+    opts?: { nested?: boolean; browser?: BrowserController; downloads?: DownloadManager; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor; approveOutsideWorkspace?: (call: import('./local/localTypes').LocalToolCall, paths: string[]) => Promise<boolean> },
 ): import('./local/localAgent').LocalToolExecutor {
     const snapshot = async (root: string, reason: string) => {
         opts?.signal?.throwIfAborted();
@@ -1481,6 +1486,13 @@ export function createLocalToolExecutor(
         opts?.signal?.throwIfAborted();
     };
     const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (DOWNLOAD_TOOLS.some(tool => tool.name === call.name)) {
+            if (opts?.plan && DOWNLOAD_MUTATIONS.has(call.name)) return { output: 'Error: download changes are disabled in plan mode.', isError: true };
+            if (!opts?.downloads) return { output: 'Error: downloads are unavailable in this context.', isError: true };
+            if (call.name === 'start_download' || (call.name === 'control_download' && ['resume', 'restart'].includes(String(call.arguments.action)))) await snapshot(workspaceRoot, call.name);
+            opts.signal?.throwIfAborted();
+            return opts.downloads.tool(workspaceRoot, call.name, call.arguments, opts.signal);
+        }
         if (PULL_REQUEST_TOOLS.some(tool => tool.name === call.name)) {
             if ((opts?.plan || opts?.nested) && PULL_REQUEST_MUTATIONS.has(call.name)) return { output: 'PR session changes are unavailable in plan mode and subagents.', isError: true };
             if (!opts?.pullRequests) return { output: 'PR tools are unavailable in this context.', isError: true };

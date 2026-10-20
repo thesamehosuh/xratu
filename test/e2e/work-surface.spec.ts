@@ -611,7 +611,7 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.dock-tabs.main #surface-tab-changes')).toBeVisible();
         await page.setViewportSize({ width: 420, height: 900 });
         await expect(page.locator('.dock-sidebar')).toBeHidden();
-        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(4);
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(5);
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
         await page.setViewportSize({ width: 1080, height: 900 });
@@ -1033,12 +1033,12 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.getByRole('menuitem', { name: 'Reset layout', exact: true }).click();
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
-        await expect(page.locator('[role="tab"]')).toHaveCount(1);
-        for (const panel of ['agents', 'background', 'changes', 'activity', 'pullRequests', 'browser']) {
+        await expect(page.locator('[role="tab"]')).toHaveCount(2);
+        for (const panel of ['agents', 'background', 'downloads', 'changes', 'activity', 'pullRequests', 'browser']) {
             await page.locator('.dock-tabs.main .dock-add-button').click();
             const blank = page.locator('.new-tab-pane:not(.panel-hidden)');
             await expect(blank.locator('h2')).not.toBeEmpty();
-            await expect(blank.locator('.new-tab-choice')).toHaveCount(7);
+            await expect(blank.locator('.new-tab-choice')).toHaveCount(8);
             await blank.locator(`[data-open-panel="${panel}"]`).click();
             await expect(page.locator(`#surface-tab-${panel}`)).toHaveAttribute('aria-selected', 'true');
             await expect(page.locator(`#surface-panel-${panel}`)).toBeVisible();
@@ -1162,7 +1162,7 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
         };
     });
     await expect.poll(selectedFits).toMatchObject({ fits: true });
-    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(10);
+    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(11);
     await nav.locator('[role=tab][aria-selected=true]').press('Tab');
     if (process.platform === 'darwin') {
         // macOS Chromium follows the system Full Keyboard Access setting, which

@@ -2,6 +2,8 @@ import { EngineScope, NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
+import { DownloadsPanel } from './components/DownloadsPanel';
+import { useDownloads } from './useDownloads';
 import { BrowserPanel } from './components/BrowserPanel';
 import { collectAgentRuns } from './subagentView';
 import { SubagentsPanel } from './components/SubagentsPanel';
@@ -241,6 +243,7 @@ export function App() {
         });
     }, [currentSessionId]);
     const pullRequests = usePullRequests(currentSessionId);
+    const downloads = useDownloads();
     const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, false, hasActivity(chat.messages));
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
@@ -1848,6 +1851,7 @@ export function App() {
             {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
             <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />
             <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={showConversation} />
+            <DownloadsPanel {...downloads} visible={dock.mainActive === 'downloads' || dock.sideActive === 'downloads'} panelClass={dock.position('downloads')} />
             <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
             {(pullRequests.state.links.length > 0 || dock.allPanels.includes('pullRequests')) && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} />}
             <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>

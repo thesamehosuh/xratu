@@ -53,7 +53,7 @@ for (const saved of [null, {}, {version: 3}, {version: 1, main: ['conversation',
     assert.deepEqual(readDockLayout(saved), defaultDockLayout());
 }
 let layout = movePanel(defaultDockLayout(), 'activity', 'side');
-assert.deepEqual(layout.main, ['conversation', 'agents', 'background', 'pullRequests']);
+assert.deepEqual(layout.main, ['conversation', 'agents', 'background', 'downloads', 'pullRequests']);
 assert.deepEqual(layout.side, ['changes', 'browser', 'activity']);
 assert.equal(layout.sideActive, 'activity');
 layout = movePanel(layout, 'changes', 'main');
@@ -72,6 +72,9 @@ assert.ok(!closed.main.includes('changes'));
 assert.ok(!closed.main.includes('new-example'));
 assert.ok(closed.main.includes('conversation'));
 assert.deepEqual(readDockLayout(closed), closed);
+const migratedDownloads = readDockLayout({ version: 3, main: ['conversation'], side: [], mainActive: 'conversation' });
+assert.deepEqual(migratedDownloads.main, ['conversation', 'downloads']);
+assert.deepEqual(readDockLayout(closeTabs(migratedDownloads, ['downloads'], migratedDownloads.main)).main, ['conversation']);
 assert.equal(movePanel(closed, 'changes', 'main').mainActive, 'changes');
 assert.equal(closeTabs(layout, ['activity'], ['conversation', 'changes', 'activity', 'browser']).mainActive, 'changes');
 assert.deepEqual(readDockLayout({version: 3, main: ['conversation', 'new-../../bad'], side: []}), defaultDockLayout());
@@ -101,7 +104,7 @@ assert.doesNotMatch(renderToString(createElement(ActivityTimeline, {messages:[la
 
 const reordered = movePanel(defaultDockLayout(), 'browser', 'main', 'conversation');
 assert.equal(reordered.main[0], 'browser');
-assert.equal(new Set([...reordered.main, ...reordered.side]).size, 7);
+assert.equal(new Set([...reordered.main, ...reordered.side]).size, 8);
 assert.deepEqual(readDockLayout(reordered), reordered);
 
 const hiddenWake = renderToString(createElement(MessageList, {messages:[user('visible'),{...user('internal notification'),hidden:true},{...message,id:'reply'}],onScroll:()=>{},onPickSuggestion:()=>{}}));

@@ -48,6 +48,8 @@ To change your connection later, open **Settings → Providers**. Use
 - Attach images, PDFs, or code, and steer the agent while it works.
 - Inspect diffs in **Changes**, detailed output in **Activity**, and running
   commands in **Background**. Restore files from a checkpoint when needed.
+- Ask the agent to download files and follow progress in **Downloads**. Downloads
+  resume after interruptions and use direct or configured proxy routing. [Details](docs/downloads.md).
 - Work with the agent in a shared **Browser**, or extend it through **MCP**,
   **Skills**, and custom **Agents**.
 

@@ -68,7 +68,12 @@ for (const name of ['browser_open', 'browser_navigate', 'browser_click', 'browse
     check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
     check(`YOLO snapshot: ${name} still reaches the live approval gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);
 }
-for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot']) check(`plan: keeps ${name}`, planNames.has(name), true);
+for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot', 'list_downloads']) check(`plan: keeps ${name}`, planNames.has(name), true);
+for (const name of ['start_download', 'control_download']) {
+    check(`plan: no ${name}`, planNames.has(name), false);
+    check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
+    check(`YOLO snapshot: ${name} reaches live gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);
+}
 
 // Read tools stay (planning needs them).
 for (const name of ['read_file', 'grep_search', 'list_files', 'update_task_list', 'exit_plan_mode', 'ask_user_question']) {

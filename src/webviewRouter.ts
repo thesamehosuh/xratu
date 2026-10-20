@@ -41,6 +41,7 @@ export interface RouterDeps {
 
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
+    _sendDownloads(): void;
     _sendPullRequests(requestId?: string, refresh?: boolean): Promise<void>;
     _pullRequestAction(action: PullRequestAction, url: unknown, sessionId: string | null, requestId: string, autoResume?: boolean): Promise<void>;
     _stopPullRequestWatches(): Promise<void>;
@@ -246,6 +247,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // reasoning). Pushed here so a reload never renders
                     // pills at the wrong default.
                     host._sendRuntimePreferences();
+                    host._sendDownloads();
                     host._sendTranscriptPrefs();
                     host._startConnectionPolling();
                     // Re-echo the policy toggles: a webview reload
@@ -565,6 +567,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'pullRequestsGetState':
                     if (typeof data.requestId === 'string' && data.requestId.length <= 100) await host._sendPullRequests(data.requestId, data.refresh === true);
+                    break;
+                case 'downloadsGetState':
+                    host._sendDownloads();
                     break;
                 case 'pullRequestAction':
                     if (typeof data.requestId === 'string' && data.requestId.length <= 100 && ['link', 'unlink', 'refresh', 'watch', 'unwatch', 'resume', 'dismiss'].includes(data.action)) {
