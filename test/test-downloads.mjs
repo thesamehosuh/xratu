@@ -205,6 +205,22 @@ try {
         assert.equal(f.state(r.id).status, 'cancelled'); assert.equal(f.secretMap.size, 0);
         assert.deepEqual(await fs.readdir(f.root), ['link']);
     });
+    await test('relative destinations use the same canonical spelling as the path sanitizer', async ({ mock }) => {
+        const f = await fixture(), alias = path.join(path.dirname(f.root), 'workspace-alias');
+        await fs.symlink(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        const fileSystem = require('node:fs'), realpath = fileSystem.realpathSync;
+        const root = realpath(f.root);
+        // Simulate legacy realpathSync retaining a Windows short-name prefix
+        // while the native asynchronous realpath expands it. Both paths exist.
+        mock.method(fileSystem, 'realpathSync', (...args) => {
+            const resolved = realpath(...args), relative = path.relative(root, resolved);
+            return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) ? path.join(alias, relative) : resolved;
+        });
+        const r = await f.start('/file', { path: 'models/model.bin', sha256: digest });
+        assert.equal(r.path, path.join('models', 'model.bin'));
+        assert.equal((await f.finished(r.id)).status, 'completed');
+        assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+    });
     await test('destination races never overwrite a file and another window cannot acquire ownership', async () => {
         const f = await fixture(); const r = await f.start('/slow', { path: 'race.bin' });
         await until(() => f.state(r.id).received >= 4096); await fs.writeFile(path.join(f.root, r.path), 'user data');

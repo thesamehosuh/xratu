@@ -197,7 +197,9 @@ export class DownloadManager {
         signal?.throwIfAborted();
         const target = sanitizePath(textArg(args.path, 'path', 4096), this.workspace);
         if (/[\r\n\0]/.test(target)) throw new Error('Download path contains unsupported control characters.');
-        const relative = path.relative(await fs.realpath(this.workspace), target);
+        // Use the sanitizer's spelling for both operands: native realpath can
+        // expand Windows short names that realpathSync preserves.
+        const relative = path.relative(sanitizePath('.', this.workspace), target);
         validateRecordPath(relative);
         const comparable = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
         if ([...this.records.values()].some(r => {
