@@ -1021,8 +1021,9 @@ test('live changes follow the latest edited file and preserve a manual selection
     await expect(page.locator('.review-file.selected')).toContainText('src/first.ts');
     await refresh([{ ...changes[0], modifiedAt: 1 }, { ...changes[1], modifiedAt: 3 }]);
     await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
-    await replyFile(page, 'second changed again');
-    await expect(page.locator('.review-diff')).toContainText('second changed again');
+    const secondRequest = (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === 'src/second.ts').at(-1)!;
+    await post(page, { ...secondRequest, type: 'changeFileState', file: { path: 'src/second.ts', kind: 'text', before: 'old', after: 'second changed again', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: ['second changed again'] }] } });
+    await expect(page.locator('.review-open-file').filter({ has: page.locator('.review-diff-head', { hasText: 'src/second.ts' }) })).toContainText('second changed again');
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
@@ -1225,4 +1226,85 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`closin
     await expect(page.locator('.background-output')).toHaveAttribute('data-retained', 'yes');
     await page.locator('.bg-job-stop').click();
     expect(await sent(page)).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`multiple diffs retain independent replies (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        await page.locator('.review-file').filter({ hasText: 'src/second.ts' }).click();
+        await expect.poll(async () => (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === 'src/second.ts').length).toBeGreaterThan(0);
+        for (const path of ['src/second.ts', 'src/first.ts']) {
+            const request = (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === path).at(-1)!;
+            await post(page, { ...request, type: 'changeFileState', file: { path, kind: 'text', before: 'old', after: path, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: [path] }] } });
+        }
+        await expect(page.locator('.review-diff')).toHaveCount(2);
+        await page.screenshot({ path: info.outputPath('multiple-diffs.png') });
+        await page.locator('.review-file').filter({ hasText: 'src/first.ts' }).click();
+        await expect(page.locator('.review-diff')).toHaveCount(1);
+        await expect(page.locator('.review-diff')).toContainText('src/second.ts');
+        const beforeRefresh = await latest(page, 'changesGetState');
+        await page.locator('.review-head .icon-btn').click();
+        const refreshed = await latest(page, 'changesGetState', beforeRefresh.requestId);
+        await post(page, { ...refreshed, type: 'changesState', files: changes });
+        await expect(page.locator('.review-file').filter({ hasText: 'src/first.ts' })).toHaveAttribute('aria-expanded', 'false');
+        await expect(page.locator('.review-open-file')).toHaveCount(1);
+    });
+    test(`CTX caps, compaction lifecycle, and refresh icon (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
+        await post(page, { type: 'modelInfo', defaultModel: 'coder', selectedModel: 'coder', models: ['coder'], contextWindows: { coder: 32768 }, overrides: { coder: 1048576 } });
+        await page.locator('.tok-meter').click();
+        await expect(page.locator('.ctx-opt', { hasText: '64k' })).toHaveCount(0);
+        await expect(page.locator('.ctx-opt', { hasText: '32k' })).toHaveCount(1);
+        await page.keyboard.press('Escape');
+        await page.locator('.picker-chip').click();
+        await post(page, { type: 'modelsRefreshing', active: true });
+        await expect(page.locator('.model-pop-head .ghost-btn')).not.toHaveClass(/spinning/);
+        await expect(page.locator('.model-pop-head .ghost-btn > svg')).toHaveClass(/spinning/);
+        await page.keyboard.press('Escape');
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'compactionState', active: true });
+        await expect(page.locator('.compaction-status')).toBeVisible();
+        await page.screenshot({ path: info.outputPath('compaction.png') });
+        await post(page, { type: 'byokReset' });
+        await expect(page.locator('.compaction-status')).toHaveCount(0);
+    });
+}
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`Activity jump resumes following the bottom (${locale}, ${width})`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 });
+    await post(page, { type: 'locale', locale });
+    await post(page, { type: 'startResponse' });
+    for (let index = 0; index < 40; index++) {
+        await post(page, { type: 'toolCall', tool: index % 2 ? 'grep_search' : 'read_file', args: JSON.stringify({ path: `src/file${index}.ts` }), callId: `read-${index}` });
+        await post(page, { type: 'toolResult', tool: index % 2 ? 'grep_search' : 'read_file', output: 'content', callId: `read-${index}` });
+    }
+    await page.locator('#surface-tab-activity').click();
+    const pane = page.locator('#surface-panel-activity');
+    await pane.evaluate(element => { element.scrollTop = 0; });
+    const jump = pane.locator('.jump-btn');
+    await expect(jump).toBeVisible();
+    await page.screenshot({ path: info.outputPath('activity-jump.png') });
+    await jump.click();
+    await expect(jump).toHaveCount(0);
+    await expect.poll(() => pane.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(48);
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`outside-workspace approval remains actionable (${locale}, ${width})`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 });
+    await post(page, { type: 'locale', locale });
+    await post(page, { type: 'startResponse' });
+    await post(page, { type: 'needsApproval', approval_id: 'outside', approvals: [{ tool_call_id: 'outside-edit', tool_name: 'edit_file', args: { path: '../shared/settings.json', new_content: '{}', outside_workspace_paths: ['../shared/settings.json'] } }] });
+    await expect(page.locator('.approval-boundary-note')).toBeVisible();
+    await expect(page.locator('.approval-session')).toHaveCount(0);
+    const approve = page.locator('.approval-apply');
+    await expect(approve).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('outside-approval.png') });
+    await approve.click();
+    const decision = await latest(page, 'approvalDecision');
+    expect(decision.approvalId).toBe('outside');
+    expect(decision.decisions).toEqual({ 'outside-edit': true });
 });

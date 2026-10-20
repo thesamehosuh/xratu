@@ -286,7 +286,13 @@ export function withPathAlias<T extends Record<string, unknown>>(args: T): T {
     return args;
 }
 
-export function sanitizePath(userPath: string, workspaceRoot: string): string {
+export class OutsideWorkspacePathError extends Error {
+    constructor(userPath: string, readonly resolvedPath: string) {
+        super(`Path '${userPath}' is outside the workspace.`);
+    }
+}
+
+export function sanitizePath(userPath: string, workspaceRoot: string, approvedPaths?: ReadonlySet<string>): string {
     // Type-check FIRST: an undefined/blank path used to reach path.isAbsolute
     // and die with a raw Node TypeError ("The 'path' argument must be of type
     // string. Received undefined") that told the model nothing. Name the
@@ -367,7 +373,7 @@ export function sanitizePath(userPath: string, workspaceRoot: string): string {
     const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
     const inside = comparable(resolved).startsWith(comparable(rootWithSep));
     if (!inside && comparable(resolved) !== comparable(realRoot)) {
-        throw new Error(`Path '${userPath}' is outside the workspace.`);
+        if (!approvedPaths?.has(resolved)) throw new OutsideWorkspacePathError(userPath, resolved);
     }
     return resolved;
 }

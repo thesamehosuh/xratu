@@ -32,6 +32,8 @@ export type SessionApprovalKind = string;
 /** The kind a tool call belongs to, or null when the call must always
  *  prompt (unclassifiable terminal commands). */
 export function sessionApprovalKind(toolName: string, args: Record<string, unknown>): SessionApprovalKind | null {
+    // A generic tool grant never extends beyond the workspace boundary.
+    if (Array.isArray(args.outside_workspace_paths) && args.outside_workspace_paths.length) return null;
     if (toolName === TERMINAL_TOOL) {
         const command = typeof args.command === 'string'
             ? args.command

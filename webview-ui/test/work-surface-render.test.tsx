@@ -114,3 +114,8 @@ assert.match(diffPanelOpen, /outcome-review/);
 assert.doesNotMatch(diffPanelOpen, /Ask for review/);
 const historicalDiffs = renderToString(createElement(MessageList, {messages:[user('first','aaa'),{...message,id:'first-answer'},user('second','bbb'),{...message,id:'second-answer'}],onScroll:()=>{},onPickSuggestion:()=>{},onReviewChanges:()=>{},turnFiles:{'aaa:bbb':[{path:'first.ts',added:1,removed:0,binary:false}],'bbb:':[{path:'second.ts',added:2,removed:0,binary:false}]}}));
 assert.equal((historicalDiffs.match(/class="outcome-review"/g)??[]).length,2);
+
+const outsideApproval = render({ ...message, approval: { approval_id: 'outside', approvals: [{ tool_call_id: 'outside-edit', tool_name: 'edit_file', args: { path: '../outside.txt', outside_workspace_paths: ['../outside.txt'] } }] } });
+assert.match(outsideApproval, /outside the workspace/);
+assert.doesNotMatch(outsideApproval, /class="approval-session"/);
+assert.doesNotMatch(outsideApproval, /Auto-denied/);

@@ -1163,7 +1163,13 @@ export function App() {
     // Per-model windows for the picker badges: the served table with the
     // user's explicit overrides applied, so a badge reflects what the user set.
     const modelWindowsMerged = useMemo(
-        () => ({ ...(modelInfo?.contextWindows ?? {}), ...ctxOverrides }),
+        () => {
+            const windows = { ...(modelInfo?.contextWindows ?? {}) };
+            for (const [model, override] of Object.entries(ctxOverrides)) {
+                windows[model] = Math.min(override, resolveWindow(modelInfo?.contextWindows, model) ?? Infinity);
+            }
+            return windows;
+        },
         [modelInfo, ctxOverrides]
     );
 
@@ -1696,6 +1702,7 @@ export function App() {
             <div className="compose-dock">
             {dock.mainActive !== 'pullRequests' && dock.sideActive !== 'pullRequests' && <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />}
             <div className="composer-support">
+            {chat.busy && chat.compacting && <div className="compaction-status" role="status" aria-live="polite"><span className="step-status spinner" aria-hidden="true" /><span>{t('compactingContext')}</span></div>}
             {/* Connection/setup ERRORS only - the "no creds configured" hint
                 lives in the empty message list (setupMode), not here. */}
             {byokError && (
@@ -1751,10 +1758,7 @@ export function App() {
                     setScreen('usage');
                     send({ type: 'usageGetState' });
                 }}
-                contextWindow={
-                    (selectedModel ? ctxOverrides[selectedModel] : undefined) ??
-                    resolveWindow(modelInfo?.contextWindows, selectedModel)
-                }
+                contextWindow={resolveWindow(modelWindowsMerged, selectedModel)}
                 defaultContextWindow={resolveWindow(modelInfo?.contextWindows, selectedModel)}
                 ctxOverridden={!!(selectedModel && ctxOverrides[selectedModel] != null)}
                 planMode={plan}

@@ -483,3 +483,17 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
     .page-sidebar .sidebar-back { min-height:34px; margin-block-end:12px; }
     .page-sidebar :is(.sidebar-back,.sidebar-item) > span { position:absolute; inline-size:1px; block-size:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 }
+
+.toolbar > .toolbar-new-chat { order:-1; flex-shrink:0; width:28px; height:28px; padding:0; }
+.app[dir='rtl'] .toolbar > .toolbar-new-chat { order:1; }
+.session-row:hover,.session-row:focus-within { background:color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
+.session-row-main:hover:not(:disabled) { background:transparent; }
+.activity-jump { position:sticky; inset-block-end:12px; height:0; display:flex; justify-content:center; z-index:3; }
+.activity-jump .jump-btn { position:relative; inset:auto; transform:translateY(-40px); }
+
+.compaction-status { display:flex; align-items:center; gap:8px; padding:8px 12px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); }
+.review-open-file + .review-open-file { margin-block-start:18px; border-block-start:1px solid var(--page-line); }
+
+.review-file-chevron { flex-shrink:0; transform:rotate(-90deg); }
+.review-file-chevron.open { transform:none; }
+.app[dir='rtl'] .review-file-chevron:not(.open) { transform:rotate(90deg); }

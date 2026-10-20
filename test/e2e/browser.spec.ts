@@ -58,6 +58,21 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await page.locator('.browser-address').fill(demoUrl); await page.locator('.browser-address').press('Enter');
             await expect(page.locator('.browser-viewport img')).toBeVisible();
             await expect(page.locator('.browser-page-title')).toHaveText('Browser test');
+            const live = controller.getState();
+            const samePixels = await page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.src.split(',')[1]);
+            for (const frameId of [100000, 100001]) {
+                await post(page, { type: 'browserFrame', frame: { sessionId: live.sessionId, browserId: live.browserId, frameId, data: samePixels, ...live.viewport } });
+                await expect.poll(() => page.evaluate(id => (window as unknown as { __xratuHostMessages: Array<{ type: string; frameId: number }> }).__xratuHostMessages.some(message => message.type === 'browserFrameAck' && message.frameId === id), frameId)).toBe(true);
+            }
+            await controller.command(live.sessionId, live.browserId, { action: 'resize', width: 1600, height: 900 });
+            await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1600);
+            const proportions = await page.locator('.browser-viewport img').evaluate(img => { const rect = img.getBoundingClientRect(); return rect.width / rect.height; });
+            expect(proportions).toBeCloseTo(1600 / 900, 2);
+            await page.locator('.browser-viewport-picker select').selectOption('fill');
+            await expect.poll(() => controller.getState().viewportMode).toBe('fill');
+            await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(controller.getState().viewport.width);
+            await page.screenshot({ path: info.outputPath('browser.png') });
+
             await page.locator('#surface-tab-conversation').click();
             expect((await controller.tool('browser-session', 'browser_open', { url: demoUrl })).isError).toBeUndefined();
             await expect(page.locator('#surface-tab-browser')).toHaveAttribute('aria-selected', 'true');

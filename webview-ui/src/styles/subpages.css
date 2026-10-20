@@ -465,3 +465,16 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .rate-spend .usage-amounts { align-items:flex-end; }
 
 .engines-page .settings-head { padding-inline:max(var(--page-gutter, 18px), calc((100% - 540px) / 2)); }
+
+/* Section hierarchy and dividers follow the same rhythm throughout preferences. */
+.preferences-page .settings-section-head { padding-block:8px 12px; border-block-end:1px solid var(--page-line); margin-block-end:4px; }
+.preferences-page .settings-section-head h3 { font-size:var(--xratu-fs-lg); font-weight:650; }
+.preferences-page .settings-section-icon { display:flex; align-items:center; color:var(--page-muted); }
+.preferences-page .settings-nav-row { border-block-end:0; }
+.preferences-page .settings-nav-row + .settings-nav-row { border-block-start:1px solid var(--page-line); }
+.preferences-page .settings-danger-row { padding:10px 12px; margin-block-start:6px; border:1px solid transparent; border-radius:6px; color:var(--vscode-errorForeground); }
+.preferences-page .settings-danger-row:hover { background:color-mix(in srgb, var(--vscode-errorForeground) 9%, transparent); border-color:color-mix(in srgb, var(--vscode-errorForeground) 25%, transparent); }
+.usage-page .settings-card + .settings-card > .settings-section-head { margin-block-start:18px; }
+.routing-page .proxy-mcp-row:last-child { border-block-end:0; }
+
+.usage-providers,.usage-page .rate-disclosure { margin-block-start:20px; }

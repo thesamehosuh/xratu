@@ -13,7 +13,7 @@ import { promisify } from 'util';
 import { isOfflineMode, setOfflineMode, isLoopbackUrl } from './networkPolicy';
 import { manageOllamaModel } from './local/ollamaManagement';
 import { requestStreamingCompletion } from './local/wireAdapters';
-import { getLocalToolDefinitions, createLocalToolExecutor } from './mcp';
+import { getLocalToolDefinitions, createLocalToolExecutor, getOutsideWorkspacePaths } from './mcp';
 import { BrowserController } from './browserController';
 import { PullRequestController, type PullRequestAction } from './pullRequests/controller';
 import { PullRequestError, executionMatches, type PullRequestExecution } from './pullRequests/types';
@@ -62,7 +62,7 @@ import {
     type ProxyTestOutcome,
     type ProxyTestResult,
 } from './proxyTest';
-import { sanitizePath } from './paths';
+import { sanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
 import { ATTACH_MAX_BYTES, ATTACH_MAX_COUNT, ATTACH_MAX_TOTAL_BYTES, buildLocalUserText, isImageAttachment, isPdfAttachment, isTextAttachment, mimeFromFilename, resolveReferenceAttachments, validateHostAttachments } from './attachments';
 import type { AttachmentMeta, ComposerAttachment, HistoryMessage } from './chatViewTypes';
 import { displayHistoryForReplay } from './chatReplay';
@@ -341,13 +341,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return nativeServiceTools(getLocalToolDefinitions({ skills: this._discoverSkillsForRun(workspace) }));
     }
 
+    private async _approveOutsideWorkspace(call: import('./local/localTypes').LocalToolCall, paths: string[], signal?: AbortSignal, source?: SubagentApprovalSource): Promise<boolean> {
+        signal?.throwIfAborted();
+        const decisions = await this._requestLocalApproval(`outside-${crypto.randomUUID()}`, [{
+            tool_call_id: call.id, tool_name: call.name,
+            args: { ...withPathAlias(call.arguments), outside_workspace_paths: paths },
+        }], source, signal);
+        signal?.throwIfAborted();
+        return decisions[call.id] === true;
+    }
+
     private _nativeServiceExecutor(workspace: string, signal: AbortSignal, plan: boolean) {
         const sessionId = this._browserSessionId();
         this._browser.setSession(sessionId);
         return createLocalToolExecutor(workspace,
             (root, reason) => this._checkpoints.ensureTurnSnapshot(root, reason),
             undefined, name => resolveSkillForRun(workspace, name, new Set(this._disabledSkillIds())),
-            undefined, undefined, { browser: this._browser, sessionId, signal, plan });
+            undefined, undefined, { browser: this._browser, sessionId, signal, plan, approveOutsideWorkspace: (call, paths) => this._approveOutsideWorkspace(call, paths, signal) });
     }
     private readonly _pullRequests: PullRequestController;
     private _browserPanelVisible = false;
@@ -3483,7 +3493,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!model) return;
         const map = this._contextWindowOverrides();
         if (typeof window === 'number' && window >= 1024 && Number.isFinite(window)) {
-            map[model] = Math.floor(window);
+            map[model] = Math.min(Math.floor(window), this._modelContextWindowMax(model) ?? Infinity);
         } else {
             delete map[model];
         }
@@ -3499,7 +3509,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         model = model || this._selectedModel;
         if (!model) return undefined;
         const override = this._contextWindowOverrides()[model];
-        if (typeof override === 'number' && override >= 1024) return override;
+        const maximum = this._modelContextWindowMax(model);
+        if (typeof override === 'number' && Number.isFinite(override) && override >= 1024) return Math.min(override, maximum ?? Infinity);
+        return maximum;
+    }
+
+    private _modelContextWindowMax(model: string): number | undefined {
         if (this._activeEngine === 'opencode') return this._nativeModelWindows[model];
         const lowered = model.toLowerCase();
         const table = this._contextWindowsFor(baseUrlHost(this._runBaseUrl ?? ''));
@@ -4499,19 +4514,31 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // One approval gate for the whole run tree: a child tool call that
         // needs consent surfaces as the same webview approval card. YOLO is
         // consulted LIVE per call (mid-run toggles apply from the next call).
+        const outsideGrants = new WeakMap<import('./local/localTypes').LocalToolCall, string[]>();
+        const approveOutsideWorkspace = async (call: import('./local/localTypes').LocalToolCall, paths: string[], signal?: AbortSignal, source?: SubagentApprovalSource): Promise<boolean> => {
+            const granted = outsideGrants.get(call);
+            outsideGrants.delete(call);
+            if (granted?.length === paths.length && paths.every(path => granted.includes(path))) return true;
+            return this._approveOutsideWorkspace(call, paths, signal, source);
+        };
         const localApprovalGate: LocalApprovalGate = {
-            requestApproval: (id, calls, source, signal) => {
+            requestApproval: async (id, calls, source, signal) => {
                 if (this._yoloMode && !runPlanMode) {
                     return Promise.resolve(
                         Object.fromEntries(calls.map((c) => [c.id, true]))
                     );
                 }
-                return this._requestLocalApproval(
-                    id,
-                    calls.map((c) => ({ tool_call_id: c.id, tool_name: c.name, args: c.arguments })),
-                    source,
-                    signal,
-                );
+                const approvals = calls.map(call => {
+                    let paths: string[] = [];
+                    try { paths = getOutsideWorkspacePaths(workspaceRoot, call.name, call.arguments); }
+                    catch { /* Invalid paths remain denied by the preview/executor. */ }
+                    return { tool_call_id: call.id, tool_name: call.name, args: paths.length ? { ...withPathAlias(call.arguments), outside_workspace_paths: paths } : call.arguments, paths, call };
+                });
+                const decisions = await this._requestLocalApproval(id, approvals, source, signal);
+                for (const approval of approvals) {
+                    if (decisions[approval.tool_call_id] && approval.paths.length) outsideGrants.set(approval.call, approval.paths);
+                }
+                return decisions;
             },
         };
 
@@ -4591,7 +4618,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }),
                 // Child executor WITHOUT the subagent runner: `task` is
                 // unexecutable in a child even if the model hallucinates it.
-                executor: (signal) => createLocalToolExecutor(
+                executor: (signal, source) => createLocalToolExecutor(
                     workspaceRoot,
                     (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
                     externalMcpInstance ?? undefined,
@@ -4604,7 +4631,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
                     undefined,
-                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool },
+                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, signal, source) },
                 ),
                 approvalGate: localApprovalGate,
                 onObservation: (callId, trace) => {
@@ -4647,7 +4674,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ),
             subagentRunner,
             decisionGate,
-            { browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool },
+            { browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, controller.signal) },
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -4750,6 +4777,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // actually has overflows it and makes small local models
                     // degenerate (repetition loops). Over-estimating small
                     // only costs extra history compaction, which is functional.
+                    onCompactionState: (active) => {
+                        if (!controller.signal.aborted) this._view?.webview.postMessage({ type: 'compactionState', active });
+                    },
                     contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
                     maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
                     reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
@@ -5128,6 +5158,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._view?.webview.postMessage({ type: 'attempting' });
                 break;
             case 'engineNotice':
+                if (['engineCompacting', 'engineCompacted', 'engineCompactionFailed'].includes(event.valueKey)) {
+                    this._view?.webview.postMessage({ type: 'compactionState', active: event.valueKey === 'engineCompacting' });
+                }
                 this.notifyBanner(event.kind, event.valueKey, event.params);
                 break;
             case 'needsApproval':
@@ -7661,7 +7694,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'apply_patch') {
                 try {
                     sanitizePath(approval.args?.path || '', workspaceRoot);
-                } catch {
+                } catch (error) {
+                    if (error instanceof OutsideWorkspacePathError) {
+                        // Outside paths ask for this call only. Do not read them
+                        // for a preview before consent, or record session trust.
+                        out.push({ tool_call_id: approval.tool_call_id, tool_name: toolName, args: { ...approval.args, outside_workspace_paths: [error.resolvedPath] }, diff: null, kind: null });
+                        continue;
+                    }
                     preDenied[approval.tool_call_id] = false;
                     // Pre-denied calls still have an open timeline row from
                     // their streamed tool_call event - they need closing too.

@@ -189,6 +189,7 @@ export function Toolbar({
 
     return (
         <header className="toolbar" ref={rootRef}>
+            <button type="button" className="ghost-btn toolbar-new-chat" onClick={onNewSession} aria-label={t('newSession')} title={t('newSession')}><MessageSquarePlus size={15} /></button>
             <span className="toolbar-brand" role="img" aria-label={t('miniApp')}><img src={brandMark} alt="" /></span>
             <div className="toolbar-heading">
             <button
@@ -217,7 +218,6 @@ export function Toolbar({
                         <Blocks size={14} /><span className="toolbar-tools-label">{t('surfaceTools')}</span>
                     </button>
                 )}
-                <button type="button" className="ghost-btn" onClick={onNewSession} aria-label={t('newSession')} title={t('newSession')}><MessageSquarePlus size={15} /></button>
                 {onOpenSettings && (
                     <button
                         type="button"

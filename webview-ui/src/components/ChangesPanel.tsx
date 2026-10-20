@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, CodeXml, History, ExternalLink, FileText, MessageSquarePlus, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
+import { ChevronDown, CodeXml, History, ExternalLink, MessageSquarePlus, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -92,19 +92,14 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const id = useId();
     const sequence = useRef(0);
     const listTimer = useRef<number>();
-    const fileTimer = useRef<number>();
     const listRequest = useRef('');
     const listLoaded = useRef(false);
-    const fileRequest = useRef('');
-    const loadedFile = useRef<ReviewFile | null>(null);
     const previousFiles = useRef<ReviewChange[]>([]);
     const [files, setFiles] = useState<ReviewChange[]>([]);
     const [selected, setSelected] = useState<string | null>(null);
-    const [file, setFile] = useState<ReviewFile | null>(null);
+    const [opened, setOpened] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
-    const [fileLoading, setFileLoading] = useState(false);
     const [errorKey, setErrorKey] = useState<string | null>(null);
-    const [fileError, setFileError] = useState<string | null>(null);
     const [revision, setRevision] = useState(0);
     const [visibleFiles, setVisibleFiles] = useState(80);
     const liveBusy = busy && !toSha;
@@ -125,36 +120,29 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                     return !old || old.modifiedAt !== file.modifiedAt || old.added !== file.added || old.removed !== file.removed || old.binary !== file.binary || old.untracked !== file.untracked;
                 });
                 const newest = [...changed].sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))[0]?.path;
-                setSelected(current => {
-                    if (!previous.size && initialPath && message.files.some(file => file.path === initialPath)) return initialPath;
-                    if (!toSha && newest) return newest;
-                    return message.files.some(file => file.path === current) ? current : message.files[0]?.path ?? null;
-                });
+                const next = !previous.size && initialPath && message.files.some(file => file.path === initialPath) ? initialPath
+                    : !toSha && newest ? newest : message.files.some(file => file.path === selected) ? selected : message.files[0]?.path ?? null;
+                setSelected(next);
+                if (next && (!previous.size || (!toSha && newest) || next !== selected)) setOpened(open => open.includes(next) ? open : [...open, next]);
                 previousFiles.current = message.files;
                 onCount(message.files.length);
                 onFiles(message.files);
                 onSnapshot?.(message.files);
-            } else if (message.type === 'changeFileState' && message.requestId === fileRequest.current && message.sha === sha) {
-                window.clearTimeout(fileTimer.current);
-                setFileLoading(false);
-                loadedFile.current = message.file ?? null;
-                setFile(message.file ?? null);
-                setFileError(message.errorKey ?? null);
             }
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-    }, [onCount, onFiles, onSnapshot, initialPath, sha, toSha]);
+    }, [onCount, onFiles, onSnapshot, initialPath, sha, toSha, selected]);
 
     useEffect(() => {
-        setFiles([]); setSelected(null); setFile(null);
-        loadedFile.current = null; previousFiles.current = []; listLoaded.current = false;
-        listRequest.current = ''; fileRequest.current = '';
+        setFiles([]); setSelected(null); setOpened([]);
+        previousFiles.current = []; listLoaded.current = false;
+        listRequest.current = '';
         setVisibleFiles(80);
         onCount(0); onFiles([]);
     }, [sessionKey, sha, onCount, onFiles]);
 
-    useEffect(() => { if (initialPath) setSelected(initialPath); }, [initialPath, sha]);
+    useEffect(() => { if (initialPath) { setSelected(initialPath); setOpened(current => current.includes(initialPath) ? current : [...current, initialPath]); } }, [initialPath, sha]);
 
     useEffect(() => {
         listRequest.current = `${id}-list-${++sequence.current}`;
@@ -165,16 +153,6 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
         return () => window.clearTimeout(listTimer.current);
     }, [sha, toSha, liveBusy, revision, sessionKey, id]);
 
-    useEffect(() => {
-        fileRequest.current = `${id}-file-${++sequence.current}`;
-        const retained = loadedFile.current?.path === selected ? loadedFile.current : null;
-        setFile(retained); setFileError(null);
-        if (!expanded || !sha || !selected) { setFileLoading(false); return; }
-        setFileLoading(!retained);
-        postMessage({ type: 'changeFileGet', sha, toSha, path: selected, requestId: fileRequest.current });
-        fileTimer.current = window.setTimeout(() => { setFileLoading(false); setFileError('surfaceChangesFailed'); }, 45_000);
-        return () => window.clearTimeout(fileTimer.current);
-    }, [sha, toSha, expanded, selected, files, sessionKey, id]);
 
     useEffect(() => {
         let timer: number | undefined;
@@ -191,7 +169,6 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     }, [sessionKey, toSha]);
 
     const totals = useMemo(() => files.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed }), { added: 0, removed: 0 }), [files]);
-    const openFile = () => { if (sha && selected) postMessage({ type: 'changeFileOpen', sha, toSha, path: selected }); };
     return <section className="changes-review" hidden={!expanded} aria-label={t('surfaceChanges')}>
         <div className="review-head"><span>{t('surfaceSinceCheckpoint')}</span>{!!files.length && <span className="review-stat" dir="ltr">+{totals.added} <span className="minus">−{totals.removed}</span></span>}
             {!!files.length && userIndex !== undefined && <button type="button" className="settings-ghost-action review-restore" disabled={busy} onClick={() => { if (sha) postMessage({ type: 'restoreCheckpoint', userIndex, sha }); }} title={t('restoreCheckpointHint')}><RotateCcw size={12} />{t('restoreCheckpoint')}</button>}
@@ -201,16 +178,44 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
             {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} /><span>{tOrRaw(errorKey)}</span><button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
             {!errorKey && !files.length && (loading ? <p className="review-empty" role="status">{t('working')}</p> : <div className="surface-empty-state" role="status"><span className="surface-empty-icon" aria-hidden="true"><CodeXml size={22} /></span><strong>{t('surfaceNoChangesTitle')}</strong><p>{t(sha ? 'surfaceNoChanges' : 'surfaceChangesEmpty')}</p><span>{t('surfaceChangesHint')}</span></div>)}
             {!!files.length && <>
-                <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={selected === change.path} onClick={() => setSelected(change.path)}>
-                    <FileText size={12} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
+                <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={opened.includes(change.path)} aria-expanded={opened.includes(change.path)} onClick={() => { setSelected(change.path); setOpened(current => current.includes(change.path) ? current.filter(path => path !== change.path) : [...current, change.path]); }}>
+                    <ChevronDown size={12} className={`review-file-chevron${opened.includes(change.path) ? ' open' : ''}`} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
                 </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>
-                {fileLoading ? <span className="step-status spinner" aria-label={t('working')} /> : fileError ? <p role="alert">{tOrRaw(fileError)}</p> : file ? <>
-                    <div className="review-diff-head"><code dir="ltr">{file.path}</code></div>
-                    {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
-                    <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={openFile}><ExternalLink size={12} /><span>{t('surfaceOpenEditor')}</span></button>
-                        <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: file.path }))}><MessageSquarePlus size={12} /><span>{t('surfaceAskReview')}</span></button></div>
-                </> : null}
+                {sha && opened.filter(path => files.some(file => file.path === path)).map(path => <OpenFileDiff key={`${sessionKey}-${sha}-${path}`} sha={sha} toSha={toSha} path={path} expanded={expanded} revision={files} onFeedback={onFeedback} />)}
             </>}
         </div>
+    </section>;
+}
+
+/** Each open diff owns its request identity; late replies cannot replace a sibling. */
+function OpenFileDiff({ sha, toSha, path, expanded, revision, onFeedback }: { sha: string; toSha?: string; path: string; expanded: boolean; revision: ReviewChange[]; onFeedback: (text: string) => void }) {
+    const id = useId();
+    const sequence = useRef(0);
+    const [file, setFile] = useState<ReviewFile | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    useEffect(() => {
+        if (!expanded) return;
+        const requestId = `${id}-file-${++sequence.current}`;
+        let settled = false;
+        setError(null);
+        const timer = window.setTimeout(() => { settled = true; setLoading(false); setError('surfaceChangesFailed'); }, 45_000);
+        const handler = (event: MessageEvent<FromExtensionMessage>) => {
+            const message = event.data;
+            if (settled || message.type !== 'changeFileState' || message.requestId !== requestId || message.sha !== sha || (message.file && message.file.path !== path)) return;
+            settled = true; window.clearTimeout(timer);
+            setFile(message.file ?? null); setLoading(false); setError(message.errorKey ?? null);
+        };
+        window.addEventListener('message', handler);
+        postMessage({ type: 'changeFileGet', sha, toSha, path, requestId });
+        return () => { window.clearTimeout(timer); window.removeEventListener('message', handler); };
+    }, [sha, toSha, path, expanded, revision, id]);
+    return <section className="review-open-file">
+        <div className="review-diff-head"><code dir="ltr">{path}</code></div>
+        {loading ? <span className="step-status spinner" aria-label={t('working')} /> : error ? <p role="alert">{tOrRaw(error)}</p> : file ? <>
+            {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
+            <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={() => postMessage({ type: 'changeFileOpen', sha, toSha, path })}><ExternalLink size={12} /><span>{t('surfaceOpenEditor')}</span></button>
+                <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: path }))}><MessageSquarePlus size={12} /><span>{t('surfaceAskReview')}</span></button></div>
+        </> : null}
     </section>;
 }

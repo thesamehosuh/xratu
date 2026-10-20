@@ -430,7 +430,13 @@ export async function compactWithSummary(
     // summary as `existingSummary`, so strip the marker from what the
     // summarizer reads (see `summarizableDroppedTurns`).
     const droppedTurns = summarizableDroppedTurns(dropped);
-    const summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
+    let summary: string | null;
+    request.onCompactionState?.(true);
+    try {
+        summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
+    } finally {
+        request.onCompactionState?.(false);
+    }
     if (!summary || request.signal?.aborted) {
         // Nothing to carry: leave `messages` untouched so forced recovery
         // (deterministic) or the next compaction handles it. The previous

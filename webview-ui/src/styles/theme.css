@@ -4475,12 +4475,12 @@ pre.tool-cmd {
 
 /* Refresh-in-progress: gentle spin; keep the icon visible instead of
    letting :disabled fade it out. */
-.model-pop-head .ghost-btn.spinning {
+.model-pop-head .ghost-btn[aria-busy='true'] {
     opacity: 0.85;
     cursor: progress;
 }
 
-.model-pop-head .ghost-btn.spinning svg {
+.model-pop-head .ghost-btn[aria-busy='true'] svg {
     animation: xratu-spin 1.2s linear infinite;
 }
 

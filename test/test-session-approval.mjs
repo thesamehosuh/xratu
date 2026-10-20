@@ -58,6 +58,9 @@ check('blank command yields no kind', sessionApprovalKind('run_terminal_command'
 check('non-string command yields no kind', sessionApprovalKind('run_terminal_command', { command: 42 }), null);
 check('missing command never approved', isSessionApproved('run_terminal_command', {}, new Set(['cmd:npm'])), false);
 
+check('outside-workspace edits never inherit generic tool trust', isSessionApproved('edit_file', { path: '../outside.txt', outside_workspace_paths: ['outside.txt'] }, new Set(['tool:edit_file'])), false);
+check('outside-workspace edits cannot record a generic session grant', sessionApprovalKind('edit_file', { outside_workspace_paths: ['outside.txt'] }), null);
+
 // --- ordinary tools group by full tool name ---
 check('edit_file kind', sessionApprovalKind('edit_file', { path: 'src/a.ts' }), 'tool:edit_file');
 check('tool kind covers args differences', isSessionApproved('edit_file', { path: 'src/other.ts' }, new Set(['tool:edit_file'])), true);

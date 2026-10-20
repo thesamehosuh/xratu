@@ -129,12 +129,14 @@ async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYST
     const original = globalThis.fetch;
     globalThis.fetch = mockFetch(requests, summarizerMode, mainUsage);
     const events = [];
+    const compactionStates = [];
     try {
         for await (const event of runLocalAgent(
             {
                 baseUrl: 'https://example.invalid/v1',
                 apiKey: 'k',
                 model: 'test-model',
+                onCompactionState: active => compactionStates.push(active),
                 systemPrompt,
                 userText: 'now do it',
                 history,
@@ -153,7 +155,7 @@ async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYST
     } finally {
         globalThis.fetch = original;
     }
-    return { events, requests };
+    return { events, requests, compactionStates };
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +170,7 @@ ok('it reports a positive cumulative dropped count',
 ok('the summary is non-empty', !!compaction && compaction.value.includes('probe goal'));
 
 const summarizerCalls = turn1.requests.filter((r) => r.stream === false);
+ok('compaction lifecycle starts and settles around the summarizer', JSON.stringify(turn1.compactionStates) === '[true,false]');
 ok('exactly one summarizer call', summarizerCalls.length === 1, `got ${summarizerCalls.length}`);
 {
     const prompt = summarizerCalls[0]?.messages?.[0]?.content ?? '';

@@ -10,6 +10,7 @@ const LIVE_OUTPUT_MAX = 20_000;
 export interface ChatState {
     messages: ChatMessage[];
     busy: boolean;
+    compacting?: boolean;
     streamingId: string | null;
     lastUsage: ChatMessage['usage'];
     /** Cumulative session spend, HOST-provided and monotonic: a rewind or
@@ -27,7 +28,7 @@ export function nextId(): string {
 }
 
 export function createInitialChatState(): ChatState {
-    return { messages: [], busy: false, streamingId: null, lastUsage: null, sessionCost: null, backgroundJobs: [] };
+    return { messages: [], busy: false, compacting: false, streamingId: null, lastUsage: null, sessionCost: null, backgroundJobs: [] };
 }
 
 function append(state: ChatState, msg: ChatMessage): ChatState {
@@ -162,6 +163,8 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             return { ...s, busy: true };
         }
 
+        case 'compactionState':
+            return { ...state, compacting: msg.active };
         case 'chunk': {
             const { state: s, id } = ensureStreaming(state);
             return {
@@ -465,7 +468,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
         case 'fullResponse': {
             const id = state.streamingId;
             if (!id) {
-                return { ...state, busy: false, lastUsage: meaningfulUsage(msg.usage) ?? state.lastUsage };
+                return { ...state, busy: false, compacting: false, lastUsage: meaningfulUsage(msg.usage) ?? state.lastUsage };
             }
             const streaming = state.messages.find((m) => m.id === id);
             const segs = msg.segmentsHtml;
@@ -522,7 +525,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     retryStatus: null,
                     ...(steps ? { steps } : {}),
                 }),
-                busy: false,
+                busy: false, compacting: false,
                 streamingId: null,
                 lastUsage: meaningfulUsage(msg.usage) ?? state.lastUsage,
             };
@@ -530,7 +533,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
 
         case 'byokReset': {
             // Leaving chat for the credentials page: drop streaming state
-            return { ...state, busy: false, streamingId: null };
+            return { ...state, busy: false, compacting: false, streamingId: null };
         }
 
         case 'retrying': {
@@ -596,7 +599,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                             tone: 'error' as const,
                         };
                     }),
-                    busy: false,
+                    busy: false, compacting: false,
                     streamingId: null,
                 };
             }
@@ -610,7 +613,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     tone: 'error',
                     createdAt: Date.now(),
                 }),
-                busy: false,
+                busy: false, compacting: false,
             };
         }
 
@@ -787,14 +790,14 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     messages = messages.slice(0, userIdx);
                 }
             }
-            return { ...state, messages, busy: false, streamingId: null };
+            return { ...state, messages, busy: false, compacting: false, streamingId: null };
         }
 
         case 'truncateFromUser':
             return {
                 ...state,
                 messages: truncateFromUser(state.messages, msg.userIndex),
-                busy: false,
+                busy: false, compacting: false,
                 streamingId: null,
             };
 

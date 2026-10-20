@@ -28,10 +28,10 @@ try {
     await Promise.all([store.seedDefaults(), store.seedDefaults()]);
     const raw = await readFile(store.globalPath, 'utf8');
     const { mcpServers } = JSON.parse(raw);
-    assert.deepEqual(Object.keys(mcpServers).sort(), ['ddg-search']);
+    assert.deepEqual(Object.keys(mcpServers).sort(), ['ddg-search', 'digikala', 'divar', 'torob']);
     const { MCP_REGISTRY } = require('../out/mcpRegistry.js');
     for (const entry of MCP_REGISTRY.filter(entry => entry.tags?.includes('iranian'))) {
-        assert.notEqual(entry.defaultEnabled, true, 'third-party marketplace startup requires opt-in');
+        assert.equal(entry.defaultEnabled, true, 'Iranian marketplace defaults stay enabled');
         assert.equal(entry.server.autoApprove, undefined);
     }
     assert.equal(MCP_REGISTRY.find(entry => entry.id === 'torob').server.connectTimeoutMs, 120000);
@@ -57,7 +57,7 @@ try {
     await assert.rejects(readFile(store.globalPath), { code: 'ENOENT' });
     workspace.isTrusted = true;
     await store.seedDefaults();
-    assert.equal(Object.keys((await store.load()).servers).length, 1);
+    assert.equal(Object.keys((await store.load()).servers).length, 4);
     // The first Servers-page read cannot race ahead of publishing defaults.
     await rm(store.globalPath);
     const originalLink = fs.promises.link;
@@ -75,7 +75,7 @@ try {
         assert.equal(loadedEarly, false);
         release();
         await seeding;
-        assert.deepEqual(Object.keys((await reading).servers), ['ddg-search']);
+        assert.deepEqual(Object.keys((await reading).servers).sort(), ['ddg-search', 'digikala', 'divar', 'torob']);
     } finally { release(); fs.promises.link = originalLink; }
     // An interrupted publication must leave no truncated final config.
     await rm(store.globalPath);

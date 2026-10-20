@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
-import { Search, X } from 'lucide-react';
+import { ChevronDown, Search, X } from 'lucide-react';
 import { ActivityTimeline, type ActivityFilter } from './MessageItem';
 import { t } from '../i18n';
 import { Dropdown } from './Dropdown';
@@ -10,6 +10,7 @@ export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: Com
     const pane = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
+    const [showJump, setShowJump] = useState(false);
     const [filter, setFilter] = useState<ActivityFilter>('all');
     const [search, setSearch] = useState('');
     const options = transcriptOptions(props.transcriptPrefs);
@@ -19,7 +20,7 @@ export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: Com
     }, [visible, options.followActivity]);
 
     useLayoutEffect(() => {
-        pinned.current = true;
+        pinned.current = true; setShowJump(false);
         setFilter('all'); setSearch('');
     }, [sessionKey]);
 
@@ -37,7 +38,10 @@ export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: Com
     return <div ref={pane} className={`activity-pane ${panelClass}`} id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity" aria-hidden={!visible || undefined}
         onScroll={() => {
             const element = pane.current;
-            if (visible && element) pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+            if (visible && element) {
+                pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+                setShowJump(!pinned.current);
+            }
         }}>
         <div className="activity-filters">
             <div className="activity-search-box">
@@ -60,6 +64,10 @@ export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: Com
                 onResetFilter={hasActiveFilter ? () => { setFilter('all'); setSearch(''); } : undefined}
             />
         </div>
+        {showJump && <div className="activity-jump"><button type="button" className="jump-btn" aria-label={t('jumpToBottom')} title={t('jumpToBottom')} onClick={() => {
+            pinned.current = true; setShowJump(false);
+            if (pane.current) pane.current.scrollTop = pane.current.scrollHeight;
+        }}><ChevronDown size={16} /></button></div>}
     </div>;
 }
 

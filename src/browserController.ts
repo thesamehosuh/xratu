@@ -226,7 +226,7 @@ export class BrowserController {
         if (this.visible && !this.streaming) {
             this.streaming = true;
             try {
-                await this.protocolCommand(cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 1280 }));
+                await this.protocolCommand(cdp.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 2560, maxHeight: 2560 }));
                 if (cdp !== this.cdp || page !== this.page) return;
                 // An idle page may not emit a screencast frame until it changes.
                 this.pendingFrame = null;
