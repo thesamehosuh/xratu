@@ -14,7 +14,7 @@ Module._load = function (name, ...args) {
 const { createLocalToolExecutor } = require('../out/mcp.js');
 Module._load = original;
 const { sanitizePath, OutsideWorkspacePathError, withPathAlias } = require('../out/paths.js');
-const base = fs.mkdtempSync(path.join(tmpdir(), 'xratu-outside-'));
+const base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'xratu-outside-')));
 const workspace = path.join(base, 'workspace');
 const outside = path.join(base, 'outside');
 fs.mkdirSync(workspace); fs.mkdirSync(outside);
