@@ -86,6 +86,14 @@ async function fixture(overrides = {}) {
     const finished = id => until(() => ['completed', 'failed', 'paused'].includes(state(id)?.status) && state(id), 'transfer settles');
     return { manager, root, storage, deps, start, control, state, finished, secretMap, routed, validated, diagnostics };
 }
+async function metadataDirectory(f) {
+    const downloads = path.join(f.storage, 'downloads');
+    return path.join(downloads, (await fs.readdir(downloads))[0]);
+}
+async function restore(f) {
+    const manager = new DownloadManager(f.root, f.storage, f.deps);
+    managers.push(manager); await manager.ready; return manager;
+}
 
 try {
     await test('streams and verifies a file; safe views/manifest omit signed URLs; final file is exclusive', async () => {
@@ -209,6 +217,123 @@ try {
         const f = await fixture({ concurrency: 1 }); const a = await f.start('/slow'), b = await f.start('/slow');
         await until(() => f.state(a.id).received >= 4096); assert.equal(f.state(b.id).status, 'queued');
         await f.control(a.id, 'cancel'); assert.equal((await f.finished(b.id)).status, 'completed');
+    });
+    await test('empty, torn and abandoned same-process owner records recover without manual cleanup', async () => {
+        const f = await fixture(), directory = await metadataDirectory(f);
+        const owner = JSON.parse(await fs.readFile(path.join(directory, 'owner.json'), 'utf8'));
+        await f.manager.dispose();
+        const stale = ['', '{"pid":', JSON.stringify({ ...owner, owner: 'abandoned-owner' })];
+        if (owner.boot) stale.push(JSON.stringify({ ...owner, boot: `${owner.boot}-previous`, namespace: 'previous-boot-namespace' }));
+        for (const contents of stale) {
+            await fs.writeFile(path.join(directory, 'owner.json'), contents);
+            const manager = await restore(f);
+            assert.equal((await manager.tool(f.root, 'list_downloads', {})).isError, undefined);
+            await manager.dispose();
+        }
+    });
+    await test('concurrent stale-owner recovery admits only one live manager', async () => {
+        const f = await fixture(), directory = await metadataDirectory(f);
+        await f.manager.dispose(); await fs.writeFile(path.join(directory, 'owner.json'), '');
+        const contenders = [new DownloadManager(f.root, f.storage, f.deps), new DownloadManager(f.root, f.storage, f.deps)];
+        managers.push(...contenders);
+        const results = await Promise.allSettled(contenders.map(m => m.ready));
+        assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+        assert.match(results.find(r => r.status === 'rejected').reason.message, /another Xratu window/);
+        const winner = contenders[results.findIndex(r => r.status === 'fulfilled')];
+        const loser = contenders[results.findIndex(r => r.status === 'rejected')];
+        await loser.dispose();
+        assert.equal((await winner.tool(f.root, 'list_downloads', {})).isError, undefined);
+        await winner.dispose();
+    });
+    await test('a storage directory alias cannot bypass the live in-process owner registry', async () => {
+        const f = await fixture(); const alias = path.join(path.dirname(f.storage), 'storage-alias');
+        await fs.symlink(f.storage, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        const blocked = new DownloadManager(f.root, alias, f.deps); managers.push(blocked);
+        await assert.rejects(blocked.ready, /another Xratu window/);
+        assert.equal((await f.manager.tool(f.root, 'list_downloads', {})).isError, undefined);
+    });
+    await test('a recycled live PID with a different process incarnation does not retain ownership', async () => {
+        const f = await fixture(), directory = await metadataDirectory(f);
+        const owner = JSON.parse(await fs.readFile(path.join(directory, 'owner.json'), 'utf8'));
+        await f.manager.dispose();
+        await fs.writeFile(path.join(directory, 'owner.json'), JSON.stringify({ ...owner, pid: process.ppid, processToken: 'previous-process-incarnation' }));
+        const manager = await restore(f);
+        assert.equal((await manager.tool(f.root, 'list_downloads', {})).isError, undefined);
+        await manager.dispose();
+    });
+    await test('foreign-host and foreign-namespace leases are not judged by local PID liveness', async () => {
+        const f = await fixture(), directory = await metadataDirectory(f);
+        const owner = JSON.parse(await fs.readFile(path.join(directory, 'owner.json'), 'utf8'));
+        await f.manager.dispose();
+        for (const fields of [{ host: 'another-host' }, { namespace: 'another-namespace' }]) {
+            const text = JSON.stringify({ ...owner, ...fields });
+            await fs.writeFile(path.join(directory, 'owner.json'), text);
+            const blocked = new DownloadManager(f.root, f.storage, f.deps); managers.push(blocked);
+            await assert.rejects(blocked.ready, /another host or PID namespace/);
+            await blocked.dispose();
+            assert.equal(await fs.readFile(path.join(directory, 'owner.json'), 'utf8'), text);
+        }
+    });
+    await test('completed history survives a parent moved outside the workspace without blocking new downloads', async () => {
+        const f = await fixture(); const r = await f.start('/file', { path: 'models/model.bin' });
+        await f.finished(r.id); await f.manager.dispose();
+        const external = path.join(path.dirname(f.root), 'external-models');
+        await fs.rename(path.join(f.root, 'models'), external);
+        await fs.symlink(external, path.join(f.root, 'models'), process.platform === 'win32' ? 'junction' : 'dir');
+        const manager = await restore(f);
+        assert.equal(manager.views()[0].status, 'completed');
+        const next = await manager.tool(f.root, 'start_download', { url: 'https://downloads.example/file', path: 'new.bin' });
+        assert.equal(next.isError, undefined);
+        await until(() => manager.views().find(item => item.path === 'new.bin')?.status === 'completed');
+        assert.deepEqual(await fs.readFile(path.join(external, 'model.bin')), payload);
+    });
+    await test('unsafe unfinished restored paths fail individually and cancellation never follows them', async () => {
+        const f = await fixture(); const r = await f.start('/slow', { path: 'models/model.bin' });
+        await until(() => f.state(r.id).received >= 4096); await f.control(r.id, 'pause'); await f.manager.dispose();
+        const external = path.join(path.dirname(f.root), 'external-models');
+        await fs.rename(path.join(f.root, 'models'), external);
+        await fs.symlink(external, path.join(f.root, 'models'), process.platform === 'win32' ? 'junction' : 'dir');
+        const partial = path.join(external, `.xratu-download-${r.id}.part`), bytes = await fs.readFile(partial);
+        const manager = await restore(f);
+        assert.equal(manager.views()[0].error, 'downloadFileError');
+        const next = await manager.tool(f.root, 'start_download', { url: 'https://downloads.example/file', path: 'new.bin' });
+        assert.equal(next.isError, undefined);
+        assert.equal((await manager.tool(f.root, 'control_download', { id: r.id, action: 'cancel' })).isError, undefined);
+        assert.equal(manager.views().find(item => item.id === r.id).status, 'cancelled');
+        assert.deepEqual(await fs.readFile(partial), bytes);
+    });
+    await test('a path that becomes unsafe after startup cannot poison destination collision checks', async () => {
+        const f = await fixture(); const r = await f.start('/slow', { path: 'models/model.bin' });
+        await until(() => f.state(r.id).received >= 4096); await f.control(r.id, 'pause');
+        const external = path.join(path.dirname(f.root), 'external-models');
+        await fs.rename(path.join(f.root, 'models'), external);
+        await fs.symlink(external, path.join(f.root, 'models'), process.platform === 'win32' ? 'junction' : 'dir');
+        const next = await f.start('/file', { path: 'new.bin' });
+        assert.equal((await f.finished(next.id)).status, 'completed');
+        assert.equal(f.state(r.id).error, 'downloadFileError');
+    });
+    await test('completed dangling symlinks do not block history, while lexical traversal remains invalid', async () => {
+        const f = await fixture(); const r = await f.start('/file', { path: 'model.bin' });
+        await f.finished(r.id); await f.manager.dispose();
+        if (process.platform !== 'win32') {
+            await fs.unlink(path.join(f.root, r.path)); await fs.symlink('missing.bin', path.join(f.root, r.path));
+            const manager = await restore(f);
+            assert.equal(manager.views()[0].status, 'completed'); await manager.dispose();
+        }
+        const manifest = path.join(await metadataDirectory(f), 'manifest.json');
+        const records = JSON.parse(await fs.readFile(manifest, 'utf8'));
+        records[0].path = '../escape.bin'; await fs.writeFile(manifest, JSON.stringify(records));
+        const blocked = new DownloadManager(f.root, f.storage, f.deps); managers.push(blocked);
+        await assert.rejects(blocked.ready, /downloadFileError/);
+    });
+    await test('checkpoint preparation failures are diagnostic only and never retry or block publication', async () => {
+        for (const prepareDestination of [() => { throw new Error('git unavailable'); }, async () => { throw new Error('shadow storage unavailable'); }]) {
+            const f = await fixture({ prepareDestination }); const r = await f.start('/file', { sha256: digest });
+            const result = await f.finished(r.id);
+            assert.equal(result.status, 'completed'); assert.equal(result.attempts, 1); assert.equal(result.error, undefined);
+            assert.equal(f.routed.length, 1); assert.equal(f.diagnostics.length, 1);
+            assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+        }
     });
     await test('DNS outages retry before any socket is opened and cancelled admission creates no download', async () => {
         let attempts = 0;

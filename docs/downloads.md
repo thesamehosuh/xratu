@@ -11,7 +11,7 @@ native and built-in children. Plan mode permits only status reads.
 
 The implementation uses Node streams, file handles and Xratu's existing
 `proxyFetch`/undici stack. There is no backend, binary installer, new dependency,
-RPC daemon, inbound port, or extra process. This also avoids an initial download
+RPC daemon, inbound port, or persistent download process. This also avoids an initial download
 of the download engine on the very connection that needs recovery.
 
 aria2 was considered for segmentation, multi-source transfers and its mature
@@ -33,6 +33,7 @@ the existing undici dependency retains its MIT notice in THIRD_PARTY_NOTICES.
   so later coding turns do not archive multi-gigabyte downloads. These files
   are consequently outside checkpoint restore; the user's gitignore/index are
   untouched. Smaller completed files follow normal checkpoint behavior.
+  Exclusion failures are diagnostic only and never prevent delivering a file.
 - A request or stalled body has a 30-second idle deadline. Transient transport,
   DNS and selected HTTP failures retry up to twenty times with exponential
   backoff and jitter (normally capped at 60 seconds). Retry-After is honored
@@ -79,9 +80,20 @@ turning it off does not silently restart paused downloads.
 Destinations stay inside the current workspace through sanitizePath, including
 symlink checks. `.git` and managed partial names are reserved. Ownership is
 workspace-scoped, never a chat ID; another active window is refused by an owner
-lock. A dead PID permits crash recovery. As with the existing OAuth lock,
-stale-lock reclamation in pure Node has a residual cross-process TOCTOU;
-simultaneous recovery by multiple windows is not a distributed locking service.
+lock. Owner records include host/PID namespace, process incarnation and kernel
+boot identity where available;
+an in-process registry distinguishes live owners from abandoned instances in
+the same extension host. A short directory mutex serializes claims and releases,
+and owner records are written atomically. Malformed/stale records recover without
+manual deletion. Windows uses the existing asynchronous process-identity probe
+only during ownership checks. Foreign-host/namespace owners and unverified live
+processes are refused. The acquisition mutex retains the existing OAuth lock's
+documented stale-reclamation TOCTOU limitation.
+
+Restored history validates paths lexically without requiring completed targets
+to still exist or resolve. Unsafe unfinished destinations fail individually;
+they do not prevent other downloads. Cancellation can discard such a record's
+source credentials without following an unsafe path to delete its partial file.
 
 Source URLs can carry signed queries and are stored through VS Code
 SecretStorage. Manifests, status results and UI contain only the source origin.

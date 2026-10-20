@@ -6,6 +6,7 @@ import { sanitizePath } from '../paths';
 import { abortable } from '../oauth/refreshLock';
 import type { ProxyRouteMode } from '../proxy';
 import type { DownloadError, DownloadRecord, DownloadSecrets, DownloadView } from './types';
+import { acquireDownloadOwner } from './ownerLock';
 
 const MAX_RECORDS = 100;
 const MAX_PENDING = 20;
@@ -50,6 +51,11 @@ function contentLength(value: string | null): number | null {
     return Number(value);
 }
 function validator(record: DownloadRecord): string | undefined { return record.etag ?? record.lastModified; }
+function validateRecordPath(value: string): void {
+    const parts = value.split(/[\\/]/);
+    if (!value.trim() || path.isAbsolute(value) || path.win32.isAbsolute(value) || /^[a-z]:/i.test(value) || /[\r\n\0]/.test(value)
+        || parts.every(part => !part || part === '.') || parts.some(part => part === '..' || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
+}
 
 /** Workspace-owned transfers. Model turns own commands, never transfer lifetimes. */
 export class DownloadManager {
@@ -66,6 +72,7 @@ export class DownloadManager {
     private lastEmit = 0;
     private startupError?: DownloadError;
     private closing?: Promise<void>;
+    private releaseOwner?: () => Promise<void>;
 
     constructor(readonly workspace: string, storage: string, private readonly deps: DownloadDependencies) {
         this.scope = createHash('sha256').update(path.resolve(workspace)).digest('hex');
@@ -82,8 +89,9 @@ export class DownloadManager {
     private emit(): void { this.lastEmit = Date.now(); this.deps.changed(this.views(), this.startupError); }
     private key(id: string): string { return `xratu.download.${this.scope}.${id}`; }
     private target(record: DownloadRecord): string {
-        if (record.path.split(/[\\/]/).some(p => p.toLowerCase() === '.git' || p.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
-        return sanitizePath(record.path, this.workspace);
+        validateRecordPath(record.path);
+        try { return sanitizePath(record.path, this.workspace); }
+        catch { throw new DownloadFailure('downloadFileError'); }
     }
     private partial(record: DownloadRecord): string {
         const target = this.target(record);
@@ -96,18 +104,7 @@ export class DownloadManager {
     private async load(): Promise<void> {
         if (!this.workspace) return;
         await fs.mkdir(this.directory, { recursive: true });
-        const lock = path.join(this.directory, 'owner.json');
-        // Another window must never write the same manifest or partial file.
-        try { await fs.writeFile(lock, JSON.stringify({ pid: process.pid, owner: this.owner }), { flag: 'wx', mode: 0o600 }); }
-        catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-            const previous = JSON.parse(await fs.readFile(lock, 'utf8')) as { pid: number };
-            if (!Number.isInteger(previous.pid) || previous.pid <= 0) throw new Error('Invalid download owner lock.');
-            try { process.kill(previous.pid, 0); throw new Error('Downloads are owned by another Xratu window.'); }
-            catch (alive) { if ((alive as NodeJS.ErrnoException).code !== 'ESRCH') throw alive; }
-            await fs.unlink(lock);
-            await fs.writeFile(lock, JSON.stringify({ pid: process.pid, owner: this.owner }), { flag: 'wx', mode: 0o600 });
-        }
+        this.releaseOwner = await acquireDownloadOwner(this.directory, this.owner);
         this.locked = true;
         let manifest: unknown;
         try {
@@ -125,7 +122,7 @@ export class DownloadManager {
                 || !integer(r.attempts) || !integer(r.createdAt) || !integer(r.updatedAt)
                 || (r.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(r.sha256))
                 || [r.etag, r.lastModified].some(v => v !== undefined && (typeof v !== 'string' || v.length > 1024 || /[\r\n]/.test(v)))) throw new Error('Invalid download record.');
-            this.target(r);
+            validateRecordPath(r.path);
             const source = new URL(r.source);
             if (!['http:', 'https:'].includes(source.protocol) || source.origin !== r.source) throw new Error('Invalid download source.');
             // Never silently restart network/disk work after a host restart.
@@ -134,6 +131,10 @@ export class DownloadManager {
             delete r.retryAt;
             delete r.error;
             delete r.httpStatus;
+            if (!settled.has(r.status)) {
+                try { this.target(r); }
+                catch { r.status = 'failed'; r.error = 'downloadFileError'; }
+            }
             this.records.set(r.id, r);
         }
         this.emit();
@@ -197,9 +198,15 @@ export class DownloadManager {
         const target = sanitizePath(textArg(args.path, 'path', 4096), this.workspace);
         if (/[\r\n\0]/.test(target)) throw new Error('Download path contains unsupported control characters.');
         const relative = path.relative(await fs.realpath(this.workspace), target);
-        if (!relative || relative.split(path.sep).some(p => p.toLowerCase() === '.git' || p.toLowerCase().startsWith('.xratu-download-'))) throw new Error('Download destination is reserved.');
+        validateRecordPath(relative);
         const comparable = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-        if ([...this.records.values()].some(r => !settled.has(r.status) && comparable(this.target(r)) === comparable(target))) throw new Error('Another download owns this destination.');
+        if ([...this.records.values()].some(r => {
+            if (settled.has(r.status)) return false;
+            let destination: string;
+            try { destination = this.target(r); }
+            catch { r.status = 'failed'; r.error = 'downloadFileError'; r.bytesPerSecond = 0; return false; }
+            return comparable(destination) === comparable(target);
+        })) throw new Error('Another download owns this destination.');
         const maxBytes = args.max_bytes === undefined ? DEFAULT_MAX_BYTES : args.max_bytes;
         if (!integer(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES) throw new Error('max_bytes must be between 1 and 1099511627776.');
         const sha256 = args.sha256 === undefined ? undefined : textArg(args.sha256, 'sha256', 64).toLowerCase();
@@ -256,7 +263,9 @@ export class DownloadManager {
         await active?.done;
         if (this.records.get(id)?.status === 'completed') return r;
         if (action === 'cancel') {
-            await fs.unlink(this.partial(r)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+            let partial: string | undefined;
+            try { partial = this.partial(r); } catch (error) { this.deps.diagnostic(error); }
+            if (partial) await fs.unlink(partial).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
             await this.deps.secrets.delete(this.key(id));
         } else if (url) {
             this.assertAbsent(this.target(r));
@@ -460,7 +469,8 @@ export class DownloadManager {
         }
         signal.throwIfAborted();
         const expected = await file.stat();
-        await this.deps.prepareDestination?.(r.path, r.received);
+        try { await this.deps.prepareDestination?.(r.path, r.received); }
+        catch (error) { this.deps.diagnostic(error); }
         await this.save();
         await file.close();
         // Same-directory hard link atomically publishes without overwriting.
@@ -492,10 +502,12 @@ export class DownloadManager {
         for (const active of this.active.values()) active.controller.abort();
         await Promise.allSettled([...this.active.values()].map(a => a.done));
         if (!this.locked) return;
-        if (!this.startupError) await this.save();
-        await this.writes;
-        const lock = path.join(this.directory, 'owner.json');
-        if (JSON.parse(await fs.readFile(lock, 'utf8')).owner === this.owner) await fs.unlink(lock);
-        this.locked = false;
+        try {
+            if (!this.startupError) await this.save();
+            await this.writes;
+        } finally {
+            await this.releaseOwner?.();
+            this.locked = false;
+        }
     }
 }
