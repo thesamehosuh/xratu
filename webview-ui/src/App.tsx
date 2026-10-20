@@ -1758,7 +1758,7 @@ export function App() {
                     setScreen('usage');
                     send({ type: 'usageGetState' });
                 }}
-                contextWindow={resolveWindow(modelWindowsMerged, selectedModel)}
+                contextWindow={selectedModel && ctxOverrides[selectedModel] != null ? modelWindowsMerged[selectedModel] : resolveWindow(modelInfo?.contextWindows, selectedModel)}
                 defaultContextWindow={resolveWindow(modelInfo?.contextWindows, selectedModel)}
                 ctxOverridden={!!(selectedModel && ctxOverrides[selectedModel] != null)}
                 planMode={plan}

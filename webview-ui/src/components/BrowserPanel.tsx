@@ -83,7 +83,7 @@ export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
         if (!force && (requestedViewportMode.current === 'fixed' || current.viewportMode !== 'fill')) return;
         const width = Math.max(240, Math.min(2560, Math.floor(rect.width)));
         const height = Math.max(240, Math.min(2560, Math.floor(rect.height)));
-        if (width !== current.viewport.width || height !== current.viewport.height || current.viewportMode !== 'fill') command({ action: 'resize', width, height, mode: 'fill' });
+        if (width !== current.viewport.width || height !== current.viewport.height || current.viewportMode !== 'fill') command({ action: 'resize', width, height, mode: 'fill', expectedMode: force ? undefined : current.viewportMode });
     }, [command]);
     useEffect(() => {
         if (!visible || state?.status !== 'ready' || state.viewportMode !== 'fill' || !content.current) return;

@@ -58,12 +58,20 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await page.locator('.browser-address').fill(demoUrl); await page.locator('.browser-address').press('Enter');
             await expect(page.locator('.browser-viewport img')).toBeVisible();
             await expect(page.locator('.browser-page-title')).toHaveText('Browser test');
+            await page.locator('.browser-viewport-picker select').selectOption('desktop');
+            await expect.poll(() => controller.getState().viewportMode).toBe('fixed');
+            await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1280);
             const live = controller.getState();
+            // Test identical-frame acknowledgments without the real producer
+            // replacing the injected frame before React commits its decode effect.
+            await controller.setVisible(live.sessionId, live.browserId, false);
+            await settle();
             const samePixels = await page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.src.split(',')[1]);
             for (const frameId of [100000, 100001]) {
                 await post(page, { type: 'browserFrame', frame: { sessionId: live.sessionId, browserId: live.browserId, frameId, data: samePixels, ...live.viewport } });
                 await expect.poll(() => page.evaluate(id => (window as unknown as { __xratuHostMessages: Array<{ type: string; frameId: number }> }).__xratuHostMessages.some(message => message.type === 'browserFrameAck' && message.frameId === id), frameId)).toBe(true);
             }
+            await controller.setVisible(live.sessionId, live.browserId, true);
             await controller.command(live.sessionId, live.browserId, { action: 'resize', width: 1600, height: 900 });
             await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1600);
             const proportions = await page.locator('.browser-viewport img').evaluate(img => { const rect = img.getBoundingClientRect(); return rect.width / rect.height; });

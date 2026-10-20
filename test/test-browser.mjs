@@ -102,6 +102,21 @@ test('shared tools, streaming backpressure, cancellation, and offline subresourc
     await new Promise(resolve => setTimeout(resolve, 120));
     assert.notEqual(frames().at(-1).frame.data, 'wrong size');
     assert.equal(frames().at(-1).frame.width, 390);
+    await controller.command('chat', id, { action: 'resize', width: 390, height: 844, mode: 'fill' });
+    await Promise.all([
+        controller.command('chat', id, { action: 'resize', width: 1600, height: 900 }),
+        controller.command('chat', id, { action: 'resize', width: 420, height: 700, mode: 'fill', expectedMode: 'fill' }),
+    ]);
+    assert.equal(controller.getState().viewport.width, 1600, 'stale fit measurements cannot undo an explicit fixed viewport');
+    await controller.command('chat', id, { action: 'resize', width: 420, height: 700, mode: 'fill' });
+    assert.equal(controller.getState().viewport.width, 420, 'explicitly selecting Fit still works');
+    const largeFrame = 'a'.repeat(5 * 1024 * 1024);
+    controller.sendFrame(largeFrame);
+    controller.ack('chat', id, frames().at(-1).frame.frameId);
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(frames().at(-1).frame.data.length, largeFrame.length, 'large supported-viewport frames fit the forwarding budget');
+    controller.sendFrame('a'.repeat(13 * 1024 * 1024));
+    assert.equal(controller.latestFrame, null, 'the larger IPC budget remains bounded');
     const snapshot = await controller.tool('chat', 'browser_snapshot', {});
     assert.match(snapshot.output, /button/);
     const screenshot = await controller.tool('chat', 'browser_screenshot', {});

@@ -15,7 +15,7 @@ export interface BrowserState {
 export type BrowserCommand =
     | { action: 'open' | 'navigate'; url: string }
     | { action: 'back' | 'forward' | 'reload' | 'close' }
-    | { action: 'resize'; width: number; height: number; mode?: 'fill' | 'fixed' }
+    | { action: 'resize'; width: number; height: number; mode?: 'fill' | 'fixed'; expectedMode?: 'fill' | 'fixed' }
     | { action: 'click'; x: number; y: number }
     | { action: 'press'; key: string }
     | { action: 'type'; text: string }

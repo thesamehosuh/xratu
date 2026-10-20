@@ -101,9 +101,10 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     const [loading, setLoading] = useState(false);
     const [errorKey, setErrorKey] = useState<string | null>(null);
     const [revision, setRevision] = useState(0);
+    const [fileRevision, setFileRevision] = useState(0);
     const [visibleFiles, setVisibleFiles] = useState(80);
     const liveBusy = busy && !toSha;
-    const refresh = () => setRevision((value) => value + 1);
+    const refresh = () => { setRevision(value => value + 1); setFileRevision(value => value + 1); };
 
     useEffect(() => {
         const handler = (event: MessageEvent<FromExtensionMessage>) => {
@@ -123,7 +124,11 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 const next = !previous.size && initialPath && message.files.some(file => file.path === initialPath) ? initialPath
                     : !toSha && newest ? newest : message.files.some(file => file.path === selected) ? selected : message.files[0]?.path ?? null;
                 setSelected(next);
-                if (next && (!previous.size || (!toSha && newest) || next !== selected)) setOpened(open => open.includes(next) ? open : [...open, next]);
+                setOpened(open => {
+                    const retained = open.filter(path => message.files.some(file => file.path === path));
+                    if (next && (!previous.size || (!toSha && newest) || next !== selected) && !retained.includes(next)) retained.push(next);
+                    return retained;
+                });
                 previousFiles.current = message.files;
                 onCount(message.files.length);
                 onFiles(message.files);
@@ -181,14 +186,14 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={opened.includes(change.path)} aria-expanded={opened.includes(change.path)} onClick={() => { setSelected(change.path); setOpened(current => current.includes(change.path) ? current.filter(path => path !== change.path) : [...current, change.path]); }}>
                     <ChevronDown size={12} className={`review-file-chevron${opened.includes(change.path) ? ' open' : ''}`} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
                 </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>
-                {sha && opened.filter(path => files.some(file => file.path === path)).map(path => <OpenFileDiff key={`${sessionKey}-${sha}-${path}`} sha={sha} toSha={toSha} path={path} expanded={expanded} revision={files} onFeedback={onFeedback} />)}
+                {sha && files.filter(change => opened.includes(change.path)).map(change => <OpenFileDiff key={`${sessionKey}-${sha}-${change.path}`} sha={sha} toSha={toSha} path={change.path} expanded={expanded} revision={`${fileRevision}:${change.modifiedAt ?? ''}:${change.added}:${change.removed}:${change.binary}:${change.untracked}`} onFeedback={onFeedback} />)}
             </>}
         </div>
     </section>;
 }
 
 /** Each open diff owns its request identity; late replies cannot replace a sibling. */
-function OpenFileDiff({ sha, toSha, path, expanded, revision, onFeedback }: { sha: string; toSha?: string; path: string; expanded: boolean; revision: ReviewChange[]; onFeedback: (text: string) => void }) {
+function OpenFileDiff({ sha, toSha, path, expanded, revision, onFeedback }: { sha: string; toSha?: string; path: string; expanded: boolean; revision: string; onFeedback: (text: string) => void }) {
     const id = useId();
     const sequence = useRef(0);
     const [file, setFile] = useState<ReviewFile | null>(null);

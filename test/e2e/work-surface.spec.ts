@@ -310,6 +310,7 @@ test('review responses reject old checkpoints and settled requests do not time o
     await post(page, { ...current, type: 'changesState', files: changes });
     await page.locator('#surface-tab-changes').click();
     await replyFile(page);
+    await expect(page.locator('.review-current .review-diff')).toBeVisible();
     await page.clock.fastForward(46_000);
     await expect(page.locator('.review-files')).not.toContainText('stale.ts');
     await expect(page.locator('.changes-review [role="alert"]')).toHaveCount(0);
@@ -1307,4 +1308,28 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`outsid
     const decision = await latest(page, 'approvalDecision');
     expect(decision.approvalId).toBe('outside');
     expect(decision.decisions).toEqual({ 'outside-edit': true });
+});
+
+test('context overrides do not leak to similarly named models', async ({ page }) => {
+    await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
+    await post(page, { type: 'modelInfo', defaultModel: 'gpt-4o-mini', selectedModel: 'gpt-4o-mini', models: ['gpt-4o', 'gpt-4o-mini'], contextWindows: { 'gpt-4o': 128000 }, overrides: { 'gpt-4o': 8192 } });
+    await post(page, { type: 'usage', usage: { input_tokens: 64000, output_tokens: 0 } });
+    await expect(page.locator('.tok-meter .tok-pct')).toHaveText('(50%)');
+});
+
+test('automatic change refreshes only reload open files that changed', async ({ page }) => {
+    await openReview(page);
+    await page.locator('.review-file').filter({ hasText: 'src/second.ts' }).click();
+    await replyFile(page, 'second');
+    const fileRequests = async (path: string) => (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === path);
+    const firstBefore = (await fileRequests('src/first.ts')).length;
+    const secondBefore = (await fileRequests('src/second.ts')).length;
+    const listBefore = await latest(page, 'changesGetState');
+    await post(page, { type: 'toolResult', tool: 'edit_file', output: 'Updated', callId: 'update-second' });
+    const list = await latest(page, 'changesGetState', listBefore.requestId);
+    await post(page, { ...list, type: 'changesState', files: [changes[0], { ...changes[1], added: 2 }] });
+    await expect.poll(async () => (await fileRequests('src/second.ts')).length).toBe(secondBefore + 1);
+    expect((await fileRequests('src/first.ts')).length).toBe(firstBefore);
+    await page.locator('.review-head .icon-btn').click();
+    await expect.poll(async () => (await fileRequests('src/first.ts')).length).toBe(firstBefore + 1);
 });
