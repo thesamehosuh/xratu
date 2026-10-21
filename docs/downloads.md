@@ -143,9 +143,18 @@ duplicates and file/directory conflicts fail. Links, devices, FIFOs, encrypted
 ZIPs and unsupported formats/types fail explicitly. Only ordinary executable
 bits are retained; ownership, timestamps, ACLs and special permission bits are
 not restored. Extraction never executes a downloaded file. The existing
-`sanitizePath` workspace/symlink guard applies to sources and destinations;
-this does not provide isolation from other local processes racing filesystem
-changes.
+`sanitizePath` workspace/symlink guard applies to sources and destinations, and
+each created file is additionally checked against the location the kernel
+reports for the descriptor itself (`/proc/self/fd` on Linux) before a single
+byte is written, so a parent swapped for a symlink mid-extraction is refused and
+the empty file it produced is removed. Two sequenced path checks cannot be
+atomic: on Windows, and anywhere the kernel offers no handle query, an ACTIVE
+same-user process racing the create can strand a zero-byte file at the raced
+path - never written content, since the write is refused first. Such a process
+can already write outside the workspace without this tool, so it sits outside
+the containment guarantee; malicious ARCHIVE CONTENT and pre-existing workspace
+symlinks - the threats that guarantee does cover - cannot race anything and are
+refused on every platform.
 
 `npm run test:archives` covers all supported formats, hostile paths encoded
 independently of the host OS, case/Unicode collisions, CRC/SHA failures, partial

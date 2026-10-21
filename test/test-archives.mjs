@@ -181,23 +181,39 @@ try {
                 assert.equal(injected, true);
             }
         });
-        await test(`${format}: a parent swapped for a symlink in the validation/create gap is refused`, { timeout: 10000 }, async () => {
-            const f = await fixture(encode([{ name: 'nested/first' }, { name: 'nested/second' }]));
-            const escaped = path.join(root, `escaped-${++serial}`);
-            await fs.mkdir(escaped);
-            const promises = require('node:fs/promises'), originalOpen = promises.open;
-            promises.open = async (...args) => {
-                // outputPath has already validated `nested`; the swap lands
-                // between that check and the create itself.
-                if (args[1] === 'wx' && typeof args[0] === 'string' && args[0].includes(`${path.sep}nested${path.sep}`)) {
-                    await fs.rm(path.dirname(args[0]), { recursive: true, force: true });
-                    await fs.symlink(escaped, path.dirname(args[0]), 'junction');
-                }
-                return originalOpen(...args);
-            };
-            try { await refused(f); } finally { promises.open = originalOpen; }
-            assert.deepEqual(await fs.readdir(escaped), []);
-            await absent(path.join(f.workspace, 'output'));
+        await test(`${format}: a swapped parent is refused whether it stays swapped or is restored`, { timeout: 10000 }, async () => {
+            for (const restore of [false, true]) {
+                const f = await fixture(encode([{ name: 'nested/first' }, { name: 'nested/second' }]));
+                const escaped = path.join(root, `escaped-${++serial}`);
+                await fs.mkdir(escaped);
+                const promises = require('node:fs/promises'), originalOpen = promises.open;
+                promises.open = async (...args) => {
+                    // outputPath has already validated `nested`; the swap lands
+                    // between that check and the create itself. With `restore`
+                    // the parent is put back immediately after the create, which
+                    // is exactly what beats two SEQUENCED path checks (identity,
+                    // then containment) - only asking the descriptor where it
+                    // lives still reports the truth.
+                    if (args[1] === 'wx' && typeof args[0] === 'string' && args[0].includes(`${path.sep}nested${path.sep}`)) {
+                        const parent = path.dirname(args[0]);
+                        await fs.rm(parent, { recursive: true, force: true });
+                        await fs.symlink(escaped, parent, 'junction');
+                        const handle = await originalOpen(...args);
+                        if (restore) { await fs.rm(parent, { force: true }); await fs.mkdir(parent); }
+                        return handle;
+                    }
+                    return originalOpen(...args);
+                };
+                try { await refused(f); } finally { promises.open = originalOpen; }
+                // No content may escape on any platform. Where the kernel can
+                // answer where the descriptor points (Linux), the refused create
+                // is cleaned up too; elsewhere a restored parent can strand the
+                // zero-byte file, which is the documented residual.
+                const leaked = await fs.readdir(escaped);
+                for (const name of leaked) assert.equal((await fs.stat(path.join(escaped, name))).size, 0);
+                if (process.platform === 'linux' || !restore) assert.deepEqual(leaked, []);
+                await absent(path.join(f.workspace, 'output'));
+            }
         });
     }
     await test('ZIP handles Windows separators without changing file bytes', async () => {

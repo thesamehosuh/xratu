@@ -136,15 +136,43 @@ async function outputPath(destination: Destination, entry: Entry): Promise<strin
 }
 
 /**
+ * Where the descriptor itself lives, asked of the kernel in one step: on Linux
+ * `/proc/self/fd/N` resolves through the opened file's OWN dentry chain, so a
+ * parent swapped in or out around the create cannot change the answer. Returns
+ * undefined where the platform offers no such handle query (Windows, and any
+ * environment where the fd link does not resolve to a real path) so callers
+ * fall back to the path-based checks below.
+ */
+async function descriptorPath(handle: fs.FileHandle): Promise<string | undefined> {
+    const prefix = process.platform === 'linux' ? '/proc/self/fd/' : process.platform === 'darwin' ? '/dev/fd/' : undefined;
+    if (!prefix || handle.fd < 0) return undefined;
+    const link = `${prefix}${handle.fd}`;
+    try { const resolved = await fs.realpath(link); return resolved === link ? undefined : resolved; }
+    catch { return undefined; }
+}
+
+interface Refusal { opened: Stats; located: string }
+
+/**
  * `outputPath` proves every parent BEFORE the file exists, but a concurrent
  * process can swap a checked parent for a symlink inside that gap and `wx`
- * follows the ancestor. Node has no descriptor-relative (openat) creation, so
- * the gap is closed from the other side: right after the create and before a
- * single byte is written, the path must still resolve to the file we opened
- * (dev + inode) and to its canonical in-workspace location. Returns that
- * stat when the placement must be refused.
+ * follows the ancestor; swapping it back again beats two SEQUENCED checks
+ * (identity, then containment), because neither observes both at once. Node
+ * has no descriptor-relative (openat) creation, so where the kernel exposes a
+ * handle query we compare the descriptor's own path against the target - one
+ * atomic answer, unimpeachable by that swap-back. Everywhere else the fallback
+ * still refuses the persistent swap before a byte is written; what it cannot
+ * rule out is an ACTIVE same-user racer - a process that could itself write
+ * outside the workspace without our help - which is the documented residual in
+ * docs/downloads.md. Returns where the descriptor points so the caller can
+ * drop what was created.
  */
-async function misplaced(handle: fs.FileHandle, target: string, destination: Destination): Promise<Stats | undefined> {
+async function misplaced(handle: fs.FileHandle, target: string, destination: Destination): Promise<Refusal | undefined> {
+    const located = await descriptorPath(handle);
+    if (located !== undefined) {
+        if (comparableTarget(located) === comparableTarget(target)) return undefined;
+        return { opened: await handle.stat(), located };
+    }
     const opened = await handle.stat();
     const at = await fs.lstat(target).catch(() => undefined);
     // ino is 0 on a few filesystems; then only the location can be checked.
@@ -152,15 +180,17 @@ async function misplaced(handle: fs.FileHandle, target: string, destination: Des
     let resolved = false;
     try { resolved = canonicalTarget(destination, target) === comparableTarget(target); }
     catch { resolved = false; }
-    return resolved && named ? undefined : opened;
+    return resolved && named ? undefined : { opened, located: target };
 }
-/** Remove what we created - only while the path still names that inode, so a
- *  path retargeted after the refusal can never delete someone else's file. */
-async function discardCreated(opened: Stats, target: string): Promise<void> {
-    if (!opened.ino) return;
+/** Remove what we created - only while that path still names the inode, so a
+ *  path retargeted after the refusal can never delete someone else's file.
+ *  Cleanup is best effort by design: it may lose a zero-byte file at a raced
+ *  path, it can never delete one that was not ours, and it never writes. */
+async function discardCreated(refusal: Refusal): Promise<void> {
+    if (!refusal.opened.ino) return;
     try {
-        const current = await fs.lstat(target);
-        if (current.dev === opened.dev && current.ino === opened.ino) await fs.unlink(target);
+        const current = await fs.lstat(refusal.located);
+        if (current.dev === refusal.opened.dev && current.ino === refusal.opened.ino) await fs.unlink(refusal.located);
     } catch { /* already gone, or nothing of ours is reachable there */ }
 }
 
@@ -176,7 +206,7 @@ async function consume(entry: Entry, stream: AsyncIterable<Buffer>, destination:
                 const refused = await misplaced(handle, target, destination);
                 if (refused) {
                     await handle.close(); output = undefined;
-                    await discardCreated(refused, target);
+                    await discardCreated(refused);
                     throw new Error('Extraction path changed.');
                 }
             }
