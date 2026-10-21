@@ -92,7 +92,7 @@ user's choice to require approvals. Plan still deterministically rejects mutatio
 
 - Mandatory lint, independent host/webview type checks, esbuild, webview tests and
   all 92 host suites passed during implementation. The full relevant browser run
-  passed 203 checks, including research, Proxy, work surfaces, engine setup and
+  passed 207 checks, including research, Proxy, work surfaces, engine setup, downloads and
   onboarding. Both locales and sidebar/wide layouts were inspected with the
   shared VS Code theme fixture. Final-head results belong in the PR.
 - Live anonymous smoke searches returned official FastAPI sources via both
