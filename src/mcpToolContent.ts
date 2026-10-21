@@ -134,14 +134,41 @@ export function boundedStructuredContent(value: unknown): Record<string, unknown
     let remaining = 48_000;
     let nodes = 0;
     const visit = (item: unknown, depth: number): unknown => {
-        if (++nodes > 1000 || depth > 8 || remaining <= 0) return '[truncated]';
-        if (typeof item === 'string') { const result = item.slice(0, Math.min(remaining, 8000)); remaining -= result.length; return result; }
-        if (item === null || typeof item === 'boolean' || typeof item === 'number') return item;
-        if (Array.isArray(item)) return item.slice(0, 100).map(child => visit(child, depth + 1));
-        if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).slice(0, 100).map(([key, child]) => [key.slice(0, 100), visit(child, depth + 1)]));
+        if (++nodes > 1000 || depth > 8) { remaining -= 13; return '[truncated]'; }
+        if (typeof item === 'string') {
+            let result = item.slice(0, Math.min(remaining - 2, 8000));
+            while (JSON.stringify(result).length > remaining) result = result.slice(0, Math.floor(result.length / 2));
+            remaining -= JSON.stringify(result).length;
+            return result;
+        }
+        if (item === null || typeof item === 'boolean' || typeof item === 'number') { remaining -= JSON.stringify(item).length; return item; }
+        if (Array.isArray(item)) {
+            remaining -= 16; // Brackets and a reserved truncation marker.
+            const result: unknown[] = [];
+            for (const child of item) {
+                if (result.length >= 100 || nodes >= 1000 || remaining < 32) { result.push('[truncated]'); break; }
+                remaining--; // Comma.
+                result.push(visit(child, depth + 1));
+            }
+            return result;
+        }
+        if (item && typeof item === 'object') {
+            remaining -= 24; // Braces and a reserved _truncated flag.
+            const result: Record<string, unknown> = Object.create(null);
+            for (const [key, child] of Object.entries(item)) {
+                const boundedKey = key.slice(0, 100);
+                const keySize = JSON.stringify(boundedKey).length + 2;
+                if (Object.keys(result).length >= 100 || nodes >= 1000 || remaining < keySize + 32) { result._truncated = true; break; }
+                remaining -= keySize;
+                result[boundedKey] = visit(child, depth + 1);
+            }
+            return result;
+        }
+        remaining -= 4;
         return null;
     };
-    return visit(value, 0) as Record<string, unknown>;
+    const result = visit(value, 0);
+    return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : { _truncated: true };
 }
 export function mapMcpToolResult(result: Record<string, unknown>, toolName: string): ExternalToolResult {
     const mapped = mapMcpToolContent(result.content, toolName);

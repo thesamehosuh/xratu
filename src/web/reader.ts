@@ -34,11 +34,11 @@ export function htmlToMarkdown(html: string, url: string): { text: string; title
     return { text: converter.turndown(root.innerHTML ?? root.textContent ?? ''), title };
 }
 export interface ReadDocument { url: string; requestedUrl: string; text: string; title?: string; route: string; truncated?: boolean }
-export async function readPublicPage(url: string, signal: AbortSignal, validate: (url: string) => Promise<string>): Promise<ReadDocument> {
+export async function readPublicPage(url: string, signal: AbortSignal, validate: (url: string) => Promise<string>, useProxy = true): Promise<ReadDocument> {
     let current = url;
     for (let hop = 0; hop <= 4; hop++) {
         current = await abortable(validate(current), signal);
-        const response = await abortable(routedFetch(current, { redirect: 'manual', signal, headers: { Accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8, application/pdf;q=0.7', 'User-Agent': 'Xratu/1.0' } }), signal);
+        const response = await abortable(routedFetch(current, { redirect: 'manual', signal, headers: { Accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8, application/pdf;q=0.7', 'User-Agent': 'Xratu/1.0' } }, useProxy), signal);
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             const location = response.headers.get('location');
             void response.body?.cancel().catch(() => undefined);

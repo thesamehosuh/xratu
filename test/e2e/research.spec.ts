@@ -11,6 +11,19 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
 });
 for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+    test(`native search retains its label, icon and result cards (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'toolCall', callId: 'native', tool: 'opencode_websearch', args: '{"query":"docs"}' });
+        await post(page, { type: 'toolResult', callId: 'native', tool: 'opencode_websearch', output: '1. Official documentation\n   https://example.com/docs\n   Search result snippet.' });
+        const label = page.getByText(locale === 'en' ? 'Web search · OpenCode' : 'جستجوی وب · OpenCode', { exact: true }).first();
+        await expect(label).toBeVisible();
+        await label.click();
+        await expect(page.locator('.detail-web-results a')).toHaveAttribute('href', 'https://example.com/docs');
+        await expect(page.locator('.lucide-globe').first()).toBeVisible();
+        await page.screenshot({ path: info.outputPath('native-search.png') });
+    });
     test(`automatic research and sole proxy routing control (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });

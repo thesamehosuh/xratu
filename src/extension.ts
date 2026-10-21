@@ -5837,7 +5837,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
         await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
         if (typeof webSearchUseProxy === 'boolean') await cfg.update('webSearchUseProxy', webSearchUseProxy, vscode.ConfigurationTarget.Global);
-        resetResearchPolicy();
         await this._sendProxyState();
     }
 
@@ -7995,6 +7994,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     configureMcpSecrets(context.secrets);
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('xratu.mcpServers')) {
+            void externalMcp.reload().catch(error => console.error('xratu: MCP settings reload failed:', error));
+        }
         if (['xratu.webSearchUseProxy', 'xratu.proxyMode', 'xratu.proxyUrl', 'xratu.noProxy'].some(key => event.affectsConfiguration(key))) resetResearchPolicy();
     }));
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);

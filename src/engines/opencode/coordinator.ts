@@ -252,7 +252,7 @@ export class NativeSessionCoordinator {
                         if (typeof call?.input.sessionID === 'string') this.release(call.input.sessionID, sessionID, id);
                     }
                 }
-                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError, ...(data.xratuResearch ? { research: readResearchEvidence(data.xratuResearch) } : {}) });
+                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError, ...(research ? { research } : {}) });
                 state.calls.delete(id);
                 break;
             }

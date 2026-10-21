@@ -20,10 +20,16 @@ researchSession('public-evaluation');
 const results = [];
 for (const task of queries) {
     const start = performance.now();
-    const result = await executeWebTool('web_search', { query: task.query, max_results: 5, ...(task.domains ? { domains: task.domains } : {}) });
-    results.push({ ...task, elapsedMs: Math.round(performance.now() - start), outcome: result.research.outcome, provider: result.research.provider, warnings: result.research.warnings,
-        sources: result.research.sources, officialInFirstFive: task.official ? result.research.sources.some(source => matchesDomains(source.url, task.official)) : undefined });
-    console.log(`${results.length}/${queries.length}: ${result.research.outcome} ${result.research.provider} ${results.at(-1).elapsedMs} ms`);
+    try {
+        const result = await executeWebTool('web_search', { query: task.query, max_results: 5, ...(task.domains ? { domains: task.domains } : {}) });
+        if (!result.research) throw new Error(result.output || 'Missing research outcome.');
+        results.push({ ...task, elapsedMs: Math.round(performance.now() - start), outcome: result.research.outcome, provider: result.research.provider, warnings: result.research.warnings,
+            sources: result.research.sources, officialInFirstFive: task.official ? result.research.sources.some(source => matchesDomains(source.url, task.official)) : undefined });
+    } catch (error) {
+        results.push({ ...task, elapsedMs: Math.round(performance.now() - start), outcome: 'error', error: error instanceof Error ? error.message : String(error), sources: [] });
+    }
+    const result = results.at(-1);
+    console.log(`${results.length}/${queries.length}: ${result.outcome} ${result.provider ?? 'none'} ${result.elapsedMs} ms`);
 }
 const times = results.filter(result => result.outcome === 'success').map(result => result.elapsedMs).sort((a, b) => a - b);
 const official = results.filter(result => result.official);

@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import Module, { createRequire } from 'node:module';
 const originalLoad = Module._load;
 let routingCalls = [];
+let proxyConfigured = false;
 Module._load = function(name, ...args) {
-    if (name.endsWith('proxyDispatcher')) return { getProxyDispatcher: (_url, route) => { routingCalls.push(route); return undefined; }, isProxyConfigured: () => false };
+    if (name.endsWith('proxyDispatcher')) return { getProxyDispatcher: (_url, route) => { routingCalls.push(route); return undefined; }, isProxyConfigured: () => proxyConfigured };
     if (name === 'vscode') return { workspace: { isTrusted: true, getConfiguration: () => ({ get: (_key, fallback) => fallback }) } };
     return originalLoad.call(this, name, ...args);
 };
@@ -17,6 +18,10 @@ const { setOfflineMode } = require('../out/networkPolicy.js');
 const { mapMcpToolResult } = require('../out/mcpToolContent.js');
 const { ExternalMcpManager } = require('../out/externalMcp.js');
 const { persistedEventFromAgentEvent, historyRowFromEvent } = require('../out/local/historyRows.js');
+const { boundOutcomeEvents } = require('../out/local/eventBounds.js');
+const { boundedStructuredContent } = require('../out/mcpToolContent.js');
+const { mcpFetch } = require('../out/web/transport.js');
+const { TOOL_RESULT_ELISION_MARKER } = require('../out/local/localAgent.js');
 const cfg = {};
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const item = (url = 'https://docs.example.com/page') => ({ url, title: 'Documentation', excerpts: ['first excerpt', 'second excerpt'], publish_date: '2026-10-01' });
@@ -132,6 +137,44 @@ try {
         await executeWebTool('web_search', { query: 'docs' }, { useProxy: false });
         assert.ok(routingCalls.length > 0); assert.ok(routingCalls.every(route => route === 'direct'));
     });
+    await check('Direct reading propagates routing and DNS validation to every redirect hop', async () => {
+        routingCalls = [];
+        const validated = [];
+        globalThis.fetch = async url => String(url).endsWith('/redirect')
+            ? new Response(null, { status: 302, headers: { location: '/page' } })
+            : new Response('public page '.repeat(100), { headers: { 'content-type': 'text/plain' } });
+        const result = await executeResearch('fetch_url', { url: 'https://example.com/redirect' }, { useProxy: false }, async (url, proxyConfigured) => { validated.push(proxyConfigured); return url; });
+        assert.equal(result.research.outcome, 'success'); assert.equal(result.research.freshness, 'live');
+        assert.deepEqual(routingCalls, ['direct', 'direct']); assert.deepEqual(validated, [false, false]);
+    });
+    await check('Direct opt-out rejects private DNS even while a global proxy is configured', async () => {
+        const dns = require('node:dns');
+        const lookup = dns.promises.lookup;
+        let lookups = 0;
+        proxyConfigured = true;
+        dns.promises.lookup = async () => { lookups++; return [{ address: '10.0.0.1', family: 4 }]; };
+        try {
+            const result = await executeWebTool('fetch_url', { url: 'https://private-dns.example/page' }, { useProxy: false });
+            assert.equal(result.isError, true); assert.match(result.output, /non-public destination/);
+            assert.equal(lookups, 1); assert.equal(calls.length, 0);
+        } finally { proxyConfigured = false; dns.promises.lookup = lookup; }
+    });
+    await check('SDK cancellation terminates both the HTTP exchange and a pending body read', async () => {
+        for (const phase of ['fetch', 'body']) {
+            const operation = new AbortController(), sdk = new AbortController();
+            let transportSignal, cancelled = false;
+            globalThis.fetch = async (_url, init) => {
+                transportSignal = init.signal;
+                if (phase === 'fetch') return new Promise(() => {});
+                return new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+            };
+            const waiting = mcpFetch(operation.signal)('https://example.com/mcp', { signal: sdk.signal });
+            await new Promise(done => setImmediate(done)); sdk.abort();
+            await assert.rejects(waiting, /abort/i); assert.equal(transportSignal.aborted, true);
+            assert.equal(operation.signal.aborted, false);
+            if (phase === 'body') assert.equal(cancelled, true);
+        }
+    });
     await check('reader retains final URL and continuation, find and expired handles are recoverable', async () => {
         globalThis.fetch = async () => new Response('begin ' + 'body '.repeat(1000) + 'TARGET final section ' + 'tail '.repeat(1000), { headers: { 'content-type': 'text/markdown' } });
         const first = await executeResearch('fetch_url', { url: 'https://example.com/page', max_chars: 1000 }, cfg, async url => url);
@@ -186,10 +229,38 @@ try {
         const result = mapMcpToolResult({ structuredContent: { results: [{ title: 'one' }] } }, 'search'); assert.match(result.text, /one/); assert.ok(result.structuredContent);
         assert.equal(mapMcpToolResult({ content: [{ type: 'text', text: 'already projected' }], structuredContent: { title: 'one' } }, 'search').text, 'already projected');
     });
+    await check('structured payload budgets include escaped keys, numbers and collection truncation', () => {
+        const payload = Object.fromEntries(Array.from({ length: 100 }, (_, i) => ['\\'.repeat(95) + i, Object.fromEntries(Array.from({ length: 100 }, (_, j) => ['x'.repeat(95) + j, Number.MAX_VALUE]))]));
+        const bounded = boundedStructuredContent(payload);
+        assert.equal(typeof bounded, 'object'); assert.ok(!Array.isArray(bounded));
+        assert.ok(JSON.stringify(bounded).length <= 48_000); assert.match(JSON.stringify(bounded), /truncated/);
+        assert.ok(JSON.stringify(boundedStructuredContent({ items: Array(200).fill('x') })).includes('[truncated]'));
+    });
+    await check('aggregate bounds use the same structured size and become idempotent', () => {
+        const events = [
+            { type: 'tool_result', output: '', structuredContent: { text: 'x'.repeat(100_000) } },
+            { type: 'tool_result', output: '', structuredContent: { text: 'y'.repeat(100_000) } },
+        ];
+        assert.equal(boundOutcomeEvents(events, 1000), true);
+        assert.ok(events.every(event => !event.structuredContent));
+        const research = { version: 1, provider: 'parallel', outcome: 'success', freshness: 'unknown', sources: [], warnings: [] };
+        assert.equal(boundOutcomeEvents([{ type: 'tool_result', output: TOOL_RESULT_ELISION_MARKER, research }], 1), false);
+    });
     await check('external MCP does not replay an uncertain mutation', async () => {
         const manager = new ExternalMcpManager(async () => ({ servers: { remote: { url: 'https://example.com/mcp' } }, sources: { remote: 'global' }, issues: [] }));
         let invoked = 0; manager.getState = async () => ({ client: { callTool: async () => { invoked++; throw new Error('connection lost after remote commit'); } } });
         const result = await manager.callTool('mcp__remote__mutate', {}); assert.equal(invoked, 1); assert.equal(result.isError, true); assert.match(result.text, /outcome is unknown/);
+    });
+    await check('an old failed MCP call preserves the replacement connection and status', async () => {
+        const manager = new ExternalMcpManager(async () => ({ servers: { remote: { url: 'https://example.com/mcp' } }, sources: { remote: 'global' }, issues: [] }));
+        let fail, closed = 0, marked = 0;
+        const old = { client: { callTool: () => new Promise((_resolve, reject) => { fail = reject; }), close: async () => { closed++; } } };
+        const original = Promise.resolve(old), replacement = Promise.resolve({ client: { close: async () => { closed++; } } });
+        manager._states.set('remote', original); manager.getState = async () => old; manager._markStatus = () => { marked++; };
+        const waiting = manager.callTool('mcp__remote__mutate', {});
+        await new Promise(done => setImmediate(done)); manager._states.set('remote', replacement); fail(new Error('old connection lost'));
+        assert.equal((await waiting).isError, true); assert.equal(manager._states.get('remote'), replacement);
+        assert.equal(closed, 0); assert.equal(marked, 0);
     });
     await check('optional MCP discovery cannot hold first built-in request for its connect timeout', async () => {
         const manager = new ExternalMcpManager(async () => ({ servers: {}, sources: {}, issues: [] })); let resolve;
@@ -199,12 +270,17 @@ try {
     });
     await check('MCP config saves protect secrets and resolve refs only for execution', async () => {
         const { configureMcpSecrets, protectMcpSecrets, resolveMcpSecrets } = require('../out/mcpSecrets.js');
+        await assert.rejects(protectMcpSecrets('global', { remote: { headers: { Authorization: 'private' } } }), /not configured/);
         const vault = new Map(); configureMcpSecrets({ store: async (key, value) => vault.set(key, value), get: async key => vault.get(key) });
         const original = { remote: { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer private-key' }, env: { API_KEY: 'private-env' } } };
         const protectedConfig = await protectMcpSecrets('global', original);
         assert.ok(!JSON.stringify(protectedConfig).includes('private-key')); assert.ok(!JSON.stringify(protectedConfig).includes('private-env'));
         assert.deepEqual(await resolveMcpSecrets(protectedConfig.remote), original.remote);
         assert.equal(original.remote.headers.Authorization, 'Bearer private-key');
+        const updated = await protectMcpSecrets('global', { remote: { ...original.remote, headers: { Authorization: 'Bearer replacement' } } });
+        assert.equal(updated.remote.headers.Authorization, protectedConfig.remote.headers.Authorization); assert.equal(vault.size, 2);
+        assert.equal((await resolveMcpSecrets(updated.remote)).headers.Authorization, 'Bearer replacement');
+        await assert.rejects(resolveMcpSecrets({ env: { BAD: 123 } }), /must be strings/);
         await assert.rejects(resolveMcpSecrets({ headers: { Authorization: '${secret:xratu.llmApiKey}' } }), /Only Xratu MCP/);
         vault.clear();
         await assert.rejects(resolveMcpSecrets(protectedConfig.remote), /unavailable/);

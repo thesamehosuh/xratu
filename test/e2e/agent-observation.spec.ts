@@ -166,6 +166,7 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
 for (const locale of ['en','fa']) {
     test(`current-state tooltips describe mode and permission semantics (${locale})`, async ({page}) => {
         await post(page,{type:'locale',locale});
+        await post(page,{type:'yoloMode',enabled:false});
         const mode=page.locator('[data-policy="mode"]'), permission=page.locator('[data-policy="approval"]');
         await expect(mode).toHaveAttribute('title',/Build/);
         await expect(permission).not.toHaveAttribute('title',/YOLO/);

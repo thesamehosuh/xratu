@@ -232,8 +232,8 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
     if (total > budget) {
         for (let i = 0; i < events.length && total > budget; i++) {
             const event = events[i];
-            if (!event?.structuredContent) continue;
-            total -= JSON.stringify(event.structuredContent).length;
+            if (event?.type !== 'tool_result' || !event.structuredContent) continue;
+            total -= JSON.stringify(boundedStructuredContent(event.structuredContent))?.length ?? 0;
             const { structuredContent: _structuredContent, ...rest } = event;
             events[i] = rest;
             changed = true;
@@ -242,12 +242,15 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
     if (total > budget) {
         for (let i = 0; i < events.length && total > budget; i++) {
             const event = events[i];
+            if (event?.type !== 'tool_result') continue;
             const research = readResearchEvidence(event?.research);
             if (!research) continue;
             const before = JSON.stringify(research).length;
             const trimmed = { ...research, sources: research.sources.map(source => ({ ...source, excerpts: [] })), warnings: [] };
+            const reclaimed = before - JSON.stringify(trimmed).length;
+            if (reclaimed <= 0) continue;
             events[i] = { ...event, research: trimmed };
-            total -= before - JSON.stringify(trimmed).length;
+            total -= reclaimed;
             changed = true;
         }
     }

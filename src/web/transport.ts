@@ -42,12 +42,14 @@ export function checkStatus(response: Response): void {
 export function mcpFetch(signal: AbortSignal, useProxy = true): typeof fetch {
     return (async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-        const response = await abortable(routedFetch(url, { ...init, redirect: 'error', signal }, useProxy), signal);
+        const requestSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+        const combined = requestSignal ? AbortSignal.any([signal, requestSignal]) : signal;
+        const response = await abortable(routedFetch(url, { ...init, redirect: 'error', signal: combined }, useProxy), combined);
         if (!response.ok) { checkStatus(response); }
         // Hosted research has no notifications/subscriptions. Bound its entire reply,
         // then let the SDK parse the supported JSON or SSE response normally.
         if (response.status === 204) return response;
-        const bytes = await boundedBody(response, signal);
+        const bytes = await boundedBody(response, combined);
         const headers = new Headers(response.headers);
         headers.delete('content-encoding'); headers.delete('content-length');
         return new Response(bytes as BodyInit, { status: response.status, headers });

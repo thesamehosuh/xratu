@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import Module, { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-const binary = process.argv[process.argv.indexOf('--binary') + 1];
-if (!process.argv.includes('--binary') || !binary) throw new Error('Pass --binary to opt into a real OpenCode runtime.');
+const binaryIndex = process.argv.indexOf('--binary');
+const binary = binaryIndex >= 0 ? process.argv[binaryIndex + 1] : undefined;
+if (!binary || binary.startsWith('--')) throw new Error('Pass --binary to opt into a real OpenCode runtime.');
 const root = await mkdtemp(join(tmpdir(), 'xratu-native-research-'));
 const model = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk;

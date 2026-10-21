@@ -19,6 +19,9 @@ Module._load = function (name, ...args) {
     return originalLoad.call(this, name, ...args);
 };
 const { McpConfigStore } = require('../out/mcpConfig.js');
+const { configureMcpSecrets } = require('../out/mcpSecrets.js');
+const vault = new Map();
+configureMcpSecrets({ store: async (key, value) => vault.set(key, value), get: async key => vault.get(key) });
 Module._load = originalLoad;
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-mcp-config-'));

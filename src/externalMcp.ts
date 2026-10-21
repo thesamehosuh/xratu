@@ -473,7 +473,9 @@ export class ExternalMcpManager {
         const source = config.sources[serverName] ?? 'global';
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
-        const state = await this.getState(serverName, cfg, source);
+        const stateRequest = this.getState(serverName, cfg, source);
+        const usedPromise = this._states.get(serverName);
+        const state = await stateRequest;
         signal?.throwIfAborted();
         if (!state) {
             return textResult(`Error: MCP server '${serverName}' is not reachable`);
@@ -493,12 +495,13 @@ export class ExternalMcpManager {
             signal?.throwIfAborted();
             // Dispatch may already have completed on the remote host. Never
             // replay an unknown operation after a transport failure.
-            const pending = this._states.get(serverName);
-            this._states.delete(serverName);
-            void pending?.then(state => closeState(state)).catch(() => undefined);
             const msg = e instanceof Error ? e.message : String(e);
+            if (usedPromise && this._states.get(serverName) === usedPromise) {
+                this._states.delete(serverName);
+                void usedPromise.then(state => closeState(state)).catch(() => undefined);
+                this._markStatus(serverName, { state: 'error', lastError: msg }, source);
+            }
             console.error(`xratu: callTool ${namespaced} failed:`, e);
-            this._markStatus(serverName, { state: 'error', lastError: msg }, source);
             return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}. The remote outcome is unknown; the call was not replayed. Check its effects before retrying.`);
         }
     }
