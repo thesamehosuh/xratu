@@ -10,6 +10,17 @@ Choose a new workspace-relative path. Supply the publisher's SHA-256 when
 available, and a realistic `max_bytes` budget for large artifacts. Downloaded
 files are data; downloading never authorizes executing or installing them.
 
+Use `verify_file` to compute a local file's SHA-256 or compare a trusted
+publisher digest. Hashing alone does not prove authenticity. A checksum supplied
+to `start_download` is already verified before the completed file is published.
+Use `inspect_archive` to list ZIP/TAR/TAR.GZ contents and sizes without writing.
+Use `extract_archive` with a new workspace-relative `destination` whose parent
+already exists. Extraction needs normal approval, never overwrites an existing
+directory, rejects links and non-portable names, and bounds expanded bytes and
+entry counts. It checks ZIP CRCs and accepts an optional publisher SHA-256.
+These local tools also work offline. Unsupported archives fail explicitly;
+do not silently switch to shell extraction to bypass a refused path or limit.
+
 The tools are shared by Xratu and OpenCode. Native engines may prefix the tool
 names through the Xratu MCP bridge; use the names in the current catalog.
 

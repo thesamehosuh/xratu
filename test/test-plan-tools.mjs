@@ -68,8 +68,8 @@ for (const name of ['browser_open', 'browser_navigate', 'browser_click', 'browse
     check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
     check(`YOLO snapshot: ${name} still reaches the live approval gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);
 }
-for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot', 'list_downloads']) check(`plan: keeps ${name}`, planNames.has(name), true);
-for (const name of ['start_download', 'control_download']) {
+for (const name of ['browser_status', 'browser_snapshot', 'browser_screenshot', 'list_downloads', 'verify_file', 'inspect_archive']) check(`plan: keeps ${name}`, planNames.has(name), true);
+for (const name of ['start_download', 'control_download', 'extract_archive']) {
     check(`plan: no ${name}`, planNames.has(name), false);
     check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
     check(`YOLO snapshot: ${name} reaches live gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);

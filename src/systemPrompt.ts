@@ -22,7 +22,7 @@ export function buildNativeSystemContext(planMode: boolean, replyLanguage: 'fa' 
     const language = replyLanguage === 'fa' ? REPLY_LANGUAGE_FA : replyLanguage === 'en' ? REPLY_LANGUAGE_EN : REPLY_LANGUAGE_AUTO;
     const services = [
         'Xratu services are available through its MCP bridge: use update_task_list for the visible task list and browser_* for the shared browser.',
-        ...(!planMode ? ['Use start_download/control_download/list_downloads for managed file downloads. Read the native-downloads skill for proxy routing and recovery; progress needs no model polling.'] : []),
+        ...(!planMode ? ['Use start_download/control_download/list_downloads for managed file downloads, and verify_file/inspect_archive/extract_archive for local verification and unpacking. Read the native-downloads skill for proxy routing and recovery; progress needs no model polling.'] : []),
         ...(options.toolCatalog?.includes('skill')
             ? ['Use the bridged skill tool for Xratu-managed skills and their resources.']
             : []),
@@ -138,7 +138,7 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         "- `task` delegates a self-contained subtask to a subagent (fresh context; only its final report returns). Prefer it for codebase-wide research, project tours and independent multi-step subtasks - especially when the search may span many files; do small lookups and work that needs this conversation inline.",
         "- `ask_user_question` shows the user a decision card (2-4 options, one recommended) and returns their pick. Use it for genuine user-owned choices (preferences, tradeoffs, ambiguous direction) instead of asking a multiple-choice question in prose; never for permission requests, and never for what you can decide or verify yourself.",
     ];
-    if (!inputs.planMode) parts.push('', 'Use start_download/control_download/list_downloads for managed file downloads. Read the native-downloads skill for proxy routing and recovery; progress needs no model polling.', PULL_REQUEST_AGENT_INSTRUCTIONS);
+    if (!inputs.planMode) parts.push('', 'Use start_download/control_download/list_downloads for managed file downloads, and verify_file/inspect_archive/extract_archive for local verification and unpacking. Read the native-downloads skill for proxy routing and recovery; progress needs no model polling.', PULL_REQUEST_AGENT_INSTRUCTIONS);
     if (inputs.replyLanguage === 'fa') {
         parts.push("", `${REPLY_LANGUAGE_FA} ${REPLY_COMMIT_MESSAGES}`, "", REPLY_VISIBLE_NARRATION);
         if (inputs.farsiSkill) {
