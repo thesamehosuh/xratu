@@ -308,7 +308,10 @@ export class DownloadManager {
                 await this.transfer(r, signal);
                 r.status = 'completed'; r.bytesPerSecond = 0; r.updatedAt = Date.now();
                 await this.save();
-                await this.deps.secrets.delete(this.key(r.id));
+                // Publication is complete; credential cleanup must not retry
+                // the transfer after its partial has already been removed.
+                try { await this.deps.secrets.delete(this.key(r.id)); }
+                catch (error) { this.deps.diagnostic(error); }
                 this.emit(); return;
             } catch (error) {
                 if (signal.aborted) break;

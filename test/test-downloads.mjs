@@ -109,6 +109,21 @@ try {
         assert.equal(collision.isError, true);
         assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
     });
+    await test('source cleanup failure cannot retry or fail an already published download', async () => {
+        const f = await fixture({ maxRetries: 0 });
+        const failure = new Error('SecretStorage unavailable');
+        f.deps.secrets.delete = async () => { throw failure; };
+        const r = await f.start('/file', { sha256: digest });
+        await until(() => f.state(r.id).status === 'failed' || f.diagnostics.includes(failure), 'cleanup settles');
+        await f.manager.dispose();
+        assert.equal(f.state(r.id).status, 'completed');
+        assert.equal(f.state(r.id).attempts, 1);
+        assert.equal(f.routed.length, 1);
+        assert.deepEqual(f.diagnostics, [failure]);
+        assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+        const recovered = await restore(f);
+        assert.equal(recovered.views()[0].status, 'completed');
+    });
     await test('dropped connection retries with Range and If-Range and preserves every byte', async () => {
         const f = await fixture();
         const r = await f.start('/drop', { sha256: digest });
