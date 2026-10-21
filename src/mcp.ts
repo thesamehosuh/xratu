@@ -1500,7 +1500,7 @@ export function createLocalToolExecutor(
             if (!opts?.downloads) return { output: 'Error: downloads are unavailable in this context.', isError: true };
             if (call.name === 'start_download' || (call.name === 'control_download' && ['resume', 'restart'].includes(String(call.arguments.action)))) await snapshot(workspaceRoot, call.name);
             opts.signal?.throwIfAborted();
-            return opts.downloads.tool(workspaceRoot, call.name, call.arguments, opts.signal);
+            return opts.downloads.tool(workspaceRoot, call.name, call.arguments, opts.signal, opts.sessionId);
         }
         if (PULL_REQUEST_TOOLS.some(tool => tool.name === call.name)) {
             if ((opts?.plan || opts?.nested) && PULL_REQUEST_MUTATIONS.has(call.name)) return { output: 'PR session changes are unavailable in plan mode and subagents.', isError: true };

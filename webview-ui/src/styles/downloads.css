@@ -6,14 +6,23 @@
 .download-title > svg { flex-shrink:0; color:var(--surface-accent); }
 .download-title strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--xratu-fs-sm); }
 .download-status { margin-inline-start:auto; flex-shrink:0; font-size:var(--xratu-fs-xs); color:var(--vscode-descriptionForeground); }
+.download-footer { display:flex; align-items:center; gap:12px; min-height:24px; }
+.download-footer .download-metrics { flex:1; min-width:0; }
+.download-actions { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.download-actions:empty { display:none; }
+.download-action { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--vscode-descriptionForeground); cursor:pointer; }
+.download-action:hover { background:var(--vscode-list-hoverBackground); color:var(--vscode-foreground); }
+.download-action:focus-visible { outline:1px solid var(--vscode-focusBorder, var(--surface-accent)); outline-offset:1px; }
+.download-action:disabled { opacity:0.4; cursor:wait; }
 .download-progress { height:4px; overflow:hidden; border-radius:2px; background:var(--page-line); margin-block:12px 8px; }
 .download-progress > span { display:block; height:100%; background:var(--surface-accent); }
 .download-completed .download-progress > span { opacity:0.55; }
 .download-failed .download-title > svg { color:var(--vscode-errorForeground); }
-.download-metrics { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:var(--xratu-fs-xs); line-height:1.8; color:var(--vscode-descriptionForeground); }
+.download-metrics { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:var(--xratu-fs-xs); line-height:1.8; color:var(--vscode-descriptionForeground); }
 .download-metrics > :last-child { margin-inline-start:auto; }
 .download-speed { display:inline-flex; align-items:center; gap:4px; flex-wrap:wrap; }
 .download-speed > :last-child:not(:nth-child(2)) { margin-inline-start:4px; }
 .download-error { font-size:var(--xratu-fs-xs); line-height:1.8; margin:14px 20px; }
 .download-error { color:var(--vscode-errorForeground); }
+.download-action-error { margin-block:6px 0; font-size:var(--xratu-fs-xs); line-height:1.8; color:var(--vscode-errorForeground); }
 @media (max-width:480px) { .downloads-content { padding:6px 14px 20px; } }
