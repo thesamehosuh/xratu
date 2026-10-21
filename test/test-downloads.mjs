@@ -98,9 +98,15 @@ async function restore(f) {
 try {
     await test('streams and verifies a file; safe views/manifest omit signed URLs; final file is exclusive', async () => {
         const f = await fixture();
+        const deleteSecret = f.deps.secrets.delete;
+        f.deps.secrets.delete = async key => {
+            await new Promise(resolve => setTimeout(resolve, 25));
+            await deleteSecret(key);
+        };
         const r = await f.start('/file?token=private', { path: 'models/model.bin', sha256: digest });
         assert.equal((await f.finished(r.id)).status, 'completed');
         assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+        await until(() => f.secretMap.size === 0, 'completed source cleanup');
         assert.equal(f.secretMap.size, 0);
         const manifest = await fs.readFile(path.join(f.storage, 'downloads', (await fs.readdir(path.join(f.storage, 'downloads')))[0], 'manifest.json'), 'utf8');
         assert.doesNotMatch(manifest, /private|token=/);
