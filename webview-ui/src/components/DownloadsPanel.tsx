@@ -17,9 +17,10 @@ export function formatDownloadBytes(bytes: number): string {
 export function DownloadsPanel({ downloads, error, visible, panelClass }: { downloads: DownloadView[]; error?: DownloadError; visible: boolean; panelClass: string }) {
     return <section className={`downloads-pane ${panelClass}`} id="surface-panel-downloads" role="tabpanel" aria-labelledby="surface-tab-downloads" aria-hidden={!visible || undefined}>
         {error && <p className="download-error" role="status">{t(error)}</p>}
-        {downloads.length === 0 ? <div className="surface-empty-state">
-            <div className="surface-empty-icon"><Download size={22} /></div>
+        {downloads.length === 0 ? <div className="surface-empty-state" role="status">
+            <div className="surface-empty-icon" aria-hidden="true"><Download size={22} /></div>
             <strong>{t('downloadEmpty')}</strong>
+            <p>{t('downloadEmptyHint')}</p>
         </div> : <div className="downloads-content">
             <div className="download-list">{downloads.map(r => {
                 const percent = r.total !== null && r.total > 0 ? Math.min(100, Math.floor(r.received / r.total * 100)) : r.status === 'completed' ? 100 : undefined;

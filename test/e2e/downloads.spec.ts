@@ -24,7 +24,9 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         const panel = page.locator('#surface-panel-downloads');
         await expect(panel).toBeVisible();
         await expect(panel).toContainText(locale === 'en' ? 'No downloads yet' : 'هنوز دانلودی شروع نشده');
-        await expect(panel.locator('p')).toHaveCount(0);
+        await expect(panel.locator('p')).toHaveText(locale === 'en'
+            ? 'Files the agent downloads appear here with live progress, and interrupted transfers keep their saved progress.'
+            : 'فایل هایی که ایجنت دانلود میکنه اینجا با پیشرفت زنده نمایش داده میشن؛ پیشرفت دانلود نیمه کاره هم ذخیره میشه.');
         await page.screenshot({ path: test.info().outputPath(`downloads-empty-${locale}-${width}.png`) });
         await page.evaluate(base => window.postMessage({ type: 'downloadsState', downloads: [
             { ...base, status: 'downloading' },
