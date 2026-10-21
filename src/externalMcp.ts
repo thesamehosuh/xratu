@@ -15,6 +15,7 @@
 
 import { createHash } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { resolveMcpSecrets } from './mcpSecrets';
 import { isOfflineMode } from './networkPolicy';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -496,13 +497,16 @@ export class ExternalMcpManager {
             // Dispatch may already have completed on the remote host. Never
             // replay an unknown operation after a transport failure.
             const msg = e instanceof Error ? e.message : String(e);
-            if (usedPromise && this._states.get(serverName) === usedPromise) {
+            const protocolError = e instanceof McpError;
+            const connectionFailure = !protocolError || e.code === ErrorCode.ConnectionClosed;
+            if (connectionFailure && usedPromise && this._states.get(serverName) === usedPromise) {
                 this._states.delete(serverName);
                 void usedPromise.then(state => closeState(state)).catch(() => undefined);
                 this._markStatus(serverName, { state: 'error', lastError: msg }, source);
             }
             console.error(`xratu: callTool ${namespaced} failed:`, e);
-            return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}. The remote outcome is unknown; the call was not replayed. Check its effects before retrying.`);
+            const uncertain = connectionFailure || e instanceof McpError && e.code === ErrorCode.RequestTimeout;
+            return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}${uncertain ? '. The remote outcome is unknown; the call was not replayed. Check its effects before retrying.' : ''}`);
         }
     }
 }

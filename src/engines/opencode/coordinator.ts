@@ -5,7 +5,7 @@ import type { LocalAgentEvent } from '../../local/localTypes';
 import { SubagentTraceCollector, type SubagentApprovalSource, type SubagentTrace } from '../../subagentObservation';
 import type { NativeEvent } from './events';
 import { nativeToolDisplayArgs } from './services';
-import { mapMcpToolContent } from '../../mcpToolContent';
+import { boundedStructuredContent, mapMcpToolContent } from '../../mcpToolContent';
 
 interface NativeCall { name: string; input: Record<string, unknown> }
 interface Delegation {
@@ -242,6 +242,7 @@ export class NativeSessionCoordinator {
                 const metadata = record(data.metadata);
                 const content = mapMcpToolContent(Array.isArray(data.content) ? data.content : []);
                 const research = readResearchEvidence(data.xratuResearch);
+                const structuredContent = boundedStructuredContent(data.structuredContent);
                 const isError = !!research && !['success', 'empty'].includes(research.outcome) || event.type.endsWith('failed') || (typeof metadata.exit === 'number' && metadata.exit !== 0);
                 if (delegation) {
                     if (typeof metadata.sessionID === 'string') this.attach(delegation, metadata.sessionID);
@@ -252,7 +253,7 @@ export class NativeSessionCoordinator {
                         if (typeof call?.input.sessionID === 'string') this.release(call.input.sessionID, sessionID, id);
                     }
                 }
-                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError, ...(research ? { research } : {}) });
+                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError, ...(research ? { research } : {}), ...(structuredContent ? { structuredContent } : {}) });
                 state.calls.delete(id);
                 break;
             }

@@ -10,7 +10,7 @@ import type { LocalAgentEvent, LocalSteerMessage } from '../../local/localTypes'
 import type { AgentEngine, EngineHost, EngineTurn } from '../types';
 import { ENGINE_CAPABILITIES } from '../types';
 import { nativeToolDisplayArgs } from './services';
-import { mapMcpToolContent } from '../../mcpToolContent';
+import { boundedStructuredContent, mapMcpToolContent } from '../../mcpToolContent';
 import type { NativeIntegration } from '../nativeSetup';
 import { OpenCodeServer } from './server';
 import { subscribeEvents } from './events';
@@ -408,12 +408,13 @@ export class OpenCodeEngine implements AgentEngine {
                             const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
                             if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
                             const research = readResearchEvidence(data.xratuResearch);
+                            const structuredContent = boundedStructuredContent(data.structuredContent);
                             const isError = !!research && !['success', 'empty'].includes(research.outcome) || event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
                             if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
                             // V2 represents MCP images as file parts with data URIs.
                             // Reuse shared image bounds; never fetch native file/HTTP URIs.
                             const content = mapMcpToolContent(Array.isArray(data.content) ? data.content.map(part => part?.type === 'file' && typeof part.uri === 'string' && /^data:image\//i.test(part.uri) ? { type: 'text', text: part.uri } : part) : [], call?.name);
-                            yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}), ...(data.xratuResearch ? { research: readResearchEvidence(data.xratuResearch) } : {}) };
+                            yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}), ...(research ? { research } : {}), ...(structuredContent ? { structuredContent } : {}) };
                             calls.delete(id);
                             active.calls.delete(id);
                             // Native tools own their arguments and retries. Stop a

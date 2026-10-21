@@ -51,6 +51,26 @@ const bounded = boundSubagentEvents(groups)[0];
 assert.ok(bounded[0].subagent.truncated && bounded[0].subagent.entries.length === 0);
 assert.equal(bounded.at(-1).subagent.entries.length, 1);
 assert.equal(groups[0][0].subagent.entries.length, 1, 'aggregate trimming does not mutate model/display inputs');
+const research = { version:1, provider:'parallel', outcome:'success', freshness:'unknown', sources:Array.from({length:20},(_,i)=>({id:String(i),url:`https://example.com/${i}`,title:'Documentation',excerpts:['x'.repeat(1200),'y'.repeat(1200)],retrievedAt:'now',route:'parallel'})), warnings:[] };
+const entries = Array.from({length:120},(_,i)=>({id:String(i),kind:'tool',tool:'web_search',text:'{}',output:'sources',startedAt:1,research,structuredContent:{text:'s'.repeat(8000)}}));
+const evidenceTrace = readSubagentTrace({...trace,entries});
+const payloadSize = value => (value.prompt?.length ?? 0) + (value.description?.length ?? 0) + (value.model?.length ?? 0) + (value.effort?.length ?? 0) + (value.report?.length ?? 0) + (value.error?.length ?? 0) + value.entries.reduce((sum,e)=>sum+e.text.length+(e.tool?.length??0)+(e.output?.length??0)+(e.live?.length??0)+(e.research?JSON.stringify(e.research).length:0)+(e.structuredContent?JSON.stringify(e.structuredContent).length:0),0);
+assert.ok(payloadSize(evidenceTrace) <= TRACE_CHARS);
+assert.ok(evidenceTrace.truncated); assert.equal(evidenceTrace.entries.at(-1).research.sources.length,20);
+assert.ok(evidenceTrace.entries.slice(0,-1).some(e=>!e.research || e.research.sources.length<20),'older source metadata is reclaimed');
+assert.equal(entries[0].research.sources[0].excerpts[0].length,1200,'bounding never mutates input evidence');
+const publications = [];
+const evidenceCollector = new SubagentTraceCollector({...trace,entries:[],status:'running'},value=>publications.push(value));
+for(let i=0;i<10;i++) {
+ evidenceCollector.receive({type:'toolCall',id:String(i),tool:'web_search',args:{}});
+ evidenceCollector.receive({type:'toolResult',id:String(i),tool:'web_search',output:'sources',research,structuredContent:{number:i}});
+}
+assert.ok(publications.every(value=>payloadSize(value)<=TRACE_CHARS),'every live publication obeys the aggregate budget');
+const small = readSubagentTrace({...trace,entries:[{...entries[0],research:undefined,structuredContent:{number:1}}]});
+assert.equal(small.entries[0].structuredContent.number,1);
+const snapshotJson = JSON.stringify(publications.at(-1));
+evidenceCollector.receive({type:'toolCall',id:'later',tool:'read_file',args:{}});
+assert.equal(JSON.stringify(publications.at(-2)),snapshotJson,'metadata snapshots remain immutable');
 collector.finish('cancelled');
 assert.equal(snapshots.at(-1).status, 'cancelled');
 console.log('subagent observation: immutable snapshots, real states, cumulative thinking, token accounting, bounded replay and display-only metadata passed');

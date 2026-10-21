@@ -1,4 +1,5 @@
 import { readResearchEvidence } from './web/types';
+import { boundedStructuredContent } from './mcpToolContent';
 import type { LocalAgentEvent } from './local/localTypes';
 
 export interface SubagentApprovalSource { parentCallId: string; profile: string; description: string }
@@ -15,6 +16,7 @@ export interface SubagentTraceEntry {
     live?: string;
     isError?: boolean;
     research?: import('./web/types').ResearchEvidence;
+    structuredContent?: Record<string, unknown>;
     /** Transient host-sanitized markup; disk normalization always discards it. */
     html?: string;
 }
@@ -75,6 +77,27 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
         return kept;
     };
     const number = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0;
+    const research = (value: unknown) => {
+        let evidence = readResearchEvidence(value);
+        if (!evidence) return undefined;
+        if (JSON.stringify(evidence).length > budget) {
+            truncated = true;
+            evidence = { ...evidence, truncated: true, warnings: [], sources: evidence.sources.map(source => ({ ...source, excerpts: [] })) };
+            while (evidence.sources.length && JSON.stringify(evidence).length > budget) evidence.sources.pop();
+        }
+        const size = JSON.stringify(evidence).length;
+        if (size > budget) return undefined;
+        budget -= size;
+        return evidence;
+    };
+    const structured = (value: unknown) => {
+        const content = boundedStructuredContent(value);
+        if (!content) return undefined;
+        const size = JSON.stringify(content).length;
+        if (size > budget) { truncated = true; return undefined; }
+        budget -= size;
+        return content;
+    };
     const result: SubagentTrace = {
         taskId: v.taskId.slice(0, 100), profile: v.profile.slice(0, 160),
         description: text(v.description, 1_000), prompt: text(v.prompt), model: text(v.model, 160), effort: text(v.effort, 40) || undefined,
@@ -91,7 +114,8 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
         if (!e || !['text', 'thinking', 'tool'].includes(e.kind) || typeof e.id !== 'string') continue;
         result.entries.unshift({ id: e.id.slice(0, 160), kind: e.kind, text: text(e.text), startedAt: number(e.startedAt),
             endedAt: e.endedAt === undefined ? undefined : number(e.endedAt), tool: text(e.tool, 160) || undefined,
-            output: e.output === undefined ? undefined : text(e.output), live: e.live === undefined ? undefined : text(e.live), isError: !!e.isError, ...(e.research ? { research: readResearchEvidence(e.research) } : {}) });
+            output: e.output === undefined ? undefined : text(e.output), live: e.live === undefined ? undefined : text(e.live), isError: !!e.isError,
+            ...(e.research ? { research: research(e.research) } : {}), ...(e.structuredContent ? { structuredContent: structured(e.structuredContent) } : {}) });
     }
     result.truncated = truncated;
     return result;
@@ -146,7 +170,7 @@ export class SubagentTraceCollector {
             case 'toolResult': {
                 const entry = trace.entries.find(e => e.kind === 'tool' && e.id === event.id);
                 trace.status = 'running'; trace.pendingTools = undefined;
-                if (entry) { entry.output = event.output.slice(0, 8_000); entry.endedAt = now; entry.isError = !!event.isError; entry.research = readResearchEvidence(event.research); entry.live = undefined; }
+                if (entry) { entry.output = event.output.slice(0, 8_000); entry.endedAt = now; entry.isError = !!event.isError; entry.research = readResearchEvidence(event.research); entry.structuredContent = boundedStructuredContent(event.structuredContent); entry.live = undefined; }
                 if (event.output.length > 8_000) trace.truncated = true;
                 break;
             }

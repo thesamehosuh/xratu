@@ -56,9 +56,12 @@ export function parseExaText(text: string): ResearchSource[] {
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch { /* Supported text contract below. */ }
     if (parsed !== undefined) return extractSources(parsed, 'exa');
-    if (!text.trim() || /no (?:results|relevant results)/i.test(text)) return [];
+    if (!text.trim()) return [];
     const chunks = text.split(/(?=^Title:)/m).filter(chunk => /^Title:/m.test(chunk));
-    if (!chunks.length) throw new ResearchError('unavailable', 'Exa returned an unsupported response format.');
+    if (!chunks.length) {
+        if (/no (?:results|relevant results)/i.test(text)) return [];
+        throw new ResearchError('unavailable', 'Exa returned an unsupported response format.');
+    }
     return chunks.slice(0, 100).flatMap(chunk => {
         const url = /^URL:\s*(.+)$/m.exec(chunk)?.[1]?.trim();
         const title = /^Title:\s*(.+)$/m.exec(chunk)?.[1]?.trim();

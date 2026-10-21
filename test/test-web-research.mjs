@@ -22,6 +22,7 @@ const { boundOutcomeEvents } = require('../out/local/eventBounds.js');
 const { boundedStructuredContent } = require('../out/mcpToolContent.js');
 const { mcpFetch } = require('../out/web/transport.js');
 const { TOOL_RESULT_ELISION_MARKER } = require('../out/local/localAgent.js');
+const { ErrorCode, McpError } = require('@modelcontextprotocol/sdk/types.js');
 const cfg = {};
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const item = (url = 'https://docs.example.com/page') => ({ url, title: 'Documentation', excerpts: ['first excerpt', 'second excerpt'], publish_date: '2026-10-01' });
@@ -47,6 +48,28 @@ const toolCalls = () => calls.filter(call => call.body?.method === 'tools/call')
 let count = 0;
 async function check(name, fn) { await fn(); count++; console.log('ok', name); resetResearchPolicy(); calls = []; globalThis.fetch = mockMcpFetch; wireResult = () => ({ content: [], structuredContent: { results: [item()] } }); }
 try {
+    await check('Exa result excerpts mentioning no results remain valid sources', () => {
+        const found = providers.parseExaText('Title: Query returns no results\nURL: https://example.com/query\nText: Explain why this query returns no relevant results.');
+        assert.equal(found.length, 1); assert.match(found[0].excerpts[0], /no relevant results/);
+        assert.deepEqual(providers.parseExaText('No relevant results found.'), []);
+        assert.throws(() => providers.parseExaText('Unsupported provider envelope'), /unsupported response/);
+    });
+    await check('reader schema avoids root combinators and rejects missing URL/handle at execution', async () => {
+        const { getLocalToolDefinitions } = require('../out/mcp.js');
+        const tool = getLocalToolDefinitions().find(tool => tool.name === 'fetch_url');
+        for (const key of ['anyOf', 'oneOf', 'allOf']) assert.equal(tool.inputSchema[key], undefined);
+        assert.equal(tool.inputSchema.type, 'object');
+        assert.equal((await executeWebTool('fetch_url', {}, cfg)).isError, true); assert.equal(calls.length, 0);
+    });
+    await check('document handles and ranges survive display and persisted normalization', () => {
+        const document = { handle: 'a'.repeat(24), start: 1000, end: 2000, total: 5000 };
+        const research = { version: 1, provider: 'direct', outcome: 'success', freshness: 'live', sources: [], warnings: [], document };
+        assert.deepEqual(readResearchEvidence(research).document, document);
+        assert.deepEqual(persistedEventFromAgentEvent({ type: 'toolResult', id: 'read', tool: 'fetch_url', output: 'page', research }).research.document, document);
+        for (const invalid of [null, [], { ...document, handle: 'x'.repeat(10000) }, { ...document, start: -1 }, { ...document, end: 999 }, { ...document, end: 1.5 }, { ...document, total: 500001 }]) {
+            assert.equal(readResearchEvidence({ ...research, document: invalid }).document, undefined);
+        }
+    });
     await check('HTML reader preserves headings, code indentation, links and tables; removes navigation and scripts', () => {
         const result = htmlToMarkdown('<html><head><title>Docs</title></head><body><nav>noise</nav><main><h2>Setup</h2><pre><code class="language-python">if True:\n    print("yes")</code></pre><a href="../api">API</a><a href="javascript:alert(1)">bad</a><table><tr><th>Name</th></tr><tr><td>value</td></tr></table><script>steal()</script></main></body></html>', 'https://docs.example.com/guide/install');
         assert.match(result.text, /## Setup/); assert.match(result.text, /```python\nif True:\n    print/); assert.match(result.text, /https:\/\/docs.example.com\/api/); assert.match(result.text, /\| Name \|/); assert.doesNotMatch(result.text, /noise|steal|javascript:/); assert.equal(result.title, 'Docs');
@@ -261,6 +284,21 @@ try {
         await new Promise(done => setImmediate(done)); manager._states.set('remote', replacement); fail(new Error('old connection lost'));
         assert.equal((await waiting).isError, true); assert.equal(manager._states.get('remote'), replacement);
         assert.equal(closed, 0); assert.equal(marked, 0);
+    });
+    await check('MCP protocol errors and timeouts preserve healthy shared connections without replay', async () => {
+        for (const code of [ErrorCode.InvalidParams, ErrorCode.MethodNotFound, ErrorCode.RequestTimeout, ErrorCode.ConnectionClosed]) {
+            const manager = new ExternalMcpManager(async () => ({ servers: { remote: { url: 'https://example.com/mcp' } }, sources: { remote: 'global' }, issues: [] }));
+            let invoked = 0, closed = 0, marked = 0;
+            const state = { client: { callTool: async () => { invoked++; throw new McpError(code, 'fixture failure'); }, close: async () => { closed++; } } };
+            const pending = Promise.resolve(state);
+            manager._states.set('remote', pending); manager.getState = async () => state; manager._markStatus = () => { marked++; };
+            const result = await manager.callTool('mcp__remote__mutate', {});
+            await new Promise(done => setImmediate(done));
+            assert.equal(result.isError, true); assert.equal(invoked, 1);
+            assert.equal(closed, code === ErrorCode.ConnectionClosed ? 1 : 0); assert.equal(marked, closed);
+            assert.equal(manager._states.get('remote'), closed ? undefined : pending);
+            assert.equal(result.text.includes('outcome is unknown'), [ErrorCode.RequestTimeout, ErrorCode.ConnectionClosed].includes(code));
+        }
     });
     await check('optional MCP discovery cannot hold first built-in request for its connect timeout', async () => {
         const manager = new ExternalMcpManager(async () => ({ servers: {}, sources: {}, issues: [] })); let resolve;

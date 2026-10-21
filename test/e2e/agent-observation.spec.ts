@@ -24,6 +24,21 @@ test.beforeEach(async ({page}) => {
     await page.goto('/'); await post(page,{type:'showChat'}); await post(page,{type:'locale',locale:'en'});
 });
 for (const locale of ['en','fa']) for (const width of [420,1080]) {
+    test(`child structured output remains inspectable (${locale}, ${width})`, async ({page}, info) => {
+        await page.setViewportSize({width,height:900}); await post(page,{type:'locale',locale});
+        await post(page,{type:'startResponse'});
+        await post(page,{type:'toolCall',tool:'task',args:'{"subagent_type":"explore","description":"Inspect sources"}',callId:'parent'});
+        await post(page,{type:'subagentState',callId:'parent',trace:trace('done',{entries:[{id:'report',kind:'tool',tool:'mcp__remote__report',text:'{}',output:'Report complete',structuredContent:{project:'xratu',count:3},startedAt:Date.now()-100,endedAt:Date.now()}]})});
+        await page.locator('.transcript-pane .step').first().locator(':scope > summary').click();
+        await page.locator('.transcript-pane .subagent-open').first().click();
+        const step=page.locator('.agents-pane .step').first();
+        if(await step.getAttribute('open')===null) await step.locator(':scope > summary').click();
+        const data=step.locator('.detail-arguments').filter({hasText:locale==='en'?'Structured data':'داده ساختاریافته'});
+        await data.locator('summary').click();
+        await expect(data.locator('pre')).toContainText('"project": "xratu"');
+        await expect(page.locator('.agents-pane .approval-card')).toHaveCount(0);
+        await page.screenshot({path:info.outputPath('child-structured-output.png')});
+    });
     test(`child observation, docking, approvals and retained state (${locale}, ${width})`, async ({page}) => {
         await page.setViewportSize({width,height:900}); await post(page,{type:'locale',locale});
         await page.locator('.composer-input').fill('Keep my draft');
