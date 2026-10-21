@@ -149,8 +149,9 @@ Linux that check asks the kernel where the descriptor itself lives
 (`/proc/self/fd`), one atomic answer, so a parent swapped for a symlink
 mid-extraction is refused and the empty file it produced is removed. That handle
 query is the only atomic answer there is; Node exposes no descriptor-relative
-creation, and on Windows - and on macOS whenever `/dev/fd` does not resolve -
-extraction falls back to two SEQUENCED pathname checks (identity, then
+creation, and the fd link it offers on macOS answers with a path that does not
+compare equal to the one the process created. On Windows and macOS extraction
+therefore falls back to two SEQUENCED pathname checks (identity, then
 containment). An ACTIVE same-user process that swaps the parent out for the
 create and back between those two checks passes both, and the entry is then
 written through the descriptor pointing outside; likewise the cleanup identity

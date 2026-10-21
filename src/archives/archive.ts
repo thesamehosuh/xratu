@@ -138,13 +138,15 @@ async function outputPath(destination: Destination, entry: Entry): Promise<strin
 /**
  * Where the descriptor itself lives, asked of the kernel in one step: on Linux
  * `/proc/self/fd/N` resolves through the opened file's OWN dentry chain, so a
- * parent swapped in or out around the create cannot change the answer. Returns
- * undefined where the platform offers no such handle query (Windows, and any
- * environment where the fd link does not resolve to a real path) so callers
- * fall back to the path-based checks below.
+ * parent swapped in or out around the create cannot change the answer. That
+ * handle query exists on Linux only, so every other platform falls back to
+ * the path-based checks below.
  */
 async function descriptorPath(handle: fs.FileHandle): Promise<string | undefined> {
-    const prefix = process.platform === 'linux' ? '/proc/self/fd/' : process.platform === 'darwin' ? '/dev/fd/' : undefined;
+    // Linux only: macOS `/dev/fd` answers too, but never with a path that
+    // compares equal to the one this process created (verified in CI), so
+    // trusting it would refuse legitimate extractions; Windows has no query.
+    const prefix = process.platform === 'linux' ? '/proc/self/fd/' : undefined;
     if (!prefix || handle.fd < 0) return undefined;
     const link = `${prefix}${handle.fd}`;
     try { const resolved = await fs.realpath(link); return resolved === link ? undefined : resolved; }
