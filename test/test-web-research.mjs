@@ -60,6 +60,15 @@ try {
         assert.ok(toolCalls()[0].body.params.arguments.search_queries[0].includes('site:example.com OR site:two.org'));
         assert.ok(calls.every(call => call.init.redirect === 'error')); assert.equal(result.research.sources[0].excerpts.length, 2);
     });
+    await check('HTTP-success error envelopes cannot masquerade as empty search results', async () => {
+        wireResult = () => ({ content: [], structuredContent: { results: [], errors: [{ code: 429, message: 'quota exceeded' }] } });
+        const failure = await executeWebTool('web_search', { query: 'docs' }, cfg);
+        assert.equal(failure.isError, true); assert.equal(failure.research.outcome, 'rate-limited');
+        resetResearchPolicy();
+        wireResult = () => ({ content: [], structuredContent: { results: [item()], errors: [{ message: 'one source unavailable' }] } });
+        const partial = await executeWebTool('web_search', { query: 'docs' }, cfg);
+        assert.equal(partial.research.outcome, 'success'); assert.ok(partial.research.warnings.some(warning => warning.includes('partial')));
+    });
     await check('anonymous 401 is a durable auth failure with no fallback', async () => {
         wireResult = () => new Response('', { status: 401 });
         const result = await executeWebTool('web_search', { query: 'docs' }, cfg);

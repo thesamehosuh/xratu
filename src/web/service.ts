@@ -76,6 +76,7 @@ async function search(args: Record<string, unknown>, config: WebToolConfig, sign
                 catch (error) { signal.throwIfAborted(); if (attempt.aborted) throw new ResearchError('timeout', `${provider} search timed out.`); throw error; }
             });
             let sources = sourcesResult;
+            for (const item of sources) for (const warning of item.warnings ?? []) if (!warnings.includes(warning)) warnings.push(warning);
             const seen = new Set<string>();
             sources = sources.filter(item => matchesDomains(item.url, request.domains) && !seen.has(item.url) && !!seen.add(item.url)).slice(0, request.maxResults);
             let remaining = 24_000;

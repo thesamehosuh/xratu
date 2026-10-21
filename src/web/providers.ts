@@ -35,16 +35,27 @@ export function extractSources(value: unknown, provider: string): ResearchSource
     const root = record(value);
     const nested = record(root.result ?? root.data);
     const list = Array.isArray(root.results) ? root.results : Array.isArray(nested.results) ? nested.results : undefined;
+    const errors = Array.isArray(root.errors) ? root.errors : Array.isArray(nested.errors) ? nested.errors : [];
+    const explicitError = root.error ?? nested.error;
+    if (explicitError || errors.length && !list?.length) {
+        const detail = JSON.stringify(explicitError ?? errors).slice(0, 4000);
+        const outcome = /429|rate.?limit|quota/i.test(detail) ? 'rate-limited' : /401|402|403|unauthoriz|forbidden/i.test(detail) ? 'authentication-required' : 'unavailable';
+        throw new ResearchError(outcome, 'Research provider returned an error inside its response.', outcome === 'rate-limited' ? 30_000 : undefined);
+    }
     if (!list) throw new ResearchError('unavailable', 'Research response does not contain a supported results envelope.');
-    return list.slice(0, 100).flatMap(item => {
+    const sources = list.slice(0, 100).flatMap(item => {
         const data = record(item);
         const result = source(data.url, provider, data);
         return result ? [result] : [];
     });
+    if (errors.length && sources.length) sources[0].warnings = ['Research provider returned partial results with extraction errors.'];
+    return sources;
 }
 /** Exa currently returns a documented text envelope rather than structuredContent. */
 export function parseExaText(text: string): ResearchSource[] {
-    try { return extractSources(JSON.parse(text), 'exa'); } catch { /* Supported text contract below. */ }
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { /* Supported text contract below. */ }
+    if (parsed !== undefined) return extractSources(parsed, 'exa');
     if (!text.trim() || /no (?:results|relevant results)/i.test(text)) return [];
     const chunks = text.split(/(?=^Title:)/m).filter(chunk => /^Title:/m.test(chunk));
     if (!chunks.length) throw new ResearchError('unavailable', 'Exa returned an unsupported response format.');
@@ -87,6 +98,8 @@ export async function searchProvider(provider: SearchProvider, request: SearchRe
         : { query, objective, numResults: request.maxResults }, signal, config.useProxy !== false);
     if (response.structured) return extractSources(response.structured, provider);
     if (provider === 'exa') return parseExaText(response.text);
-    try { return extractSources(JSON.parse(response.text), provider); }
+    let parsed: unknown;
+    try { parsed = JSON.parse(response.text); }
     catch { throw new ResearchError('unavailable', 'Parallel returned an unsupported response format.'); }
+    return extractSources(parsed, provider);
 }

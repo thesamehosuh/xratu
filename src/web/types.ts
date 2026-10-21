@@ -4,6 +4,7 @@ export type SearchProvider = 'parallel' | 'exa';
 export interface ResearchSource {
     id: string;
     truncated?: boolean;
+    warnings?: string[];
     url: string;
     requestedUrl?: string;
     title?: string;
