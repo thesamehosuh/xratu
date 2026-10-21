@@ -52,7 +52,9 @@ names through the Xratu MCP bridge; use the names in the current catalog.
 ## Lifecycle and token use
 
 Start returns immediately. Transfers retry automatically in the extension
-host; the read-only Downloads tab streams progress without LLM calls. Do
+host; the Downloads tab streams progress without LLM calls and lets users
+continue, retry or cancel existing transfers. The list belongs to the
+current chat; a new chat starts empty. Do
 other work and inspect `list_downloads` when the result is needed. Do not
 run tight polling loops or spend turns narrating each retry. There is no
 automatic agent wake on completion; if a task depends on the file, check

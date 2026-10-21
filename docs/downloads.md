@@ -2,10 +2,12 @@
 
 Xratu manages public HTTP(S) downloads inside the extension host. Agents use
 `start_download`, `control_download` and `list_downloads` in both the built-in
-runner and OpenCode's authenticated MCP bridge. Downloads is a read-only work
-surface tab: there are no start, pause, resume, cancel, routing or configuration
-controls for users to operate. Normal tool approvals still apply, including
-native and built-in children. Plan mode permits only status reads.
+runner and OpenCode's authenticated MCP bridge. The Downloads tab shows only
+the current chat's transfers, with compact continue, retry and cancel
+controls. Cancelling a transfer removes its partial file; completed files stay
+on disk. Agent commands keep their normal approvals,
+including native and built-in children. Plan mode permits only agent status
+reads; explicit user controls remain available.
 
 ## Engine decision
 
@@ -41,8 +43,11 @@ the existing undici dependency retains its MIT notice in THIRD_PARTY_NOTICES.
 - Same-directory `.xratu-download-<id>.part` files preserve received bytes.
   Metadata is serialized to an atomic manifest, checkpointed every five seconds
   and at state transitions. Restore trusts actual partial length, revalidates
-  paths, and marks active records interrupted. An approved agent resume is
-  required after a host restart; opening a workspace never silently downloads.
+  paths, and marks active records interrupted. Resume through the owning chat's
+  Continue control or an approved agent command after a host restart; opening
+  a workspace never silently downloads. New chats start with an empty list.
+  Returning to a saved chat restores its own records. Older records without
+  chat identity remain hidden; they are never assigned to an unrelated chat.
 - Recovery sends Range and If-Range using a strong ETag or Last-Modified.
   Content-Range, lengths, validators and identity encoding are checked before
   appending. A source that changes, ignores Range, or lacks a usable validator
@@ -79,8 +84,10 @@ turning it off does not silently restart paused downloads.
 
 Destinations stay inside the current workspace through sanitizePath, including
 symlink checks. `.git` and managed partial names are reserved. Ownership is
-workspace-scoped, never a chat ID; another active window is refused by an owner
-lock. Owner records include host/PID namespace, process incarnation and kernel
+workspace-scoped; records carry their owning chat ID, and lists and controls
+are restricted to that chat. The workspace lock key does not use a chat ID;
+another active window is refused by an owner lock. Owner records include
+host/PID namespace, process incarnation and kernel
 boot identity where available;
 an in-process registry distinguishes live owners from abandoned instances in
 the same extension host. A short directory mutex serializes claims and releases,
@@ -173,5 +180,5 @@ It runs through the existing host-test discovery in Linux, Windows and macOS CI.
 `npm run test:downloads` exercises real HTTP streaming, dropped connections,
 resume validators, route decisions, stalls, backoff, cancellation, reload,
 integrity, path/redirect guards, collisions and concurrency. Plan/native tool
-tests cover bridge gating; webview/e2e tests cover read-only behavior, docking,
+tests cover bridge gating; webview/e2e tests cover session isolation, user controls, docking,
 locale changes and narrow/wide layouts.

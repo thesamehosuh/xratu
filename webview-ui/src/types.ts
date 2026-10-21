@@ -8,7 +8,7 @@ export type { RuntimeSetupState, SetupPath } from '../../src/engines/setup';
 import type { SubagentTrace, SubagentApprovalSource } from '../../src/subagentObservation';
 import type { BrowserCommand, BrowserFrame, BrowserState } from '../../src/browserTypes';
 import type { PullRequestView } from '../../src/pullRequests/types';
-import type { DownloadView, DownloadError } from '../../src/downloads/types';
+import type { DownloadView, DownloadError, DownloadAction } from '../../src/downloads/types';
 import type { PullRequestAction } from '../../src/pullRequests/controller';
 export type { SubagentTrace } from '../../src/subagentObservation';
 import type { AgentProfileView, ReviewChange, ReviewFile } from '../../src/workSurface';
@@ -45,6 +45,7 @@ export interface EngineSetupState {
 
 export type ToExtensionMessage =
     | { type: 'downloadsGetState' }
+    | { type: 'downloadAction'; sessionId: string; id: string; action: DownloadAction; requestId: string }
     | { type: 'nativeGetState'; requestId: string }
     | { type: 'nativeCancel' }
     | { type: 'nativeConnect'; requestId: string; integrationID: string; key?: string; methodID?: string }
@@ -392,7 +393,8 @@ export interface ProviderBenchmark {
 }
 
 export type FromExtensionMessage =
-    | { type: 'downloadsState'; downloads: DownloadView[]; error?: DownloadError }
+    | { type: 'downloadsState'; sessionId: string; downloads: DownloadView[]; error?: DownloadError }
+    | { type: 'downloadActionResult'; sessionId: string; id: string; requestId: string; errorKey?: 'downloadActionFailed' }
     | { type: 'modelPing'; model: string; state: ModelPingState }
     | { type: 'enginesState'; state: EngineSetupState }
     | { type: 'openEngines' }

@@ -33,9 +33,9 @@ const server = createServer((req, res) => {
     res.writeHead(offset ? 206 : 200, headers);
     let position = offset;
     if (pathname === '/stall') { res.write(payload.subarray(0, 4096)); return; }
-    if (['/slow', '/changed', '/ignores', '/bad-range', '/no-validator'].includes(pathname) || (pathname === '/drop' && count === 1)) {
+    if (['/slow', '/changed', '/ignores', '/bad-range', '/no-validator'].includes(pathname) || (['/drop', '/retry-now'].includes(pathname) && count === 1)) {
         res.write(payload.subarray(position, position + 4096)); position += 4096;
-        if (pathname === '/drop') { setTimeout(() => res.destroy(), 40); return; }
+        if (['/drop', '/retry-now'].includes(pathname)) { setTimeout(() => res.destroy(), 40); return; }
         const timer = setInterval(() => {
             res.write(payload.subarray(position, position + 4096)); position += 4096;
             if (position >= payload.length) { clearInterval(timer); res.end(); }
@@ -96,6 +96,108 @@ async function restore(f) {
 }
 
 try {
+    await test('downloads belong to their chat across save, switch and host restart', async () => {
+        const snapshots = [];
+        const f = await fixture({ changed: downloads => snapshots.push(downloads) });
+        const start = async (session, target) => {
+            const result = await f.manager.tool(f.root, 'start_download', { url: 'https://downloads.example/slow', path: target }, undefined, session);
+            assert.equal(result.isError, undefined, result.output);
+            return JSON.parse(result.output);
+        };
+        f.manager.setSession('live-chat-a');
+        const a = await start('live-chat-a', 'a.bin');
+        await until(() => f.state(a.id).received > 0);
+        await f.control(a.id, 'pause');
+        await f.manager.bindSession('live-chat-a', 'saved-chat-a');
+        assert.equal(f.manager.views('live-chat-a')[0].id, a.id);
+        f.manager.setSession('chat-b');
+        assert.deepEqual(f.manager.views('chat-b'), []);
+        assert.deepEqual(snapshots.at(-1), []);
+        assert.equal(JSON.parse((await f.manager.tool(f.root, 'list_downloads', {}, undefined, 'chat-b')).output).downloads.length, 0);
+        assert.equal((await f.manager.tool(f.root, 'control_download', { id: a.id, action: 'cancel' }, undefined, 'chat-b')).isError, true);
+        await assert.rejects(f.manager.userAction('chat-b', a.id, 'cancel'));
+        await assert.rejects(f.manager.userAction('live-chat-a', a.id, 'resume'));
+        const b = await start('chat-b', 'b.bin');
+        await f.finished(b.id);
+        await f.manager.dispose();
+        const recovered = await restore(f);
+        assert.equal(recovered.views('saved-chat-a')[0].id, a.id);
+        assert.equal(recovered.views('chat-b')[0].id, b.id);
+        assert.deepEqual(recovered.views('chat-c'), []);
+        recovered.setSession('saved-chat-a');
+        await recovered.userAction('saved-chat-a', a.id, 'resume');
+        await until(() => recovered.views('saved-chat-a')[0].status === 'completed');
+        assert.deepEqual(await fs.readFile(path.join(f.root, a.path)), payload);
+    });
+
+    await test('user controls continue, retry and cancel safely', async () => {
+        const f = await fixture();
+        const session = 'controls';
+        f.manager.setSession(session);
+        const start = async (pathname, target) => {
+            const result = await f.manager.tool(f.root, 'start_download', { url: `https://downloads.example${pathname}`, path: target }, undefined, session);
+            assert.equal(result.isError, undefined, result.output);
+            return JSON.parse(result.output);
+        };
+        const r = await start('/slow', 'continued.bin');
+        await until(() => f.state(r.id).received > 0);
+        await f.control(r.id, 'pause');
+        const offset = f.state(r.id).received;
+        assert.equal(f.state(r.id).status, 'paused');
+        await f.manager.userAction(session, r.id, 'resume');
+        await f.finished(r.id);
+        assert(requests.some(req => req.pathname === '/slow' && req.range === `bytes=${offset}-`));
+        await assert.rejects(f.manager.userAction(session, r.id, 'restart'));
+        assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+
+        const failed = await start('/expired', 'retry.bin');
+        assert.equal((await f.finished(failed.id)).status, 'failed');
+        const attempts = counts.get('/expired');
+        await f.manager.userAction(session, failed.id, 'restart');
+        await f.finished(failed.id);
+        assert.equal(counts.get('/expired'), attempts + 1);
+
+        const cancelled = await start('/slow', 'cancelled.bin');
+        await until(() => f.state(cancelled.id).received > 0);
+        await f.manager.userAction(session, cancelled.id, 'cancel');
+        assert.equal(f.state(cancelled.id).status, 'cancelled');
+
+        await assert.rejects(fs.stat(path.join(f.root, `.xratu-download-${cancelled.id}.part`)), { code: 'ENOENT' });
+        await assert.rejects(fs.stat(path.join(f.root, cancelled.path)), { code: 'ENOENT' });
+        assert.equal([...f.secretMap.keys()].some(key => key.endsWith(cancelled.id)), false);
+    });
+
+    await test('user controls keep offline enforcement and require the owning chat', async () => {
+        let offline = false;
+        const f = await fixture({ offline: () => offline });
+        f.manager.setSession('a');
+        const result = await f.manager.tool(f.root, 'start_download', { url: 'https://downloads.example/slow', path: 'offline.bin' }, undefined, 'a');
+        const r = JSON.parse(result.output);
+        await until(() => f.state(r.id).received > 0);
+        await f.control(r.id, 'pause');
+        offline = true;
+        const before = f.routed.length;
+        await assert.rejects(f.manager.userAction('a', r.id, 'resume'), /downloadOffline/);
+        assert.equal(f.routed.length, before);
+        assert.equal(f.state(r.id).status, 'paused');
+        await f.manager.userAction('a', r.id, 'cancel');
+    });
+
+    await test('Retry now skips backoff and preserves validated partial bytes', async () => {
+        const f = await fixture({ retryMs: 30_000 });
+        f.manager.setSession('retry');
+        const result = await f.manager.tool(f.root, 'start_download', { url: 'https://downloads.example/retry-now', path: 'retry-now.bin' }, undefined, 'retry');
+        assert.equal(result.isError, undefined, result.output);
+        const r = JSON.parse(result.output);
+        await until(() => f.state(r.id).status === 'retrying');
+        const offset = f.state(r.id).received;
+        assert(offset > 0);
+        await f.manager.userAction('retry', r.id, 'resume');
+        assert.equal((await f.finished(r.id)).status, 'completed');
+        assert(requests.some(req => req.pathname === '/retry-now' && req.range === `bytes=${offset}-`));
+        assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+    });
+
     await test('streams and verifies a file; safe views/manifest omit signed URLs; final file is exclusive', async () => {
         const f = await fixture();
         const deleteSecret = f.deps.secrets.delete;
