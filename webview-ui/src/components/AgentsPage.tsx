@@ -33,7 +33,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
                             <button type="button" className="agent-profile" aria-expanded={expanded === id} onClick={() => setExpanded(expanded === id ? null : id)}>
                                 <span className={`agent-profile-icon${profile.error ? ' error' : ''}`}><Icon size={14} /></span>
                                 <span className="agent-profile-copy"><strong dir="ltr">{profile.name}</strong>
-                                    <span>{profile.source === 'builtin' && profile.name === 'explore' ? t('surfaceReadOnly') : profile.source === 'builtin' && profile.name === 'general' ? t('surfaceEditVerify') : profile.description}</span>
+                                    <span>{profile.error ? t('surfaceAgentInvalid') : profile.warning ? t('surfaceAgentWarning') : profile.source === 'builtin' && profile.name === 'explore' ? t('surfaceReadOnly') : profile.source === 'builtin' && profile.name === 'general' ? t('surfaceEditVerify') : t('surfaceCustomAgent')}</span>
                                 </span>
                                 {!profile.error && !profile.warning && <Check size={12} className="agent-ready" />}
                                 {expanded === id ? <ChevronDown size={12} /> : <ChevronRight size={12} className={getLocale() === 'fa' ? 'rtl-flip' : undefined} />}

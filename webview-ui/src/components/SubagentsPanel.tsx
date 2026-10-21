@@ -77,7 +77,6 @@ export function SubagentsPanel({ runs, selectedId, onSelect, onStop, visible, pa
             <div className="agent-empty-pane surface-empty-state" role="status">
                 <div className="agent-empty-icon surface-empty-icon" aria-hidden="true"><Bot size={22} /></div>
                 <strong className="agent-empty-title">{t('surfaceNoAgents')}</strong>
-                <p className="agent-empty-hint">{t('agentEmptyHint')}</p>
                 <button type="button" className="secondary-btn" onClick={onConversation}>{t('surfaceBackToConversation')}</button>
             </div>
         ) : (

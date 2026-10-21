@@ -1044,7 +1044,6 @@ export function CapabilitiesPage({
                     </div>
                     <div>
                         <h3>{t('mcpMarketTab')}</h3>
-                        <p>{t('mcpMarketSectionDesc')}</p>
                     </div>
                     <button
                         type="button"
@@ -1204,7 +1203,6 @@ export function CapabilitiesPage({
                     </div>
                     <div>
                         <h3>{t('mcpServersTab')}</h3>
-                        <p>{t('mcpServersSectionDesc')}</p>
                     </div>
                     <button type="button" className="cred-local-connect" onClick={() => openEditor()}>
                         <Plus size={13} />
@@ -1329,7 +1327,6 @@ export function CapabilitiesPage({
                     </div>
                     <div>
                         <h3>{skills.length} {t('skillsTitle')}</h3>
-                        <p>{t('skillsSectionDesc')}</p>
                     </div>
                     <button type="button" className="cred-local-connect" onClick={onNewSkill}>
                         <Plus size={13} />
@@ -1403,7 +1400,6 @@ export function CapabilitiesPage({
             </header>
 
             <div className="settings-scroll">
-                {native && <p className="scope-hint">{t(tab === 'skills' ? 'nativeSharedSkills' : 'nativeSharedMcp')}</p>}
                 {legacyInUse && tab === 'servers' && (
                     <div className="mcp-hint warn" role="status">
                         <TriangleAlert size={12} aria-hidden="true" />

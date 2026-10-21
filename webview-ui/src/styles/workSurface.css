@@ -261,6 +261,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .agent-profile-copy > span { font-size:var(--xratu-fs-sm); color:var(--vscode-descriptionForeground); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-ready { color:var(--vscode-testing-iconPassed, #8bbaa6); flex-shrink:0; }
 .agent-profile-details { padding:10px 0; font-size:var(--xratu-fs-md); color:var(--vscode-descriptionForeground); }
+.agent-profile-details > .settings-ghost-action { display:inline-flex; align-items:center; gap:6px; }
 .agent-tools { display:flex; flex-wrap:wrap; gap:4px; margin-block:9px; }
 .agent-tools code { font-size:var(--xratu-fs-sm); padding:2px 4px; background:var(--page-surface); border-radius:3px; }
 .agent-discovery summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; font-size:var(--xratu-fs-md); color:var(--vscode-descriptionForeground); }
@@ -484,8 +485,9 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
     .page-sidebar :is(.sidebar-back,.sidebar-item) > span { position:absolute; inline-size:1px; block-size:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 }
 
-.toolbar > .toolbar-new-chat { order:-1; flex-shrink:0; width:28px; height:28px; padding:0; }
-.app[dir='rtl'] .toolbar > .toolbar-new-chat { order:1; }
+.toolbar-new-chat { flex-shrink:0; width:28px; height:28px; padding:0; color:var(--vscode-descriptionForeground); }
+.session-pop-new-chat { margin-inline-start:auto; display:inline-flex; align-items:center; gap:6px; flex-shrink:0; white-space:nowrap; }
+.session-pop-close { margin-inline-start:0; }
 .session-row:hover,.session-row:focus-within { background:color-mix(in srgb, var(--vscode-foreground) 6%, transparent); }
 .session-row-main:hover:not(:disabled) { background:transparent; }
 .activity-jump { position:sticky; inset-block-end:12px; height:0; display:flex; justify-content:center; z-index:3; }

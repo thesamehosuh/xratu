@@ -2508,7 +2508,6 @@ export function ActivityTimeline({ messages, firstVisible = 0, onShowEarlier, fi
                     </svg>
                 </div>
                 <strong className="activity-empty-title">{t(isFiltered ? 'txNoMatchingActivity' : 'surfaceNoActivity')}</strong>
-                {!isFiltered && <p className="activity-empty-hint">{t('activityEmptyHint')}</p>}
                 {isFiltered && onResetFilter && (
                     <button type="button" className="secondary-btn activity-reset-btn" onClick={onResetFilter}>
                         {t('activityClearFilter')}

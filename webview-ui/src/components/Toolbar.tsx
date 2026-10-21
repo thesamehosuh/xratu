@@ -90,6 +90,11 @@ export function Toolbar({
         }
     }, [sessionsOpen]);
 
+    const startNewSession = () => {
+        if (sessionsOpen) onToggleSessions();
+        onNewSession();
+    };
+
     const grouped = new Map<string, SessionMeta[]>();
     for (const item of sessions) {
         const g = timeGroup(item.updatedAt);
@@ -189,23 +194,23 @@ export function Toolbar({
 
     return (
         <header className="toolbar" ref={rootRef}>
-            <button type="button" className="ghost-btn toolbar-new-chat" onClick={onNewSession} aria-label={t('newSession')} title={t('newSession')}><MessageSquarePlus size={15} /></button>
             <span className="toolbar-brand" role="img" aria-label={t('miniApp')}><img src={brandMark} alt="" /></span>
             <div className="toolbar-heading">
-            <button
-                type="button"
-                className={`session-btn${sessionsOpen ? ' open' : ''}`}
-                onClick={onToggleSessions}
-                aria-expanded={sessionsOpen}
-                aria-haspopup="listbox"
-                aria-label={t('sessionsTitle')}
-                title={sessionTitle || t('sessionsUntitled')}
-            >
-                <span className="session-btn-title" dir="auto">{sessionTitle || t('sessionsUntitled')}</span>
-                <ChevronDown size={13} className="session-btn-chevron" />
-            </button>
-            {workspaceLabel && <span className="workspace-breadcrumb" dir="ltr" title={workspaceLabel}>{workspaceLabel}</span>}
+                <button
+                    type="button"
+                    className={`session-btn${sessionsOpen ? ' open' : ''}`}
+                    onClick={onToggleSessions}
+                    aria-expanded={sessionsOpen}
+                    aria-haspopup="listbox"
+                    aria-label={t('sessionsTitle')}
+                    title={sessionTitle || t('sessionsUntitled')}
+                >
+                    <span className="session-btn-title" dir="auto">{sessionTitle || t('sessionsUntitled')}</span>
+                    <ChevronDown size={13} className="session-btn-chevron" />
+                </button>
+                {workspaceLabel && <span className="workspace-breadcrumb" dir="ltr" title={workspaceLabel}>{workspaceLabel}</span>}
             </div>
+            <button type="button" className="ghost-btn toolbar-new-chat" onClick={startNewSession} aria-label={t('newSession')} title={t('newSession')}><MessageSquarePlus size={15} /></button>
             <div className="toolbar-group toolbar-tools">
                 {onOpenCapabilities && (
                     <button
@@ -246,6 +251,9 @@ export function Toolbar({
                             onClick={() => onSessionsScope('all')}
                         >
                             {t('sessionsAllWorkspaces')}
+                        </button>
+                        <button type="button" className="session-scope session-pop-new-chat" onClick={startNewSession}>
+                            <MessageSquarePlus size={15} /><span>{t('newSession')}</span>
                         </button>
                         <button
                             type="button"

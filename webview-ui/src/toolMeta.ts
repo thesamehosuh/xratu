@@ -33,6 +33,8 @@ import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^(start_download|control_download|list_downloads)$/, icon: Download },
+    { re: /^verify_file$/, icon: ShieldCheck },
+    { re: /^(inspect_archive|extract_archive)$/, icon: Package },
     { re: /^(link|unlink|watch|unwatch|get)_pull_request$|^list_thread_pull_requests$/, icon: GitPullRequest },
     { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
@@ -76,6 +78,9 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^start_download$/, key: 'toolStartDownload' },
+    { re: /^verify_file$/, key: 'toolVerifyFile' },
+    { re: /^inspect_archive$/, key: 'toolInspectArchive' },
+    { re: /^extract_archive$/, key: 'toolExtractArchive' },
     { re: /^control_download$/, key: 'toolControlDownload' },
     { re: /^list_downloads$/, key: 'toolListDownloads' },
     { re: /^link_pull_request$/, key: 'prLink' },

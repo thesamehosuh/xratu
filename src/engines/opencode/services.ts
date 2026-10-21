@@ -3,24 +3,26 @@ import type { LocalToolDefinition } from '../../local/localTypes';
 import type { AggregatedTool } from '../../externalMcp';
 import { TASK_LIST_TOOL_NAME } from '../../taskList';
 import { DOWNLOAD_MUTATIONS, DOWNLOAD_TOOLS } from '../../downloads/tools';
+import { ARCHIVE_MUTATIONS, ARCHIVE_TOOLS } from '../../archives/tools';
 
 const browserNames = new Set(BROWSER_TOOL_DEFINITIONS.map(tool => tool.name));
 const sessionTools = new Set([TASK_LIST_TOOL_NAME, 'exit_plan_mode', 'skill']);
 
 /** Deliberate service allowlist: native file/shell tools and delegation stay native. */
 export function isNativeServiceTool(name: string): boolean {
-    return browserNames.has(name) || sessionTools.has(name) || DOWNLOAD_TOOLS.some(tool => tool.name === name);
+    return browserNames.has(name) || sessionTools.has(name) || DOWNLOAD_TOOLS.some(tool => tool.name === name) || ARCHIVE_TOOLS.some(tool => tool.name === name);
 }
 
 export function isNativePlanTool(name: string): boolean {
-    return sessionTools.has(name) || name === 'list_downloads' || (browserNames.has(name) && !BROWSER_MUTATING_TOOLS.has(name));
+    return sessionTools.has(name) || name === 'list_downloads' || (browserNames.has(name) && !BROWSER_MUTATING_TOOLS.has(name))
+        || ARCHIVE_TOOLS.some(tool => tool.name === name && !ARCHIVE_MUTATIONS.has(name));
 }
 
 export function nativeServiceTools(tools: LocalToolDefinition[]): AggregatedTool[] {
     return tools.filter(tool => isNativeServiceTool(tool.name)).map(tool => ({
         name: tool.name, originalName: tool.name, serverName: 'xratu',
         description: tool.description, inputSchema: tool.inputSchema,
-        autoApprove: !tool.requiresApproval && !BROWSER_MUTATING_TOOLS.has(tool.name) && !DOWNLOAD_MUTATIONS.has(tool.name),
+        autoApprove: !tool.requiresApproval && !BROWSER_MUTATING_TOOLS.has(tool.name) && !DOWNLOAD_MUTATIONS.has(tool.name) && !ARCHIVE_MUTATIONS.has(tool.name),
     }));
 }
 

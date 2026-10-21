@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { abortable } from './oauth/refreshLock';
 import { DOWNLOAD_MUTATIONS, DOWNLOAD_TOOLS } from './downloads/tools';
 import type { DownloadManager } from './downloads/manager';
+import { ARCHIVE_MUTATIONS, ARCHIVE_TOOLS } from './archives/tools';
+import { executeArchiveTool } from './archives/archive';
 import { BROWSER_MUTATING_TOOLS, BROWSER_TOOL_DEFINITIONS } from './browserPolicy';
 import type { BrowserController } from './browserController';
 import { isOfflineMode } from './networkPolicy';
@@ -73,6 +75,7 @@ const MUTATING_TOOLS = new Set([
     'edit_file', 'replace_in_file', 'apply_patch',
     'run_terminal_command',
     ...DOWNLOAD_MUTATIONS,
+    ...ARCHIVE_MUTATIONS,
     ...EXPANSION_MUTATING_TOOL_NAMES,
 ]);
 
@@ -602,7 +605,8 @@ export function getLocalToolDefinitions(opts?: {
         && (!isOfflineMode() || !['get_pull_request', 'watch_pull_request'].includes(tool.name)));
     const downloads = DOWNLOAD_TOOLS.filter(tool => !plan || !DOWNLOAD_MUTATIONS.has(tool.name))
         .filter(tool => !isOfflineMode() || tool.name !== 'start_download');
-    return [...builtin, ...web, ...browser, ...downloads, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
+    const archives = ARCHIVE_TOOLS.filter(tool => !plan || !ARCHIVE_MUTATIONS.has(tool.name));
+    return [...builtin, ...web, ...browser, ...downloads, ...archives, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
 }
 
 /**
@@ -1486,6 +1490,11 @@ export function createLocalToolExecutor(
         opts?.signal?.throwIfAborted();
     };
     const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (ARCHIVE_TOOLS.some(tool => tool.name === call.name)) {
+            if (opts?.plan && ARCHIVE_MUTATIONS.has(call.name)) return { output: 'Error: archive extraction is disabled in plan mode.', isError: true };
+            if (ARCHIVE_MUTATIONS.has(call.name)) await snapshot(workspaceRoot, call.name);
+            return executeArchiveTool(workspaceRoot, call.name, call.arguments, opts?.signal);
+        }
         if (DOWNLOAD_TOOLS.some(tool => tool.name === call.name)) {
             if (opts?.plan && DOWNLOAD_MUTATIONS.has(call.name)) return { output: 'Error: download changes are disabled in plan mode.', isError: true };
             if (!opts?.downloads) return { output: 'Error: downloads are unavailable in this context.', isError: true };

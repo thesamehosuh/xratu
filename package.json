@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.5.0",
+  "version": "2.5.2",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -333,7 +333,8 @@
     "test:runtime-controls": "node test/test-runtime-controls.mjs",
     "test:first-token-timeout": "node test/test-first-token-timeout.mjs",
     "test:browser": "node test/test-browser.mjs",
-    "test:downloads": "node test/test-downloads.mjs"
+    "test:downloads": "node test/test-downloads.mjs",
+    "test:archives": "node test/test-archives.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [
@@ -349,6 +350,7 @@
     "@types/react-dom": "^18.3.1",
     "@types/vscode": "^1.90.0",
     "@types/ws": "^8.18.2",
+    "@types/yauzl": "3.4.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
@@ -367,6 +369,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@opencode/client": "2.0.30",
+    "crc-32": "1.2.2",
     "cross-spawn": "^7.0.6",
     "lucide-react": "^1.55.0",
     "markdown-it": "^14.3.2",
@@ -375,6 +378,7 @@
     "shiki": "^4.5.0",
     "tar": "7.5.22",
     "undici": "^6.28.1",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "yauzl": "3.4.0"
   }
 }

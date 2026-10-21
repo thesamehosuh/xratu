@@ -5,6 +5,7 @@ async function post(page: Page, message: object) { await page.evaluate((value) =
 async function sent(page: Page) { return page.evaluate(() => (window as unknown as { __xratuHostMessages: object[] }).__xratuHostMessages); }
 test.beforeEach(async ({ page }) => {
     await installVscodeTheme(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
         const messages: object[] = [];
         Object.assign(window, { __xratuHostMessages: messages, acquireVsCodeApi: () => ({ postMessage: (message: object) => messages.push(message), getState: () => undefined, setState: (value: unknown) => value }) });
@@ -37,7 +38,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'skillsState', skills: [{ id: 'project-xratu:review', name: 'review', description: 'Review project changes', dirPath: 'C:\\project\\.xratu\\skills\\review', source: 'project-xratu', error: null, enabled: true, bodyChars: 400 }] });
         await expect(page.locator('.mcp-row').filter({ hasText: 'shared-docs' })).toBeVisible();
         await expect(page.getByRole('button', { name: locale === 'en' ? 'Add server' : 'افزودن سرور', exact: true })).toBeVisible();
-        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory summary').click();
+        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory > summary').click();
         await expect(page.locator('.native-inventory')).toContainText('native-docs');
         await page.screenshot({ path: testInfo.outputPath('shared-servers.png') });
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Marketplace' : 'فروشگاه', exact: true }).click();
@@ -51,14 +52,20 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await skill.getByRole('switch').click();
         expect(await sent(page)).toContainEqual({ type: 'skillsToggle', id: 'project-xratu:review', enabled: false });
         await expect(page.getByRole('button', { name: locale === 'en' ? 'New skill' : 'مهارت جدید', exact: true })).toBeVisible();
-        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory summary').click();
+        if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory > summary').click();
         await expect(page.locator('.native-inventory')).toContainText('native-review');
         await page.screenshot({ path: testInfo.outputPath('shared-skills.png') });
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Agent files' : 'فایل های ایجنت', exact: true }).click();
         await replyNative();
         await expect(page.locator('.native-inventory')).toContainText('Explore');
         await expect(page.locator('.native-inventory')).toContainText(locale === 'en' ? 'Native subagent' : 'زیرعامل بومی');
+        const nativeDescription = page.locator('.native-inventory-detail p');
+        await expect(nativeDescription).toBeHidden();
         await page.screenshot({ path: testInfo.outputPath('native-agent-inventory.png') });
+        await page.locator('.native-inventory-detail summary').click();
+        await expect(nativeDescription).toBeVisible();
+        await expect(nativeDescription).toHaveText('Read-only native exploration');
+        await page.screenshot({ path: testInfo.outputPath('native-agent-details.png') });
         expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
         await page.getByRole('button', { name: locale === 'en' ? 'Manage Xratu agent files' : 'مدیریت فایل های ایجنت Xratu', exact: true }).click();
         await expect(page.locator('.agents-page')).toBeVisible();
@@ -103,7 +110,7 @@ for (const locale of ['en', 'fa'] as const) {
             await post(page, { type: 'enginesState', state: { ...state, installedByXratu: false } });
             await expect(engine.locator('.engine-maintenance')).toHaveCount(0);
         });
-        test(`OpenCode setup and installation controls (${locale}, ${width})`, async ({ page }) => {
+        test(`OpenCode setup and installation controls (${locale}, ${width})`, async ({ page }, info) => {
             await page.setViewportSize({ width, height: 800 });
             await post(page, { type: 'locale', locale });
             await post(page, { type: 'showChat' });
@@ -125,6 +132,9 @@ for (const locale of ['en', 'fa'] as const) {
             await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\tools\\opencode.exe', customPath: '', installedByXratu: true, busy: false } });
             await engine.locator('.primary-btn').click();
             expect(await sent(page)).toContainEqual({ type: 'engineSelect', engine: 'opencode' });
+            await engine.locator('.engine-details > summary').click();
+            await expect(engine.locator('.engine-install-source')).toBeVisible();
+            await page.screenshot({ path: info.outputPath('engine-setup.png') });
             expect((await sent(page)).some((message) => (message as { type: string }).type === 'setupOpen')).toBe(false);
             await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\tools\\opencode.exe', customPath: '', installedByXratu: true, busy: false } });
             await expect(engine).toHaveCSS('border-color', 'rgb(20, 227, 200)');

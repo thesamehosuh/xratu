@@ -7909,6 +7909,8 @@ button.settings-nav-row:hover {
 }
 
 .mcp-hint.warn {
+    color: var(--vscode-editorWarning-foreground, #ffb020);
+    overflow-wrap: anywhere;
     padding: 9px 10px;
     border-radius: var(--xratu-radius-sm);
     background: rgba(255, 176, 32, 0.12);

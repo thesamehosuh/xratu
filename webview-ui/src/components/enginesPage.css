@@ -31,6 +31,10 @@
 .engine-remove-confirm { margin-block-start: 12px; }
 .engine-details { width: 100%; min-width: 0; font-size: var(--xratu-fs-sm); }
 .engine-details summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+.engine-details > summary, .engine-install-source { display: flex; align-items: center; gap: 6px; }
+.engine-details > summary { inline-size: fit-content; }
+.engine-install-source { margin-block-start: 10px; color: var(--vscode-descriptionForeground); }
+.engine-install-source > svg { flex-shrink: 0; }
 .engine-details p { color: var(--vscode-descriptionForeground); margin-block: 10px 0; line-height: 1.6; }
 .engine-details label { display: block; margin-block: 12px 6px; }
 .engine-details input { width: 100%; min-width: 0; box-sizing: border-box; background: var(--xratu-surface-inset); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--engine-line)); padding: 6px 8px; border-radius: 4px; margin-block-end: 8px; }

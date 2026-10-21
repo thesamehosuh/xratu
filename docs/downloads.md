@@ -106,6 +106,68 @@ is no completion-driven automatic next turn; agents inspect status when a
 dependent task needs the file. A server with unknown length can finish at EOF;
 use the publisher checksum to detect application-level truncation in that case.
 
+## Local verification and archives
+
+`verify_file` streams an existing workspace file through SHA-256, optionally
+checking a publisher digest. Its default input limit is 20 GiB (maximum 1 TiB).
+`inspect_archive` lists ZIP, TAR and TAR.GZ/TGZ contents without writing files;
+it returns totals and at most 200 entries, while validating the whole inventory.
+ZIP inspection reads metadata, not payload CRCs. Both tools are read-only,
+available in plan mode, and work offline without a download-service instance.
+
+`extract_archive` uses the normal approval gate and a shadow checkpoint before
+writing. Native parent/child calls share the same gate; plan mode denies it in
+both the advertised catalog and the executor. It creates a new workspace
+directory with exclusive `mkdir`; the parent must already exist. An existing
+directory, including an empty one, is refused. Files use exclusive creation.
+Cancellation and errors close streams/handles before removing owned output;
+cleanup checks the destination directory identity before removing it.
+
+The implementation uses the existing `tar` parser, `yauzl` for streaming ZIP
+reads and `crc-32` for ZIP payload integrity. These are bundled JavaScript
+libraries, with no platform binaries, subprocesses or shell commands. Archive
+formats are detected from content, so a downloaded file need not have a suffix.
+An optional SHA-256 is checked against the same open source handle before any
+output directory is created. The source's identity, size and modification times
+are checked after reading to catch concurrent changes. Hashing without a trusted
+expected value does not authenticate a file.
+
+Input archives are capped at 20 GiB. Expanded files default to 1 GiB, with an
+agent-selectable maximum of 20 GiB. At most 10,000 entries and output paths
+(including implicit parents) are allowed; agents can lower that limit. TAR
+metadata records are capped at 64 KiB each, and the complete uncompressed TAR
+stream also has a bounded overhead budget. Paths have at most 32 components and
+1,024 UTF-8 bytes. Absolute, traversing, reserved, Windows-unsafe and `.git`
+paths are refused on every platform. Case and Unicode normalization aliases,
+duplicates and file/directory conflicts fail. Links, devices, FIFOs, encrypted
+ZIPs and unsupported formats/types fail explicitly. Only ordinary executable
+bits are retained; ownership, timestamps, ACLs and special permission bits are
+not restored. Extraction never executes a downloaded file. The existing
+`sanitizePath` workspace/symlink guard applies to sources and destinations, and
+each created file is additionally checked before a single byte is written. On
+Linux that check asks the kernel where the descriptor itself lives
+(`/proc/self/fd`), one atomic answer, so a parent swapped for a symlink
+mid-extraction is refused and the empty file it produced is removed. That handle
+query is the only atomic answer there is; Node exposes no descriptor-relative
+creation, and the fd link it offers on macOS answers with a path that does not
+compare equal to the one the process created. On Windows and macOS extraction
+therefore falls back to two SEQUENCED pathname checks (identity, then
+containment). An ACTIVE same-user process that swaps the parent out for the
+create and back between those two checks passes both, and the entry is then
+written through the descriptor pointing outside; likewise the cleanup identity
+check is read before the unlink, not bound to it, so it removes whatever now
+occupies that path. These sequences are EXCLUDED behavior, not prevented ones:
+a process with that access can already write or delete outside the workspace
+without this tool, so it stands outside the containment guarantee. Malicious
+ARCHIVE CONTENT and pre-existing workspace symlinks - the threats that guarantee
+does cover - cannot race anything: they are refused on every platform, always
+before any output byte is written.
+
+`npm run test:archives` covers all supported formats, hostile paths encoded
+independently of the host OS, case/Unicode collisions, CRC/SHA failures, partial
+cleanup, cancellation during writes, limits, and built-in/native plan gating.
+It runs through the existing host-test discovery in Linux, Windows and macOS CI.
+
 ## Validation
 
 `npm run test:downloads` exercises real HTTP streaming, dropped connections,

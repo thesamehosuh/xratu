@@ -459,14 +459,21 @@ test('background jobs remain available when switching work surfaces', async ({ p
     expect(await sent(page)).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
 });
 
-test('agent details surface both load problems and open only the discovered profile', async ({ page }) => {
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`agent details surface both load problems and open only the discovered profile (${locale}, ${width})`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 });
+    await post(page, { type: 'locale', locale });
     await post(page, { type: 'openSettings' });
     await page.locator('.sidebar-item').nth(5).click();
     await post(page, { type: 'agentsState', profiles: [{ name: 'reviewer', description: 'Review code', source: 'project-xratu', editable: true, error: 'No valid tools remain', warning: 'Dropped unknown tool Read' }] });
+    await expect(page.locator('.agent-profile')).toContainText(locale === 'en' ? 'Invalid profile' : 'پروفایل نامعتبر');
+    await expect(page.locator('.agent-profile')).not.toContainText('Review code');
+    await page.screenshot({ path: info.outputPath('agent-profile.png') });
     await page.locator('.agent-profile').click();
+    await expect(page.locator('.agent-profile-details')).toContainText('Review code');
     await expect(page.locator('.agent-profile-details')).toContainText('No valid tools remain');
     await expect(page.locator('.agent-profile-details')).toContainText('Dropped unknown tool Read');
-    await page.getByRole('button', { name: 'Open file', exact: true }).click();
+    await page.screenshot({ path: info.outputPath('agent-profile-details.png') });
+    await page.getByRole('button', { name: locale === 'en' ? 'Open file' : 'باز کردن فایل', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'agentFileOpen', name: 'reviewer', source: 'project-xratu' });
 });
 
@@ -1028,7 +1035,7 @@ test('live changes follow the latest edited file and preserve a manual selection
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`new tabs choose panels and empty views explain what to do (${locale}, ${width})`, async ({ page }) => {
+    test(`new tabs choose panels and empty views show their state (${locale}, ${width})`, async ({ page }) => {
         await page.locator('.dock-tabs.main .dock-layout-button').click();
         await page.getByRole('menuitem', { name: 'Reset layout', exact: true }).click();
         await page.setViewportSize({ width, height: 900 });
@@ -1042,7 +1049,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
             await blank.locator(`[data-open-panel="${panel}"]`).click();
             await expect(page.locator(`#surface-tab-${panel}`)).toHaveAttribute('aria-selected', 'true');
             await expect(page.locator(`#surface-panel-${panel}`)).toBeVisible();
-            await expect(page.locator(`#surface-panel-${panel} ${panel === 'downloads' ? 'strong' : 'p'}`).first()).not.toBeEmpty();
+            await expect(page.locator(`#surface-panel-${panel} ${panel === 'browser' ? 'h2' : 'strong'}`).first()).not.toBeEmpty();
             await expect(page.locator('[role="tab"][data-panel^="new-"]')).toHaveCount(0);
         }
         expect(await page.locator('.app').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
