@@ -181,8 +181,25 @@ try {
                 assert.equal(injected, true);
             }
         });
+        await test(`${format}: a parent swapped for a symlink in the validation/create gap is refused`, { timeout: 10000 }, async () => {
+            const f = await fixture(encode([{ name: 'nested/first' }, { name: 'nested/second' }]));
+            const escaped = path.join(root, `escaped-${++serial}`);
+            await fs.mkdir(escaped);
+            const promises = require('node:fs/promises'), originalOpen = promises.open;
+            promises.open = async (...args) => {
+                // outputPath has already validated `nested`; the swap lands
+                // between that check and the create itself.
+                if (args[1] === 'wx' && typeof args[0] === 'string' && args[0].includes(`${path.sep}nested${path.sep}`)) {
+                    await fs.rm(path.dirname(args[0]), { recursive: true, force: true });
+                    await fs.symlink(escaped, path.dirname(args[0]), 'junction');
+                }
+                return originalOpen(...args);
+            };
+            try { await refused(f); } finally { promises.open = originalOpen; }
+            assert.deepEqual(await fs.readdir(escaped), []);
+            await absent(path.join(f.workspace, 'output'));
+        });
     }
-
     await test('ZIP handles Windows separators without changing file bytes', async () => {
         const f = await fixture(zip([{ name: 'sdk\\bin\\tool.exe', data: 'binary' }]));
         ok(await tool(f, 'extract_archive', { destination: 'output' }));

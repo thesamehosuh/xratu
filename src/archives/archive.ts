@@ -110,6 +110,15 @@ async function ownedDirectory(destination: Destination): Promise<boolean> {
     const current = await fs.lstat(destination.root).catch(() => undefined);
     return !!current?.isDirectory() && current.dev === destination.identity.dev && current.ino === destination.identity.ino;
 }
+/** NFC everywhere, case-insensitive only on Windows - the one form extraction compares in. */
+function comparableTarget(value: string): string {
+    return process.platform === 'win32' ? value.normalize('NFC').toLowerCase() : value.normalize('NFC');
+}
+/** The target as sanitizePath resolves its ancestors, so a path that would
+ *  follow a swapped-in symlink compares unequal to the path we asked for. */
+function canonicalTarget(destination: Destination, target: string): string {
+    return comparableTarget(sanitizePath(target, destination.workspace));
+}
 async function outputPath(destination: Destination, entry: Entry): Promise<string> {
     if (!await ownedDirectory(destination)) throw new Error('Extraction directory changed.');
     const parts = entry.path.split('/');
@@ -122,9 +131,37 @@ async function outputPath(destination: Destination, entry: Entry): Promise<strin
         if (!(await fs.lstat(parent)).isDirectory()) throw new Error('Extraction parent is not a directory.');
     }
     const target = path.join(destination.root, ...parts);
-    const comparable = (value: string) => process.platform === 'win32' ? value.normalize('NFC').toLowerCase() : value.normalize('NFC');
-    if (comparable(sanitizePath(target, destination.workspace)) !== comparable(target)) throw new Error('Extraction path changed.');
+    if (canonicalTarget(destination, target) !== comparableTarget(target)) throw new Error('Extraction path changed.');
     return target;
+}
+
+/**
+ * `outputPath` proves every parent BEFORE the file exists, but a concurrent
+ * process can swap a checked parent for a symlink inside that gap and `wx`
+ * follows the ancestor. Node has no descriptor-relative (openat) creation, so
+ * the gap is closed from the other side: right after the create and before a
+ * single byte is written, the path must still resolve to the file we opened
+ * (dev + inode) and to its canonical in-workspace location. Returns that
+ * stat when the placement must be refused.
+ */
+async function misplaced(handle: fs.FileHandle, target: string, destination: Destination): Promise<Stats | undefined> {
+    const opened = await handle.stat();
+    const at = await fs.lstat(target).catch(() => undefined);
+    // ino is 0 on a few filesystems; then only the location can be checked.
+    const named = !opened.ino || (!!at && at.dev === opened.dev && at.ino === opened.ino);
+    let resolved = false;
+    try { resolved = canonicalTarget(destination, target) === comparableTarget(target); }
+    catch { resolved = false; }
+    return resolved && named ? undefined : opened;
+}
+/** Remove what we created - only while the path still names that inode, so a
+ *  path retargeted after the refusal can never delete someone else's file. */
+async function discardCreated(opened: Stats, target: string): Promise<void> {
+    if (!opened.ino) return;
+    try {
+        const current = await fs.lstat(target);
+        if (current.dev === opened.dev && current.ino === opened.ino) await fs.unlink(target);
+    } catch { /* already gone, or nothing of ours is reachable there */ }
 }
 
 async function consume(entry: Entry, stream: AsyncIterable<Buffer>, destination: Destination | undefined, signal?: AbortSignal, expectedCrc?: number): Promise<void> {
@@ -133,7 +170,16 @@ async function consume(entry: Entry, stream: AsyncIterable<Buffer>, destination:
         if (destination && entry.path) {
             const target = await outputPath(destination, entry);
             signal?.throwIfAborted();
-            if (entry.type === 'file') output = await fs.open(target, 'wx', entry.executable ? 0o755 : 0o644);
+            if (entry.type === 'file') {
+                const handle = await fs.open(target, 'wx', entry.executable ? 0o755 : 0o644);
+                output = handle;
+                const refused = await misplaced(handle, target, destination);
+                if (refused) {
+                    await handle.close(); output = undefined;
+                    await discardCreated(refused, target);
+                    throw new Error('Extraction path changed.');
+                }
+            }
         }
         for await (const chunk of stream) {
             signal?.throwIfAborted();
