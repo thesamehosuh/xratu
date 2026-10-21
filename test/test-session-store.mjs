@@ -42,8 +42,9 @@ try {
     // Child observations persist as display events, independently of model rows.
     const observed = await store.create(ws);
     const child = {taskId:'child',profile:'explore',description:'Trace auth',prompt:'Find the expiry check',model:'child-model',tools:['read_file'],resumed:false,status:'running',startedAt:1,updatedAt:2,toolCalls:1,inputTokens:20,outputTokens:4,entries:[{id:'read',kind:'tool',tool:'read_file',text:'{}',output:'x'.repeat(20000),startedAt:1,endedAt:2}]};
-    await store.save(observed.id,{workspace:ws,model:'parent-model',summary:null,localHistory:[{role:'user',content:'Parent task'}],uiHistory:[{role:'assistant',content:'Parent report',events:[{type:'tool_call',tool:'task',id:'parent',args:{},subagent:child}]}],pendingTurn:{prompt:'Current task',text:'',thinking:'',events:[{type:'tool_call',id:'pending',tool:'task',args:{},subagent:child}]}});
+    await store.save(observed.id,{researchConversationId:'b4ab6fea-7652-469a-b157-ff3a26e0ad7b',workspace:ws,model:'parent-model',summary:null,localHistory:[{role:'user',content:'Parent task'}],uiHistory:[{role:'assistant',content:'Parent report',events:[{type:'tool_call',tool:'task',id:'parent',args:{},subagent:child}]}],pendingTurn:{prompt:'Current task',text:'',thinking:'',events:[{type:'tool_call',id:'pending',tool:'task',args:{},subagent:child}]}});
     const restoredChild = await store.load(observed.id);
+    check('opaque research identity survives restore', restoredChild.researchConversationId, 'b4ab6fea-7652-469a-b157-ff3a26e0ad7b');
     checkTrue('display child trace persists',restoredChild.uiHistory[0].events[0].subagent.model === 'child-model');
     checkTrue('persisted child outputs stay bounded',restoredChild.uiHistory[0].events[0].subagent.entries[0].output.length === 8000);
     checkTrue('pending child trace persists',restoredChild.pendingTurn.events[0].subagent.taskId === 'child');

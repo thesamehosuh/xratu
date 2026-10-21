@@ -13,7 +13,9 @@
  *   mcp__<server>__<tool>
  */
 
+import { createHash } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { resolveMcpSecrets } from './mcpSecrets';
 import { isOfflineMode } from './networkPolicy';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
@@ -25,7 +27,7 @@ import { getProxyDispatcher } from './proxyDispatcher';
 import { proxyFetch } from './proxyFetch';
 import { normalizeProxyRoute } from './proxy';
 import type { LocalToolImage } from './local/localTypes';
-import { mapMcpToolContent } from './mcpToolContent';
+import { mapMcpToolResult } from './mcpToolContent';
 export { mapMcpToolContent, MAX_TOOL_IMAGES_PER_CALL, MAX_TOOL_IMAGE_TOTAL_BYTES } from './mcpToolContent';
 import type { ExternalServerConfig, LoadedMcpConfig, McpTransportType } from './mcpConfig';
 
@@ -77,6 +79,8 @@ export interface ExternalToolResult {
     text: string;
     images: LocalToolImage[];
     isError?: boolean;
+    structuredContent?: Record<string, unknown>;
+    research?: import('./web/types').ResearchEvidence;
 }
 
 function textResult(text: string): ExternalToolResult {
@@ -138,6 +142,11 @@ export class ExternalMcpManager {
     private _connectingTransports = new Set<{ close: () => Promise<void>; pid?: number | null }>();
     private _statuses = new Map<string, ExternalServerStatus>();
     private _stopped = false;
+    private _inventory: AggregatedTool[] = [];
+    private _inventoryConfig = '';
+    private _inventoryAt = 0;
+    private _listing?: Promise<AggregatedTool[]>;
+    private _generation = 0;
 
     constructor(private readonly loadConfig: () => Promise<LoadedMcpConfig>) {}
 
@@ -157,6 +166,8 @@ export class ExternalMcpManager {
     /** Drop cached clients + status memory so the next call reconnects from
      *  fresh config (used after the MCP page saves and for manual restarts). */
     async reload(): Promise<void> {
+        this._generation++;
+        this._inventory = []; this._inventoryConfig = ''; this._inventoryAt = 0; this._listing = undefined;
         await this.closeConnectingTransports();
         for (const [name, pending] of [...this._states.entries()]) {
             this._states.delete(name);
@@ -182,6 +193,8 @@ export class ExternalMcpManager {
     /** Restart one server: drop its cached client and reconnect eagerly so
      *  the MCP page's status reflects the retry immediately. */
     async restart(name: string): Promise<void> {
+        this._generation++; this._listing = undefined; this._inventoryAt = 0;
+        this._inventory = this._inventory.filter(tool => tool.serverName !== name);
         this._retryAfter.delete(name);
         const pending = this._states.get(name);
         this._states.delete(name);
@@ -318,7 +331,7 @@ export class ExternalMcpManager {
         const start = (async (): Promise<ServerState | null> => {
             let built: { transport: unknown; type: McpTransportType } | null = null;
             try {
-                built = this.buildTransport(name, cfg);
+                built = this.buildTransport(name, await resolveMcpSecrets(cfg));
                 if (!built) {
                     this._markStatus(name, { state: 'error', transport: 'unknown', lastError: 'missing url/command' }, source);
                     return null;
@@ -375,8 +388,34 @@ export class ExternalMcpManager {
 
     /** Aggregate tool listings from every enabled server. Failures degrade quietly. */
     async listTools(): Promise<AggregatedTool[]> {
-        if (isOfflineMode()) return [];
+        if (isOfflineMode() || this._stopped) return [];
         const config = await this.loadConfig();
+        const fingerprint = createHash('sha256').update(JSON.stringify(config)).digest('hex');
+        if (this._inventoryConfig !== fingerprint) {
+            this._generation++; this._listing = undefined; this._inventory = [];
+            this._inventoryConfig = fingerprint; this._inventoryAt = 0;
+        }
+        if (Date.now() - this._inventoryAt < 60_000) return this._inventory.slice();
+        if (!this._listing) {
+            const generation = this._generation;
+            this._listing = this.discoverTools(config, generation).then(tools => {
+                if (this._generation === generation && !this._stopped) {
+                    this._inventory = tools; this._inventoryAt = Date.now(); this._listing = undefined;
+                }
+                return tools;
+            }).catch(() => { if (this._generation === generation) this._listing = undefined; return []; });
+        }
+        // Discovery keeps running for the next session. The returned array is a
+        // frozen snapshot; a slow optional server cannot delay built-in research.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            return (await Promise.race([this._listing, new Promise<AggregatedTool[]>(resolve => {
+                timer = setTimeout(() => resolve(this._inventory.slice()), 1500);
+            })])).slice();
+        } finally { if (timer) clearTimeout(timer); }
+    }
+
+    private async discoverTools(config: LoadedMcpConfig, generation: number): Promise<AggregatedTool[]> {
         const listings = await Promise.all(Object.entries(config.servers).map(async ([name, cfg]) => {
             const out: AggregatedTool[] = [];
             if (cfg.disabled) return out;
@@ -403,12 +442,13 @@ export class ExternalMcpManager {
                 console.error(`xratu: listTools failed for '${name}':`, e);
                 this._markStatus(name, { state: 'error', lastError: msg }, source);
             }
+            if (generation === this._generation && !this._stopped) this._inventory = [...this._inventory.filter(tool => tool.serverName !== name), ...out];
             return out;
         }));
         return listings.flat();
     }
 
-    /** Route a namespaced call. One transparent reconnect retry on stale clients. */
+    /** Route a namespaced call. No automatic replay after dispatch; side effects may already have occurred. */
     async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ExternalToolResult> {
         signal?.throwIfAborted();
         if (isOfflineMode()) return textResult('Error: external MCP is disabled in offline mode.');
@@ -433,47 +473,33 @@ export class ExternalMcpManager {
         const source = config.sources[serverName] ?? 'global';
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
-        for (let attempt = 0; attempt < 2; attempt++) {
-            const state = await this.getState(serverName, cfg, source);
-            signal?.throwIfAborted();
-            if (!state) {
-                return textResult(`Error: MCP server '${serverName}' is not reachable`);
-            }
-            try {
-                const res = await state.client.callTool(
-                    { name: toolName, arguments: args ?? {} },
-                    undefined,
-                    { ...(timeoutMs > 0 ? { timeout: timeoutMs } : {}), ...(signal ? { signal } : {}) },
-                );
-                if (res.isError) {
-                    // Same defensive block handling as a success, TEXT ONLY.
-                    // Two reasons: an image in an error payload is meaningless
-                    // (the error path reads text alone), and the old
-                    // `c.text ?? ''` threw on a non-object entry - INSIDE this
-                    // try, so the catch below turned the server's real failure
-                    // into a wasted reconnect plus a generic "MCP Call Error".
-                    const errText = mapMcpToolContent(res.content, toolName).text || 'Unknown tool error';
-                    return textResult(`Error from MCP server '${serverName}': ${errText}`);
-                }
-                return mapMcpToolContent(res.content, toolName);
-            } catch (e) {
-                signal?.throwIfAborted();
-                if (attempt === 0) {
-                    // Stale connection - drop it so getState reconnects.
-                    const pending = this._states.get(serverName);
-                    this._states.delete(serverName);
-                    try {
-                        const s = await pending;
-                        await closeState(s);
-                    } catch { /* ignore */ }
-                    continue;
-                }
-                const msg = e instanceof Error ? e.message : String(e);
-                console.error(`xratu: callTool ${namespaced} failed:`, e);
-                this._markStatus(serverName, { state: 'error', lastError: msg }, source);
-                return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}`);
-            }
+        const state = await this.getState(serverName, cfg, source);
+        signal?.throwIfAborted();
+        if (!state) {
+            return textResult(`Error: MCP server '${serverName}' is not reachable`);
         }
-        return textResult(`Error: MCP server '${serverName}' unreachable`);
+        try {
+            const res = await state.client.callTool(
+                { name: toolName, arguments: args ?? {} },
+                undefined,
+                { ...(timeoutMs > 0 ? { timeout: timeoutMs } : {}), ...(signal ? { signal } : {}) },
+            );
+            if (res.isError) {
+                const error = mapMcpToolResult(res, toolName);
+                return { ...error, text: `Error from MCP server '${serverName}': ${error.text || 'Unknown tool error'}`, images: [], isError: true };
+            }
+            return mapMcpToolResult(res, toolName);
+        } catch (e) {
+            signal?.throwIfAborted();
+            // Dispatch may already have completed on the remote host. Never
+            // replay an unknown operation after a transport failure.
+            const pending = this._states.get(serverName);
+            this._states.delete(serverName);
+            void pending?.then(state => closeState(state)).catch(() => undefined);
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`xratu: callTool ${namespaced} failed:`, e);
+            this._markStatus(serverName, { state: 'error', lastError: msg }, source);
+            return textResult(`MCP Call Error (${serverName}/${toolName}): ${msg}. The remote outcome is unknown; the call was not replayed. Check its effects before retrying.`);
+        }
     }
 }

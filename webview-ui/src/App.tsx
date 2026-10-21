@@ -117,7 +117,7 @@ export function App() {
      *  step's args; edits go back to the host for persistence + reminder. */
     const [taskList, setTaskList] = useState<TaskListItem[] | null>(null);
     const [conn, setConn] = useState<ConnStatus>('disconnected');
-    const [yolo, setYolo] = useState(false);
+    const [yolo, setYolo] = useState(true);
     const [plan, setPlan] = useState(false);
     const [byokHint, setByokHint] = useState(false);
     const [byokError, setByokError] = useState<string | null>(null);
@@ -829,6 +829,7 @@ export function App() {
                         resolvedSource: msg.resolvedSource,
                         systemProxy: msg.systemProxy,
                         noProxyList: msg.noProxyList,
+                        webSearchUseProxy: msg.webSearchUseProxy,
                     });
                     break;
                 case 'proxyDetectResult':
@@ -1411,9 +1412,9 @@ export function App() {
                         // visit happened first.
                         send({ type: 'mcpGetState' });
                     }}
-                    onSave={(mode, proxyUrl, noProxy) => {
+                    onSave={(mode, proxyUrl, noProxy, webSearchUseProxy) => {
                         setProxyTestResult(null);
-                        send({ type: 'proxySave', mode, proxyUrl, noProxy });
+                        send({ type: 'proxySave', mode, proxyUrl, noProxy, webSearchUseProxy });
                     }}
                     onDetect={() => {
                         setProxyDetecting(true);

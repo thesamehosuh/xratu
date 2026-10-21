@@ -6,15 +6,16 @@ import { DOWNLOAD_MUTATIONS, DOWNLOAD_TOOLS } from '../../downloads/tools';
 import { ARCHIVE_MUTATIONS, ARCHIVE_TOOLS } from '../../archives/tools';
 
 const browserNames = new Set(BROWSER_TOOL_DEFINITIONS.map(tool => tool.name));
+const researchNames = new Set(['web_search', 'fetch_url']);
 const sessionTools = new Set([TASK_LIST_TOOL_NAME, 'exit_plan_mode', 'skill']);
 
 /** Deliberate service allowlist: native file/shell tools and delegation stay native. */
 export function isNativeServiceTool(name: string): boolean {
-    return browserNames.has(name) || sessionTools.has(name) || DOWNLOAD_TOOLS.some(tool => tool.name === name) || ARCHIVE_TOOLS.some(tool => tool.name === name);
+    return researchNames.has(name) || browserNames.has(name) || sessionTools.has(name) || DOWNLOAD_TOOLS.some(tool => tool.name === name) || ARCHIVE_TOOLS.some(tool => tool.name === name);
 }
 
 export function isNativePlanTool(name: string): boolean {
-    return sessionTools.has(name) || name === 'list_downloads' || (browserNames.has(name) && !BROWSER_MUTATING_TOOLS.has(name))
+    return researchNames.has(name) || sessionTools.has(name) || name === 'list_downloads' || (browserNames.has(name) && !BROWSER_MUTATING_TOOLS.has(name))
         || ARCHIVE_TOOLS.some(tool => tool.name === name && !ARCHIVE_MUTATIONS.has(name));
 }
 

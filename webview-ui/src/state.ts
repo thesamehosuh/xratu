@@ -315,7 +315,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // call - not orphan a row on the fresh bubble).
             const global = mapCallStep(state, msg.callId, (st) => ({
                 ...st,
-                result: tOrRaw(msg.output), isError: msg.isError,
+                result: tOrRaw(msg.output), isError: msg.isError, ...(msg.research ? { research: msg.research } : {}), ...(msg.structuredContent ? { structuredContent: msg.structuredContent } : {}),
                 endedAt: msg.timestamp ?? Date.now(),
                 ...(images ? { images } : {}),
             }));
@@ -345,7 +345,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                         }
                     }
                     if (idx >= 0) {
-                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), isError: msg.isError, endedAt: msg.timestamp ?? Date.now(), ...(images ? { images } : {}) };
+                        steps[idx] = { ...steps[idx], result: tOrRaw(msg.output), isError: msg.isError, ...(msg.research ? { research: msg.research } : {}), ...(msg.structuredContent ? { structuredContent: msg.structuredContent } : {}), endedAt: msg.timestamp ?? Date.now(), ...(images ? { images } : {}) };
                     } else {
                         // Orphan result - render as a completed standalone row,
                         // not a call-shaped row with an empty args section.
@@ -354,7 +354,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                             kind: 'toolResult',
                             tool: msg.tool,
                             text: '',
-                            result: tOrRaw(msg.output), isError: msg.isError,
+                            result: tOrRaw(msg.output), isError: msg.isError, ...(msg.research ? { research: msg.research } : {}), ...(msg.structuredContent ? { structuredContent: msg.structuredContent } : {}),
                             startedAt: msg.timestamp ?? Date.now(),
                             ...(images ? { images } : {}),
                         });

@@ -467,7 +467,7 @@ try {
         const test = await harness();
         const signals = new Map();
         // Observe the exact cancellation signals the adapter gives its MCP bridge.
-        test.engine.mcpBridge = { trustedActions: () => [], toolNames: () => new Map(), activate: (id, _plan, signal) => signals.set(id, signal), deactivate: () => {}, dispose: async () => {} };
+        test.engine.mcpBridge = { hasResearch: () => false, takeResearch: () => undefined, trustedActions: () => [], toolNames: () => new Map(), activate: (id, _plan, signal) => signals.set(id, signal), deactivate: () => {}, dispose: async () => {} };
         try {
             const done = test.run(); await test.ready(); test.emit('session.execution.started', 'root');
             test.child('root', 'parent-call', 'child'); test.child('child', 'nested-call', 'grandchild', true);

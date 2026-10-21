@@ -834,6 +834,8 @@ export async function* runLocalAgent(
                         tool: call.name,
                         output: result.output,
                         isError: result.isError,
+                ...(result.research ? { research: result.research } : {}),
+                ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
                     });
                 } catch (e) {
                     execError = execError ?? e;
@@ -928,6 +930,8 @@ export async function* runLocalAgent(
                 tool: call.name,
                 output: result.output,
                 isError: result.isError,
+                ...(result.research ? { research: result.research } : {}),
+                ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
                 ...(result.images?.length ? { images: result.images } : {}),
             };
         }

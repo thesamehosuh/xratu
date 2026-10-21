@@ -1,3 +1,4 @@
+import { readResearchEvidence } from './web/types';
 import type { LocalAgentEvent } from './local/localTypes';
 
 export interface SubagentApprovalSource { parentCallId: string; profile: string; description: string }
@@ -13,6 +14,7 @@ export interface SubagentTraceEntry {
     output?: string;
     live?: string;
     isError?: boolean;
+    research?: import('./web/types').ResearchEvidence;
     /** Transient host-sanitized markup; disk normalization always discards it. */
     html?: string;
 }
@@ -89,7 +91,7 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
         if (!e || !['text', 'thinking', 'tool'].includes(e.kind) || typeof e.id !== 'string') continue;
         result.entries.unshift({ id: e.id.slice(0, 160), kind: e.kind, text: text(e.text), startedAt: number(e.startedAt),
             endedAt: e.endedAt === undefined ? undefined : number(e.endedAt), tool: text(e.tool, 160) || undefined,
-            output: e.output === undefined ? undefined : text(e.output), live: e.live === undefined ? undefined : text(e.live), isError: !!e.isError });
+            output: e.output === undefined ? undefined : text(e.output), live: e.live === undefined ? undefined : text(e.live), isError: !!e.isError, ...(e.research ? { research: readResearchEvidence(e.research) } : {}) });
     }
     result.truncated = truncated;
     return result;
@@ -144,7 +146,7 @@ export class SubagentTraceCollector {
             case 'toolResult': {
                 const entry = trace.entries.find(e => e.kind === 'tool' && e.id === event.id);
                 trace.status = 'running'; trace.pendingTools = undefined;
-                if (entry) { entry.output = event.output.slice(0, 8_000); entry.endedAt = now; entry.isError = !!event.isError; entry.live = undefined; }
+                if (entry) { entry.output = event.output.slice(0, 8_000); entry.endedAt = now; entry.isError = !!event.isError; entry.research = readResearchEvidence(event.research); entry.live = undefined; }
                 if (event.output.length > 8_000) trace.truncated = true;
                 break;
             }

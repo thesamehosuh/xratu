@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { AggregatedTool, ExternalMcpManager } from '../../externalMcp';
 import { isNativePlanTool } from './services';
+import { readResearchEvidence, type ResearchEvidence } from '../../web/types';
 import { abortable } from '../../oauth/refreshLock';
 
 export interface NativeMcpContext { sessionID: string; plan: boolean; rootSessionID?: string; rootSignal?: AbortSignal }
@@ -23,6 +24,12 @@ export class OpenCodeMcpBridge {
     private connection?: Promise<{ url: string; headers: Record<string, string> }>;
     private wireTools = new Map<string, AggregatedTool>();
     private readonly sessions = new Map<string, { plan: boolean; signal: AbortSignal; rootSessionID?: string; rootSignal?: AbortSignal }>();
+    private readonly researchResults: Array<{ sessionID: string; text: string; research: ResearchEvidence }> = [];
+    takeResearch(sessionID: string, text: string): ResearchEvidence | undefined {
+        const index = this.researchResults.findIndex(item => item.sessionID === sessionID && item.text === text);
+        return index < 0 ? undefined : this.researchResults.splice(index, 1)[0].research;
+    }
+    hasResearch(): boolean { return [...this.wireTools.values()].some(tool => tool.serverName === 'xratu' && tool.name === 'web_search'); }
     private readonly transports = new Set<Server>();
     constructor(private readonly source: NativeMcpSource) {}
 
@@ -46,7 +53,7 @@ export class OpenCodeMcpBridge {
         return tool.serverName === 'xratu' && tool.originalName === tool.name && isNativePlanTool(tool.name);
     }
     activate(sessionID: string, plan: boolean, signal: AbortSignal, rootSessionID?: string, rootSignal?: AbortSignal): void { this.sessions.set(sessionID, { plan, signal, rootSessionID, rootSignal }); }
-    deactivate(sessionID: string): void { this.sessions.delete(sessionID); }
+    deactivate(sessionID: string): void { this.sessions.delete(sessionID); for (let i = this.researchResults.length - 1; i >= 0; i--) if (this.researchResults[i].sessionID === sessionID) this.researchResults.splice(i, 1); }
 
     connect(): Promise<{ url: string; headers: Record<string, string> }> {
         return this.connection ??= this.listen().catch((error) => { this.connection = undefined; throw error; });
@@ -71,7 +78,9 @@ export class OpenCodeMcpBridge {
                     return { isError: true, content: [{ type: 'text', text: 'Xratu MCP call is not allowed in this session.' }] };
                 }
                 const result = await abortable(this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan, ...(session.rootSessionID ? { rootSessionID: session.rootSessionID } : {}), ...(session.rootSignal ? { rootSignal: session.rootSignal } : {}) }), session.signal);
-                return { isError: result.isError === true, content: [
+                const research = readResearchEvidence(result.research);
+                if (research) { this.researchResults.push({ sessionID: sessionID as string, text: result.text, research }); if (this.researchResults.length > 64) this.researchResults.shift(); }
+                return { isError: result.isError === true, ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}), content: [
                     ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
                     ...result.images.map((image) => ({ type: 'image' as const, mimeType: image.mimeType, data: image.dataBase64 })),
                 ] };

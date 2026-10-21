@@ -36,7 +36,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegDivarDesc',
         docsUrl: 'https://github.com/mmdju/divar-mcp',
         tags: ['iranian'],
-        defaultEnabled: true,
+        defaultEnabled: false,
         server: {
             name: 'divar',
             url: 'https://divar-mcp.mmdju2.workers.dev/mcp',
@@ -48,7 +48,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegTorobDesc',
         docsUrl: 'https://github.com/mmdju/torob-mcp',
         tags: ['iranian'],
-        defaultEnabled: true,
+        defaultEnabled: false,
         server: {
             name: 'torob',
             connectTimeoutMs: 120_000,
@@ -65,7 +65,7 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         descKey: 'mcpRegDigikalaDesc',
         docsUrl: 'https://github.com/sepehr071/digikala-mcp',
         tags: ['iranian'],
-        defaultEnabled: true,
+        defaultEnabled: false,
         server: {
             name: 'digikala',
             command: 'uvx',
@@ -79,14 +79,13 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         docsUrl: 'https://github.com/upstash/context7',
         server: {
             name: 'context7',
-            command: 'npx',
-            args: ['-y', '@upstash/context7-mcp'],
+            url: 'https://mcp.context7.com/mcp',
             autoApprove: ['resolve-library-id', 'get-library-docs'],
         },
     },
     {
         id: 'ddg-search',
-        defaultEnabled: true,
+        defaultEnabled: false,
         nameKey: 'mcpRegDdgName',
         descKey: 'mcpRegDdgDesc',
         docsUrl: 'https://github.com/nickclyde/duckduckgo-mcp-server',

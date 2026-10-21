@@ -126,3 +126,25 @@ function dataUrlPayload(text: string | undefined): string {
     if (comma < 0) return '';
     return /;base64/i.test(t.slice(0, comma)) ? t.slice(comma + 1).trim() : '';
 }
+
+/** Structured-only MCP tools still need useful model text. Keep a bounded JSON
+ * copy independently; neither remote object graphs nor control fields are trusted. */
+export function boundedStructuredContent(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    let remaining = 48_000;
+    let nodes = 0;
+    const visit = (item: unknown, depth: number): unknown => {
+        if (++nodes > 1000 || depth > 8 || remaining <= 0) return '[truncated]';
+        if (typeof item === 'string') { const result = item.slice(0, Math.min(remaining, 8000)); remaining -= result.length; return result; }
+        if (item === null || typeof item === 'boolean' || typeof item === 'number') return item;
+        if (Array.isArray(item)) return item.slice(0, 100).map(child => visit(child, depth + 1));
+        if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).slice(0, 100).map(([key, child]) => [key.slice(0, 100), visit(child, depth + 1)]));
+        return null;
+    };
+    return visit(value, 0) as Record<string, unknown>;
+}
+export function mapMcpToolResult(result: Record<string, unknown>, toolName: string): ExternalToolResult {
+    const mapped = mapMcpToolContent(result.content, toolName);
+    const structuredContent = boundedStructuredContent(result.structuredContent);
+    return { ...mapped, ...(!mapped.text && structuredContent ? { text: JSON.stringify(structuredContent) } : {}), ...(structuredContent ? { structuredContent } : {}) };
+}

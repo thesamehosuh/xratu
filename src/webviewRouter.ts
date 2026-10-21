@@ -123,7 +123,7 @@ export interface WebviewMessageHost {
         cachedInput?: number | null,
         currency?: 'USD' | 'IRT',
     ): Promise<void>;
-    _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string): Promise<void>;
+    _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean): Promise<void>;
     _saveTaskListEdits(): Promise<void>;
     _searchSessions(query: string, all: boolean, requestId?: number): Promise<void>;
     _secrets: vscode.SecretStorage;
@@ -454,6 +454,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'toggleYolo':
                     host._yoloMode = !host._yoloMode;
+                    await host._globalState.update('xratu.yoloMode', host._yoloMode);
                     host._view?.webview.postMessage({ type: 'yoloMode', enabled: host._yoloMode });
                     break;
                 case 'togglePlanMode':
@@ -605,6 +606,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         data.mode === 'off' || data.mode === 'custom' ? data.mode : 'auto',
                         String(data.proxyUrl ?? ''),
                         String(data.noProxy ?? ''),
+                        typeof data.webSearchUseProxy === 'boolean' ? data.webSearchUseProxy : undefined,
                     );
                     break;
                 case 'proxyDetect':

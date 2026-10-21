@@ -66,6 +66,7 @@ test('saving composes the server URL and posts it', async ({ page }) => {
         mode: 'custom',
         proxyUrl: 'http://127.0.0.1:7897',
         noProxy: 'localhost,127.0.0.1',
+        webSearchUseProxy: true,
     });
 });
 
@@ -80,7 +81,7 @@ test('a saved SOCKS URL does not prevent turning proxy routing off', async ({ pa
     await expect(page.locator('.proxy-hint.warn')).toHaveCount(0);
     await page.locator('.proxy-save-row .apply-btn').click();
     const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'proxySave', mode: 'off', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost' });
+    expect(messages).toContainEqual({ type: 'proxySave', mode: 'off', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost', webSearchUseProxy: true });
 });
 
 test('detected clients group their ports under one family row', async ({ page }) => {

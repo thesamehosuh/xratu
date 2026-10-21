@@ -1,0 +1,934 @@
+{
+  "observedAt": "2026-10-21T12:30:31.993Z",
+  "networkScope": "This machine only; not a regional or model-answer benchmark.",
+  "count": 40,
+  "successfulRetrievals": 11,
+  "officialInFirstFive": 9,
+  "officialQueries": 19,
+  "results": [
+    {
+      "query": "FastAPI 0.115 tutorial first steps",
+      "official": [
+        "fastapi.tiangolo.com"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 3066,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "9a7e5fb49c2dd173",
+          "url": "https://github.com/fastapi/fastapi/blob/master/docs/en/docs/tutorial/first-steps.md",
+          "title": "fastapi/docs/en/docs/tutorial/first-steps.md at master · fastapi/fastapi · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "c63490ed0b137c39",
+          "url": "https://github.com/fastapi/fastapi/blob/master/docs/en/docs/tutorial/index.md",
+          "title": "fastapi/docs/en/docs/tutorial/index.md at master · fastapi/fastapi · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "ab75a119ec80c121",
+          "url": "https://www.fastapiinteractive.com/fastapi-basics/01-first-steps/theory",
+          "title": "First Steps - Theory | FastAPI Basics | FastAPI Tutorial",
+          "route": "parallel"
+        },
+        {
+          "id": "94c74a9258b3dd5f",
+          "url": "https://fastapi.tiangolo.com/tutorial/first-steps",
+          "title": "First Steps - FastAPI",
+          "route": "parallel"
+        },
+        {
+          "id": "141a10eef60ec03d",
+          "url": "https://www.fastapiinteractive.com/fastapi-basics/01-first-steps",
+          "title": "First Steps | FastAPI Basics | FastAPI Tutorial",
+          "route": "parallel"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "React 19 useActionState reference",
+      "official": [
+        "react.dev"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 6475,
+      "outcome": "success",
+      "provider": "exa",
+      "warnings": [
+        "parallel: unavailable"
+      ],
+      "sources": [
+        {
+          "id": "f773318257650341",
+          "url": "https://react.dev/reference/react/useActionState",
+          "title": "N/A",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "97bbfe53cc07f33e",
+          "url": "https://react.dev/blog/2024/12/05/react-19",
+          "title": "React v19",
+          "publishedAt": "2024-12-05T00:00:00.000Z",
+          "route": "exa"
+        },
+        {
+          "id": "daa07206437d7057",
+          "url": "https://az.react.dev/blog/2024/04/25/react-19",
+          "title": "React 19 RC – React",
+          "publishedAt": "2024-04-25T10:21:11.000Z",
+          "route": "exa"
+        },
+        {
+          "id": "0347ab573a29795f",
+          "url": "https://react.dev/reference/react/useActionState.md",
+          "title": "N/A",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "62cbe13c9ec392ff",
+          "url": "https://github.com/react/react/issues/31356",
+          "title": "[React 19] Parameter order for server action when using `useActionState`",
+          "publishedAt": "N/A",
+          "route": "exa"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "Python 3.12 asyncio TaskGroup documentation",
+      "official": [
+        "docs.python.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 7911,
+      "outcome": "success",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited"
+      ],
+      "sources": [
+        {
+          "id": "b2fa72de32d7d6ad",
+          "url": "https://docs.python.org/release/3.12.1/library/asyncio-task.html",
+          "title": "Coroutines and Tasks — Python 3.12.1 documentation",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "8648139190e53478",
+          "url": "https://docs.python.org/3/library/asyncio-task.html",
+          "title": "Coroutines and tasks — Python 3.15.0 documentation",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "fd1a417db5e251ad",
+          "url": "https://github.com/python/cpython/blob/master/Doc/library/asyncio-task.rst",
+          "title": "Doc/library/asyncio-task.rst",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "9b1cfa7f182a5514",
+          "url": "https://cpython-previews.readthedocs.io/en/3.12/library/asyncio-task.html",
+          "title": "Coroutines and Tasks ¶",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "95a5dffe6c86c28c",
+          "url": "https://github.com/python/cpython/issues/95180",
+          "title": "TaskGroup missing from API Index",
+          "publishedAt": "N/A",
+          "route": "exa"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "TypeScript 5.7 release notes",
+      "official": [
+        "typescriptlang.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 5252,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "5877b009857c8394",
+          "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-7.html",
+          "title": "TypeScript: Documentation - TypeScript 5.7",
+          "route": "parallel"
+        },
+        {
+          "id": "3a2d111e67e1bc1b",
+          "url": "https://typescriptdocs.com/release-notes/TypeScript%205.7.html",
+          "title": "TypeScript 5.7 | TypeScript Docs",
+          "route": "parallel"
+        },
+        {
+          "id": "00e284ea6b13339d",
+          "url": "https://github.com/microsoft/TypeScript-Website/blob/v2/packages/documentation/copy/en/release-notes/TypeScript%205.7.md",
+          "title": "TypeScript-Website/packages/documentation/copy/en/release-notes/TypeScript 5.7.md at v2 · microsoft/TypeScript-Website · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "55236e82867ef967",
+          "url": "https://github.com/microsoft/TypeScript/releases/tag/v5.7.2",
+          "title": "Release TypeScript 5.7 · microsoft/TypeScript · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "0313e8d9471a81a3",
+          "url": "https://tech-insider.org/typescript-vs-javascript-2026",
+          "title": "TypeScript vs JavaScript: 73% of Devs Switched [2026]",
+          "publishedAt": "2026-03-25",
+          "route": "parallel"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "Node.js 22 fetch AbortSignal documentation",
+      "official": [
+        "nodejs.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 2124,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "3e60f5d366233adc",
+          "url": "https://github.com/nodejs/node/blob/v22.19.0/doc/api/globals.md",
+          "title": "node/doc/api/globals.md at v22.19.0 · nodejs/node · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "a10a0795f17496ad",
+          "url": "https://nodejs.org/download/release/v22.22.3/docs/api/globals.html",
+          "title": "Global objects | Node.js v22.22.3 Documentation",
+          "route": "parallel"
+        },
+        {
+          "id": "9ea51d901a9ccdf0",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal",
+          "title": "AbortSignal - Web APIs | MDN",
+          "route": "parallel"
+        },
+        {
+          "id": "6fdaa8736048ae6b",
+          "url": "https://github.com/nodejs/node/blob/68ef009f828fb79d8aba85ff63be87152a8dbc49/doc/api/globals.md",
+          "title": "node/doc/api/globals.md at 68ef009f828fb79d8aba85ff63be87152a8dbc49 · nodejs/node · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "ff7d4e2fc87380bb",
+          "url": "https://developer.mozilla.org/ko/docs/Web/API/Window/fetch",
+          "title": "fetch() 전역 함수 - Web API | MDN",
+          "route": "parallel"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "PostgreSQL 17 JSON functions reference",
+      "official": [
+        "postgresql.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 2272,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "c936ab9f78ce95e9",
+          "url": "https://www.postgresql.org/docs/17/functions-json.html",
+          "title": "PostgreSQL: Documentation: 17: 9.16. JSON Functions and Operators",
+          "publishedAt": "2026-08-13",
+          "route": "parallel"
+        },
+        {
+          "id": "579e3d4d0060754b",
+          "url": "https://www.postgresql.org/docs/15/functions-json.htm",
+          "title": "PostgreSQL: Documentation: 15: 9.16. JSON Functions and Operators",
+          "publishedAt": "2026-08-13",
+          "route": "parallel"
+        },
+        {
+          "id": "8b3969989938cfed",
+          "url": "https://www.postgresql.org/docs/19/functions-json.html",
+          "title": "PostgreSQL: Documentation: 19: 9.17. JSON Functions and Operators",
+          "publishedAt": "2026-09-24",
+          "route": "parallel"
+        },
+        {
+          "id": "a0c960290e29663a",
+          "url": "https://www.postgresql.org/docs/15//functions-json.html",
+          "title": "PostgreSQL: Documentation: 15: 9.16. JSON Functions and Operators",
+          "publishedAt": "2026-08-13",
+          "route": "parallel"
+        },
+        {
+          "id": "e653c025f0d44c16",
+          "url": "https://www.postgresql.org/docs/13/functions-json.html",
+          "title": "PostgreSQL: Documentation: 13: 9.16. JSON Functions and Operators",
+          "publishedAt": "2025-11-13",
+          "route": "parallel"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "Django 5.2 middleware documentation",
+      "official": [
+        "docs.djangoproject.com"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 7005,
+      "outcome": "success",
+      "provider": "exa",
+      "warnings": [
+        "parallel: unavailable"
+      ],
+      "sources": [
+        {
+          "id": "612c8904a0edb412",
+          "url": "https://docs.djangoproject.com/en/5.2/topics/http/middleware/",
+          "title": "Middleware | Django documentation | Django",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "11b692f7c5228e41",
+          "url": "https://django.readthedocs.io/en/5.2.x/ref/middleware.html",
+          "title": "N/A",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "171126115e5b93d3",
+          "url": "https://docs.djangoproject.com/en/5.2/ref/csrf/",
+          "title": "Cross Site Request Forgery protection | Django documentation | Django",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "50fe4f44e040cdae",
+          "url": "https://djangodocs.dev/en/5.2/topics/http/middleware/",
+          "title": "Middleware — Django 5.2 documentation",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "6abd357ded37191d",
+          "url": "https://docs.djangoproject.com/en/5.2/topics/http/sessions/",
+          "title": "How to use sessions | Django documentation | Django",
+          "publishedAt": "N/A",
+          "route": "exa"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "Vue 3 watch cleanup official docs",
+      "official": [
+        "vuejs.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 3207,
+      "outcome": "success",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited"
+      ],
+      "sources": [
+        {
+          "id": "a9fef6e9ac7bb938",
+          "url": "https://vuejs.org/guide/essentials/watchers.html",
+          "title": "Watchers | Vue.js",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "efd887c8196dd523",
+          "url": "https://vuejs.org/api/reactivity-core.html",
+          "title": "Reactivity API: Core",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "bd6a3c9d5fa0f66e",
+          "url": "https://github.com/vuejs/docs/issues/3222",
+          "title": "Documentation clarification needed for onWatcherCleanup in async contexts",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "fdd57f4df76a5478",
+          "url": "https://github.com/vuejs/core/blob/main/packages/runtime-core/src/apiWatch.ts",
+          "title": "packages/runtime-core/src/apiWatch.ts",
+          "publishedAt": "N/A",
+          "route": "exa"
+        },
+        {
+          "id": "35f2e0f97aaa6a46",
+          "url": "https://vuejs.org/api/composition-api-lifecycle.html",
+          "title": "Composition API: Lifecycle Hooks | Vue.js",
+          "publishedAt": "N/A",
+          "route": "exa"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "Rust std sync OnceLock documentation",
+      "official": [
+        "doc.rust-lang.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 2540,
+      "outcome": "unavailable",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: unavailable"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "Kotlin coroutines cancellation official guide",
+      "official": [
+        "kotlinlang.org"
+      ],
+      "category": "version-docs",
+      "elapsedMs": 4126,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "39784db34befb64d",
+          "url": "https://kotlinlang.org/docs/coroutines-cancellation.html",
+          "title": "Cancellation and timeouts | Kotlin Documentation",
+          "route": "parallel"
+        },
+        {
+          "id": "158c5f688db20190",
+          "url": "https://kotlinlang.org/docs/reference/coroutines/cancellation-and-timeouts.html",
+          "title": "Cancellation and timeouts | Kotlin Documentation",
+          "route": "parallel"
+        },
+        {
+          "id": "ce0442a3cbaa439a",
+          "url": "https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.coroutines.cancellation/",
+          "title": "kotlin.coroutines.cancellation | Core API – Kotlin Programming Language",
+          "route": "parallel"
+        },
+        {
+          "id": "46198710365ff04a",
+          "url": "https://android.googlesource.com/platform/external/kotlinx.coroutines/+/e4623ab71f5ce23ca9bef2033ad5241d16dfaac0/docs/topics/cancellation-and-timeouts.md",
+          "title": "docs/topics/cancellation-and-timeouts.md",
+          "route": "parallel"
+        },
+        {
+          "id": "b1fde5597ce12311",
+          "url": "https://android.googlesource.com/platform/external/kotlinx.coroutines/+/34c3464c80904e6e578b646db80f9d0169059c37/docs/cancellation-and-timeouts.md",
+          "title": "docs/cancellation-and-timeouts.md",
+          "route": "parallel"
+        }
+      ],
+      "officialInFirstFive": true
+    },
+    {
+      "query": "\"ERR_REQUIRE_ESM\" Node.js error",
+      "category": "exact-error",
+      "elapsedMs": 1869,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "88bf2976f1943e2d",
+          "url": "https://nodejs.cn/api/v24/errors/err_require_esm.html",
+          "title": "ERR_REQUIRE_ESM | Node.js API 文档",
+          "route": "parallel"
+        },
+        {
+          "id": "2dbedeb8789ab09d",
+          "url": "https://github.com/nodejs/node/issues/60204",
+          "title": "Bug: require() of dual-mode package (chalk@4.1.2) incorrectly resolves to ESM entry point on Node.js v22.5.1 · Issue #60204 · nodejs/node · GitHub",
+          "publishedAt": "2025-10-10",
+          "route": "parallel"
+        },
+        {
+          "id": "cf0b8f8d4211d0ed",
+          "url": "https://github.com/nodejs/node/issues/52697",
+          "title": "Tracking issue: require(esm) · Issue #52697 · nodejs/node · GitHub",
+          "publishedAt": "2024-04-25",
+          "route": "parallel"
+        },
+        {
+          "id": "b62350f312586db0",
+          "url": "https://stackoverflow.com/questions/70525787/const-fetch-requirenode-fetch-error-err-require-esm-require-of-es",
+          "title": "node.js - const fetch = require(\"node-fetch\"); ^ Error [ERR_REQUIRE_ESM]: require() of ES Module - Stack Overflow",
+          "publishedAt": "2021-12-29",
+          "route": "parallel"
+        },
+        {
+          "id": "a66368f17ef79c7a",
+          "url": "https://github.com/yarnpkg/berry/issues/6595",
+          "title": "[Bug?]: ERR_REQUIRE_ESM in Yarn PnP mode using Node.js 22 with *.mts file and --experimental-strip-types flag · Issue #6595 · yarnpkg/berry · GitHub",
+          "publishedAt": "2024-11-12",
+          "route": "parallel"
+        }
+      ]
+    },
+    {
+      "query": "\"InvalidArgumentError\" \"invalid onError method\" undici",
+      "category": "exact-error",
+      "elapsedMs": 1905,
+      "outcome": "success",
+      "provider": "parallel",
+      "warnings": [],
+      "sources": [
+        {
+          "id": "c902fe20dcf16eae",
+          "url": "https://github.com/nodejs/undici/issues/3973",
+          "title": "Cache interceptor failing with \"invalid onError method\" · Issue #3973 · nodejs/undici · GitHub",
+          "publishedAt": "2024-12-28",
+          "route": "parallel"
+        },
+        {
+          "id": "f5f3a4321dbdce12",
+          "url": "https://github.com/nodejs/undici/issues/4698",
+          "title": "InvalidArgumentError: invalid throwOnError · Issue #4698 · nodejs/undici · GitHub",
+          "publishedAt": "2025-12-11",
+          "route": "parallel"
+        },
+        {
+          "id": "80a3ba147760b6d9",
+          "url": "https://github.com/nodejs/undici/blob/main/lib/core/request.js",
+          "title": "undici/lib/core/request.js at main · nodejs/undici · GitHub",
+          "route": "parallel"
+        },
+        {
+          "id": "388b7110234cc3ce",
+          "url": "https://github.com/semantic-release/github/issues/1242",
+          "title": "InvalidArgumentError: invalid onRequestStart method (node 26 ...",
+          "route": "parallel"
+        },
+        {
+          "id": "e5d9ee40dd98ecc4",
+          "url": "https://github.com/qdrant/qdrant-js/issues/134",
+          "title": "Node 26+: UND_ERR_INVALID_ARG: invalid onError method on first request (Agent/fetch undici version mismatch) · Issue #134 · qdrant/qdrant-js · GitHub",
+          "publishedAt": "2026-05-12",
+          "route": "parallel"
+        }
+      ]
+    },
+    {
+      "query": "\"Task was destroyed but it is pending\" asyncio",
+      "category": "exact-error",
+      "elapsedMs": 883,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: unavailable",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "\"Hydration failed\" React server rendered HTML",
+      "category": "exact-error",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "\"fatal: refusing to merge unrelated histories\" git",
+      "category": "exact-error",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "\"Cannot read properties of undefined\" TypeScript",
+      "category": "exact-error",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "\"SSL_CERTIFICATE_VERIFY_FAILED\" Python requests",
+      "category": "exact-error",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "\"EADDRINUSE\" Node.js server Windows",
+      "category": "exact-error",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "Node.js latest release official blog",
+      "official": [
+        "nodejs.org"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "React latest release official blog",
+      "official": [
+        "react.dev"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "Python latest stable release official",
+      "official": [
+        "python.org"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "TypeScript latest release official announcement",
+      "official": [
+        "devblogs.microsoft.com",
+        "typescriptlang.org"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "VS Code latest release notes",
+      "official": [
+        "code.visualstudio.com"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "Rust latest stable release blog",
+      "official": [
+        "blog.rust-lang.org"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "PostgreSQL latest release news",
+      "official": [
+        "postgresql.org"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "Django latest release weblog",
+      "official": [
+        "djangoproject.com"
+      ],
+      "category": "recent",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "آموزش رسمی FastAPI شروع سریع",
+      "official": [
+        "fastapi.tiangolo.com"
+      ],
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": [],
+      "officialInFirstFive": false
+    },
+    {
+      "query": "مستندات پایتون مدیریت خطا try except",
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "رفع خطای اتصال npm با پروکسی ویندوز",
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "آموزش React هوک useEffect",
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "نصب PostgreSQL روی ویندوز مستندات رسمی",
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "تفاوت asyncio و threading در پایتون",
+      "category": "persian",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "SQLite WAL checkpoint starvation busy reader",
+      "category": "obscure",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "Windows CreateProcess cmd shim cross-spawn ENOENT",
+      "category": "obscure",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "HTML malformed nested table foster parenting parse algorithm",
+      "category": "obscure",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "IPv6 RFC 6052 embedded IPv4 prefix DNS64",
+      "category": "obscure",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "React hooks reference",
+      "domains": [
+        "react.dev",
+        "github.com"
+      ],
+      "category": "multi-domain",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "Python asyncio TaskGroup cancellation",
+      "domains": [
+        "docs.python.org",
+        "peps.python.org"
+      ],
+      "category": "multi-domain",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "Node.js undici proxy fetch",
+      "domains": [
+        "nodejs.org",
+        "github.com"
+      ],
+      "category": "multi-domain",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    },
+    {
+      "query": "FastAPI dependency injection",
+      "domains": [
+        "fastapi.tiangolo.com",
+        "github.com"
+      ],
+      "category": "multi-domain",
+      "elapsedMs": 0,
+      "outcome": "rate-limited",
+      "provider": "exa",
+      "warnings": [
+        "parallel: rate-limited",
+        "exa: rate-limited"
+      ],
+      "sources": []
+    }
+  ],
+  "successfulRetrievalP50Ms": 3207,
+  "successfulRetrievalP95Ms": 7911
+}

@@ -443,6 +443,8 @@ Settings → Proxy controls outbound routing:
   Mihomo Party, Clash Nyanpasu, ClashX), v2rayN/v2rayA, or Surge already
   running on your machine and locks to its ports. "System Proxy" mode is
   enough - no TUN required.
+- **Web search** - use the configured proxy or connect directly, independently
+  of model routing.
 - **Per-MCP routing** - each MCP server can ride auto / via proxy /
   direct, with a live connection test before you commit.
 - MCP marketplace catalogs are fetched host-side through the same proxy and
@@ -450,16 +452,35 @@ Settings → Proxy controls outbound routing:
 
 ## Privacy
 
-API keys are stored in VS Code secrets storage and sent only to the endpoint
-you configure. Chat history and checkpoints live on your disk only.
+Model API keys are stored in VS Code secrets storage. MCP header/environment
+values entered through Servers are saved as secret references. Existing or
+hand-edited MCP JSON may still contain raw secrets; do not commit it. Native
+credentials stay with OpenCode. Chat history and checkpoints live on your disk.
 
-Two features do leave your machine, by design:
+Web research runs automatically, including in Plan mode. `web_search` sends
+public queries to anonymous Parallel Search MCP, falling back to anonymous
+Exa for availability or quota failures. There is no account or provider setup.
+Anonymous quotas can temporarily prevent research; failures remain visible.
+Legacy Brave/SearXNG/key settings are no longer used. Old key values are not
+silently erased; remove them from user/workspace settings if previously saved. Optional DDG and marketplace
+MCP presets are disabled on fresh installs; existing MCP files are not rewritten.
 
-- **Web search** sends the query to whichever provider is configured - your own
-  SearXNG instance (`xratu.webSearchUrl`), otherwise Brave Search; Parallel is
-  also selectable.
-- **Fetch URL** requests the page you or the agent name, after the SSRF guard
-  rejects private and loopback addresses.
+`fetch_url` reads public pages directly, preserving Markdown, code and links,
+and supports bounded PDF text extraction. Clean URLs observed in this chat's
+public search results can fall back to Parallel extraction. Other URLs and
+URLs with query strings/fragments stay direct-only. Hosted services receive
+only the query or eligible URL and a random per-chat identifier; no model
+analytics, provider keys, cookies, local paths or native session IDs are sent.
+URL heuristics do not prove confidentiality. Direct page reads use the normal
+proxy routing; the Proxy page's Web search buttons govern hosted research.
+
+Source rows record retrieved evidence and unknown dates, not a guarantee that
+the answer cited every row. Temporary page handles support `find` and character
+continuation and expire after five minutes. Documents are not cached on disk.
+Observed source metadata and outcomes remain in local chat history.
+OpenCode uses the same Xratu research executor; its legacy native search/fetch
+are denied. Native definitions may remain visible in custom runtimes.
+[Implementation and measured limits](web-research-delivery.md).
 
 MCP servers, skills, and agent files are read from your disk. There is no
 telemetry, no analytics, and no crash reporting in the extension. Report a

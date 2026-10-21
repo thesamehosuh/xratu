@@ -1,3 +1,5 @@
+import type { ResearchEvidence } from '../../src/web/types';
+export type { ResearchEvidence } from '../../src/web/types';
 export type { SetupEngine } from '../../src/engines/setup';
 import type { NativeSetupState } from '../../src/engines/nativeSetup';
 export type { NativeSetupState } from '../../src/engines/nativeSetup';
@@ -209,7 +211,7 @@ export type ToExtensionMessage =
     /** Proxy page: request settings + the live resolution report. */
     | { type: 'proxyGetState' }
     /** Proxy page: persist mode + proxy URL + no_proxy list. */
-    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string }
+    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string; webSearchUseProxy?: boolean }
     /** Proxy page: scan loopback for running proxy clients (Clash, v2rayN…). */
     | { type: 'proxyDetect' }
     /** Proxy page: live connectivity check through the current resolution. */
@@ -446,7 +448,7 @@ export type FromExtensionMessage =
     | { type: 'thinkingHtml'; value: string }
     | { type: 'toolCall'; tool: string; args: string; callId?: string; timestamp?: number; subagent?: SubagentTrace }
     | { type: 'subagentState'; callId: string; trace: SubagentTrace }
-    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[]; timestamp?: number; isError?: boolean }
+    | { type: 'toolResult'; tool: string; output: string; callId?: string; images?: ToolImageView[]; structuredContent?: Record<string, unknown>; research?: ResearchEvidence; timestamp?: number; isError?: boolean }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; callId?: string; value: string }
     /** A terminal call was moved to the background (model- or user-initiated).
@@ -620,6 +622,7 @@ export interface ProxyCandidateView {
 /** Response to proxyGetState - settings plus WHY the traffic routes as it
  *  does (which resolution layer won). */
 export interface ProxyStateView {
+    webSearchUseProxy?: boolean;
     mode: 'auto' | 'custom' | 'off';
     proxyUrl: string;
     noProxy: string;
@@ -935,6 +938,8 @@ export interface Step {
     /** Filled when the matching tool_result arrives (Cline-style paired row). */
     result?: string;
     isError?: boolean;
+    research?: ResearchEvidence;
+    structuredContent?: Record<string, unknown>;
     /** Child run ended before this tool returned an authoritative result. */
     interrupted?: boolean;
     /** Images the tool returned with its result (MCP screenshots). */

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { readResearchEvidence } from '../../../src/web/types';
 import { searchMatches, webResults } from '../toolPresentation';
 import { Check, ExternalLink, ChevronDown, Copy, FileText, Search, SquareTerminal, X } from 'lucide-react';
 import type { Step } from '../types';
-import { t, tf } from '../i18n';
+import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
 import { toolFamily } from '../transcriptPrefs';
 import { escapeHtml, extToLang } from '../diffText';
@@ -89,6 +90,20 @@ function WebOutput({ text }: { text: string }) {
     </article>)}</div>;
 }
 
+function ResearchOutput({ value, text }: { value: unknown; text: string }) {
+    const evidence = readResearchEvidence(value);
+    if (!evidence) return <WebOutput text={text} />;
+    return <div className="detail-web-results">
+        <div className="research-evidence-status"><span dir="ltr">{evidence.provider}</span><span>{tOrRaw('researchOutcome_' + evidence.outcome)}</span>{evidence.truncated && <span>{t('researchPartial')}</span>}</div>
+        {evidence.sources.map(item => <article key={item.id + item.url}>
+            <a href={item.url} target="_blank" rel="noopener noreferrer" dir="auto"><span>{item.title || item.url}</span><ExternalLink size={11} /></a>
+            <code dir="ltr">{new URL(item.url).hostname}</code><span dir="auto">{item.publishedAt || t('researchUnknownDate')}</span>
+            {item.excerpts.map((excerpt, index) => <p key={index} dir="auto">{excerpt}</p>)}
+        </article>)}
+        <details className="detail-arguments"><summary><ChevronDown size={11} /><span>{t('agentOutput')}</span></summary><RawOutput text={text} auto /></details>
+    </div>;
+}
+
 /** The useful artifact first; complete arguments stay available on demand. */
 export function ToolDetails({ call, result, children }: { call: Step; result?: Step; children?: ReactNode }) {
     const args = useMemo(() => toolArgs(call.text), [call.text]);
@@ -103,7 +118,8 @@ export function ToolDetails({ call, result, children }: { call: Step; result?: S
     return <div className={`tool-detail ${family}`}>
         {!children && subject && <div className="detail-subject"><Icon size={12} aria-hidden="true" /><code dir="ltr">{subject}</code><CopyOutput text={subject} /></div>}
         {!children && family === 'read' && path && readHeader && <div className="detail-range" dir="ltr">{readHeader[1]}–{readHeader[2]} / {readHeader[3]}</div>}
-        {children ?? (family === 'terminal' ? <TerminalOutput text={text} done={done} /> : family === 'read' && path && text && !/^Error:/.test(text) ? <SourceOutput text={source} path={path} start={Number(readHeader?.[1] ?? args.start_line) || 1} /> : text ? family === 'search' && call.tool === 'grep_search' ? <SearchOutput text={text} /> : family === 'web' && call.tool === 'web_search' ? <WebOutput text={text} /> : <RawOutput text={text} auto={family === 'web'} /> : <div className="detail-empty">{done ? t('toolNoOutput') : <><span className="spinner" aria-hidden="true" />{t('toolRunning')}</>}</div>)}
+        {children ?? ((call.research || result?.research) ? <ResearchOutput value={call.research ?? result?.research} text={text} /> : family === 'terminal' ? <TerminalOutput text={text} done={done} /> : family === 'read' && path && text && !/^Error:/.test(text) ? <SourceOutput text={source} path={path} start={Number(readHeader?.[1] ?? args.start_line) || 1} /> : text ? family === 'search' && call.tool === 'grep_search' ? <SearchOutput text={text} /> : family === 'web' && call.tool === 'web_search' ? <WebOutput text={text} /> : <RawOutput text={text} auto={family === 'web'} /> : <div className="detail-empty">{done ? t('toolNoOutput') : <><span className="spinner" aria-hidden="true" />{t('toolRunning')}</>}</div>)}
+        {(call.structuredContent || result?.structuredContent) && <details className="detail-arguments"><summary><ChevronDown size={11} /><span>{t('toolStructuredData')}</span></summary><RawOutput text={JSON.stringify(call.structuredContent ?? result?.structuredContent)} /></details>}
         {call.backgroundOutcome?.status === 'killed' && <div className="detail-interrupted">{t('bgStopped')}</div>}
         {call.interrupted && <div className="detail-interrupted">{t('toolInterrupted')}</div>}
         {call.text && call.text !== '{}' && <details className="detail-arguments"><summary><ChevronDown size={11} /><span>{t('toolArguments')}</span></summary><div className="detail-output-bar"><span dir="ltr">{call.tool}</span><CopyOutput text={call.text} /></div><pre className="detail-output" dir="ltr">{Object.keys(args).length ? JSON.stringify(args, null, 2) : call.text}</pre></details>}

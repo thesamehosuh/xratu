@@ -99,8 +99,8 @@ skip it.
 
 `npm run lint` is `eslint.config.mjs`, which encodes the Non-negotiable rules
 below as AST rules (R1 killTree, R2 cross-spawn, R3 `dir`, R4 logical props).
-It must be GREEN on a clean tree — it reports 0 errors and a handful of
-`warn`s that are known, documented debt. Do not turn an R* rule down to make
+It must be GREEN on a clean tree — it reports 0 errors and a baseline of
+290 warnings (mostly explicit `any` debt; see docs/web-research-delivery.md). Do not turn an R* rule down to make
 the lint pass; fix the code, or amend the rule's justification comment in
 `eslint.config.mjs`. A pre-commit hook runs eslint on staged files only.
 

@@ -15,7 +15,7 @@ const members = cls.members.filter(n => n.name && names.includes(n.name.getText(
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
 const diagnostics = [];
-const sandbox = { EngineError, canStartSetup, diagnosticsChannel: { appendLine: message => diagnostics.push(message) }, isOfflineMode: () => false, classifyWorkspace: () => 'code', fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
+const sandbox = { crypto: require('node:crypto'), EngineError, canStartSetup, diagnosticsChannel: { appendLine: message => diagnostics.push(message) }, isOfflineMode: () => false, classifyWorkspace: () => 'code', fs: { realpathSync: value => path.resolve(value) }, path, setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; }, clearTimeout: id => timers.delete(id),
     resolveSessionTitle: title => title, isSafeBranchName: branch => !branch.startsWith('-'),
     execFileAsync: async (...args) => { checkouts.push(args); },
     vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: path.resolve('workspace') } }] } } };

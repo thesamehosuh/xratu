@@ -12,6 +12,7 @@
 // with a clear message (vision-based page rendering is a future path).
 
 import * as path from 'path';
+import { abortable } from './oauth/refreshLock';
 import { pathToFileURL } from 'url';
 
 /** Attachment text cap - matches ATTACH_TEXT_MAX_CHARS in extension.ts (the
@@ -37,7 +38,7 @@ export interface PdfExtractionResult {
 
 type MinimalPdfjs = {
     GlobalWorkerOptions: { workerSrc: string };
-    getDocument(src: Record<string, unknown>): { promise: Promise<any> };
+    getDocument(src: Record<string, unknown>): { promise: Promise<any>; destroy(): Promise<void> };
 };
 
 let workerConfigured = false;
@@ -57,42 +58,48 @@ async function loadPdfjs(): Promise<MinimalPdfjs> {
     return pdfjs;
 }
 
-export async function extractPdfText(data: Uint8Array): Promise<PdfExtractionResult> {
+export async function extractPdfText(data: Uint8Array, signal?: AbortSignal): Promise<PdfExtractionResult> {
     const pdfjs = await loadPdfjs();
-    const doc = await pdfjs.getDocument({
+    signal?.throwIfAborted();
+    const task = pdfjs.getDocument({
         data,
         isEvalSupported: false,
         disableFontFace: true,
         useWorkerFetch: false,
-    }).promise;
-
-    const pageCount: number = doc.numPages;
-    const pageLimit = Math.min(pageCount, PDF_MAX_PAGES);
-    let text = '';
-    for (let i = 1; i <= pageLimit; i++) {
-        const page = await doc.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-            .map((item: unknown) => {
-                const str = (item as { str?: unknown })?.str;
-                return typeof str === 'string' ? str : '';
-            })
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-        page.cleanup();
-        if (pageText) {
-            text += (text ? '\n\n' : '') + `--- Page ${i} ---\n` + pageText;
+    });
+    const cancel = () => { void task.destroy().catch(() => undefined); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+        const doc = signal ? await abortable(task.promise, signal) : await task.promise;
+        const pageCount: number = doc.numPages;
+        const pageLimit = Math.min(pageCount, PDF_MAX_PAGES);
+        let text = '';
+        for (let i = 1; i <= pageLimit; i++) {
+            signal?.throwIfAborted();
+            const page = await doc.getPage(i);
+            const content = await page.getTextContent();
+            const pageText = content.items
+                .map((item: unknown) => {
+                    const str = (item as { str?: unknown })?.str;
+                    return typeof str === 'string' ? str : '';
+                })
+                .join(' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            page.cleanup();
+            if (pageText) {
+                text += (text ? '\n\n' : '') + `--- Page ${i} ---\n` + pageText;
+            }
+            if (text.length > PDF_TEXT_MAX_CHARS) break;
         }
-        if (text.length > PDF_TEXT_MAX_CHARS) break;
-    }
 
-    if (text.length > PDF_TEXT_MAX_CHARS) {
-        text = text.slice(0, PDF_TEXT_MAX_CHARS)
-            + `\n… [PDF truncated, ${PDF_TEXT_MAX_CHARS} character cap reached]`;
-    }
+        if (text.length > PDF_TEXT_MAX_CHARS) {
+            text = text.slice(0, PDF_TEXT_MAX_CHARS)
+                + `\n… [PDF truncated, ${PDF_TEXT_MAX_CHARS} character cap reached]`;
+        }
 
-    return { text, pages: pageCount, truncatedByPages: pageCount > PDF_MAX_PAGES };
+        return { text, pages: pageCount, truncatedByPages: pageCount > PDF_MAX_PAGES };
+    } finally { signal?.removeEventListener('abort', cancel); await task.destroy().catch(() => undefined); }
 }
 
 /**

@@ -52,7 +52,7 @@ export function toolFamily(tool?: string): ToolFamily {
     if (/^skill$/.test(tool)) return 'read';
     if (/grep|glob|find_|workspace_symbols|list_files|directory_tree/.test(tool)) return 'search';
     if (/^git_/.test(tool)) return 'git';
-    if (/fetch_url|web_search/.test(tool)) return 'web';
+    if (/fetch_url|web_search|opencode_websearch|opencode_webfetch/.test(tool)) return 'web';
     if (/^run_tests$|^get_diagnostics$|^check_dependencies$|^install_dependency$|^copy_file$|^move_file$|^delete_file$/.test(tool)) return 'ops';
     if (/^task$/.test(tool)) return 'subagent';
     return 'generic';
