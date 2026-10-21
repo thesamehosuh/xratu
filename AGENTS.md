@@ -368,6 +368,34 @@ git, SSRF, plan-mode tool gating, Windows paths — are review-only.
 - Tool schemas snapshot at session start; tool changes reach in-flight
   agents only in a fresh session.
 
+## UI copy — show, don't tell
+
+- **Default to controls and visible state, not explanatory prose.** Pages should
+  let users act and scan: compact rows, short labels, status badges, progress,
+  and relevant actions. Do not add introductory paragraphs, feature summaries,
+  or sentences that restate a heading, label, or control's behavior.
+- Keep primary actions clearly labeled. Use familiar icons for secondary actions
+  with localized accessible names and tooltips; do not replace clear labels with
+  cryptic icons or use color alone to communicate state.
+- **Never dump model-facing instructions or raw metadata into the default UI.**
+  For example, OpenCode Agent files should show agent names, compact role/status
+  badges, and supported actions; full agent descriptions belong in on-demand
+  details. Read-only inventories must stay read-only; do not invent controls.
+- Disclosures are not a dumping ground either. Engine setup/about sections
+  should present relevant configuration, concise facts, and available actions,
+  not paragraphs explaining tools, history, permissions, or internal architecture.
+  Put reference material in docs; show constraints where they affect a decision.
+- Before adding any sentence, ask: **does the user need this to choose or act
+  here, now?** Delete it if the answer is no. Put occasional help behind an
+  accessible help control. Do not solve verbosity with smaller or dimmer text.
+- Empty states get a short state label and a useful next action when one exists,
+  not multiple explanations of what will eventually appear. Keep necessary
+  errors, approval consequences, and recovery instructions concise and visible
+  when relevant.
+- Review the actual UI at sidebar width in both locales. Users should identify
+  the current state and next action without reading a paragraph. Apply this to
+  expanded details as well as the initial view.
+
 ## UI polish rules
 
 - Format elapsed times with the shared locale-aware `formatDuration`: seconds,

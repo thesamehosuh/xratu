@@ -21,9 +21,7 @@
 .activity-search-clear:hover { background:var(--vscode-list-hoverBackground); color:var(--vscode-foreground); }
 .activity-filters > .dropdown { flex:0 1 auto; max-width:45%; min-width:124px; }
 .conversation-preference { align-items:center; gap:12px; }
-.preferences-page .conversation-preference .settings-nav-main { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
-.preferences-page .conversation-preference .preference-description { display:none; }
-.preference-description { font-size:var(--xratu-fs-sm); line-height:1.6; color:var(--vscode-descriptionForeground); font-weight:400; }
+.preferences-page .conversation-preference .settings-nav-main { flex:1; min-width:0; display:flex; align-items:center; gap:6px; }
 .conversation-preference > .dropdown { flex:0 0 160px; max-width:48%; }
 .conversation-advanced { margin-block:8px 16px; }
 .conversation-advanced > summary { cursor:pointer; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); padding-block:5px; }

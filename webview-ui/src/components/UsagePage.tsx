@@ -668,7 +668,6 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                         </div>
                         <div>
                             <h3>{t(chartMetric === 'tokens' ? 'usageTokensOverTime' : 'costChartTitle')}</h3>
-                            <p>{t('usageChartPeriod')}</p>
                         </div>
                     </div>
 
@@ -872,7 +871,6 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                         </div>
                         <div>
                             <h3>{t('providersTitle')}</h3>
-                            <p>{t('usageProvidersPeriod')}</p>
                         </div>
                     </div>
 
@@ -918,14 +916,13 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                     <UsageAmounts totals={allTime} />
                 </section>}
 
-                <details className="settings-card rate-disclosure"><summary><span><strong>{t('miniPricing')}</strong><small>{t('ratesDesc')}</small></span><ChevronDown size={12}/></summary>
+                <details className="settings-card rate-disclosure"><summary><span><Tag size={13} aria-hidden="true" /><strong>{t('miniPricing')}</strong></span><ChevronDown size={12}/></summary>
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Tag size={15} />
                         </div>
                         <div>
                             <h3>{t('ratesTitle')}</h3>
-                            <p>{t('ratesDesc')}</p>
                         </div>
                     </div>
 

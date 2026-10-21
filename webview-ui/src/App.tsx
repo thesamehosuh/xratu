@@ -1397,7 +1397,6 @@ export function App() {
         };
         overlay = (
                 <ProxyPage
-                    nativeEngine={engineState?.active === 'opencode'}
                     onBack={() => setScreen(proxyReturnTo)}
                     state={proxyState}
                     candidates={proxyCandidates}

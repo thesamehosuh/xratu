@@ -149,7 +149,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .preferences-page .settings-nav-row:last-child { border-block-end:0; }
 .settings-nav-main { display:flex; flex-direction:row; align-items:center; gap:7px; min-width:0; }
 .settings-nav-main strong { font-size:var(--xratu-fs-base); font-weight:450; color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 100%); }
-.preference-help { display:inline-flex; align-items:center; justify-content:center; width:12px; height:12px; border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 25%); color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 64%); border-radius:50%; font-size:var(--xratu-fs-xs); flex-shrink:0; cursor:help; }
+.preference-help { display:inline-flex; align-items:center; justify-content:center; width:12px; height:12px; color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 64%); flex-shrink:0; cursor:help; }
 .settings-nav-main > span:not(.preference-help) { font-size:var(--xratu-fs-sm); color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 68%); }
 .preferences-page .settings-nav-row .lang-choice { flex-wrap:nowrap; max-width:none; }
 .preferences-page .settings-nav-row:has(.lang-choice) > svg { display:none; }
@@ -435,7 +435,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .usage-lifetime > .usage-amounts { margin-inline-start:auto; flex-direction:row; flex-wrap:wrap; gap:12px; }
 .rate-disclosure { border-block:0; padding:0; }
 .rate-disclosure > summary { min-height:36px; gap:12px; }
-.rate-disclosure > summary > span { display:flex; flex-direction:column; gap:4px; }
+.rate-disclosure > summary > span { display:flex; align-items:center; gap:6px; }
 .rate-disclosure > summary strong { color:var(--page-ink); font-weight:600; font-size:var(--xratu-fs-base); }
 .rate-disclosure > summary small { color:var(--page-muted); font-size:var(--xratu-fs-sm); line-height:1.6; }
 .rate-disclosure[open] > summary > svg { transform:rotate(180deg); }

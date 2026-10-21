@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, KeyRound, Laptop, RefreshCw, Sparkles, SquareTerminal, Wrench } from 'lucide-react';
+import { Check, FolderCheck, KeyRound, Laptop, RefreshCw, Settings2, Sparkles, SquareTerminal, Trash2, Wrench } from 'lucide-react';
 import brandMark from '../../../assets/brand/logo-outline.svg';
 import { OpenCodeSetup } from './OpenCodeSetup';
 import { t } from '../i18n';
@@ -33,20 +33,19 @@ export function EnginesPage({ state, send }: { state: EngineSetupState | null; s
                 {state?.installedByXratu && <div className="engine-maintenance">
                     {state.updateAvailable && <p>{t('engineUpdateHint')}</p>}
                     <div className="engine-maintenance-actions">
-                        <button type="button" className="secondary-btn" disabled={locked || !state.updateAvailable} onClick={() => send({ type: 'engineInstall' })}>{t(state.updateAvailable ? 'engineUpdate' : 'engineUpToDate')}</button>
-                        <button type="button" className="secondary-btn" disabled={locked} onClick={() => setConfirmRemove(true)}>{t('engineRemove')}</button>
+                        <button type="button" className="secondary-btn" disabled={locked || !state.updateAvailable} onClick={() => send({ type: 'engineInstall' })}>{state.updateAvailable ? <RefreshCw size={12} aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}<span>{t(state.updateAvailable ? 'engineUpdate' : 'engineUpToDate')}</span></button>
+                        <button type="button" className="icon-btn" aria-label={t('engineRemove')} title={t('engineRemove')} disabled={locked} onClick={() => setConfirmRemove(true)}><Trash2 size={14} /></button>
                     </div>
                     {confirmRemove && <div className="engine-remove-confirm" role="group" aria-label={t('engineRemove')}>
                         <p>{t('engineRemoveHint')}</p>
                         <div className="engine-maintenance-actions"><button type="button" className="secondary-btn" disabled={locked} onClick={() => { setConfirmRemove(false); send({ type: 'engineRemove' }); }}>{t('engineRemoveConfirm')}</button><button type="button" className="secondary-btn" disabled={locked} onClick={() => setConfirmRemove(false)}>{t('editCancel')}</button></div>
                     </div>}
                 </div>}
-                <div className="engine-controls"><details className="engine-details"><summary>{t('engineSetup')}</summary>
+                <div className="engine-controls"><details className="engine-details"><summary><Settings2 size={12} aria-hidden="true" /><span>{t('engineSetup')}</span></summary>
                     {state?.binaryPath && <p className="engine-path" dir="ltr">{state.binaryPath}</p>}
-                    <p>{t(phase === 'unsupported' ? 'engineUpgradeHint' : state?.installedByXratu ? 'engineManaged' : phase === 'ready' ? 'engineExternal' : 'engineInstallHint')}</p>
+                    {phase === 'ready' && <div className="engine-install-source"><FolderCheck size={12} aria-hidden="true" /><span>{t(state?.installedByXratu ? 'engineManaged' : 'engineExternal')}</span></div>}
                     <label htmlFor="engine-path">{t('engineCustomPath')}</label><input id="engine-path" dir="ltr" value={customPath} disabled={locked} placeholder={t('enginePathHint')} onChange={(event) => setCustomPath(event.target.value)} /><button type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'engineSetPath', path: customPath })}>{t('engineSavePath')}</button>
-                </details>
-                <details className="engine-details"><summary>{t('engineAbout')}</summary><p>{t('engineNativeToolsHint')}</p></details></div>
+                </details></div>
             </section>
             {state?.busy && <p role="status">{t('engineBusyHint')}</p>}
         </div>

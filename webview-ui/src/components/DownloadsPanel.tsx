@@ -20,7 +20,6 @@ export function DownloadsPanel({ downloads, error, visible, panelClass }: { down
         {downloads.length === 0 ? <div className="surface-empty-state" role="status">
             <div className="surface-empty-icon" aria-hidden="true"><Download size={22} /></div>
             <strong>{t('downloadEmpty')}</strong>
-            <p>{t('downloadEmptyHint')}</p>
         </div> : <div className="downloads-content">
             <div className="download-list">{downloads.map(r => {
                 const percent = r.total !== null && r.total > 0 ? Math.min(100, Math.floor(r.received / r.total * 100)) : r.status === 'completed' ? 100 : undefined;

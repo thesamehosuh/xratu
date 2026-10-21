@@ -9,6 +9,7 @@ import {
     Languages,
     MessageSquare,
     Trash2,
+    CircleHelp,
 } from 'lucide-react';
 import { getLocale, t, type StringKey } from '../i18n';
 import { conversationPrefs, prefOn, transcriptOptions, type TranscriptOptions, type TranscriptPrefs } from '../transcriptPrefs';
@@ -49,7 +50,7 @@ interface SettingsPageProps {
 }
 
 function PreferenceHelp({ text }: { text: string }) {
-    return <span className="preference-help" role="img" tabIndex={0} title={text} aria-label={text}>?</span>;
+    return <span className="preference-help" role="img" tabIndex={0} title={text} aria-label={text}><CircleHelp size={12} aria-hidden="true" /></span>;
 }
 
 export function SettingsPage({
@@ -82,17 +83,17 @@ export function SettingsPage({
         });
     }, [transcriptPrefs]);
     const displayPrefs = conversationPrefs(transcriptPrefs);
-    function choice<K extends 'detail' | 'reasoning' | 'commands' | 'progress'>(id: K, label: StringKey, description: StringKey, choices: readonly [TranscriptOptions[K], StringKey][]) {
+    function choice<K extends 'detail' | 'reasoning' | 'commands' | 'progress'>(id: K, label: StringKey, choices: readonly [TranscriptOptions[K], StringKey][]) {
         return <div className="settings-nav-row conversation-preference">
-            <label className="settings-nav-main" htmlFor={`tx-${id}`}><strong id={`tx-${id}-label`}>{t(label)}</strong><span id={`tx-${id}-hint`} className="preference-description">{t(description)}</span></label>
-            <Dropdown id={`tx-${id}`} label={t(label)} describedBy={`tx-${id}-hint`} value={String(options[id])}
+            <label className="settings-nav-main" htmlFor={`tx-${id}`}><strong id={`tx-${id}-label`}>{t(label)}</strong></label>
+            <Dropdown id={`tx-${id}`} label={t(label)} value={String(options[id])}
                 options={choices.map(([value, key]) => ({ value: String(value), label: t(key) }))}
                 onChange={value => onSetTranscriptOptions?.({ [id]: value })} />
         </div>;
     }
-    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps' | 'showContextMeter', label: StringKey, description: StringKey) {
+    function toggle(id: 'compactCompleted' | 'followActivity' | 'timestamps' | 'showContextMeter', label: StringKey) {
         const value = pendingToggles[id] ?? options[id];
-        return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong><span className="preference-description" id={`tx-${id}-hint`}>{t(description)}</span></div><button type="button" className={`mcp-switch${value ? ' on' : ''}`} role="switch" aria-checked={value} aria-label={t(label)} aria-describedby={`tx-${id}-hint`} onClick={() => { const next = !value; setPendingToggles((current) => ({ ...current, [id]: next })); onSetTranscriptOptions?.({ [id]: next }); }}><span className="mcp-switch-knob" /></button></div>;
+        return <div className="settings-nav-row conversation-preference"><div className="settings-nav-main"><strong>{t(label)}</strong>{id === 'followActivity' && <PreferenceHelp text={t('txFollowActivityDesc')} />}</div><button type="button" className={`mcp-switch${value ? ' on' : ''}`} role="switch" aria-checked={value} aria-label={t(label)} onClick={() => { const next = !value; setPendingToggles((current) => ({ ...current, [id]: next })); onSetTranscriptOptions?.({ [id]: next }); }}><span className="mcp-switch-knob" /></button></div>;
     }
 
     return (
@@ -141,16 +142,16 @@ export function SettingsPage({
                         <h3>{t('surfaceConversation')}</h3>
                         <button type="button" className="settings-ghost-action conversation-reset" aria-label={t('txReset')} title={t('txReset')} onClick={onResetTranscriptPrefs}><RotateCcw size={12} /><span>{t('txResetShort')}</span></button>
                     </div>
-                    {choice('detail', 'txDetail', 'txDetailDesc', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
-                    {toggle('showContextMeter', 'txShowContextMeter', 'txShowContextMeterDesc')}
+                    {choice('detail', 'txDetail', [['minimal', 'txMinimal'], ['balanced', 'txBalanced'], ['detailed', 'txDetailed']])}
+                    {toggle('showContextMeter', 'txShowContextMeter')}
                     <details className="conversation-advanced"><summary>{t('txAdvanced')}</summary>
-                        {choice('reasoning', 'miniThinking', 'txReasoningDesc', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
-                        <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong><span className="preference-description" id="tx-diffs-hint">{t('txDiffsDesc')}</span></label><Dropdown id="tx-diffs" label={t('miniFiles')} describedBy="tx-diffs-hint" value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>
-                        {choice('commands', 'miniCommands', 'txCommandsDesc', [['collapsed', 'txCollapsed'], ['errors', 'txOnFailure'], ['expanded', 'txExpanded']])}
-                        {choice('progress', 'txProgress', 'txProgressDesc', [['latest', 'txLatest'], ['all', 'txKeepAll']])}
-                        {toggle('compactCompleted', 'txCompactCompleted', 'txCompactCompletedDesc')}
-                        {toggle('followActivity', 'txFollowActivity', 'txFollowActivityDesc')}
-                        {toggle('timestamps', 'txTimestamps', 'txTimestampsDesc')}
+                        {choice('reasoning', 'miniThinking', [['activity', 'txActivityOnly'], ['collapsed', 'txCollapsed'], ['expanded', 'txExpanded']])}
+                        <div className="settings-nav-row conversation-preference"><label className="settings-nav-main" htmlFor="tx-diffs"><strong id="tx-diffs-label">{t('miniFiles')}</strong></label><Dropdown id="tx-diffs" label={t('miniFiles')} value={prefOn(displayPrefs, 'edit') ? 'inline' : 'summary'} options={[{ value: 'summary', label: t('txSummary') }, { value: 'inline', label: t('txInline') }]} onChange={value => onSetTranscriptPref?.('edit', value === 'inline')} /></div>
+                        {choice('commands', 'miniCommands', [['collapsed', 'txCollapsed'], ['errors', 'txOnFailure'], ['expanded', 'txExpanded']])}
+                        {choice('progress', 'txProgress', [['latest', 'txLatest'], ['all', 'txKeepAll']])}
+                        {toggle('compactCompleted', 'txCompactCompleted')}
+                        {toggle('followActivity', 'txFollowActivity')}
+                        {toggle('timestamps', 'txTimestamps')}
                     </details>
                 </section>
 

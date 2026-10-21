@@ -9,9 +9,16 @@
 .native-config .settings-scroll { display: flex; flex-direction: column; gap: 14px; }
 .native-inventory { margin-block-start: 16px; border-block-start: 1px solid var(--vscode-widget-border); padding-block: 12px; }
 .native-inventory > summary { cursor: pointer; font-size: var(--xratu-fs-md); font-weight: 600; line-height: 1.6; }
-.native-inventory-head { display: flex; align-items: center; gap: 12px; margin-block: 10px; }
-.native-inventory-head > span { flex: 1; font-size: var(--xratu-fs-sm); line-height: 1.6; }
+.native-inventory-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-block: 10px; }
 .native-inventory-head > button { flex-shrink: 0; }
+.native-readonly { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
+.native-inventory-row-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-inline-size: 0; }
+.native-inventory-row-head > svg { flex-shrink: 0; color: var(--vscode-descriptionForeground); }
+.native-inventory-row-head > strong { overflow-wrap: anywhere; }
+.native-inventory-badge { color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
+.native-inventory-detail > summary { display: flex; align-items: center; gap: 5px; inline-size: fit-content; padding-block: 4px; cursor: pointer; color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
+.native-inventory-detail p { margin-block: 6px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-inventory-detail code { display: block; overflow-wrap: anywhere; background: transparent; padding: 0; }
 .native-config .secondary-btn { align-self: flex-start; inline-size: auto; padding: 8px 12px; white-space: normal; line-height: 1.6; }
 .native-config-row { display: flex; flex-direction: column; gap: 5px; padding-block: 10px; border-block-end: 1px solid var(--vscode-widget-border); font-size: var(--xratu-fs-md); }
 .native-config-row > span, .native-config-row > code { color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); overflow-wrap: anywhere; }
