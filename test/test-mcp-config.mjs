@@ -19,6 +19,9 @@ Module._load = function (name, ...args) {
     return originalLoad.call(this, name, ...args);
 };
 const { McpConfigStore } = require('../out/mcpConfig.js');
+const { configureMcpSecrets } = require('../out/mcpSecrets.js');
+const vault = new Map();
+configureMcpSecrets({ store: async (key, value) => vault.set(key, value), get: async key => vault.get(key) });
 Module._load = originalLoad;
 
 const root = await mkdtemp(join(tmpdir(), 'xratu-mcp-config-'));
@@ -28,10 +31,10 @@ try {
     await Promise.all([store.seedDefaults(), store.seedDefaults()]);
     const raw = await readFile(store.globalPath, 'utf8');
     const { mcpServers } = JSON.parse(raw);
-    assert.deepEqual(Object.keys(mcpServers).sort(), ['ddg-search', 'digikala', 'divar', 'torob']);
+    assert.deepEqual(Object.keys(mcpServers).sort(), []);
     const { MCP_REGISTRY } = require('../out/mcpRegistry.js');
     for (const entry of MCP_REGISTRY.filter(entry => entry.tags?.includes('iranian'))) {
-        assert.equal(entry.defaultEnabled, true, 'Iranian marketplace defaults stay enabled');
+        assert.equal(entry.defaultEnabled, false, 'Iranian marketplace presets stay visible and opt-in');
         assert.equal(entry.server.autoApprove, undefined);
     }
     assert.equal(MCP_REGISTRY.find(entry => entry.id === 'torob').server.connectTimeoutMs, 120000);
@@ -57,7 +60,7 @@ try {
     await assert.rejects(readFile(store.globalPath), { code: 'ENOENT' });
     workspace.isTrusted = true;
     await store.seedDefaults();
-    assert.equal(Object.keys((await store.load()).servers).length, 4);
+    assert.equal(Object.keys((await store.load()).servers).length, 0);
     // The first Servers-page read cannot race ahead of publishing defaults.
     await rm(store.globalPath);
     const originalLink = fs.promises.link;
@@ -75,7 +78,7 @@ try {
         assert.equal(loadedEarly, false);
         release();
         await seeding;
-        assert.deepEqual(Object.keys((await reading).servers).sort(), ['ddg-search', 'digikala', 'divar', 'torob']);
+        assert.deepEqual(Object.keys((await reading).servers).sort(), []);
     } finally { release(); fs.promises.link = originalLink; }
     // An interrupted publication must leave no truncated final config.
     await rm(store.globalPath);
@@ -84,7 +87,7 @@ try {
     finally { fs.promises.link = originalLink; }
     await assert.rejects(readFile(store.globalPath), { code: 'ENOENT' });
     assert.equal((await fs.promises.readdir(root)).some(name => name.endsWith('.tmp')), false);
-    console.log('mcp-config: enabled defaults, concurrent seed, user choices, legacy and trust gates passed');
+    console.log('mcp-config: optional defaults, concurrent seed, user choices, legacy and trust gates passed');
 } finally {
     await rm(root, { recursive: true, force: true });
 }

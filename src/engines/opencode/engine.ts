@@ -1,5 +1,6 @@
 // Event and permission mapping adapted from T3 Code's OpenCode 2 adapter.
 // Native OpenCode owns tools/history; Xratu owns the display and decision cards.
+import { readResearchEvidence } from '../../web/types';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -9,7 +10,7 @@ import type { LocalAgentEvent, LocalSteerMessage } from '../../local/localTypes'
 import type { AgentEngine, EngineHost, EngineTurn } from '../types';
 import { ENGINE_CAPABILITIES } from '../types';
 import { nativeToolDisplayArgs } from './services';
-import { mapMcpToolContent } from '../../mcpToolContent';
+import { boundedStructuredContent, mapMcpToolContent } from '../../mcpToolContent';
 import type { NativeIntegration } from '../nativeSetup';
 import { OpenCodeServer } from './server';
 import { subscribeEvents } from './events';
@@ -25,7 +26,7 @@ import { NativeSessionTree } from './sessionTree';
 export class EngineError extends Error {
     constructor(readonly valueKey: string) { super(valueKey); }
 }
-const TOOL_NAMES: Record<string, string> = { shell: 'run_terminal_command', bash: 'run_terminal_command', read: 'read_file', edit: 'edit_file', write: 'write_file', glob: 'glob_search', grep: 'grep_search', websearch: 'web_search', webfetch: 'fetch_url', question: 'ask_user_question' };
+const TOOL_NAMES: Record<string, string> = { shell: 'run_terminal_command', bash: 'run_terminal_command', read: 'read_file', edit: 'edit_file', write: 'write_file', glob: 'glob_search', grep: 'grep_search', websearch: 'opencode_websearch', webfetch: 'opencode_webfetch', question: 'ask_user_question' };
 function toolName(name: string): string { return name === 'subagent' ? 'task' : TOOL_NAMES[name] ?? `opencode_${name}`; }
 function errorText(error: unknown): string {
     if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
@@ -233,6 +234,7 @@ export class OpenCodeEngine implements AgentEngine {
         // models require OpenCode's harness, including its tool definitions.
         const permissions = this.probing ? [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'subagent', resource: '*', effect: 'deny' as const }] : [
             ...openCodePermissions(turn.plan, turn.yolo),
+            ...(this.mcpBridge?.hasResearch() ? ['websearch', 'webfetch'].map(action => ({ action, resource: '*', effect: 'deny' as const })) : []),
             ...(turn.plan ? this.mcpBridge?.planActions() ?? [] : this.mcpBridge?.trustedActions() ?? []).map((action) => ({ action, resource: '*', effect: 'allow' as const })),
         ];
         const mcpNames = this.mcpBridge?.toolNames();
@@ -319,6 +321,11 @@ export class OpenCodeEngine implements AgentEngine {
                     turn.signal.throwIfAborted();
                     if (decisionFailure) throw decisionFailure.error;
                     const data = event.data;
+                    if (event.type === 'session.tool.success' || event.type === 'session.tool.failed') {
+                        const content = mapMcpToolContent(data.content);
+                        const research = this.mcpBridge?.takeResearch(String(data.sessionID), content.text);
+                        if (research) data.xratuResearch = research;
+                    }
                     const form = data.form as FormInfo1 | undefined;
                     const eventSessionID = String(event.type === 'form.created' ? form?.sessionID : data.sessionID);
                     if (eventSessionID === sessionID && !executionStarted && event.type !== 'session.execution.started') continue;
@@ -400,12 +407,14 @@ export class OpenCodeEngine implements AgentEngine {
                             const call = calls.get(id);
                             const metadata = data.metadata as { exit?: number; shellID?: string; status?: string } | undefined;
                             if (typeof metadata?.shellID === 'string') await this.shellMonitor?.track(metadata.shellID, sessionID, id, metadata.status === 'running').catch(() => undefined);
-                            const isError = event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
+                            const research = readResearchEvidence(data.xratuResearch);
+                            const structuredContent = boundedStructuredContent(data.structuredContent);
+                            const isError = !!research && !['success', 'empty'].includes(research.outcome) || event.type.endsWith('failed') || (typeof metadata?.exit === 'number' && metadata.exit !== 0);
                             if (call) failedEdits = call.nativeEdit && isError ? failedEdits + 1 : 0;
                             // V2 represents MCP images as file parts with data URIs.
                             // Reuse shared image bounds; never fetch native file/HTTP URIs.
                             const content = mapMcpToolContent(Array.isArray(data.content) ? data.content.map(part => part?.type === 'file' && typeof part.uri === 'string' && /^data:image\//i.test(part.uri) ? { type: 'text', text: part.uri } : part) : [], call?.name);
-                            yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}) };
+                            yield { type: 'toolResult', id, tool: call?.name ?? 'opencode_tool', output: content.text.slice(0, 200_000) || (event.type.endsWith('failed') ? errorText(data.error) : ''), isError, ...(content.images.length ? { images: content.images } : {}), ...(research ? { research } : {}), ...(structuredContent ? { structuredContent } : {}) };
                             calls.delete(id);
                             active.calls.delete(id);
                             // Native tools own their arguments and retries. Stop a
@@ -424,6 +433,7 @@ export class OpenCodeEngine implements AgentEngine {
                             const args = nativeToolDisplayArgs(name, { ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}), ...call?.input, action: data.action, resources: data.resources });
                             decisions.start(`${eventSessionID}:permission:${String(data.id)}`, async (signal, answering) => {
                                 let allowed = !turn.plan;
+                                if (this.mcpBridge?.hasResearch() && ['websearch', 'webfetch'].includes(String(data.action))) allowed = false;
                                 if (data.action === 'subagent') {
                                     // Model-supplied native ids may name another chat.
                                     // Replace a reused child's old mode before admission.

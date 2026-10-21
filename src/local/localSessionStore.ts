@@ -1,3 +1,4 @@
+import { readResearchEvidence } from '../web/types';
 import { boundSubagentEvents, readSubagentTrace } from '../subagentObservation';
 import type { EngineSessionRef } from '../engines/types';
 import * as fs from 'fs/promises';
@@ -36,6 +37,8 @@ export interface LocalPendingTurn {
 }
 
 export interface LocalSessionSnapshot {
+    /** Random per-chat research ID, unrelated to paths or native session IDs. */
+    researchConversationId?: string;
     engineSession?: EngineSessionRef;
     /** Workspace folder path the session belongs to (list filtering). */
     workspace?: string;
@@ -376,6 +379,7 @@ function alignPendingTurnEvents(events: any[]): any[] {
 
 function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STORED_CONTENT): LocalPendingTurn {
     const events = Array.isArray(pt.events) ? alignPendingTurnEvents(pt.events.slice(-PENDING_TURN_EVENT_LIMIT)).map((event: any) => {
+        if (event?.research) event = { ...event, research: readResearchEvidence(event.research) };
         if (event?.subagent) event = { ...event, subagent: readSubagentTrace(event.subagent) };
         if (event?.type === 'thinking' && typeof event.content === 'string') {
             // A reasoning block can still be growing when a mid-run persist
@@ -640,6 +644,7 @@ export class LocalSessionStore {
                 renamed: !!parsed?.renamed,
                 model: parsed?.model ?? null,
                 engineSession: readEngineSession(parsed?.engineSession),
+                researchConversationId: typeof parsed.researchConversationId === 'string' && /^[a-f0-9-]{36}$/i.test(parsed.researchConversationId) ? parsed.researchConversationId : undefined,
                 summary: parsed?.summary ?? null,
                 localHistory: parsed?.localHistory ?? [],
                 replayUserTurns: typeof parsed?.replayUserTurns === 'number' && Number.isFinite(parsed.replayUserTurns)

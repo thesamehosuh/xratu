@@ -18,6 +18,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { protectMcpSecrets } from './mcpSecrets';
 import { MCP_REGISTRY } from './mcpRegistry';
 
 export type McpTransportType = 'stdio' | 'websocket' | 'streamableHttp' | 'sse';
@@ -162,7 +163,7 @@ export class McpConfigStore {
     }
 
     /** First-run default: ship with the default-enabled curated servers
-     *  active out of the box (no API keys, read-only tools). Seeds the global
+     *  available as opt-in presets; built-in research needs no external MCP runtime. Seeds the global
      *  config file
      *  only when it does not exist yet - exclusive create, never clobbers an
      *  existing or concurrently created file. An emptied-but-present file is
@@ -209,6 +210,7 @@ export class McpConfigStore {
         const filePath = target === 'global' ? this.globalPath : this.workspacePath;
         if (!filePath) throw new Error('No workspace folder open - cannot save the workspace MCP config.');
         await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.promises.writeFile(filePath, JSON.stringify({ mcpServers: servers }, null, 2) + '\n', 'utf-8');
+        const protectedServers = await protectMcpSecrets(filePath, servers);
+        await fs.promises.writeFile(filePath, JSON.stringify({ mcpServers: protectedServers }, null, 2) + '\n', 'utf-8');
     }
 }

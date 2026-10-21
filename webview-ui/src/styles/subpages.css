@@ -478,3 +478,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .routing-page .proxy-mcp-row:last-child { border-block-end:0; }
 
 .usage-providers,.usage-page .rate-disclosure { margin-block-start:20px; }
+
+.research-evidence-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 8px; }
+
+.proxy-search-routing { margin-block-start: 16px; }

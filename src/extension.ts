@@ -4,6 +4,8 @@ import { readSubagentTrace, type SubagentApprovalSource } from './subagentObserv
 import { canStartSetup, setupPhase, type RuntimeSetupState, type SetupEngine, type SetupPath } from './engines/setup';
 import { listReviewChanges, readReviewFile, StartupPageIntent, validateReviewCheckpoint } from './workSurface';
 import * as vscode from 'vscode';
+import { configureMcpSecrets } from './mcpSecrets';
+import { resetResearchPolicy, researchSession } from './web/service';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -850,7 +852,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         const executor = context.rootSessionID ? this._nativeServiceExecutor(active.workspace, signal, context.plan) : active.executor;
                         const result = await executor.execute({ id: crypto.randomUUID(), name, arguments: args, argumentsJson: JSON.stringify(args) });
                         signal.throwIfAborted();
-                        return { text: result.output, images: result.images ?? [], isError: result.isError };
+                        return { text: result.output, images: result.images ?? [], isError: result.isError, research: result.research };
                     }
                     if (PULL_REQUEST_TOOLS.some(tool => tool.name === name)) {
                         signal?.throwIfAborted();
@@ -921,7 +923,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _sessionEpoch = 0;
     private _connectionStatusInterval: NodeJS.Timeout | null = null;
     private _chatRetryCount: number = 0;
-    _yoloMode: boolean = false;
+    private _researchConversationId: string = crypto.randomUUID();
+    _yoloMode: boolean = true;
     _planMode: boolean = false;
     _selectedModel: string | null = null;
     /** Provider-reported context windows, scoped by provider HOST then model
@@ -1284,6 +1287,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         readonly _globalState: vscode.Memento,
         localStorageUri: vscode.Uri
     ) {
+        this._yoloMode = this._globalState.get<boolean>('xratu.yoloMode', true);
         setOfflineMode(this._globalState.get<boolean>('xratu.offlineMode') === true);
         this._checkpoints = checkpoints;
         this._storagePath = localStorageUri.fsPath;
@@ -4534,6 +4538,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // conversation's requests to the same prompt cache. Prefer the persisted
         // session id; fall back to one stable id per live chat.
         const conversationId = this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`);
+        researchSession(conversationId, this._researchConversationId);
         const browserSessionId = this._browserSessionId();
         this._browser.setSession(browserSessionId);
 
@@ -4919,6 +4924,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const bridgedTools = this._nativeServiceDefinitions();
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
+            researchSession(this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`), this._researchConversationId);
             const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 isYolo: () => this._yoloMode,
                 approvals: { requestApproval: (id, calls, source, signal) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments })), source, signal) },
@@ -5047,6 +5053,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     tool: event.tool,
                     output: event.output,
                     isError: event.isError,
+                    ...(event.research ? { research: event.research } : {}),
+                    ...(event.structuredContent ? { structuredContent: event.structuredContent } : {}),
                     callId: event.id,
                     timestamp,
                     // Images the tool returned (MCP screenshots etc). The
@@ -5816,17 +5824,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             resolvedSource: resolved.source,
             systemProxy: resolved.systemProxy,
             noProxyList: resolved.noProxy,
+            webSearchUseProxy: cfg.get<boolean>('webSearchUseProxy', true),
         });
     }
 
     /** Persist proxy settings (Proxy page). Writes the `xratu.*` settings -
      *  the dispatcher picks them up on the next request (its cache keys off
      *  the resolved URL). */
-    async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string): Promise<void> {
+    async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean): Promise<void> {
         const cfg = vscode.workspace.getConfiguration('xratu');
         await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
         await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
         await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
+        if (typeof webSearchUseProxy === 'boolean') await cfg.update('webSearchUseProxy', webSearchUseProxy, vscode.ConfigurationTarget.Global);
         await this._sendProxyState();
     }
 
@@ -6325,6 +6335,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                                 tool: parsed.tool,
                                 output: parsed.output,
                                 isError: parsed.isError,
+                                ...(parsed.research ? { research: parsed.research } : {}),
+                                ...(parsed.structuredContent ? { structuredContent: parsed.structuredContent } : {}),
                                 callId: parsed.id ?? undefined,
                                 timestamp: parsed.timestamp,
                             });
@@ -6423,6 +6435,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._engineSession = { engineId: this._activeEngine };
         this._forgetSubagentRuns();
         this._sessionId = null;
+        this._researchConversationId = crypto.randomUUID();
         // A new conversation gets a fresh OpenCode session id.
         this._ephemeralSessionId = null;
         this._history = [];
@@ -6568,6 +6581,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._resetSessionLedgers();
         this._activeEngine = engine;
         this._engineSession = snapshot.engineSession;
+        this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
         this._sessionId = snapshot.sessionId;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
@@ -6705,6 +6719,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return;
         }
         this._engineSession = snapshot.engineSession;
+        this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
         this._activeEngine = engine;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
@@ -6851,6 +6866,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._sessionId!,
             {
                 workspace: this._localWorkspaceKey(),
+                researchConversationId: this._researchConversationId,
                 engineSession: this._engineSession ?? { engineId: this._activeEngine },
                 model: this._selectedModel,
                 summary: this._sessionSummary,
@@ -7976,6 +7992,13 @@ export function activate(context: vscode.ExtensionContext) {
     // null for the whole session.
     void ensureShiki();
 
+    configureMcpSecrets(context.secrets);
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('xratu.mcpServers')) {
+            void externalMcp.reload().catch(error => console.error('xratu: MCP settings reload failed:', error));
+        }
+        if (['xratu.webSearchUseProxy', 'xratu.proxyMode', 'xratu.proxyUrl', 'xratu.noProxy'].some(key => event.affectsConfiguration(key))) resetResearchPolicy();
+    }));
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);
     downloadShutdown = () => provider.disposeDownloads();
 

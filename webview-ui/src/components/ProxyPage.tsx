@@ -31,7 +31,7 @@ interface ProxyPageProps {
     /** MCP servers for per-server routing overrides. */
     servers: McpServerView[];
     onGetState: () => void;
-    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string) => void;
+    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy: boolean) => void;
     onDetect: () => void;
     onTest: () => void;
     onSetServerProxy: (name: string, mode: ProxyRouteMode) => void;
@@ -99,6 +99,7 @@ export function ProxyPage({
     const [mode, setMode] = useState<'auto' | 'custom' | 'off'>('auto');
     const [serverDraft, setServerDraft] = useState<ServerDraft>({ scheme: 'http', host: '', port: '' });
     const [noProxy, setNoProxy] = useState('');
+    const [webSearchUseProxy, setWebSearchUseProxy] = useState(true);
 
     // Host echo is the source of truth - re-sync drafts when it lands.
     useEffect(() => {
@@ -106,6 +107,7 @@ export function ProxyPage({
         setMode(state.mode);
         setServerDraft(splitProxyUrl(state.proxyUrl));
         setNoProxy(state.noProxy);
+        setWebSearchUseProxy(state.webSearchUseProxy !== false);
     }, [state]);
 
     useEffect(() => {
@@ -121,6 +123,7 @@ export function ProxyPage({
         mode !== state.mode
         || composedUrl !== (state.proxyUrl ?? '').trim()
         || noProxy.trim() !== (state.noProxy ?? '').trim()
+        || webSearchUseProxy !== (state.webSearchUseProxy !== false)
     );
     const socksWarn = mode !== 'off' && serverDraft.scheme === 'socks5';
     /** The save check marks a click, not the idle state - it drops again as
@@ -266,6 +269,13 @@ export function ProxyPage({
                     </div>
                     <div className="proxy-hint" dir="auto">{t('proxyNoProxyDesc')}</div></details>
 
+                    <div className="proxy-mcp-bulk proxy-search-routing">
+                        <span>{t('proxyWebSearch')}</span>
+                        <div className="lang-choice" role="group" aria-label={t('proxyWebSearch')}>
+                            <button type="button" className={`lang-chip${webSearchUseProxy ? ' active' : ''}`} aria-pressed={webSearchUseProxy} onClick={() => setWebSearchUseProxy(true)}><span>{t('proxyMcpProxy')}</span></button>
+                            <button type="button" className={`lang-chip${!webSearchUseProxy ? ' active' : ''}`} aria-pressed={!webSearchUseProxy} onClick={() => setWebSearchUseProxy(false)}><span>{t('proxyMcpDirect')}</span></button>
+                        </div>
+                    </div>
                     <div className="proxy-save-row">
                         {state && (
                             <div className="proxy-status" dir="auto">
@@ -280,7 +290,7 @@ export function ProxyPage({
                             disabled={!dirty || socksWarn}
                             onClick={() => {
                                 setJustSaved(true);
-                                onSave(mode, composedUrl, noProxy);
+                                onSave(mode, composedUrl, noProxy, webSearchUseProxy);
                             }}
                         >
                             {justSaved && !dirty ? <Check size={13} /> : null}
@@ -339,7 +349,7 @@ export function ProxyPage({
                                         const draft = splitProxyUrl(c.url!);
                                         setServerDraft(draft);
                                         setMode('custom');
-                                        onSave('custom', c.url!, noProxy);
+                                        onSave('custom', c.url!, noProxy, webSearchUseProxy);
                                     }}
                                 >
                                     {t('proxyUse')}

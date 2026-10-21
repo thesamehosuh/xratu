@@ -64,15 +64,16 @@ mode remain unavailable with OpenCode.
 
 ## Approvals and privacy
 
-Edits, commands, and tool actions use approval controls. **YOLO mode removes
-those approval prompts for the root request**; enable it only when you want
-tools to run unattended. Delegated native children still ask before a mutation.
+YOLO is enabled by default and applies to the whole agent tree. Turn it off
+in the composer to require approval for mutations; your choice is saved.
 Checkpoints use separate shadow git storage and leave your repository's git
 index and history alone.
 
-API keys use VS Code secrets storage. Chat history and checkpoints stay on your
-machine. Prompts and relevant context go to your selected provider; web tools
-and MCP servers contact their configured services. The extension has no telemetry.
+Model API keys use VS Code secrets storage. MCP saves protect header/environment
+values with secret references; manually edited MCP JSON can still contain secrets.
+History and checkpoints stay local. Prompts go to your selected model provider;
+automatic web research uses anonymous Parallel with Exa fallback. MCP servers
+contact their configured services. The extension has no telemetry.
 For local-only use, choose a local model and enable **Offline mode**; terminal
 commands remain unrestricted.
 

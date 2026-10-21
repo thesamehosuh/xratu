@@ -126,3 +126,52 @@ function dataUrlPayload(text: string | undefined): string {
     if (comma < 0) return '';
     return /;base64/i.test(t.slice(0, comma)) ? t.slice(comma + 1).trim() : '';
 }
+
+/** Structured-only MCP tools still need useful model text. Keep a bounded JSON
+ * copy independently; neither remote object graphs nor control fields are trusted. */
+export function boundedStructuredContent(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    let remaining = 48_000;
+    let nodes = 0;
+    const visit = (item: unknown, depth: number): unknown => {
+        if (++nodes > 1000 || depth > 8) { remaining -= 13; return '[truncated]'; }
+        if (typeof item === 'string') {
+            let result = item.slice(0, Math.min(remaining - 2, 8000));
+            while (JSON.stringify(result).length > remaining) result = result.slice(0, Math.floor(result.length / 2));
+            remaining -= JSON.stringify(result).length;
+            return result;
+        }
+        if (item === null || typeof item === 'boolean' || typeof item === 'number') { remaining -= JSON.stringify(item).length; return item; }
+        if (Array.isArray(item)) {
+            remaining -= 16; // Brackets and a reserved truncation marker.
+            const result: unknown[] = [];
+            for (const child of item) {
+                if (result.length >= 100 || nodes >= 1000 || remaining < 32) { result.push('[truncated]'); break; }
+                remaining--; // Comma.
+                result.push(visit(child, depth + 1));
+            }
+            return result;
+        }
+        if (item && typeof item === 'object') {
+            remaining -= 24; // Braces and a reserved _truncated flag.
+            const result: Record<string, unknown> = Object.create(null);
+            for (const [key, child] of Object.entries(item)) {
+                const boundedKey = key.slice(0, 100);
+                const keySize = JSON.stringify(boundedKey).length + 2;
+                if (Object.keys(result).length >= 100 || nodes >= 1000 || remaining < keySize + 32) { result._truncated = true; break; }
+                remaining -= keySize;
+                result[boundedKey] = visit(child, depth + 1);
+            }
+            return result;
+        }
+        remaining -= 4;
+        return null;
+    };
+    const result = visit(value, 0);
+    return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : { _truncated: true };
+}
+export function mapMcpToolResult(result: Record<string, unknown>, toolName: string): ExternalToolResult {
+    const mapped = mapMcpToolContent(result.content, toolName);
+    const structuredContent = boundedStructuredContent(result.structuredContent);
+    return { ...mapped, ...(!mapped.text && structuredContent ? { text: JSON.stringify(structuredContent) } : {}), ...(structuredContent ? { structuredContent } : {}) };
+}

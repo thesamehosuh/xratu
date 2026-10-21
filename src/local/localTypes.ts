@@ -144,6 +144,8 @@ export interface LocalToolDefinition {
 
 /** What one tool execution hands back to the agent loop. */
 export interface LocalToolResult {
+    research?: import('../web/types').ResearchEvidence;
+    structuredContent?: Record<string, unknown>;
     /** Text half of the result - always present, may be empty. */
     output: string;
     isError?: boolean;
@@ -160,7 +162,7 @@ export type LocalAgentEvent =
     | { type: 'chunk'; value: string }
     | { type: 'thinking'; value: string }
     | { type: 'toolCall'; id: string; tool: string; args: Record<string, unknown> }
-    | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean; images?: LocalToolImage[] }
+    | { type: 'toolResult'; id: string; tool: string; output: string; isError?: boolean; images?: LocalToolImage[]; structuredContent?: Record<string, unknown>; research?: import('../web/types').ResearchEvidence }
     /** Incremental output from a still-running tool (terminal commands). */
     | { type: 'toolOutput'; id: string; value: string }
     /**

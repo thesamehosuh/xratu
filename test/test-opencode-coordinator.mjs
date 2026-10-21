@@ -94,6 +94,20 @@ async function harness() {
 }
 try {
     {
+        const test = await harness();
+        try {
+            const done = test.run(); await test.ready(); test.emit('session.execution.started','root');
+            test.child('root','delegate','child'); test.tool('child','lookup','read',{});
+            test.emit('session.tool.success','child',{id:'lookup',structuredContent:{title:'Child structured result',body:'s'.repeat(100_000)},content:[]});
+            test.emit('session.execution.succeeded','child'); test.result('root','delegate','child'); test.emit('session.execution.succeeded','root');
+            await done;
+            const entry = test.observations.at(-1).trace.entries.find(entry=>entry.id==='child:lookup');
+            assert.equal(entry.structuredContent.title,'Child structured result'); assert.equal(entry.structuredContent.body.length,8000);
+            assert.ok(!test.events.some(event=>event.type==='toolResult' && event.id==='child:lookup'),'child structured data stays out of the parent ledger');
+            console.log('ok native child structured-only results survive the bounded observation path');
+        } finally { await test.close(); }
+    }
+    {
         // Replay T3's real 2.0.18 wire recording, not just invented shapes.
         const frames = (await readFile(new URL('./fixtures/opencode2-nested-background.jsonl', import.meta.url), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
         const rootID = frames.find(frame => frame.type === 'session.created').data.sessionID;
@@ -467,7 +481,7 @@ try {
         const test = await harness();
         const signals = new Map();
         // Observe the exact cancellation signals the adapter gives its MCP bridge.
-        test.engine.mcpBridge = { trustedActions: () => [], toolNames: () => new Map(), activate: (id, _plan, signal) => signals.set(id, signal), deactivate: () => {}, dispose: async () => {} };
+        test.engine.mcpBridge = { hasResearch: () => false, takeResearch: () => undefined, trustedActions: () => [], toolNames: () => new Map(), activate: (id, _plan, signal) => signals.set(id, signal), deactivate: () => {}, dispose: async () => {} };
         try {
             const done = test.run(); await test.ready(); test.emit('session.execution.started', 'root');
             test.child('root', 'parent-call', 'child'); test.child('child', 'nested-call', 'grandchild', true);

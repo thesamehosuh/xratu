@@ -111,7 +111,7 @@ async function harness(mode = 'complete', mcpSource) {
                     for (const type of ['started', 'ended', 'failed']) emit(`session.compaction.${type}`, { sessionID: 'native-1', error: { message: 'Summary unavailable' } });
                     emit('session.tool.input.started', { sessionID: 'native-1', id: 'read-1', name: 'read' });
                     emit('session.tool.called', { sessionID: 'native-1', id: 'read-1', input: { filePath: 'C:\\project\\file.ts' } });
-                    emit('session.tool.success', { sessionID: 'native-1', id: 'read-1', content: [{ type: 'text', text: 'File read' }, { type: 'file', mime: 'image/png', uri: 'data:image/png;base64,aW1hZ2U=' }, { type: 'file', mime: 'image/png', uri: 'http://127.0.0.1/private' }] });
+                    emit('session.tool.success', { sessionID: 'native-1', id: 'read-1', structuredContent: { text: 's'.repeat(100_000) }, content: [{ type: 'text', text: 'File read' }, { type: 'file', mime: 'image/png', uri: 'data:image/png;base64,aW1hZ2U=' }, { type: 'file', mime: 'image/png', uri: 'http://127.0.0.1/private' }] });
                     finish();
                     return;
                 }
@@ -334,7 +334,7 @@ try {
     let currentTools = mcpTools;
     const mcpSource = { listTools: async () => currentTools, callTool: async (name, args, signal) => {
         mcpCalls.push({ name, args, signal });
-        return { text: 'Documentation', images: [{ mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }] };
+        return { text: 'Documentation', images: [{ mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }], structuredContent: { title: 'Documentation' }, research: { version:1,provider:'direct',outcome:'success',freshness:'live',sources:[],warnings:[],document:{handle:'a'.repeat(24),start:0,end:100,total:500} } };
     } };
     const bridge = new OpenCodeMcpBridge(mcpSource);
     const mcpClient = new Client({ name: 'native-test', version: '1.0.0' });
@@ -355,6 +355,8 @@ try {
         bridge.activate('native-1', false, controller.signal);
         const result = await call();
         assert.deepEqual(result.content, [{ type: 'text', text: 'Documentation' }, { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }]);
+        assert.deepEqual(result.structuredContent, { title: 'Documentation' });
+        assert.deepEqual(bridge.takeResearch('native-1','Documentation').document,{handle:'a'.repeat(24),start:0,end:100,total:500});
         assert.equal(mcpCalls[0].signal, controller.signal, 'native cancellation reaches the real MCP request');
         controller.abort();
         assert.equal((await call()).isError, true, 'cancelled turns cannot invoke tools');
@@ -433,6 +435,7 @@ try {
         for await (const event of nativeEvents.engine.runTurn({ ...baseTurn, signal: AbortSignal.timeout(5000) }, host)) events.push(event);
         assert.equal(events.find(event => event.type === 'toolCall').args.path, 'C:\\project\\file.ts');
         const output = events.find(event => event.type === 'toolResult');
+        assert.equal(output.structuredContent.text.length,8000,'native structured content is bounded and forwarded');
         assert.equal(output.output, 'File read');
         assert.equal(output.images[0].dataBase64, 'aW1hZ2U=');
         assert.equal(output.images.length, 1, 'native file/HTTP URIs are never fetched');
@@ -551,7 +554,7 @@ try {
         sharedExecutorModule = require('../out/mcp.js');
     } finally { Module._load = moduleLoad; }
     const skillModule = require('../out/skills.js');
-    const sandbox = { OutsideWorkspacePathError: require('../out/paths.js').OutsideWorkspacePathError, isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, sessionApprovalKind: require('../out/sessionApproval.js').sessionApprovalKind, sanitizePath: require('../out/paths.js').sanitizePath, resolveEditMode: require('../out/tooling/editFileArgs.js').resolveEditMode, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', vscode: { workspace: { workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { OutsideWorkspacePathError: require('../out/paths.js').OutsideWorkspacePathError, isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, sessionApprovalKind: require('../out/sessionApproval.js').sessionApprovalKind, sanitizePath: require('../out/paths.js').sanitizePath, resolveEditMode: require('../out/tooling/editFileArgs.js').resolveEditMode, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', researchSession: () => {}, vscode: { workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }), workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeDefinitionsMethod = sandbox.Host.prototype._nativeServiceDefinitions;
     const nativeExecutorMethod = sandbox.Host.prototype._nativeServiceExecutor;

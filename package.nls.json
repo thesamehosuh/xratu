@@ -3,9 +3,6 @@
 	"ext.description": "AI coding assistant for VS Code. Bring your own key or use a local runtime.",
 	"config.title": "Xratu",
 	"config.mcpServers.desc": "Legacy fallback for **MCP servers** - configure them in the Xratu panel's dedicated **MCP page** instead (files: global `mcp.json` / workspace `.xratu/mcp.json`). This setting is only read when both files are empty.\n\nTheir tools are exposed to the agent as `mcp__<server>__<tool>` and require your approval unless auto-approved on the MCP page.",
-	"config.webSearchProvider.desc": "Web-search provider for local mode's web_search tool. Auto uses SearXNG when a search URL is set, otherwise Brave.",
-	"config.webSearchUrl.desc": "SearXNG instance base URL (e.g. http://localhost:8888) used by local mode's web_search tool",
-	"config.webSearchApiKey.desc": "Brave Search API key used by local mode's web_search tool",
 	"config.proxyUrl.desc": "HTTP/HTTPS proxy URL for model and web requests, e.g. http://127.0.0.1:7890. Overrides VS Code's http.proxy setting and the HTTPS_PROXY/HTTP_PROXY environment variables. SOCKS proxies are not supported yet.",
 	"config.proxyMode.desc": "How outbound requests pick a proxy. **auto** (default): xratu.proxyUrl if set, else VS Code's http.proxy, else the environment, else the OS system proxy (what Clash/v2rayN set in \"System Proxy\" mode). **custom**: only xratu.proxyUrl. **off**: never proxy",
 	"config.noProxy.desc": "Comma-separated hosts that bypass the proxy (e.g. localhost,127.0.0.1,.internal). Overrides VS Code's http.noProxy setting and the NO_PROXY environment variable. Supports * and host:port entries; CIDR ranges are not supported.",
@@ -29,5 +26,6 @@
 	"command.attachFromExplorer.title": "Attach to Xratu Chat",
 	"view.container.title": "Xratu",
 	"view.chat.name": "Xratu Chat",
-	"config.browserExecutablePath.desc": "Absolute path to a Chromium browser executable. Leave empty to use installed Chrome or Edge. The browser runs in an isolated profile on the extension host."
+	"config.browserExecutablePath.desc": "Absolute path to a Chromium browser executable. Leave empty to use installed Chrome or Edge. The browser runs in an isolated profile on the extension host.",
+	"config.webSearchUseProxy.desc": "Route built-in web search through the configured proxy. Turn off to search directly."
 }

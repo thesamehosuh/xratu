@@ -19,7 +19,7 @@ export function agentMessage(run: AgentRun): ChatMessage {
         id: `${run.id}:${entry.id}`, kind: entry.kind === 'tool' ? 'toolCall' : entry.kind,
         tool: entry.tool, text: entry.text, html: entry.html, startedAt: entry.startedAt, endedAt: entry.endedAt,
         callId: entry.kind === 'tool' ? `${run.id}:${entry.id}` : undefined, result: entry.output,
-        live: entry.live, isError: entry.isError,
+        live: entry.live, isError: entry.isError, research: entry.research, structuredContent: entry.structuredContent,
         interrupted: entry.kind === 'tool' && entry.output === undefined && !['queued', 'running', 'waiting'].includes(run.status),
     })) ?? [];
     return { id: run.id, role: 'assistant', text: trace?.entries.filter(entry => entry.kind === 'text').map(entry => entry.text).join('\n\n') ?? '', steps, createdAt: trace?.startedAt ?? run.createdAt,

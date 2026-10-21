@@ -1,10 +1,11 @@
 // Session ownership, child attachment and report settlement adapted from
 // T3 Code's provider-opencode/server/v2/adapter.ts (see third-party notices).
+import { readResearchEvidence } from '../../web/types';
 import type { LocalAgentEvent } from '../../local/localTypes';
 import { SubagentTraceCollector, type SubagentApprovalSource, type SubagentTrace } from '../../subagentObservation';
 import type { NativeEvent } from './events';
 import { nativeToolDisplayArgs } from './services';
-import { mapMcpToolContent } from '../../mcpToolContent';
+import { boundedStructuredContent, mapMcpToolContent } from '../../mcpToolContent';
 
 interface NativeCall { name: string; input: Record<string, unknown> }
 interface Delegation {
@@ -240,7 +241,9 @@ export class NativeSessionCoordinator {
                 const delegation = state.delegations.get(displayID);
                 const metadata = record(data.metadata);
                 const content = mapMcpToolContent(Array.isArray(data.content) ? data.content : []);
-                const isError = event.type.endsWith('failed') || (typeof metadata.exit === 'number' && metadata.exit !== 0);
+                const research = readResearchEvidence(data.xratuResearch);
+                const structuredContent = boundedStructuredContent(data.structuredContent);
+                const isError = !!research && !['success', 'empty'].includes(research.outcome) || event.type.endsWith('failed') || (typeof metadata.exit === 'number' && metadata.exit !== 0);
                 if (delegation) {
                     if (typeof metadata.sessionID === 'string') this.attach(delegation, metadata.sessionID);
                     // Launch success for a background call is not completion.
@@ -250,7 +253,7 @@ export class NativeSessionCoordinator {
                         if (typeof call?.input.sessionID === 'string') this.release(call.input.sessionID, sessionID, id);
                     }
                 }
-                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError });
+                if (child) this.emit(state, { type: 'toolResult', id: displayID, tool: this.displayName(call?.name ?? 'tool'), output: content.text || text(record(data.error).message), isError, ...(research ? { research } : {}), ...(structuredContent ? { structuredContent } : {}) });
                 state.calls.delete(id);
                 break;
             }

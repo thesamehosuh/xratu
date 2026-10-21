@@ -1,3 +1,5 @@
+import { boundedStructuredContent } from '../mcpToolContent';
+import { readResearchEvidence } from '../web/types';
 import { readSubagentTrace } from '../subagentObservation';
 /**
  * Bounds for the RUN-LIFETIME display event ledger (`outcome.events` in
@@ -94,6 +96,8 @@ export function trimDisplayEvent(event: any): any {
         const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
         event = rest;
     }
+    if (event?.structuredContent) event = { ...event, structuredContent: boundedStructuredContent(event.structuredContent) };
+    if (event?.research) event = { ...event, research: readResearchEvidence(event.research) };
     if (event?.type === 'thinking' && typeof event.content === 'string') {
         // Legacy sessions restore thinking from a pending snapshot that was
         // saved before the streaming clip existed - bound it here too.
@@ -196,6 +200,8 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
         if (e?.type === 'tool_result') {
             if (typeof e.output === 'string') total += e.output.length;
             total += imageBytes(e);
+            if (e.structuredContent) total += JSON.stringify(boundedStructuredContent(e.structuredContent))?.length ?? 0;
+            if (e.research) total += (JSON.stringify(readResearchEvidence(e.research))?.length ?? 0);
         }
     }
     if (total > budget) {
@@ -223,6 +229,31 @@ export function boundOutcomeEvents(events: any[], budget = EVENT_OUTPUT_BUDGET):
         }
     }
 
+    if (total > budget) {
+        for (let i = 0; i < events.length && total > budget; i++) {
+            const event = events[i];
+            if (event?.type !== 'tool_result' || !event.structuredContent) continue;
+            total -= JSON.stringify(boundedStructuredContent(event.structuredContent))?.length ?? 0;
+            const { structuredContent: _structuredContent, ...rest } = event;
+            events[i] = rest;
+            changed = true;
+        }
+    }
+    if (total > budget) {
+        for (let i = 0; i < events.length && total > budget; i++) {
+            const event = events[i];
+            if (event?.type !== 'tool_result') continue;
+            const research = readResearchEvidence(event?.research);
+            if (!research) continue;
+            const before = JSON.stringify(research).length;
+            const trimmed = { ...research, sources: research.sources.map(source => ({ ...source, excerpts: [] })), warnings: [] };
+            const reclaimed = before - JSON.stringify(trimmed).length;
+            if (reclaimed <= 0) continue;
+            events[i] = { ...event, research: trimmed };
+            total -= reclaimed;
+            changed = true;
+        }
+    }
     // 3. Every output now fits the display size but the AGGREGATE still
     // exceeds the budget: collapse the oldest payloads to the marker.
     if (total > budget) {

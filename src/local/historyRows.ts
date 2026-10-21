@@ -1,3 +1,5 @@
+import { boundedStructuredContent } from '../mcpToolContent';
+import { readResearchEvidence } from '../web/types';
 /**
  * Model-ledger row mapping - the SINGLE place a committed agent event becomes
  * a persisted history row, and a row becomes the message the next request
@@ -69,6 +71,8 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
     if (event.type === 'toolResult') {
         return {
             type: 'tool_result',
+            ...(event.research ? { research: readResearchEvidence(event.research) } : {}),
+            ...(event.structuredContent ? { structuredContent: boundedStructuredContent(event.structuredContent) } : {}),
             id: event.id,
             tool: event.tool,
             // Bound the retained copy: a single terminal/expansion result can
