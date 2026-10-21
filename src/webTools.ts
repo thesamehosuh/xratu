@@ -118,7 +118,7 @@ function isForbiddenAddress(ip: string): boolean {
     return false;
 }
 
-async function validatePublicUrl(url: string): Promise<string> {
+export async function validatePublicUrl(url: string, proxyConfigured = isProxyConfigured(url)): Promise<string> {
     let parsed: URL;
     try {
         parsed = new URL(url.trim());
@@ -149,7 +149,7 @@ async function validatePublicUrl(url: string): Promise<string> {
         if (isForbiddenAddress(bare)) {
             throw new Error(`Refusing non-public destination: ${bare}`);
         }
-    } else if (!isProxyConfigured(url)) {
+    } else if (!proxyConfigured) {
         let infos: dns.LookupAddress[];
         try {
             infos = await dns.promises.lookup(host, { all: true });

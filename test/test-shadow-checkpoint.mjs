@@ -39,6 +39,21 @@ try {
     writeFileSync(join(work, 'a.txt'), 'one\n');
     const sha1 = await store.createCheckpoint(work, 'baseline');
     ok('baseline checkpoint returned a sha', /^[0-9a-f]{6,}$/.test(sha1), sha1);
+    // Existing stores receive the partial-file exclusion on upgrade. Large
+    // destinations get an exact literal pattern; glob metacharacters do not
+    // accidentally hide neighboring workspace files.
+    const partial = join(work, '.xratu-download-test.part');
+    const artifact = join(work, 'model [q4].bin');
+    writeFileSync(partial, 'partial bytes');
+    await store.excludeDownload(work, 'model [q4].bin');
+    writeFileSync(artifact, 'downloaded bytes');
+    writeFileSync(join(work, 'model q.bin'), 'ordinary file');
+    const downloadDiff = await store.diffCheckpoint(work, sha1);
+    ok('partials and exact download destination stay out of shadow changes', !downloadDiff.some(file => file.path === '.xratu-download-test.part' || file.path === 'model [q4].bin'));
+    ok('download exclusion does not hide neighboring files', downloadDiff.some(file => file.path === 'model q.bin'));
+    await store.restoreCheckpoint(work, sha1);
+    ok('checkpoint restore preserves partials and excluded artifacts', existsSync(partial) && existsSync(artifact));
+    rmSync(partial); rmSync(artifact);
     const fullSha = await store.resolveCheckpoint(work, sha1);
     ok('resolve returns an existing full commit', /^[a-f0-9]{40}$/.test(fullSha) && fullSha.startsWith(sha1));
     for (const invalid of ['--all', 'HEAD', 'a'.repeat(41), '0000000']) {

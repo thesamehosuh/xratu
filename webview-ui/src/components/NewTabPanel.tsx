@@ -5,7 +5,7 @@ import { PANEL_ICONS, PANEL_LABELS } from './SurfaceTabs';
 
 const hints = {
     conversation: 'surfaceConversationHint', changes: 'surfaceChangesHint', activity: 'surfaceActivityHint',
-    agents: 'surfaceAgentsHint', background: 'surfaceBackgroundHint', browser: 'surfaceBrowserHint', pullRequests: 'surfacePullRequestsHint',
+    agents: 'surfaceAgentsHint', background: 'surfaceBackgroundHint', downloads: 'surfaceDownloadsHint', browser: 'surfaceBrowserHint', pullRequests: 'surfacePullRequestsHint',
 } as const;
 
 /** An unassigned tab is a destination picker, not an empty work surface. */

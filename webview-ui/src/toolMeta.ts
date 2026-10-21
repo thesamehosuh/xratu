@@ -11,6 +11,7 @@ import {
     CodeXml,
     Copy,
     Cpu,
+    Download,
     FilePen,
     FileText,
     FolderOpen,
@@ -31,6 +32,7 @@ import {
 import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
+    { re: /^(start_download|control_download|list_downloads)$/, icon: Download },
     { re: /^(link|unlink|watch|unwatch|get)_pull_request$|^list_thread_pull_requests$/, icon: GitPullRequest },
     { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
@@ -73,6 +75,9 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
 /** Persian labels for the builtin tool pills - shown RTL like the thinking
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
+    { re: /^start_download$/, key: 'toolStartDownload' },
+    { re: /^control_download$/, key: 'toolControlDownload' },
+    { re: /^list_downloads$/, key: 'toolListDownloads' },
     { re: /^link_pull_request$/, key: 'prLink' },
     { re: /^unlink_pull_request$/, key: 'prUnlink' },
     { re: /^watch_pull_request$/, key: 'prWatch' },

@@ -282,6 +282,7 @@ function startupHarness(credentials = []) {
     t.host._localSessionStore.findCurrent = async () => null;
     t.host._restoreChatUI = () => { t.events.push('restoreUI'); };
     t.host._pushSessionState = t.host._pushEditorContext = t.host._pushTaskListState = t.host._resetLiveSegments = t.host._startConnectionPolling = t.host._sendTranscriptPrefs = t.host._sendRuntimePreferences = () => {};
+    t.host._sendDownloads = () => {};
     t.host._resolveReplyLanguage = () => 'en';
     t.host._fetchModels = async () => false;
     t.host._secrets = { store: async () => {} };

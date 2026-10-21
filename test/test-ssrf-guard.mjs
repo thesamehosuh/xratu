@@ -68,7 +68,7 @@ proxyFetchModule.proxyFetch = async () => {
 };
 const outboundCalls = () => fetchCalls + proxyFetchCalls;
 
-const { executeWebTool } = require('../out/webTools.js');
+const { executeWebTool, validatePublicUrl } = require('../out/webTools.js');
 const { isProxyConfigured } = require('../out/proxyDispatcher.js');
 
 let failed = 0;
@@ -151,6 +151,22 @@ try {
             pubV6.out.replace(/\s+/g, ' ').slice(0, 70));
     }
     // Cancellation reaches the underlying fetch without changing URL guards.
+    // Downloads select routes per request. Direct must resolve locally even
+    // when the global proxy exists; proxy mode still rejects private literals.
+    const dns = require('node:dns');
+    const lookup = dns.promises.lookup;
+    let lookups = 0;
+    dns.promises.lookup = async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; };
+    try {
+        let refused = false;
+        try { await validatePublicUrl('https://private.example/', false); } catch (error) { refused = /Refusing non-public/.test(error.message); }
+        ok('download direct override validates DNS despite configured proxy', refused && lookups === 1);
+        await validatePublicUrl('https://proxy-resolved.example/', true);
+        ok('download proxy override retains proxy DNS resolution', lookups === 1);
+        refused = false;
+        try { await validatePublicUrl('http://169.254.169.254/', true); } catch { refused = true; }
+        ok('download proxy override still refuses private IP literals', refused);
+    } finally { dns.promises.lookup = lookup; }
     for (const name of ['fetch_url', 'web_search']) {
         const controller = new AbortController();
         let requestSignal;

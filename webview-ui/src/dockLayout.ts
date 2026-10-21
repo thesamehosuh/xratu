@@ -1,5 +1,5 @@
 /** Placement belongs to the work surface; panel contents keep their own state. */
-export const SURFACE_PANELS = ['conversation', 'changes', 'activity', 'agents', 'background', 'browser', 'pullRequests'] as const;
+export const SURFACE_PANELS = ['conversation', 'changes', 'activity', 'agents', 'background', 'downloads', 'browser', 'pullRequests'] as const;
 export type SurfacePanel = typeof SURFACE_PANELS[number];
 export type NewTab = `new-${string}`;
 export type SurfaceTab = SurfacePanel | NewTab;
@@ -11,7 +11,7 @@ export function isSurfaceTab(value: unknown): value is SurfaceTab {
 }
 export type DockLocation = 'main' | 'side';
 export interface DockLayout {
-    version: 3;
+    version: 4;
     main: SurfaceTab[];
     side: SurfaceTab[];
     mainActive: SurfaceTab | null;
@@ -19,25 +19,26 @@ export interface DockLayout {
 }
 
 export function defaultDockLayout(): DockLayout {
-    return { version: 3, main: ['conversation', 'activity', 'agents', 'background', 'pullRequests'], side: ['changes', 'browser'], mainActive: 'conversation', sideActive: 'changes' };
+    return { version: 4, main: ['conversation', 'activity', 'agents', 'background', 'downloads', 'pullRequests'], side: ['changes', 'browser'], mainActive: 'conversation', sideActive: 'changes' };
 }
 
 export function readDockLayout(value: unknown): DockLayout {
     if (!value || typeof value !== 'object') return defaultDockLayout();
     const candidate = value as Partial<Omit<DockLayout, 'version'>> & { version?: number };
-    if (![1, 2, 3].includes(candidate.version ?? 0) || !Array.isArray(candidate.main) || !Array.isArray(candidate.side)) return defaultDockLayout();
+    if (![1, 2, 3, 4].includes(candidate.version ?? 0) || !Array.isArray(candidate.main) || !Array.isArray(candidate.side)) return defaultDockLayout();
     const all = [...candidate.main, ...candidate.side];
-    // Legacy layouts gain new panels; v3 preserves deliberately closed tabs.
-    if (all.length > 39 || !all.includes('conversation') || new Set(all).size !== all.length || all.some(id => !isSurfaceTab(id)) || (candidate.version !== 3 && !['changes', 'activity'].every(id => all.includes(id as SurfacePanel)))) return defaultDockLayout();
+    // v3+ preserve closed tabs; v4 adds Downloads once on upgrade.
+    if (all.length > 40 || !all.includes('conversation') || new Set(all).size !== all.length || all.some(id => !isSurfaceTab(id)) || ((candidate.version ?? 0) < 3 && !['changes', 'activity'].every(id => all.includes(id as SurfacePanel)))) return defaultDockLayout();
     const main = candidate.main.filter(panel => candidate.version !== 1 || panel !== 'pullRequests');
     const side: SurfaceTab[] = candidate.side.filter(panel => panel !== 'conversation');
     if (!main.includes('conversation')) main.unshift('conversation');
-    if (candidate.version !== 3) {
+    if ((candidate.version ?? 0) < 3) {
         main.push(...SURFACE_PANELS.filter(panel => panel !== 'pullRequests' && !all.includes(panel)));
         if (!all.includes('pullRequests') || (candidate.version === 1 && candidate.main.includes('pullRequests'))) side.push('pullRequests');
     }
+    if (candidate.version === 3 && !all.includes('downloads')) main.push('downloads');
     return {
-        version: 3, main, side,
+        version: 4, main, side,
         mainActive: main.includes(candidate.mainActive!) ? candidate.mainActive! : main[0] ?? null,
         sideActive: side.includes(candidate.sideActive!) ? candidate.sideActive! : side[0] ?? null,
     };
@@ -52,7 +53,7 @@ export function movePanel(layout: DockLayout, panel: SurfaceTab, to: DockLocatio
     const index = before ? destination.indexOf(before) : -1;
     destination.splice(index < 0 ? destination.length : index, 0, panel);
     return {
-        version: 3, main, side,
+        version: 4, main, side,
         mainActive: to === 'main' ? panel : layout.mainActive && main.includes(layout.mainActive) ? layout.mainActive : main[0] ?? null,
         sideActive: to === 'side' ? panel : side.includes(layout.sideActive!) ? layout.sideActive : side[0] ?? null,
     };

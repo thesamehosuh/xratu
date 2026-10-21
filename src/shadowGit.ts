@@ -98,6 +98,7 @@ const SHADOW_EXCLUDES = [
     '__pycache__/',
     '.venv/',
     'venv/',
+    '.xratu-download-*.part',
 ];
 
 
@@ -231,7 +232,6 @@ export class ShadowCheckpointStore {
         const headPath = path.join(dir, 'HEAD');
         const excludePath = path.join(dir, 'info', 'exclude');
         const headExists = fs.existsSync(headPath);
-        const excludeExists = fs.existsSync(excludePath);
         if (!headExists) {
             // BARE layout: the checkpoint dir IS the git dir (GIT_DIR points
             // straight at it).  A plain `git init` would nest everything
@@ -256,13 +256,24 @@ export class ShadowCheckpointStore {
                 throw new Error(`Checkpoint storage init failed: ${seeded.stderr}`);
             }
         }
-        if (!excludeExists) {
-            fs.mkdirSync(path.join(dir, 'info'), { recursive: true });
-            try {
-                fs.writeFileSync(excludePath, SHADOW_EXCLUDES.join('\n') + '\n', 'utf-8');
-            } catch { /* excludes are an optimization, not a requirement */ }
-        }
+        fs.mkdirSync(path.join(dir, 'info'), { recursive: true });
+        const excludes = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf-8') : '';
+        const lines = new Set(excludes.split(/\r?\n/));
+        const missing = SHADOW_EXCLUDES.filter(pattern => !lines.has(pattern));
+        if (missing.length) fs.appendFileSync(excludePath, `${excludes && !excludes.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, 'utf-8');
         this.clearStaleLocks(dir);
+    }
+
+    /** Large downloaded artifacts are data, not checkpoint blobs. Only the
+     *  shadow repo's excludes change; the user's git config/index stay intact. */
+    async excludeDownload(workspaceRoot: string, relativePath: string): Promise<void> {
+        const parts = relativePath.split(/[\\/]/);
+        if (!relativePath || path.isAbsolute(relativePath) || parts.some(part => part === '..') || /[\r\n\0]/.test(relativePath)) throw new Error('Invalid download checkpoint path');
+        await this.ensureRepo(workspaceRoot);
+        const pattern = '/' + parts.join('/').replace(/[\\*?\[\]#! ]/g, '\\$&');
+        const file = path.join(this.repoDir(workspaceRoot), 'info', 'exclude');
+        const current = fs.readFileSync(file, 'utf8');
+        if (!current.split(/\r?\n/).includes(pattern)) fs.appendFileSync(file, pattern + '\n', 'utf8');
     }
 
     /** A killed process (reload mid-snapshot, or a `git commit` terminated by

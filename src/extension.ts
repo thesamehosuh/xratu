@@ -32,6 +32,8 @@ import {
     type JobEvent,
 } from './tooling/backgroundJobs';
 import { BackgroundJobStore } from './tooling/backgroundJobStore';
+import { createDownloadManager } from './downloads/host';
+import type { DownloadManager } from './downloads/manager';
 import {
     buildDevWebviewHtml,
     createRecordedPostMessage,
@@ -357,7 +359,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return createLocalToolExecutor(workspace,
             (root, reason) => this._checkpoints.ensureTurnSnapshot(root, reason),
             undefined, name => resolveSkillForRun(workspace, name, new Set(this._disabledSkillIds())),
-            undefined, undefined, { browser: this._browser, sessionId, signal, plan, approveOutsideWorkspace: (call, paths) => this._approveOutsideWorkspace(call, paths, signal) });
+            undefined, undefined, { browser: this._browser, downloads: this._downloads, sessionId, signal, plan, approveOutsideWorkspace: (call, paths) => this._approveOutsideWorkspace(call, paths, signal) });
     }
     private readonly _pullRequests: PullRequestController;
     private _browserPanelVisible = false;
@@ -1012,6 +1014,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Checkpoint for background jobs, so a window reload does not orphan the
      *  processes the user asked to keep running. */
     private _backgroundJobs: BackgroundJobStore | null = null;
+    private readonly _downloads: DownloadManager;
     /** Identity of the current chat turn. `_handleSteer` captures it BEFORE
      *  its async attachment work and re-checks before queueing: a steer
      *  whose targeted run settled meanwhile (success, cancel or a noRun
@@ -1283,6 +1286,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         setOfflineMode(this._globalState.get<boolean>('xratu.offlineMode') === true);
         this._checkpoints = checkpoints;
         this._storagePath = localStorageUri.fsPath;
+        this._downloads = createDownloadManager(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', localStorageUri.fsPath, {
+            secrets: this._secrets,
+            changed: (downloads, error) => { this._view?.webview.postMessage({ type: 'downloadsState', downloads, error }); },
+            diagnostic: error => diagnosticsChannel?.appendLine(`Downloads: ${String(error)}`),
+            prepareDestination: async (relativePath, bytes) => {
+                if (bytes >= 50 * 1024 * 1024) await this._checkpoints.excludeDownload(this._downloads.workspace, relativePath);
+            },
+        });
         this._engines.register(xratuEngine);
         this._activeEngine = this._globalState.get<string>('xratu.activeEngine') === 'opencode' ? 'opencode' : 'xratu';
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
@@ -4009,8 +4020,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             errorExplanations: this._globalState.get<boolean>('xratu.errorExplanations') !== false });
     }
 
+    _sendDownloads(): void { this._downloads.publish(); }
+    disposeDownloads(): Promise<void> { return this._downloads.dispose(); }
+
     async _setOfflineMode(enabled: boolean): Promise<void> {
         setOfflineMode(enabled);
+        if (enabled) await this._downloads.pauseForOffline().catch(error => diagnosticsChannel?.appendLine(`Downloads offline: ${String(error)}`));
         // Terminate existing remote page connections, including WebSockets.
         if (enabled) this._browser.close();
         if (enabled && this._activeEngine === 'opencode') { this._cancelActiveRequests(); await this._openCodeEngine?.dispose(); }
@@ -4631,7 +4646,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
                     undefined,
-                    { nested: true, browser: this._browser, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, signal, source) },
+                    { nested: true, browser: this._browser, downloads: this._downloads, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, signal, source) },
                 ),
                 approvalGate: localApprovalGate,
                 onObservation: (callId, trace) => {
@@ -4674,7 +4689,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ),
             subagentRunner,
             decisionGate,
-            { browser: this._browser, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, controller.signal) },
+            { browser: this._browser, downloads: this._downloads, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, controller.signal) },
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -7862,6 +7877,7 @@ const BUNDLED_SKILLS: ReadonlyArray<readonly [string, string]> = [
     ['iran-dev-access', path.join('assets', 'skills', 'iran-dev-access', SKILL_FILE)],
     ['local-llm-low-ram', path.join('assets', 'skills', 'local-llm-low-ram', SKILL_FILE)],
     ['iranian-marketplaces', path.join('assets', 'skills', 'iranian-marketplaces', SKILL_FILE)],
+    ['native-downloads', path.join('assets', 'skills', 'native-downloads', SKILL_FILE)],
 ];
 
 /** Seed/update the bundled skills. Per-skill bookkeeping:
@@ -7948,6 +7964,7 @@ export function activate(context: vscode.ExtensionContext) {
     void ensureShiki();
 
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);
+    downloadShutdown = () => provider.disposeDownloads();
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(XratuChatViewProvider.viewType, provider)
@@ -7959,6 +7976,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push({ dispose: () => provider.disposeJobEvents() });
     context.subscriptions.push({ dispose: () => provider.disposeBrowser() });
     context.subscriptions.push({ dispose: () => provider.disposePullRequests() });
+    context.subscriptions.push({ dispose: () => { void provider.disposeDownloads().catch(error => diagnosticsChannel?.appendLine(`Downloads shutdown: ${String(error)}`)); } });
 
     // Adopt background jobs a previous host window left running. A reload must
     // not turn the user's dev server into an unstoppable orphan - but nothing is
@@ -8095,7 +8113,9 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
-export function deactivate() {
+let downloadShutdown: (() => Promise<void>) | undefined;
+
+export async function deactivate() {
     // Background jobs are the user's own processes (a dev server, a watcher)
     // that they explicitly asked to keep running. They are checkpointed, NOT
     // killed: killing them on a window reload would take down the thing the
@@ -8107,4 +8127,6 @@ export function deactivate() {
     externalMcpInstance = null;
     mcpConfigStoreInstance = null;
     mcpMarketplaceInstance = null;
+    await downloadShutdown?.();
+    downloadShutdown = undefined;
 }
