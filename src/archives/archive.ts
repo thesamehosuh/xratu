@@ -161,11 +161,12 @@ interface Refusal { opened: Stats; located: string }
  * has no descriptor-relative (openat) creation, so where the kernel exposes a
  * handle query we compare the descriptor's own path against the target - one
  * atomic answer, unimpeachable by that swap-back. Everywhere else the fallback
- * still refuses the persistent swap before a byte is written; what it cannot
- * rule out is an ACTIVE same-user racer - a process that could itself write
- * outside the workspace without our help - which is the documented residual in
- * docs/downloads.md. Returns where the descriptor points so the caller can
- * drop what was created.
+ * IS those two sequenced pathname checks: it refuses the persistent swap before
+ * a byte is written, but an ACTIVE same-user racer that swaps the parent out
+ * for the create and back between them passes both, and the entry is then
+ * written through the descriptor pointing outside. That sequence is EXCLUDED
+ * by the threat model in docs/downloads.md, not prevented. Returns where the
+ * descriptor points so the caller can drop what was created.
  */
 async function misplaced(handle: fs.FileHandle, target: string, destination: Destination): Promise<Refusal | undefined> {
     const located = await descriptorPath(handle);
@@ -182,10 +183,13 @@ async function misplaced(handle: fs.FileHandle, target: string, destination: Des
     catch { resolved = false; }
     return resolved && named ? undefined : { opened, located: target };
 }
-/** Remove what we created - only while that path still names the inode, so a
- *  path retargeted after the refusal can never delete someone else's file.
- *  Cleanup is best effort by design: it may lose a zero-byte file at a raced
- *  path, it can never delete one that was not ours, and it never writes. */
+/** Remove what we created, but only while that path still names the inode we
+ *  created - the identity is read immediately before the unlink, never assumed.
+ *  That narrows the damage, it does not make the pair atomic: under the same
+ *  excluded active race (docs/downloads.md) the path can be retargeted between
+ *  the two calls and the unlink lands on whatever now occupies it. Cleanup
+ *  never writes, may lose the refused zero-byte file, and without a
+ *  descriptor-reported path may not find it at all. */
 async function discardCreated(refusal: Refusal): Promise<void> {
     if (!refusal.opened.ino) return;
     try {

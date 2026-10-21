@@ -144,17 +144,23 @@ ZIPs and unsupported formats/types fail explicitly. Only ordinary executable
 bits are retained; ownership, timestamps, ACLs and special permission bits are
 not restored. Extraction never executes a downloaded file. The existing
 `sanitizePath` workspace/symlink guard applies to sources and destinations, and
-each created file is additionally checked against the location the kernel
-reports for the descriptor itself (`/proc/self/fd` on Linux) before a single
-byte is written, so a parent swapped for a symlink mid-extraction is refused and
-the empty file it produced is removed. Two sequenced path checks cannot be
-atomic: on Windows, and anywhere the kernel offers no handle query, an ACTIVE
-same-user process racing the create can strand a zero-byte file at the raced
-path - never written content, since the write is refused first. Such a process
-can already write outside the workspace without this tool, so it sits outside
-the containment guarantee; malicious ARCHIVE CONTENT and pre-existing workspace
-symlinks - the threats that guarantee does cover - cannot race anything and are
-refused on every platform.
+each created file is additionally checked before a single byte is written. On
+Linux that check asks the kernel where the descriptor itself lives
+(`/proc/self/fd`), one atomic answer, so a parent swapped for a symlink
+mid-extraction is refused and the empty file it produced is removed. That handle
+query is the only atomic answer there is; Node exposes no descriptor-relative
+creation, and on Windows - and on macOS whenever `/dev/fd` does not resolve -
+extraction falls back to two SEQUENCED pathname checks (identity, then
+containment). An ACTIVE same-user process that swaps the parent out for the
+create and back between those two checks passes both, and the entry is then
+written through the descriptor pointing outside; likewise the cleanup identity
+check is read before the unlink, not bound to it, so it removes whatever now
+occupies that path. These sequences are EXCLUDED behavior, not prevented ones:
+a process with that access can already write or delete outside the workspace
+without this tool, so it stands outside the containment guarantee. Malicious
+ARCHIVE CONTENT and pre-existing workspace symlinks - the threats that guarantee
+does cover - cannot race anything: they are refused on every platform, always
+before any output byte is written.
 
 `npm run test:archives` covers all supported formats, hostile paths encoded
 independently of the host OS, case/Unicode collisions, CRC/SHA failures, partial
