@@ -42,6 +42,7 @@ export interface RouterDeps {
 /** The slice of XratuChatViewProvider the router switches over. */
 export interface WebviewMessageHost {
     _sendDownloads(): void;
+    _downloadAction(sessionId: string, id: string, action: import('./downloads/types').DownloadAction, requestId: string): Promise<void>;
     _sendPullRequests(requestId?: string, refresh?: boolean): Promise<void>;
     _pullRequestAction(action: PullRequestAction, url: unknown, sessionId: string | null, requestId: string, autoResume?: boolean): Promise<void>;
     _stopPullRequestWatches(): Promise<void>;
@@ -570,6 +571,11 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'downloadsGetState':
                     host._sendDownloads();
+                    break;
+                case 'downloadAction':
+                    if (typeof data.sessionId === 'string' && data.sessionId.length <= 256 && typeof data.id === 'string' && data.id.length <= 36 && typeof data.requestId === 'string' && data.requestId.length <= 100 && ['resume', 'restart', 'cancel'].includes(data.action)) {
+                        await host._downloadAction(data.sessionId, data.id, data.action, data.requestId);
+                    }
                     break;
                 case 'pullRequestAction':
                     if (typeof data.requestId === 'string' && data.requestId.length <= 100 && ['link', 'unlink', 'refresh', 'watch', 'unwatch', 'resume', 'dismiss'].includes(data.action)) {

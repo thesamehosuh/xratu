@@ -34,6 +34,7 @@ import {
 import { BackgroundJobStore } from './tooling/backgroundJobStore';
 import { createDownloadManager } from './downloads/host';
 import type { DownloadManager } from './downloads/manager';
+import type { DownloadAction } from './downloads/types';
 import {
     buildDevWebviewHtml,
     createRecordedPostMessage,
@@ -1288,7 +1289,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._storagePath = localStorageUri.fsPath;
         this._downloads = createDownloadManager(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', localStorageUri.fsPath, {
             secrets: this._secrets,
-            changed: (downloads, error) => { this._view?.webview.postMessage({ type: 'downloadsState', downloads, error }); },
+            changed: (_downloads, error) => { this._view?.webview.postMessage({ type: 'downloadsState', sessionId: this._browserSessionId(), downloads: this._downloads.views(this._browserSessionId()), error }); },
             diagnostic: error => diagnosticsChannel?.appendLine(`Downloads: ${String(error)}`),
             prepareDestination: async (relativePath, bytes) => {
                 if (bytes >= 50 * 1024 * 1024) await this._checkpoints.excludeDownload(this._downloads.workspace, relativePath);
@@ -4020,7 +4021,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             errorExplanations: this._globalState.get<boolean>('xratu.errorExplanations') !== false });
     }
 
-    _sendDownloads(): void { this._downloads.publish(); }
+    _sendDownloads(): void { this._downloads.setSession(this._browserSessionId()); }
+    async _downloadAction(sessionId: string, id: string, action: DownloadAction, requestId: string): Promise<void> {
+        if (sessionId !== this._browserSessionId()) return;
+        let errorKey: 'downloadActionFailed' | undefined;
+        try { await this._downloads.userAction(sessionId, id, action); }
+        catch (error) { errorKey = 'downloadActionFailed'; diagnosticsChannel?.appendLine(`Downloads action: ${String(error)}`); }
+        if (sessionId === this._browserSessionId()) {
+            this._sendDownloads();
+            this._view?.webview.postMessage({ type: 'downloadActionResult', sessionId, id, requestId, errorKey });
+        }
+    }
     disposeDownloads(): Promise<void> { return this._downloads.dispose(); }
 
     async _setOfflineMode(enabled: boolean): Promise<void> {
@@ -6398,6 +6409,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             id: this._sessionId,
             title: this._sessionTitle,
         });
+        this._sendDownloads();
         // The checklist + progress chip are per-session: every session
         // switch re-echoes the merged task list for the NEW session.
         this._pushTaskListState();
@@ -6821,6 +6833,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     return;
                 }
                 this._sessionId = meta.id;
+                await this._downloads.bindSession(this._browserSessionId(), meta.id).catch(error => diagnosticsChannel?.appendLine(`Downloads session: ${String(error)}`));
             } catch (e) {
                 console.error('xratu: create local session failed', e);
                 return;

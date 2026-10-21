@@ -5,7 +5,8 @@ import * as path from 'path';
 import { sanitizePath } from '../paths';
 import { abortable } from '../oauth/refreshLock';
 import type { ProxyRouteMode } from '../proxy';
-import type { DownloadError, DownloadRecord, DownloadSecrets, DownloadView } from './types';
+import { downloadActions } from './types';
+import type { DownloadAction, DownloadError, DownloadRecord, DownloadSecrets, DownloadView } from './types';
 import { acquireDownloadOwner } from './ownerLock';
 
 const MAX_RECORDS = 100;
@@ -73,6 +74,8 @@ export class DownloadManager {
     private startupError?: DownloadError;
     private closing?: Promise<void>;
     private releaseOwner?: () => Promise<void>;
+    private sessionId?: string;
+    private readonly sessionAliases = new Map<string, string>();
 
     constructor(readonly workspace: string, storage: string, private readonly deps: DownloadDependencies) {
         this.scope = createHash('sha256').update(path.resolve(workspace)).digest('hex');
@@ -81,12 +84,27 @@ export class DownloadManager {
         void this.ready.catch(error => { this.startupError = 'downloadFileError'; this.deps.diagnostic(error); this.emit(); });
     }
 
-    views(): DownloadView[] {
-        return [...this.records.values()].reverse().map(({ id, path: target, source, route, effectiveRoute, status, received, total, bytesPerSecond, attempts, retryAt, error, httpStatus, createdAt, updatedAt }) =>
+    views(sessionId?: string): DownloadView[] {
+        return [...this.records.values()].filter(r => sessionId === undefined || r.sessionId === this.resolveSession(sessionId)).reverse().map(({ id, path: target, source, route, effectiveRoute, status, received, total, bytesPerSecond, attempts, retryAt, error, httpStatus, createdAt, updatedAt }) =>
             ({ id, path: target, source, route, effectiveRoute, status, received, total, bytesPerSecond, attempts, retryAt, error, httpStatus, createdAt, updatedAt }));
     }
     publish(): void { this.emit(); }
-    private emit(): void { this.lastEmit = Date.now(); this.deps.changed(this.views(), this.startupError); }
+    setSession(sessionId: string): void { this.sessionId = sessionId; this.emit(); }
+    private resolveSession(sessionId: string): string { return this.sessionAliases.get(sessionId) ?? sessionId; }
+    /** Saving a new chat assigns its durable id while in-flight tools retain the live id. */
+    bindSession(liveId: string, savedId: string): Promise<void> {
+        this.sessionAliases.set(liveId, savedId);
+        const work = this.commands.then(async () => {
+            await this.ready;
+            let changed = false;
+            for (const r of this.records.values()) if (r.sessionId === liveId) { r.sessionId = savedId; changed = true; }
+            if (changed) await this.save();
+            this.emit();
+        });
+        this.commands = work.catch(() => undefined);
+        return work;
+    }
+    private emit(): void { this.lastEmit = Date.now(); this.deps.changed(this.views(this.sessionId), this.startupError); }
     private key(id: string): string { return `xratu.download.${this.scope}.${id}`; }
     private target(record: DownloadRecord): string {
         validateRecordPath(record.path);
@@ -120,6 +138,7 @@ export class DownloadManager {
                 || !['auto', 'proxy', 'direct'].includes(r.route) || !integer(r.received) || !(r.total === null || integer(r.total))
                 || !integer(r.maxBytes) || r.maxBytes < 1 || r.maxBytes > MAX_BYTES || r.received > r.maxBytes
                 || !integer(r.attempts) || !integer(r.createdAt) || !integer(r.updatedAt)
+                || (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !r.sessionId || r.sessionId.length > 256))
                 || (r.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(r.sha256))
                 || [r.etag, r.lastModified].some(v => v !== undefined && (typeof v !== 'string' || v.length > 1024 || /[\r\n]/.test(v)))) throw new Error('Invalid download record.');
             validateRecordPath(r.path);
@@ -151,25 +170,41 @@ export class DownloadManager {
         return write;
     }
 
-    async tool(workspace: string, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ output: string; isError?: boolean }> {
+    async tool(workspace: string, name: string, args: Record<string, unknown>, signal?: AbortSignal, sessionId?: string): Promise<{ output: string; isError?: boolean }> {
         const work = this.commands.then(async () => {
             await this.ready;
             signal?.throwIfAborted();
             if (this.closed) throw new Error('Download service is closed.');
             if (!this.workspace || path.resolve(workspace) !== path.resolve(this.workspace)) throw new Error('Downloads require the current workspace.');
             if (name === 'list_downloads') {
-                const downloads = this.views();
+                const downloads = this.views(sessionId);
                 if (args.id !== undefined && !downloads.some(r => r.id === args.id)) throw new Error('Unknown download ID.');
                 return { output: JSON.stringify({ proxyAvailable: !!this.deps.dispatcher('https://example.com', 'proxy'), downloads: args.id ? downloads.filter(r => r.id === args.id) : downloads }) };
             }
             let record: DownloadRecord;
-            if (name === 'start_download') record = await this.start(args, signal);
-            else if (name === 'control_download') record = await this.control(args, signal);
+            if (name === 'start_download') record = await this.start(args, signal, sessionId);
+            else if (name === 'control_download') {
+                if (sessionId !== undefined && !this.views(sessionId).some(r => r.id === args.id)) throw new Error('Unknown download ID.');
+                record = await this.control(args, signal);
+            }
             else throw new Error('Unknown download tool.');
             return { output: JSON.stringify(this.views().find(r => r.id === record.id)) };
         });
         this.commands = work.catch(() => undefined);
         return work.catch(error => ({ output: `Error: ${error instanceof Error ? error.message : 'Download command failed.'}`, isError: true }));
+    }
+
+    /** Explicit user controls reuse the transfer's path, URL and offline guards. */
+    userAction(sessionId: string, id: string, action: DownloadAction): Promise<void> {
+        const work = this.commands.then(async () => {
+            await this.ready;
+            if (this.closed || sessionId !== this.sessionId) throw new Error('Stale download session.');
+            const r = this.records.get(id);
+            if (!r || r.sessionId !== this.resolveSession(sessionId) || !downloadActions(r.status).includes(action)) throw new Error('Unavailable download action.');
+            await this.control({ id, action });
+        });
+        this.commands = work.catch(() => undefined);
+        return work;
     }
 
     private async checkUrl(value: unknown, route: ProxyRouteMode, signal?: AbortSignal): Promise<string> {
@@ -190,7 +225,7 @@ export class DownloadManager {
             throw new DownloadFailure('downloadUnsafeUrl');
         }
     }
-    private async start(args: Record<string, unknown>, signal?: AbortSignal): Promise<DownloadRecord> {
+    private async start(args: Record<string, unknown>, signal?: AbortSignal, sessionId?: string): Promise<DownloadRecord> {
         if ([...this.records.values()].filter(r => !settled.has(r.status)).length >= MAX_PENDING) throw new Error('At most 20 unfinished downloads are allowed. Cancel an old download first.');
         const route = routeArg(args.route);
         const url = await this.checkUrl(args.url, route, signal);
@@ -216,7 +251,7 @@ export class DownloadManager {
         await fs.mkdir(path.dirname(target), { recursive: true });
         this.assertAbsent(target);
         const now = Date.now();
-        const record: DownloadRecord = { id: randomUUID(), path: relative, source: new URL(url).origin, route, status: 'queued', received: 0, total: null, bytesPerSecond: 0, attempts: 0, maxBytes, sha256, createdAt: now, updatedAt: now };
+        const record: DownloadRecord = { id: randomUUID(), sessionId: sessionId === undefined ? undefined : this.resolveSession(sessionId), path: relative, source: new URL(url).origin, route, status: 'queued', received: 0, total: null, bytesPerSecond: 0, attempts: 0, maxBytes, sha256, createdAt: now, updatedAt: now };
         const partial = this.partial(record);
         const file = await fs.open(partial, 'wx', 0o600);
         await file.close();

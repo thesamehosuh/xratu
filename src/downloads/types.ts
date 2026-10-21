@@ -2,6 +2,14 @@ import type { ProxyRouteMode } from '../proxy';
 
 export type DownloadStatus = 'queued' | 'downloading' | 'retrying' | 'verifying' | 'paused' | 'interrupted' | 'completed' | 'failed' | 'cancelled';
 export type DownloadError = 'downloadNetworkError' | 'downloadHttpError' | 'downloadUnsafeUrl' | 'downloadFileError' | 'downloadChanged' | 'downloadChecksumError' | 'downloadTooLarge' | 'downloadOffline' | 'downloadProxyMissing';
+export type DownloadAction = 'resume' | 'restart' | 'cancel';
+
+export function downloadActions(status: DownloadStatus): DownloadAction[] {
+    if (status === 'completed' || status === 'cancelled') return [];
+    if (status === 'failed') return ['restart'];
+    if (status === 'paused' || status === 'interrupted' || status === 'retrying') return ['resume', 'cancel'];
+    return ['cancel'];
+}
 
 /** Safe to send to the webview and the model. Source URLs live in SecretStorage. */
 export interface DownloadView {
@@ -23,6 +31,7 @@ export interface DownloadView {
 }
 
 export interface DownloadRecord extends DownloadView {
+    sessionId?: string;
     maxBytes: number;
     sha256?: string;
     etag?: string;

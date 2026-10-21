@@ -157,7 +157,7 @@ test('the host preserves its browser through persistence and rejects a replaced 
     const fake = fakeBrowser(), messages = [];
     host._browser = new BrowserController({ emit: message => messages.push(message), executablePath: () => '', launch: async () => fake.browser });
     host._view = { webview: { postMessage: message => messages.push(message) } };
-    host._pushTaskListState = host._postSessionCost = () => {};
+    host._pushTaskListState = host._postSessionCost = host._sendDownloads = () => {};
     host._sessionId = host._ephemeralSessionId = host._sessionTitle = null;
     try {
         host._sendBrowserState();
