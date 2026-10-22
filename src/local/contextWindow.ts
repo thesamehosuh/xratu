@@ -46,7 +46,7 @@ export function estimateMessageTokens(message: LocalAgentMessage): number {
     const reasoning = message.reasoningContent ?? '';
     // ~3 chars/token. This errs HIGH (over-budget) - the safe direction, so
     // the model sees slightly more usage than reality and never overruns.
-    return Math.ceil((content.length + calls.length + provider.length + reasoning.length) / 3)
+    return Math.ceil((content.length + calls.length + provider.length + reasoning.length + (message.contextNote?.length ?? 0)) / 3)
         + imageTokens;
 }
 

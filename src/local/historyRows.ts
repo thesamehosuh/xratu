@@ -66,6 +66,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
             // `trimDisplayEvent` strips them before they reach the UI.
             ...(event.providerBlocks?.length ? { providerBlocks: event.providerBlocks } : {}),
             ...(event.reasoningContent ? { reasoningContent: event.reasoningContent } : {}),
+            ...(event.contextNote ? { contextNote: event.contextNote } : {}),
         };
     }
     if (event.type === 'toolResult') {
@@ -136,6 +137,7 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
             ...(event.tool_calls?.length ? { tool_calls: event.tool_calls } : {}),
             ...(event.providerBlocks ? { providerBlocks: event.providerBlocks } : {}),
             ...(event.reasoningContent ? { reasoningContent: event.reasoningContent } : {}),
+            ...(event.contextNote ? { contextNote: event.contextNote } : {}),
         };
     }
     if (event.type === 'tool_result') {
@@ -213,6 +215,7 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
             ...(row.isError != null ? { isError: row.isError } : {}),
             ...(row.providerBlocks ? { providerBlocks: row.providerBlocks } : {}),
             ...(row.reasoningContent ? { reasoningContent: row.reasoningContent } : {}),
+            ...(row.role === 'assistant' && typeof row.contextNote === 'string' && row.contextNote ? { contextNote: row.contextNote } : {}),
         });
     }
     return out;

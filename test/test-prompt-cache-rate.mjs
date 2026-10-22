@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Prompt-cache rate (prefix reuse) suite.
+ * Rendered-prefix stability suite. The historical script name is retained;
+ * these local similarities are NOT server-reported cache-hit rates. Provider
+ * cache lookup/write boundaries are tested in test-prompt-cache-boundaries.mjs.
  *
  * Providers cache the longest byte-identical PREFIX of the serialized request
  * (tools + system + messages, in the provider's own order). This suite drives
@@ -196,8 +198,11 @@ const TURNS = 4;
 /** Rounds per turn in the script: tool, tool, final text. */
 const ROUNDS_PER_TURN = 3;
 
-const json = (value) => JSON.stringify(value ?? null);
-/** Serialized request in the provider's cache-matching order. */
+// Cache markers are request metadata, not rendered prompt tokens. Moving a
+// marker must not look like changed conversation text in this stability test.
+const json = (value) => JSON.stringify(value ?? null, (key, v) =>
+    key === 'cache_control' || key === 'prompt_cache_breakpoint' ? undefined : v);
+/** Approximate rendered request order, not a provider cache implementation. */
 function serializedSegments(body, style) {
     if (style === 'chat') return [json(body.tools), ...(body.messages ?? []).map(json)];
     if (style === 'messages') return [json(body.tools), json(body.system), ...(body.messages ?? []).map(json)];
@@ -235,7 +240,7 @@ function legacyRow(row) {
  * asserts the live path is stable AND that the legacy path measurably is not,
  * so the test cannot silently stop testing.
  */
-async function runScenario(style, { reasoning = false, legacyReplay = false } = {}) {
+async function runScenario(style, { reasoning = false, legacyReplay = false, dropContextNotes = false, modernResponses = false } = {}) {
     const requests = [];
     const originalFetch = globalThis.fetch;
     let turn = 0;
@@ -262,9 +267,9 @@ async function runScenario(style, { reasoning = false, legacyReplay = false } = 
         for (turn = 0; turn < TURNS; turn++) {
             round = 0;
             const request = {
-                baseUrl: 'https://example.invalid/v1',
+                baseUrl: modernResponses ? 'https://api.openai.com/v1' : 'https://example.invalid/v1',
                 apiKey: 'k',
-                model: 'test-model',
+                model: modernResponses ? 'gpt-6.1-sol' : 'test-model',
                 systemPrompt: 'You are Xratu, a coding agent. '.repeat(20),
                 userText: `turn ${turn}: please do the thing`,
                 history: buildReplayHistory(ledger),
@@ -290,6 +295,7 @@ async function runScenario(style, { reasoning = false, legacyReplay = false } = 
                 if (!persisted) continue;
                 const row = historyRowFromEvent(persisted);
                 if (!row) continue;
+                if (dropContextNotes) delete row.contextNote;
                 ledger.push(legacyReplay ? legacyRow(row) : row);
             }
         }
@@ -316,8 +322,9 @@ async function runScenario(style, { reasoning = false, legacyReplay = false } = 
     }
     const minCover = Math.min(...rows.slice(1).map((row) => row.cover));
     // Internal-only carriers must never reach ANY provider wire.
-    const leaked = requests.some((body) => JSON.stringify(body).includes('"isError"') || JSON.stringify(body).includes('"providerBlocks"'));
-    return { requests: requests.length, rate: total ? cached / total : 0, minCover, rows, leaked };
+    const leaked = requests.some((body) => ['"isError"', '"providerBlocks"', '"contextNote"'].some(key => JSON.stringify(body).includes(key)));
+    return { requests: requests.length, rate: total ? cached / total : 0, minCover, rows, leaked,
+        userTurns: ledger.filter(row => row.role === 'user').length };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,20 +335,34 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
         const mode = reasoning ? 'thinking' : 'plain';
         const result = await runScenario(style, { reasoning });
         const label = `${style}/${mode}`;
-        ok(`${label}: every request after the first reuses >=75% of the previous prefix`,
-            result.minCover >= 0.75,
+        ok(`${label}: every request retains the complete previous prompt, including status notes`,
+            result.minCover >= 0.999,
             `minCover=${(result.minCover * 100).toFixed(1)}%`);
-        ok(`${label}: aggregate cache-hit rate >= 80%`,
+        ok(`${label}: aggregate matching-prefix fraction >= 80%`,
             result.rate >= 0.80,
             `rate=${(result.rate * 100).toFixed(1)}%`);
         ok(`${label}: internal carriers never reach the wire`,
             !result.leaked);
+        ok(`${label}: retained notes do not add logical user turns`, result.userTurns === TURNS);
     }
+}
+
+{
+    const modern = await runScenario('responses', { reasoning: true, modernResponses: true });
+    ok('modern OpenAI Responses retains the complete prefix across turn boundaries', modern.minCover >= 0.999);
 }
 
 // ---------------------------------------------------------------------------
 // PROOF: the lossy replay this suite guards against measurably fails.
 // ---------------------------------------------------------------------------
+for (const style of ['chat', 'messages', 'responses', 'google']) {
+    const omitted = await runScenario(style, { reasoning: true, dropContextNotes: true });
+    const retained = await runScenario(style, { reasoning: true });
+    ok(`${style}: forgetting only the sent status notes breaks the previous prompt prefix`,
+        omitted.minCover < retained.minCover && retained.minCover >= 0.999,
+        `omitted=${(omitted.minCover * 100).toFixed(1)}% retained=${(retained.minCover * 100).toFixed(1)}%`);
+}
+
 for (const style of ['chat', 'messages', 'responses', 'google']) {
     for (const reasoning of [false, true]) {
         const mode = reasoning ? 'thinking' : 'plain';
@@ -413,6 +434,7 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
                 content: 'a',
                 tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
                 providerBlocks: [{ type: 'thinking', thinking: 't', signature: 'sig-1' }],
+                contextNote: 'Original status before this response',
                 reasoningContent: 'reasoned',
             },
             { role: 'tool', tool_call_id: 'c1', content: 'out', isError: false },
@@ -425,7 +447,27 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
     ok('snapshot reload keeps providerBlocks verbatim',
         Array.isArray(assistant.providerBlocks) && assistant.providerBlocks[0].signature === 'sig-1');
     ok('snapshot reload keeps reasoningContent', assistant.reasoningContent === 'reasoned');
+    ok('snapshot reload keeps the exact sent status note', assistant.contextNote === 'Original status before this response');
+    ok('replayed model history retains the sent status note',
+        buildReplayHistory(reloaded.localHistory).find(row => row.role === 'assistant').contextNote === assistant.contextNote);
     ok('snapshot reload keeps the tool isError flag', tool.isError === false);
+
+    const pending = await store.create('/ws-pending');
+    await store.save(pending.id, {
+        model: 'm', summary: null, localHistory: [], uiHistory: [],
+        pendingTurn: { prompt: 'work', text: '', thinking: '', events: [{
+            type: 'assistant_message', content: '', tool_calls: [], contextNote: 'Status before interruption',
+        }] },
+    });
+    const recovered = await store.load(pending.id);
+    ok('a crash snapshot preserves the sent note for interrupted-turn replay',
+        historyRowFromEvent(recovered.pendingTurn.events[0]).contextNote === 'Status before interruption');
+    const { trimDisplayEvent } = require('../out/local/eventBounds.js');
+    ok('status-note carriers never enter the display transcript',
+        !('contextNote' in trimDisplayEvent(recovered.pendingTurn.events[0])));
+    const { estimateMessageTokens } = require('../out/local/contextWindow.js');
+    ok('context occupancy accounts for retained status notes',
+        estimateMessageTokens({ role: 'assistant', content: '', contextNote: 'x'.repeat(300) }) >= 100);
 
     const oversized = await store.create('/ws-large');
     await store.save(oversized.id, {
@@ -525,6 +567,10 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
     ok('under budget, the same array is returned (no hot-path churn)',
         boundCarriers(under) === under && under.every((row) => row.providerBlocks));
     ok('the budget is the shared CARRIER_BUDGET', CARRIER_BUDGET === 2_000_000);
+    const badNote = boundCarriers([{ role: 'assistant', content: 'a', reasoningContent: 'valid',
+        contextNote: 'x'.repeat(3_000_000) }]);
+    ok('an oversized note cannot bypass carrier bounds beside valid reasoning',
+        !badNote[0].contextNote && badNote[0].content === 'a');
 }
 
 console.log(failed === 0 ? '\nall prompt-cache-rate checks passed' : `\n${failed} check(s) failed`);

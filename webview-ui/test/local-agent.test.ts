@@ -690,15 +690,16 @@ async function testSystemPromptStaysStableAcrossRounds() {
             'system prompt must not change between rounds',
         );
         assert.ok(!requests[0].messages[0].content.includes('[Context status:'));
-        // The volatile note trails each request exactly once, and is NOT stored
-        // in the history (round 2 must not carry round 1's note mid-array).
-        for (const body of requests) {
+        // Each completed response retains the note that preceded it. The next
+        // request preserves that entire prefix and appends one current note.
+        for (const [index, body] of requests.entries()) {
             const msgs = body.messages;
             const notes = msgs.filter((m: any) => String(m.content).includes('[Context status:'));
-            assert.equal(notes.length, 1, 'exactly one trailing note per request');
+            assert.equal(notes.length, index + 1, 'past notes are retained, with one new trailing note');
             assert.ok(String(msgs[msgs.length - 1].content).includes('[Context status:'), 'note rides the last message');
         }
-        assert.ok(!JSON.stringify(requests[1].messages.slice(1, -1)).includes('[Context status:'), 'note must not be stored in history');
+        assert.deepEqual(requests[1].messages.slice(0, requests[0].messages.length), requests[0].messages,
+            'the complete previous prompt, including its status note, remains a prefix');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -1351,15 +1352,16 @@ async function testMessagesApiToolUse() {
         const blockTypes = assistantTurn.content.map((b: any) => b.type);
         assert.ok(blockTypes.indexOf('thinking') < blockTypes.indexOf('tool_use'), 'thinking must precede tool_use');
 
-        // History caching: the last STORED block carries a breakpoint so the
-        // growing conversation is cached incrementally; the volatile note
-        // appended after it is NOT cached.
+        // Cache through the status note: the following response retains it so
+        // the next request can reuse the complete previous prompt.
         const lastTurn = secondInput[secondInput.length - 1];
         const lastBlock = lastTurn.content[lastTurn.content.length - 1];
         assert.ok(String(lastBlock.text).includes('[Context status:'), 'note is the last block');
-        assert.equal(lastBlock.cache_control, undefined, 'volatile note must not be cached');
+        assert.equal(lastBlock.cache_control.type, 'ephemeral', 'the retained note is a cache breakpoint');
         const storedBlock = lastTurn.content[lastTurn.content.length - 2];
-        assert.equal(storedBlock.cache_control.type, 'ephemeral', 'history end is a cache breakpoint');
+        assert.equal(storedBlock.type, 'tool_result', 'tool results remain before the status note');
+        assert.equal(secondInput[0].content.at(-1).text, calls[0].body.messages[0].content.at(-1).text,
+            'the previously sent note is replayed exactly');
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -2262,7 +2264,8 @@ async function testWrapupPreservesMessagesCacheBreakpoints() {
         const lastTurn = wrap.messages[wrap.messages.length - 1];
         const note = lastTurn.content[lastTurn.content.length - 1];
         assert.ok(String(note.text).includes('ROUND LIMIT REACHED'), 'nudge rides the tail note');
-        assert.equal(note.cache_control, undefined, 'nudge is never cached');
+        assert.equal(note.cache_control.type, 'ephemeral', 'the scoped nudge is retained and cacheable');
+        assert.ok(String(note.text).includes('later user turn receives a fresh'), 'the historical nudge cannot govern later turns');
     } finally {
         globalThis.fetch = originalFetch;
     }
