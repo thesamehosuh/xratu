@@ -30,6 +30,23 @@ const root = mkdtempSync(join(tmpdir(), 'xratu-session-store-'));
 const ws = '/tmp/fake-workspace';
 
 try {
+    const sharedRoot = join(root, 'multi-window');
+    const windows = Array.from({ length: 4 }, () => new LocalSessionStore(sharedRoot));
+    const created = await Promise.allSettled(windows.map((window) => window.create(ws)));
+    checkTrue('separate windows can create sessions concurrently', created.every((result) => result.status === 'fulfilled'));
+    check('cross-window creates retain every session in the index', (await windows[0].list(ws)).length, windows.length);
+    const sharedSession = created.find((result) => result.status === 'fulfilled')?.value;
+    if (sharedSession) {
+        const saved = await Promise.allSettled(windows.map((window, i) => window.save(sharedSession.id, {
+            model: null, summary: null,
+            localHistory: [{ role: 'user', content: `window-${i}` }],
+            uiHistory: [{ role: 'user', content: `window-${i}` }],
+        })));
+        checkTrue('separate windows serialize writes to the same snapshot', saved.every((result) => result.status === 'fulfilled'));
+        const snapshot = await windows[0].load(sharedSession.id);
+        checkTrue('concurrent snapshot saves remain readable', !!snapshot && snapshot.localHistory[0].content === snapshot.uiHistory[0].content);
+    }
+
     const store = new LocalSessionStore(root);
     const corrupt = await store.create(ws);
     for (const value of [null, [], 7, 'not a snapshot']) {

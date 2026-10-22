@@ -23,7 +23,7 @@
  */
 import { createRequire } from 'module';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -87,9 +87,10 @@ const cleanup = () => rmSync(tmp, { recursive: true, force: true, maxRetries: 10
 // ------------------------------------------------------ isOurProcess, fail-closed
 
 // A cold Windows PowerShell startup can exceed the synchronous probe's hard
-// deadline. Warm it through the production async path rather than lengthening
-// the timeout that protects the extension host from blocking.
-const selfIdentity = await new Promise((resolve) => {
+// deadline, including the async probe's limit on a cold CI runner. Allow one
+// sequential warmup retry; never overlap PowerShell starts or lengthen the
+// production timeout that protects the extension host.
+const probeSelf = () => new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), 30_000);
     captureIdentityAsync(process.pid, (identity) => {
         if (identity.token === 'unverified') return;
@@ -97,7 +98,9 @@ const selfIdentity = await new Promise((resolve) => {
         resolve(identity);
     });
 });
-ok('the initial async probe verifies this process', selfIdentity?.pid === process.pid && selfIdentity.token !== 'unverified');
+let selfIdentity = await probeSelf();
+if (!selfIdentity && isWindows) selfIdentity = await probeSelf();
+ok('the async probe verifies this process after bounded warmup', selfIdentity?.pid === process.pid && selfIdentity.token !== 'unverified');
 ok('a live process reports a start token', processStartToken(process.pid) !== null);
 ok('a live process we captured is recognised as ours',
     isOurProcess(captureIdentity(process.pid)) === true);
@@ -171,12 +174,17 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     ok('a record round-trips through the store', await (async () => {
         await store.save([{
             id: 'job-r1', command: 'npm run dev', cwd: tmp, identity,
-            startedAt: Date.now(), uptimeSeconds: 3, backgroundedByUser: true,
+            startedAt: Date.now() - 8 * 24 * 60 * 60_000, uptimeSeconds: 3, backgroundedByUser: true,
             status: 'running', exitCode: null,
         }]);
         const { alive: found } = await store.load();
         return found.length === 1 && found[0].id === 'job-r1';
     })(), 'record did not survive save/load');
+
+    const later = await store.load();
+    ok('a verified live process remains recoverable after a week',
+        later.alive.some((job) => job.id === 'job-r1') && !later.dropped.includes('job-r1'),
+        JSON.stringify(later));
 
     // A record for a process that is gone must be DROPPED, never adopted.
     child.kill();
@@ -253,6 +261,62 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     const leftovers = readdirSync(dir).filter((f) => f.endsWith('.tmp'));
     ok('no stray tmp file is left behind', leftovers.length === 0, JSON.stringify(leftovers));
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+{
+    const dir = mkdtempSync(join(tmpdir(), 'xratu-bg-windows-'));
+    try {
+        const record = {
+            command: 'dev server', cwd: dir, identity: captureIdentity(process.pid),
+            startedAt: Date.now(), uptimeSeconds: 1, backgroundedByUser: true, status: 'running', exitCode: null,
+        };
+        const stores = Array.from({ length: 4 }, () => new BackgroundJobStore(dir));
+        await Promise.all(stores.map((store, i) => store.save([{ ...record, id: `window-${i}` }])));
+        const saved = JSON.parse(readFileSync(join(dir, 'background-jobs.json'), 'utf8'));
+        ok('independent stores preserve every concurrent checkpoint',
+            stores.every((_, i) => saved.jobs.some((job) => job.id === `window-${i}`)),
+            JSON.stringify(saved.jobs.map((job) => job.id)));
+        await stores[0].save([]);
+        const afterFinish = JSON.parse(readFileSync(join(dir, 'background-jobs.json'), 'utf8'));
+        ok('finishing a local job removes its checkpoint without removing other windows',
+            afterFinish.jobs.length === stores.length - 1 && !afterFinish.jobs.some((job) => job.id === 'window-0'),
+            JSON.stringify(afterFinish.jobs.map((job) => job.id)));
+
+        const child = spawnSleeper();
+        const identity = captureIdentity(child.pid);
+        child.kill();
+        await new Promise((resolve) => child.once('exit', resolve));
+        const dead = { ...record, id: 'old-dead-job', identity };
+        const unknown = { ...record, id: 'unverified-live-job', identity: { ...record.identity, token: 'unverified' } };
+        writeFileSync(join(dir, 'background-jobs.json'), JSON.stringify({ version: 1, jobs: [...afterFinish.jobs, dead, unknown] }));
+        const restarted = new BackgroundJobStore(dir);
+        const recovered = await restarted.load();
+        ok('startup rejects dead and unverifiable process identities', recovered.dropped.includes(dead.id) && recovered.dropped.includes(unknown.id));
+        await restarted.save([]);
+        const cleaned = JSON.parse(readFileSync(join(dir, 'background-jobs.json'), 'utf8'));
+        ok('the next checkpoint prunes dead records and preserves other live jobs',
+            cleaned.jobs.length === stores.length && !cleaned.jobs.some((job) => job.id === dead.id),
+            JSON.stringify(cleaned.jobs.map((job) => job.id)));
+        ok('an uncertain live process keeps its record for a later recovery attempt', cleaned.jobs.some((job) => job.id === unknown.id));
+    } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+}
+
+{
+    // Each VS Code window loads its own registry. Its first default id must
+    // not overwrite another window's first job in the shared checkpoint.
+    const code = `
+        const { spawnTerminalJob } = require(process.argv[1]);
+        const job = spawnTerminalJob({ workspaceRoot: process.cwd(), command: process.platform === 'win32' ? 'exit /b 0' : 'exit 0' });
+        job.finished.then(() => console.log(job.id));
+    `;
+    const ids = Array.from({ length: 2 }, () => {
+        const result = spawnSync(process.execPath, ['-e', code, require.resolve('../out/tooling/backgroundJobs.js')], {
+            encoding: 'utf8', timeout: 15_000, windowsHide: true,
+        });
+        ok('an independent registry can finish its test command', result.status === 0, result.stderr);
+        return result.stdout?.trim();
+    });
+    ok('default job ids differ across independent host registries', !!ids[0] && !!ids[1] && ids[0] !== ids[1], JSON.stringify(ids));
 }
 
 // ------------------------------------------------------- adopting a live process
