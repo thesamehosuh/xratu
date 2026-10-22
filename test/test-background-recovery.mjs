@@ -87,9 +87,10 @@ const cleanup = () => rmSync(tmp, { recursive: true, force: true, maxRetries: 10
 // ------------------------------------------------------ isOurProcess, fail-closed
 
 // A cold Windows PowerShell startup can exceed the synchronous probe's hard
-// deadline. Warm it through the production async path rather than lengthening
-// the timeout that protects the extension host from blocking.
-const selfIdentity = await new Promise((resolve) => {
+// deadline, including the async probe's limit on a cold CI runner. Allow one
+// sequential warmup retry; never overlap PowerShell starts or lengthen the
+// production timeout that protects the extension host.
+const probeSelf = () => new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), 30_000);
     captureIdentityAsync(process.pid, (identity) => {
         if (identity.token === 'unverified') return;
@@ -97,7 +98,9 @@ const selfIdentity = await new Promise((resolve) => {
         resolve(identity);
     });
 });
-ok('the initial async probe verifies this process', selfIdentity?.pid === process.pid && selfIdentity.token !== 'unverified');
+let selfIdentity = await probeSelf();
+if (!selfIdentity && isWindows) selfIdentity = await probeSelf();
+ok('the async probe verifies this process after bounded warmup', selfIdentity?.pid === process.pid && selfIdentity.token !== 'unverified');
 ok('a live process reports a start token', processStartToken(process.pid) !== null);
 ok('a live process we captured is recognised as ours',
     isOurProcess(captureIdentity(process.pid)) === true);
