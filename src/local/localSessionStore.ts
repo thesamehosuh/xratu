@@ -4,6 +4,7 @@ import type { EngineSessionRef } from '../engines/types';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import { withDirectoryLock } from '../oauth/refreshLock';
 import { MAX_CONTENT_CAP, MAX_STORED_TURNS, boundCarriers, carrierSize, clipHistoryContent, clipJsonValue, clipToolCallArguments, countUserRows, keepLastUserTurns } from './historyBounds';
 
 export interface LocalSessionHistoryMessage {
@@ -461,11 +462,17 @@ export class LocalSessionStore {
      *  Two concurrent saves share ONE snapshot.json.tmp path, so an
      *  interleaved writeFile/rename can rename a partially-written temp
      *  file (corrupt snapshot → load() returns null → reconcile() drops
-     *  the session) or land a stale write last (resurrected pendingTurn). */
+     *  the session) or land a stale write last (resurrected pendingTurn).
+     *  The directory lock extends serialization to other VS Code windows
+     *  sharing this storage, including the index read/modify/write. */
     private _writeQueue: Promise<unknown> = Promise.resolve();
 
     private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-        const run = this._writeQueue.then(fn, fn);
+        const locked = async () => {
+            await fs.mkdir(this.rootDir, { recursive: true });
+            return withDirectoryLock(path.join(this.rootDir, '.write.lock.d'), {}, fn);
+        };
+        const run = this._writeQueue.then(locked, locked);
         this._writeQueue = run.catch(() => undefined);
         return run;
     }

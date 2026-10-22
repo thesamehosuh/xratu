@@ -18,6 +18,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { renameWithRetry } from '../local/localSessionStore';
+import { withDirectoryLock } from '../oauth/refreshLock';
 import { isOurProcess } from './processIdentity';
 import type { BackgroundJobRecord } from './backgroundJobs';
 
@@ -30,9 +31,6 @@ export interface ReconcileResult {
 }
 
 const FILE_NAME = 'background-jobs.json';
-/** Records older than this are not worth adopting - a week-old dev server is
- *  not something to offer the user as "still running". */
-const MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 function isBackgroundJobRecord(value: unknown): value is BackgroundJobRecord {
     if (!value || typeof value !== 'object') return false;
@@ -49,6 +47,9 @@ export class BackgroundJobStore {
     private readonly file: string;
     /** Serializes writes so two concurrent saves cannot interleave a tmp file. */
     private queue: Promise<unknown> = Promise.resolve();
+    /** Our last checkpoint, plus finished or vanished records from startup.
+     *  Missing local jobs can be removed without deleting another window's. */
+    private knownIds = new Set<string>();
 
     constructor(storageDir: string) {
         this.file = path.join(storageDir, FILE_NAME);
@@ -79,20 +80,22 @@ export class BackgroundJobStore {
         return this.enqueue(async () => {
             const dir = path.dirname(this.file);
             await fs.mkdir(dir, { recursive: true });
-            const mine = new Map(jobs.map((j) => [j.id, j]));
-            const merged: BackgroundJobRecord[] = [...mine.values()];
-            for (const entry of await this._readRecords()) {
-                // Carry over only well-formed records; a malformed one is
-                // already unusable and merging it back would keep it forever.
-                if (!isBackgroundJobRecord(entry) || mine.has(entry.id)) continue;
-                merged.push(entry);
-            }
-            // Scoped to THIS process: two VS Code windows share one
-            // globalStorage dir, and a fixed tmp name let them interleave a
-            // half-written file that `load` would then discard wholesale.
-            const temp = `${this.file}.${process.pid}.tmp`;
-            await fs.writeFile(temp, JSON.stringify({ version: 1, jobs: merged }), 'utf8');
-            await renameWithRetry(temp, this.file);
+            // The read/merge/write must be one cross-window operation: unique
+            // temp names alone still let the last rename discard other jobs.
+            await withDirectoryLock(`${this.file}.lock.d`, {}, async () => {
+                const mine = new Map(jobs.map((j) => [j.id, j]));
+                const merged: BackgroundJobRecord[] = [...mine.values()];
+                for (const entry of await this._readRecords()) {
+                    // Carry over only well-formed records; a malformed one is
+                    // already unusable and merging it back would keep it forever.
+                    if (!isBackgroundJobRecord(entry) || mine.has(entry.id) || this.knownIds.has(entry.id)) continue;
+                    merged.push(entry);
+                }
+                const temp = `${this.file}.${process.pid}.tmp`;
+                await fs.writeFile(temp, JSON.stringify({ version: 1, jobs: merged }), 'utf8');
+                await renameWithRetry(temp, this.file);
+                this.knownIds = new Set(mine.keys());
+            });
         }).catch(() => undefined);
     }
 
@@ -130,7 +133,7 @@ export class BackgroundJobStore {
      * Synchronous verification, at activation only: we cannot adopt a job
      * without knowing it is ours, and there are at most a handful of records.
      */
-    async load(now = Date.now()): Promise<ReconcileResult> {
+    async load(): Promise<ReconcileResult> {
         const alive: BackgroundJobRecord[] = [];
         const dropped: string[] = [];
         for (const entry of await this._readRecords()) {
@@ -144,20 +147,24 @@ export class BackgroundJobStore {
             // keeping: there is nothing left to stop.
             if (entry.status !== 'running') {
                 dropped.push(entry.id);
+                this.knownIds.add(entry.id);
                 continue;
             }
             // Identity is the ONLY gate. An age limit used to drop a running
             // record older than a week even when the identity verified, which is
             // backwards: a long-lived database is exactly the case where the
             // user still needs the stop handle, and dropping it left a live
-            // process that no window could signal. Age only prunes records we
-            // could never have adopted anyway.
+            // process that no window could signal.
             if (!isOurProcess(entry.identity)) {
                 dropped.push(entry.id);
-                continue;
-            }
-            if (now - entry.startedAt > MAX_AGE_MS) {
-                dropped.push(entry.id);
+                // A failed identity probe can be temporary (e.g. PowerShell
+                // timing out). Retain its record for a later restart unless
+                // the PID is invalid or the OS confirms the process is gone.
+                if (!Number.isInteger(entry.identity.pid) || entry.identity.pid <= 0) this.knownIds.add(entry.id);
+                else {
+                    try { process.kill(entry.identity.pid, 0); }
+                    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') this.knownIds.add(entry.id); }
+                }
                 continue;
             }
             alive.push(entry);

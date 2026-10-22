@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.6.0",
+  "version": "2.6.2",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -24,9 +24,9 @@
     "local llm",
     "byok",
     "mcp",
-    "خراتو",
-    "هوش مصنوعی",
-    "کدنویسی"
+    "\u062e\u0631\u0627\u062a\u0648",
+    "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06cc",
+    "\u06a9\u062f\u0646\u0648\u06cc\u0633\u06cc"
   ],
   "activationEvents": [
     "onView:xratu-chat-view"
@@ -349,8 +349,8 @@
     "react-dom": "^18.3.1",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.71.2",
-    "vite": "^5.4.11",
-    "vite-plugin-singlefile": "^2.0.3"
+    "vite": "^7.3.7",
+    "vite-plugin-singlefile": "^2.3.4"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
@@ -359,7 +359,7 @@
     "cross-spawn": "^7.0.6",
     "linkedom": "^0.18.12",
     "lucide-react": "^1.55.0",
-    "markdown-it": "^14.3.2",
+    "markdown-it": "^14.3.3",
     "pdfjs-dist": "^4.10.38",
     "playwright-core": "^1.64.1",
     "shiki": "^4.5.0",

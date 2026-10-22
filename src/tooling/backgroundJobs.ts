@@ -28,6 +28,7 @@
  */
 
 import * as cp from 'child_process';
+import { randomUUID } from 'crypto';
 import { killPids, killTree, snapshotTree } from './processTree';
 import { captureIdentity, captureIdentityAsync, isOurProcess, type ProcessIdentity } from './processIdentity';
 import { terminalSpawn, terminalFailureHint, appendHintToResult } from './shellPlatform';
@@ -172,7 +173,7 @@ export interface SpawnTerminalJobOptions {
     /** Overridable for tests; defaults to IDLE_KILL_MS / HARD_CAP_MS. */
     idleKillMs?: number;
     hardCapMs?: number;
-    /** Overridable for tests; defaults to a monotonic host-local id. */
+    /** Overridable for tests; defaults to a cross-window unique id. */
     id?: string;
     /** The tool_call_id this command belongs to. Lets the user's "run in
      *  background" button find the running job from the row it is attached to. */
@@ -186,27 +187,9 @@ export function clipTail(text: string, limit = MAX_STREAM_CHARS): string {
     return text.length > limit ? text.slice(-limit) : text;
 }
 
-let jobCounter = 0;
-
-/**
- * Ids are host-local and only need to be unique within one session; the model
- * addresses jobs by them inside one conversation.
- */
+/** Jobs share a checkpoint across hosts and retain their ids on recovery. */
 function nextJobId(): string {
-    jobCounter += 1;
-    return `job-${jobCounter}`;
-}
-
-/**
- * Ids are NOT unique across host windows: the counter restarts at 1 on every
- * activate, and adoption reuses the previous window's ids verbatim. Without
- * this, the first job started after a reload would be handed `job-1` - the id
- * of a RECOVERED job - and `jobs.set` would silently overwrite it, leaving a
- * live dev server with no handle and a `kill` aimed at the wrong process.
- */
-function reserveJobId(id: string): void {
-    const n = /^job-(\d+)$/.exec(id)?.[1];
-    if (n) jobCounter = Math.max(jobCounter, Number(n));
+    return `job-${randomUUID()}`;
 }
 
 /**
@@ -284,7 +267,6 @@ const ADOPTED_REVALIDATE_MS = 10_000;
  * only thing that ever looks at these.
  */
 export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
-    reserveJobId(spec.id);
     const { identity } = spec;
     let killReason: string | null = null;
     let finishedAt: number | undefined;
