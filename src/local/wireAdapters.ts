@@ -12,6 +12,7 @@ import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { isOpenRouterHost, supportsPromptCacheKey } from './apiStyle';
 import { isChatGptSubscriptionHost } from '../providerIdentity';
 import { dataUrlMime, dataUrlPayload } from './imageFormat';
+import { markMessagesCache, markResponsesCache, supportsAllTurnsReasoning, usesAllTurnsReasoning, usesResponsesCacheBreakpoints } from './promptCache';
 import type {
     LocalAgentMessage,
     LocalAgentRequest,
@@ -112,28 +113,18 @@ export interface CompletionResult {
     /** Captured reasoning text for transports that replay it as a top-level
      *  field instead of content blocks (Chat Completions `reasoning_content`). */
     reasoningContent?: string;
+    cacheDiagnostic?: { type?: string; reason?: string; reasoningContext?: string };
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
 /**
  * Append the volatile note to the outgoing request (chat transport).
  *
- * It must NOT be merged into a message that is REPLAYED on the next round:
- * merging made the last stored message's bytes differ from its replayed form
- * (the note is never stored), so the cached prefix ended one message EARLY -
- * every round and every turn. Measured effect: in a tool-using turn the newest
- * tool result (usually the largest message) could never be read from cache,
- * and across turns the previous turn was re-sent as a miss. That is the ~50%
- * cache rate against >98% for a harness that keeps its prefix stable.
- *
- * So the note rides its OWN trailing message - but only when that keeps the
- * turn roles ALTERNATING. Some strict OpenAI-compatible servers and every
- * Gemini endpoint reject consecutive same-role turns ("roles must alternate"),
- * and the last stored message is a `user` on the first round of a turn (the
- * prompt). In that one case the note is merged instead: nothing is cached
- * before the first request of a turn anyway, so the merge costs no cache hit,
- * while the tool rounds - where the large tool results live - still get the
- * separate, byte-stable trailing turn.
+ * Use its own trailing user message unless the last role is already user.
+ * Strict compatible servers require alternating roles, so merge in that case.
+ * The following assistant response retains the exact note in `contextNote`;
+ * replaying that carrier through this same projection preserves the complete
+ * previous prompt, including a note merged into a user message.
  */
 export function appendTailNote(messages: LocalAgentMessage[], note: string): LocalAgentMessage[] {
     if (!note) return messages;
@@ -150,10 +141,48 @@ export function appendTailNote(messages: LocalAgentMessage[], note: string): Loc
     return [...messages, { role: 'user', content: note }];
 }
 
-/** Volatile context-awareness note appended as the LAST item of each request.
- *  It is deliberately NOT part of `messages` and NOT in the system prompt:
- *  keeping the prefix byte-stable across rounds is what makes prompt caching
- *  work (Anthropic cache_control, OpenAI/Google automatic prefix caching). */
+/** Replay the exact note that preceded each response. Omitting it makes the
+ * next request diverge before the cached end of the previous request. */
+function withHistoricalContextNotes(messages: LocalAgentMessage[]): LocalAgentMessage[] {
+    let out: LocalAgentMessage[] = [];
+    for (const message of messages) {
+        if (message.role === 'assistant' && message.contextNote) out = appendTailNote(out, message.contextNote);
+        out.push(message);
+    }
+    return out;
+}
+
+type WireMessage = Record<string, unknown> & {
+    content?: Record<string, unknown>[];
+    parts?: Record<string, unknown>[];
+    output?: string | Record<string, unknown>[];
+};
+
+function appendMessagesNote(messages: WireMessage[], note: string): void {
+    if (!note) return;
+    const last = messages[messages.length - 1];
+    if (last?.role === 'user') last.content!.push({ type: 'text', text: note });
+    else messages.push({ role: 'user', content: [{ type: 'text', text: note }] });
+}
+
+function appendResponsesNote(input: WireMessage[], note: string, explicitCache: boolean): void {
+    if (!note) return;
+    const last = input[input.length - 1];
+    if (explicitCache && last?.type === 'function_call_output') {
+        if (typeof last.output === 'string') last.output = [{ type: 'input_text', text: last.output }];
+        (last.output as Record<string, unknown>[]).push({ type: 'input_text', text: note });
+    } else if (explicitCache && last?.role === 'user') {
+        last.content!.push({ type: 'input_text', text: note });
+    } else input.push({ role: 'developer', content: [{ type: 'input_text', text: note }] });
+}
+
+function appendGoogleNote(contents: WireMessage[], note: string): void {
+    if (!note) return;
+    const last = contents[contents.length - 1];
+    if (last?.role === 'user') last.parts!.push({ text: note });
+    else contents.push({ role: 'user', parts: [{ text: note }] });
+}
+
 /** The thinking-mode rejection that demands reasoning be replayed verbatim. */
 const REASONING_CONTENT_REJECT_RE = /reasoning_content/i;
 
@@ -223,7 +252,7 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
             return stripLocalImageFields(wire);
         }
         if (m.role === 'assistant') {
-            const { providerBlocks: _providerBlocks, isError: _isError, ...wire } = m;
+            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, ...wire } = m;
             return stripLocalImageFields(wire);
         }
         return stripLocalImageFields(m);
@@ -261,6 +290,7 @@ export async function requestStreamingCompletion(
     onThinking?: (thinking: string) => void,
     onToolCall?: () => void,
 ): Promise<CompletionResult> {
+    request.promptCacheState ??= {};
     const controller = new AbortController();
     const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
     let timedOut = false;
@@ -275,7 +305,17 @@ export async function requestStreamingCompletion(
         : request.apiStyle === 'responses' ? requestResponsesCompletion
         : request.apiStyle === 'google' ? requestGoogleCompletion : requestChatCompletion;
     try {
-        return await adapter({ ...request, signal }, messages, tailNote, delta, thinking, tool);
+        const result = await adapter({ ...request, signal }, messages, tailNote, delta, thinking, tool);
+        if (result.usage && request.onCacheDiagnostic) {
+            try {
+                request.onCacheDiagnostic({
+                    apiStyle: request.apiStyle ?? 'chat', model: request.model,
+                    input: result.usage.promptTokens, cached: result.usage.cachedTokens ?? null,
+                    cacheWrite: result.usage.cacheWriteTokens ?? null, ...result.cacheDiagnostic,
+                });
+            } catch { /* A closed diagnostic sink must not retry a paid request. */ }
+        }
+        return result;
     } catch (error) {
         if (timedOut && !request.signal?.aborted) throw transportTimeoutError('Model first-token timeout (300s): no text, thinking or tool call received.');
         throw error;
@@ -293,7 +333,7 @@ async function requestChatCompletion(
     const url = endpointUrl(request.baseUrl, 'chat/completions');
     // Wire messages are built ONCE so the 400 recovery below can rebuild the
     // same array (with padding) without reconstructing the tail note.
-    const wireMessages = chatWireMessages(tailNote ? appendTailNote(messages, tailNote) : messages);
+    const wireMessages = chatWireMessages(appendTailNote(withHistoricalContextNotes(messages), tailNote));
     const body: Record<string, unknown> = {
         model: request.model,
         // Safe for strict servers, and the prefix before it stays cacheable.
@@ -579,12 +619,16 @@ function toMessagesBody(
             continue;
         }
         if (msg.role === 'assistant') {
+            appendMessagesNote(out, msg.contextNote ?? '');
             // Prefer the provider-native blocks captured while streaming
             // (thinking + signature + tool_use). Reconstructing from text and
             // tool_calls would drop the thinking state the API requires when a
             // thinking turn is continued.
             if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
-                out.push({ role: 'assistant', content: msg.providerBlocks });
+                out.push({ role: 'assistant', content: msg.providerBlocks.map(block => {
+                    const { cache_control: _cacheControl, ...content } = block as Record<string, unknown>;
+                    return content;
+                }) });
                 continue;
             }
             const blocks: any[] = [];
@@ -640,26 +684,10 @@ function toMessagesBody(
         }
     }
 
-    // Second cache breakpoint at the end of the STORED history (everything
-    // before the volatile note below). It advances each round, so the growing
-    // conversation is cached incrementally rather than only tools + system.
-    // Anthropic allows up to 4 breakpoints; two is plenty here.
-    const lastStored = out[out.length - 1];
-    if (lastStored && Array.isArray(lastStored.content) && lastStored.content.length) {
-        const blocks = lastStored.content;
-        blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
-    }
-
-    // Volatile note rides the tail: merged into a trailing user turn so the
-    // cached prefix (tools + system + history) is untouched. The breakpoint
-    // above already sits on the last STORED block, so the note is outside the
-    // cached prefix and the prefix stays byte-stable across rounds. tool_result
-    // blocks stay first in their own turn, which the sort above guarantees.
-    if (tailNote) {
-        const last = out[out.length - 1];
-        if (last && last.role === 'user') last.content.push({ type: 'text', text: tailNote });
-        else out.push({ role: 'user', content: [{ type: 'text', text: tailNote }] });
-    }
+    // The note is retained on the following response, so cache through it.
+    // tool_result blocks still come first in their user turn.
+    appendMessagesNote(out, tailNote);
+    markMessagesCache(out, request.promptCacheState!);
 
     const body: Record<string, unknown> = {
         model: request.model,
@@ -987,6 +1015,7 @@ function toResponsesBody(
 ): Record<string, unknown> {
     const instructions: string[] = [];
     const input: any[] = [];
+    const explicitCache = usesResponsesCacheBreakpoints(request);
 
     for (const msg of messages) {
         if (msg.role === 'system') {
@@ -999,6 +1028,7 @@ function toResponsesBody(
             continue;
         }
         if (msg.role === 'assistant') {
+            appendResponsesNote(input, msg.contextNote ?? '', explicitCache);
             // Prefer the provider-native output items (reasoning + message +
             // function_call) captured while streaming; the Responses API wants
             // them replayed verbatim so reasoning state survives a tool turn.
@@ -1061,15 +1091,18 @@ function toResponsesBody(
         }
     }
 
-    // Volatile note as a trailing developer item - the Responses equivalent of
-    // a system note, placed after the stable instructions prefix.
-    if (tailNote) {
-        input.push({ role: 'developer', content: [{ type: 'input_text', text: tailNote }] });
-    }
+    const sys = instructions.filter(Boolean).join('\n\n');
+    // Keep status in its own block and replay it from contextNote next time.
+    // Cache through the complete prefix, including this now-retained note.
+    appendResponsesNote(input, tailNote, explicitCache);
+    if (explicitCache) markResponsesCache(input, sys, request.promptCacheState!);
 
     const body: Record<string, unknown> = { model: request.model, input, stream: true };
-    const sys = instructions.filter(Boolean).join('\n\n');
-    if (sys) body.instructions = sys;
+    if (explicitCache) {
+        body.prompt_cache_options = { mode: 'explicit',
+            ...(request.promptCacheState?.responseId ? { comparison_response_id: request.promptCacheState.responseId } : {}),
+        };
+    } else if (sys) body.instructions = sys;
     if (request.tools.length) {
         body.tools = request.tools.map((tool) => ({
             type: 'function',
@@ -1082,19 +1115,22 @@ function toResponsesBody(
     // there would spend a round trip on the 400-degradation retry below; it
     // also requires store:false, and only returns replayable reasoning when
     // it is asked for the encrypted form (Codex CLI sends all three).
-    if (request.subscription || isChatGptSubscriptionHost(request.baseUrl)) {
+    const subscriptionHost = request.subscription || isChatGptSubscriptionHost(request.baseUrl);
+    if (subscriptionHost || supportsAllTurnsReasoning(request)) {
         body.store = false;
         body.include = ['reasoning.encrypted_content'];
         if (request.subscription && body.tools) body.tools = [{
             type: 'namespace', name: 'xratu', description: 'Tools executed locally by Xratu', tools: body.tools,
         }];
-    } else {
-        body.max_output_tokens = outputCapFor(request);
     }
+    if (!subscriptionHost) body.max_output_tokens = outputCapFor(request);
     if (!request.subscription && request.temperature != null) body.temperature = request.temperature;
     // Responses reasoning models take an effort object (chat uses
     // `reasoning_effort`); forward the user's thinking level.
     if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort };
+    if (usesAllTurnsReasoning(request)) body.reasoning = {
+        ...(body.reasoning as Record<string, unknown> | undefined), context: 'all_turns',
+    };
     // OpenAI prompt caching routing hint (see requestChatCompletion).
     if (request.cacheKey && supportsPromptCacheKey(request.baseUrl)) {
         body.prompt_cache_key = request.cacheKey;
@@ -1125,7 +1161,7 @@ async function requestResponsesCompletion(
     onToolCall?: () => void,
 ): Promise<CompletionResult> {
     const url = endpointUrl(request.baseUrl, 'responses');
-    const body = toResponsesBody(request, messages, tailNote);
+    let body = toResponsesBody(request, messages, tailNote);
 
     const outerSignal = request.signal ?? new AbortController().signal;
     const controller = new AbortController();
@@ -1139,9 +1175,14 @@ async function requestResponsesCompletion(
     const send = async (payload: Record<string, unknown>): Promise<Response> => {
         const headersTimer = setTimeout(() => controller.abort(), FIRST_BYTE_TIMEOUT_MS);
         try {
+            const headers = makeHeaders(request.apiKey, request.sessionId, request.headers);
+            if ((request.subscription || isChatGptSubscriptionHost(request.baseUrl)) && request.cacheKey) {
+                headers.set('session-id', request.cacheKey);
+                headers.set('thread-id', request.cacheKey);
+            }
             return await proxyFetch(url, withDispatcher({
                 method: 'POST',
-                headers: makeHeaders(request.apiKey, request.sessionId, request.headers),
+                headers,
                 body: JSON.stringify(payload),
                 signal: controller.signal,
             }, request.dispatcher));
@@ -1158,9 +1199,24 @@ async function requestResponsesCompletion(
         // `max_output_tokens` or the reasoning effort object; drop them one at
         // a time (bounded) rather than fail the turn. An explicitly requested
         // cap is never dropped.
-        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
+        for (let attempt = 0; attempt < 6 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
-            if (request.maxTokens == null && body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+            if (body.prompt_cache_options && /prompt_cache_options|prompt_cache_breakpoint/i.test(text)) {
+                request.promptCacheState!.disabled = true;
+                request.promptCacheState!.responseId = undefined;
+                const compatible = toResponsesBody(request, messages, tailNote);
+                for (const field of ['max_output_tokens', 'reasoning', 'prompt_cache_key', 'tool_choice', 'tools']) {
+                    if (!(field in body)) delete compatible[field];
+                }
+                body = compatible;
+                response = await send(body);
+            } else if ((body.reasoning as Record<string, unknown> | undefined)?.context
+                && /reasoning[ ._]context|all_turns/i.test(text)) {
+                delete (body.reasoning as Record<string, unknown>).context;
+                if (!Object.keys(body.reasoning as Record<string, unknown>).length) delete body.reasoning;
+                request.promptCacheState!.reasoningContextDisabled = true;
+                response = await send(body);
+            } else if (request.maxTokens == null && body.max_output_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_output_tokens;
                 response = await send(body);
             } else if (body.reasoning && REASONING_REJECT_RE.test(text)) {
@@ -1208,6 +1264,7 @@ async function requestResponsesCompletion(
     const itemsByIndex = new Map<number, any>();
     let completedItems: any[] | null = null;
     let completed = false;
+    let cacheDiagnostic: CompletionResult['cacheDiagnostic'];
 
     const consume = (payload: string) => {
         let json: any;
@@ -1259,6 +1316,17 @@ async function requestResponsesCompletion(
             case 'response.completed':
                 completed = true;
                 if (json.response?.usage) usage = responsesUsage(json.response.usage);
+                if (typeof json.response?.id === 'string') request.promptCacheState!.responseId = json.response.id;
+                if (json.response?.prompt_cache_diagnostics) {
+                    const diagnostic = json.response.prompt_cache_diagnostics;
+                    cacheDiagnostic = {
+                        ...(typeof diagnostic.type === 'string' ? { type: diagnostic.type.slice(0, 80) } : {}),
+                        ...(typeof diagnostic.reason === 'string' ? { reason: diagnostic.reason.slice(0, 80) } : {}),
+                    };
+                }
+                if (typeof json.response?.reasoning?.context === 'string') {
+                    cacheDiagnostic = { ...cacheDiagnostic, reasoningContext: json.response.reasoning.context.slice(0, 80) };
+                }
                 if (Array.isArray(json.response?.output)) completedItems = json.response.output;
                 break;
             case 'response.failed':
@@ -1290,7 +1358,7 @@ async function requestResponsesCompletion(
     }
     const providerBlocks = completedItems
         ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
-    return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
+    return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks, cacheDiagnostic };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal.
@@ -1355,6 +1423,7 @@ function toGoogleBody(
             continue;
         }
         if (msg.role === 'assistant') {
+            appendGoogleNote(contents, msg.contextNote ?? '');
             if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
                 // Replay Google's own model parts (functionCall + thoughtSignature).
                 const parts = msg.providerBlocks as any[];
@@ -1410,11 +1479,7 @@ function toGoogleBody(
     // user/model contents, so a separate trailing user turn after an existing
     // user turn (functionResponse or prompt) is rejected - merge there. The
     // stable systemInstruction prefix stays byte-identical for implicit caching.
-    if (tailNote) {
-        const last = contents[contents.length - 1];
-        if (last && last.role === 'user') last.parts.push({ text: tailNote });
-        else contents.push({ role: 'user', parts: [{ text: tailNote }] });
-    }
+    appendGoogleNote(contents, tailNote);
 
     const body: Record<string, unknown> = { contents };
     const system = systemParts.filter(Boolean).join('\n\n');

@@ -20,6 +20,7 @@ export interface LocalSessionHistoryMessage {
     providerBlocks?: unknown;
     /** Chat Completions `reasoning_content` replay carrier (same rationale). */
     reasoningContent?: string;
+    contextNote?: string;
     /** Tool-row failure flag. The Messages transport maps it to `is_error`;
      *  persisting it keeps the replayed tool row byte-stable. */
     isError?: boolean;
@@ -392,8 +393,8 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
         }
         if (event?.type === 'assistant_message' && Array.isArray(event.tool_calls)) {
             // Provider-native carriers are model-ledger data and can be large;
-            // the mid-run crash snapshot keeps only the display-relevant fields
-            // (matching `trimDisplayEvent`).
+            // the mid-run crash snapshot omits those large carriers. Compact
+            // contextNote carriers remain so a restored request can replay them.
             const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
             return {
                 ...rest,
@@ -428,7 +429,7 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
     return {
         prompt: clipHistoryContent(pt.prompt, contentCap),
         ...(pt.hidden === true ? { hidden: true } : {}),
-        events,
+        events: boundCarriers(events),
         text: clipHistoryContent(pt.text, contentCap),
         thinking: clipHistoryContent(pt.thinking, contentCap),
         attachments: Array.isArray(pt.attachments) ? pt.attachments : undefined,

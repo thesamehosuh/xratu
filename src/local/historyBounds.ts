@@ -142,6 +142,7 @@ export function serializedWithinCap(value: unknown, cap: number = MAX_CONTENT_CA
 export interface CarrierRow {
     providerBlocks?: unknown;
     reasoningContent?: string;
+    contextNote?: string;
 }
 
 /**
@@ -164,6 +165,7 @@ export const CARRIER_BUDGET = 2_000_000;
  */
 export function carrierSize(row: CarrierRow): number {
     let size = 0;
+    if (typeof row.contextNote === 'string' && serializedWithinCap(row.contextNote)) size += row.contextNote.length;
     if (typeof row.reasoningContent === 'string' && serializedWithinCap(row.reasoningContent)) {
         size += row.reasoningContent.length;
     }
@@ -189,12 +191,14 @@ export function boundCarriers<T extends CarrierRow>(rows: readonly T[], budget: 
     const dropped: number[] = [];
     for (let i = rows.length - 1; i >= 0; i--) {
         const row = rows[i];
-        const hasCarrier = row.providerBlocks != null || row.reasoningContent != null;
+        const hasCarrier = row.providerBlocks != null || row.reasoningContent != null || row.contextNote != null;
         if (!hasCarrier) continue;
         // `carrierSize` is 0 for an UNACCEPTED (oversized/unserializable) carrier
         // - drop that row's carriers outright rather than leaving them in.
         const size = carrierSize(row);
-        if (size > 0 && used + size <= budget) {
+        const invalidNote = row.contextNote != null
+            && (typeof row.contextNote !== 'string' || !serializedWithinCap(row.contextNote));
+        if (size > 0 && !invalidNote && used + size <= budget) {
             used += size;
             continue;
         }
@@ -205,7 +209,7 @@ export function boundCarriers<T extends CarrierRow>(rows: readonly T[], budget: 
     if (!dropped.length) return rows as T[];
     const out = rows.slice();
     for (const i of dropped) {
-        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = rows[i];
+        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, contextNote: _contextNote, ...rest } = rows[i];
         out[i] = rest as T;
     }
     return out;

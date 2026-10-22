@@ -92,8 +92,8 @@ export function trimDisplayEvent(event: any): any {
     if (event?.subagent) event = { ...event, subagent: readSubagentTrace(event.subagent) };
     // Provider-native replay carriers are MODEL-ledger data: they must never
     // reach the display ledger, the pending-turn snapshot, or the webview.
-    if (event?.type === 'assistant_message' && (event.providerBlocks || event.reasoningContent)) {
-        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, ...rest } = event;
+    if (event?.type === 'assistant_message' && (event.providerBlocks || event.reasoningContent || event.contextNote)) {
+        const { providerBlocks: _providerBlocks, reasoningContent: _reasoningContent, contextNote: _contextNote, ...rest } = event;
         event = rest;
     }
     if (event?.structuredContent) event = { ...event, structuredContent: boundedStructuredContent(event.structuredContent) };
