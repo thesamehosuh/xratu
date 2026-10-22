@@ -254,9 +254,10 @@ const STREAM_USAGE_ESTIMATE_STEP = 32;
  *  peak context, so its cached prefix must stay byte-stable. Model-facing wire
  *  string, like HISTORY_TRUNCATION_MARKER. */
 const ROUND_LIMIT_WRAPUP_NUDGE =
-    '\n\n⚠ ROUND LIMIT REACHED: your tool-call budget for this turn is exhausted. '
+    '\n\n⚠ ROUND LIMIT REACHED (this response only): your tool-call budget for this turn is exhausted. '
     + 'Stop calling tools. Based on the work already done, give your final answer now: '
-    + 'state what you completed, what remains, and any next steps for the user.';
+    + 'state what you completed, what remains, and any next steps for the user. '
+    + 'A later user turn receives a fresh tool-call budget.';
 
 // ---------------------------------------------------------------------------
 
@@ -266,6 +267,7 @@ export async function* runLocalAgent(
     approvalGate: LocalApprovalGate,
     steerFeed?: LocalSteerFeed,
 ): AsyncGenerator<LocalAgentEvent> {
+    request = { ...request, promptCacheState: {} };
     const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
     // Threshold for this run: the host's setting, else the default. Used by the
@@ -289,13 +291,16 @@ export async function* runLocalAgent(
 
     // Context awareness (fill level + progressive hints + task-list reminder)
     // is VOLATILE: it changes every round. It is sent as a TRAILING note, never
-    // stored in `messages` and never in the system message - the system prompt
-    // must stay byte-stable across rounds or prompt caching (Anthropic
-    // cache_control, OpenAI/Google automatic prefix caching) can never hit.
-    const tailNoteFor = (usedTokens: number): string =>
-        taskListReminderLine(reminderTaskList(request))
-        + contextStatusLine(usedTokens, windowTokens)
-        + contextHint(usedTokens, windowTokens, compactRatio);
+    // added to the system message. Each completed assistant round records the
+    // exact note it followed so replay retains the previous request's full
+    // prefix, including its tail, without counting an extra user turn.
+    const tailNoteFor = (usedTokens: number): string => {
+        const note = taskListReminderLine(reminderTaskList(request))
+            + contextStatusLine(usedTokens, windowTokens)
+            + contextHint(usedTokens, windowTokens, compactRatio);
+        return note ? '[Runtime snapshot: applies only to the assistant response immediately following this note; '
+            + 'earlier runtime snapshots are historical.]' + note : '';
+    };
 
     // The FULL history. `boundHistory` used to trim it mechanically to 72%
     // BEFORE the summarizing compaction could run, so the turns it ate were
@@ -425,6 +430,7 @@ export async function* runLocalAgent(
         let resumedText = '';
         // The continuation request's messages once a resume is armed.
         let continuationMessages: LocalAgentMessage[] | null = null;
+        const contextNote = tailNoteFor(noteUsed);
         const retryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
@@ -481,7 +487,7 @@ export async function* runLocalAgent(
         requestPromise = requestStreamingCompletion(
             request,
             continuationMessages ?? messages,
-            continuationMessages ? '' : tailNoteFor(noteUsed),
+            continuationMessages ? '' : contextNote,
             (delta) => {
                 attemptText += delta;
                 queue.push({ kind: 'text', value: delta });
@@ -549,7 +555,7 @@ export async function* runLocalAgent(
             resumedText += attemptText;
             continuationMessages = [
                 ...messages,
-                { role: 'assistant', content: resumedText },
+                { role: 'assistant', content: resumedText, contextNote },
                 { role: 'user', content: STREAM_RESUME_NOTE },
             ];
             // Offline: give the link a beat before re-dialing - an immediate
@@ -734,6 +740,7 @@ export async function* runLocalAgent(
             if (finalResult.text) {
                 yield {
                     type: 'assistantMessage', text: finalResult.text, toolCalls: [],
+                    contextNote,
                     ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
                     ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
                 };
@@ -744,6 +751,7 @@ export async function* runLocalAgent(
 
         yield {
             type: 'assistantMessage', text: finalResult.text, toolCalls: finalResult.toolCalls,
+            contextNote,
             // The host persists these so the NEXT request replays the exact
             // bytes this round sent (see LocalAgentEvent.assistantMessage).
             ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
@@ -756,6 +764,7 @@ export async function* runLocalAgent(
             // older llama.cpp) reject assistant messages whose content key is
             // absent/null - empty text rides as "".
             content: finalResult.text || '',
+            contextNote,
             tool_calls: finalResult.toolCalls.map((call) => ({
                 id: call.id,
                 type: 'function',
@@ -983,6 +992,7 @@ export async function* runLocalAgent(
     let wrapRecovered = false;
     let wrapRetries = 0;
     const wrapRetryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
+    const wrapContextNote = tailNoteFor(noteUsed) + ROUND_LIMIT_WRAPUP_NUDGE;
     let wrapResult: CompletionResult | null = null;
     let wrapError: unknown = null;
     for (;;) {
@@ -994,7 +1004,7 @@ export async function* runLocalAgent(
         const wrapPromise = requestStreamingCompletion(
             { ...request, toolChoice: 'none' },
             wrapMessages,
-            tailNoteFor(noteUsed) + ROUND_LIMIT_WRAPUP_NUDGE,
+            wrapContextNote,
             (delta) => { emittedOutput = true; wrapQueue.push({ kind: 'text', value: delta }); },
             (thinking) => { emittedOutput = true; wrapQueue.push({ kind: 'thinking', value: thinking }); },
         )
@@ -1078,6 +1088,7 @@ export async function* runLocalAgent(
         text: wrapResult.text
             || `[Round limit reached: the agent used all ${rounds} tool rounds without a final answer. Ask it to continue for the remaining steps.]`,
         toolCalls: [],
+        contextNote: wrapContextNote,
         ...(wrapResult.providerBlocks?.length ? { providerBlocks: wrapResult.providerBlocks } : {}),
         ...(wrapResult.reasoningContent ? { reasoningContent: wrapResult.reasoningContent } : {}),
     };

@@ -4630,6 +4630,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         apiStyle: resolveApiStyle(active.baseUrl, childModel, auth.apiStyle),
                         ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
                         cacheKey: subagentConversationId,
+                        onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${subagentConversationId}): ${JSON.stringify(diagnostic)}`),
                     };
                 },
                 tools: (def) => filterToolsForSubagent(
@@ -4828,6 +4829,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // Sent as `prompt_cache_key` on hosts that accept it; the
                     // transport decides (see supportsPromptCacheKey).
                     cacheKey: conversationId,
+                    onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${conversationId}): ${JSON.stringify(diagnostic)}`),
                     // Several `task` calls in one message run as concurrent
                     // subagents - that is the point of delegation - but each
                     // one is a full agent loop with its own context and round

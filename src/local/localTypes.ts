@@ -128,6 +128,18 @@ export interface LocalUsage {
     cacheWriteTokens?: number | null;
 }
 
+/** Counts and provider diagnostics only: never prompt text or credentials. */
+export interface LocalCacheDiagnostic {
+    apiStyle: string;
+    model: string;
+    input: number | null;
+    cached: number | null;
+    cacheWrite: number | null;
+    type?: string;
+    reason?: string;
+    reasoningContext?: string;
+}
+
 export interface LocalToolCall {
     id: string;
     name: string;
@@ -179,6 +191,7 @@ export type LocalAgentEvent =
         toolCalls: LocalToolCall[];
         providerBlocks?: unknown[];
         reasoningContent?: string;
+        contextNote?: string;
     }
     | { type: 'steer'; text: string; attachments?: LocalImageAttachment[]; steerId?: string }
     | {
@@ -243,6 +256,9 @@ export interface LocalAgentMessage {
      *  a replayed tool-call turn that omits it. Only set on assistant messages
      *  whose response actually streamed reasoning. */
     reasoningContent?: string;
+    /** Exact status/task note sent BEFORE this assistant response. Replayed
+     *  in the same wire position; never a display row or a user turn. */
+    contextNote?: string;
 }
 
 export interface LocalAgentRequest {
@@ -296,8 +312,8 @@ export interface LocalAgentRequest {
      *  `taskList` above is captured once when the run starts, so it stays
      *  frozen for the whole run (up to 32 rounds) and a model that updates its
      *  plan mid-run would never see its own updates. Only the trailing note
-     *  reflects this - it is volatile by design and never cached - so prompt
-     *  caching is unaffected. Falls back to `taskList` when absent. */
+     *  reflects this. Each response retains its exact note for stable replay.
+     *  Falls back to `taskList` when absent. */
     taskListProvider?: () => TaskListItem[] | undefined;
     /** Optional undici dispatcher (proxy) forwarded to every fetch. Typed
      *  `unknown` so this module stays free of VS Code / undici imports. */
@@ -323,6 +339,15 @@ export interface LocalAgentRequest {
      *  (OpenAI `prompt_cache_key`), independent of the OpenCode session header:
      *  direct OpenAI hosts need it too. Only sent on hosts that accept it. */
     cacheKey?: string;
+    /** Per-run Responses capability/diagnostic state; shared by request retries,
+     *  never shared between parent and child loops. */
+    promptCacheState?: {
+        disabled?: boolean;
+        responseId?: string;
+        reasoningContextDisabled?: boolean;
+        boundary?: { message: number; block: number; hash: string };
+    };
+    onCacheDiagnostic?: (diagnostic: LocalCacheDiagnostic) => void;
     /** `'none'` disables tool CALLS while keeping the tool DEFINITIONS in the
      *  request. Used by the round-limit wrap-up: dropping the definitions would
      *  change the cached prefix and force a full cache miss on the largest
