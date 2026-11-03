@@ -355,7 +355,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@opencode/client": "2.0.30",
+    "@opencode/client": "2.1.4",
     "crc-32": "1.2.2",
     "cross-spawn": "^7.0.6",
     "linkedom": "^0.18.12",
