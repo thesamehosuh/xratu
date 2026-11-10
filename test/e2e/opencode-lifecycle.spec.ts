@@ -4,6 +4,11 @@ import type { ComposerAttachment } from '../../webview-ui/src/types';
 
 async function post(page: Page, message: object) { await page.evaluate((value) => window.postMessage(value, '*'), message); }
 async function sent(page: Page) { return page.evaluate(() => (window as unknown as { __xratuHostMessages: { type: string; value?: string; requestId?: string; attachments?: ComposerAttachment[] }[] }).__xratuHostMessages); }
+async function acceptSend(page: Page) {
+    const request = (await sent(page)).findLast(message => message.type === 'askQuestion')!;
+    await post(page, { type: 'sendReceipt', requestId: request.requestId, status: 'accepted' });
+    await expect(page.locator('.composer-input')).toHaveValue('');
+}
 
 test.beforeEach(async ({ page }) => {
     await installVscodeTheme(page);
@@ -24,6 +29,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'modelInfo', defaultModel: 'fixture/stub', selectedModel: 'fixture/stub', models: ['fixture/stub'] });
         await page.locator('.composer-input').fill('Fix this file');
         await page.locator('.send-btn').click();
+        await acceptSend(page);
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'enginesState', state: { ...state, busy: true } });
         for (let index = 0; index < 3; index++) {
@@ -66,6 +72,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         expect(request.attachments).toHaveLength(2);
         expect(Buffer.from(request.attachments![0].dataBase64, 'base64').toString()).toBe(code);
         expect(request.attachments![1].path).toBe('src/reference.ts');
+        await acceptSend(page);
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'chunk', value: 'Reading the files' });
         await page.locator('input[type="file"]').setInputFiles({ name: 'follow-up.txt', mimeType: 'text/plain', buffer: Buffer.from('STEER_ATTACHMENT') });
@@ -85,6 +92,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'modelInfo', defaultModel: 'fixture/stub', selectedModel: 'fixture/stub', models: ['fixture/stub'], displayNames: { 'fixture/stub': 'OpenCode test' }, capabilities: { 'fixture/stub': { provider: 'fixture', free: false } } });
         await page.locator('.composer-input').fill('First request');
         await page.locator('.send-btn').click();
+        await acceptSend(page);
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'enginesState', state: { ...state, busy: true } });
         await post(page, { type: 'chunk', value: 'Working' });
@@ -97,6 +105,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(page.locator('.send-btn')).toBeEnabled();
         await page.locator('.send-btn').click();
         expect(await sent(page)).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Continue in this session' }));
+        await acceptSend(page);
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'fullResponse', renderedHtml: '<p>Continued successfully</p>' });
         await expect(page.locator('.msg.assistant').last()).toContainText('Continued successfully');

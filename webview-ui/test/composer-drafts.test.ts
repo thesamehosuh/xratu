@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { composerDraftKey, promoteComposerDraft, readComposerDraft, saveComposerDraft } from '../src/composerDrafts';
+import { composerDraftKey, promoteComposerDraft, readComposerDraft, saveComposerDraft, readComposerRecoveries, saveComposerRecoveries } from '../src/composerDrafts';
 import { getWebviewState, patchWebviewState } from '../src/vscode';
 
 const a = composerDraftKey('/project', 'A');
@@ -29,4 +29,11 @@ const stored = Object.values(getWebviewState().composerDrafts as Record<string, 
 assert.ok(stored.length <= 32);
 assert.ok(stored.reduce((sum, text) => sum + text.length, 0) <= 200_000);
 assert.equal(readComposerDraft(composerDraftKey('/project', '39')).text.length, 10_000);
+saveComposerRecoveries(a, [{ id: 'rejected', value: 'do not overwrite newer typing', attachments: [{ id: 'file', name: 'private.txt', mimeType: 'text/plain', size: 6, dataBase64: 'c2VjcmV0' }], missingNames: [] }]);
+assert.ok(!JSON.stringify(getWebviewState().composerRecoveries).includes('c2VjcmV0'), 'recovery persistence excludes attachment bytes');
+assert.equal(readComposerRecoveries(a)[0].attachments[0].name, 'private.txt');
+const restored = composerDraftKey('/restored', 'A');
+patchWebviewState({ composerRecoveries: { [restored]: [{ id: 'disk', value: 'recover text', names: ['private.txt'] }] } });
+assert.deepEqual(readComposerRecoveries(restored)[0].missingNames, ['private.txt']);
+assert.deepEqual(readComposerRecoveries(restored)[0].attachments, []);
 console.log('composer-drafts: isolation, promotion, merged state, validation and bounds passed');

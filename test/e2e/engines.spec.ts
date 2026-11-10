@@ -215,7 +215,7 @@ for (const locale of ['en', 'fa'] as const) {
             await expect(page.locator('.picker-chip')).toContainText('Paid Model');
             await expect(page.locator('.send-btn')).toBeEnabled();
             await page.locator('.send-btn').click();
-            expect(await sent(page)).toContainEqual({ type: 'askQuestion', value: 'Keep this draft until I choose a model', attachments: [] });
+            expect(await sent(page)).toContainEqual(expect.objectContaining({ type: 'askQuestion', requestId: expect.any(String), value: 'Keep this draft until I choose a model', attachments: [] }));
         });
     }
 }

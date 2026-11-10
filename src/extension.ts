@@ -3361,7 +3361,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const credentials = await this._getSavedCredentials();
         if (!credentials.some((c) => c.id === id)) return;
         const currentId = this._globalState.get<string>('xratu.activeLlmCredentialId');
-        if (currentId === id) {
+        if (currentId === id && this._sessionConnectionConfirmed !== false) {
             // Toggle OFF: clicking the active credential deselects it - the
             // user's explicit "no credential" gesture. Model listing drops
             // to the empty setup state until a provider is re-selected.

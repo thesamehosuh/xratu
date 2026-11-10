@@ -2,11 +2,17 @@ import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
 const post = (page: Page, msg: Record<string, unknown>) => page.evaluate(message => window.postMessage(message, '*'), msg);
-const session = (page: Page, id: string | null, workspace = '/project', browserSessionId = id ?? 'fresh') =>
-    post(page, { type: 'sessionState', id, title: id, workspace, browserSessionId });
+async function session(page: Page, id: string | null, workspace = '/project', browserSessionId = id ?? 'fresh') {
+    await page.evaluate(message => new Promise<void>(resolve => {
+        // postMessage delivery is asynchronous. Wait for delivery and React's
+        // commit before a fill can target the previous session's textarea.
+        window.addEventListener('message', () => requestAnimationFrame(() => requestAnimationFrame(() => resolve())), { once: true });
+        window.postMessage(message, '*');
+    }), { type: 'sessionState', id, title: id, workspace, browserSessionId });
+}
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
-    test(`drafts isolate sessions and survive reload ${locale} ${width}`, async ({ page }) => {
+    test(`drafts isolate sessions and survive reload ${locale} ${width}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 900 });
         await installVscodeTheme(page);
         await page.addInitScript(() => {
@@ -46,12 +52,12 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await expect(input).toHaveValue('follow-up');
         await session(page, 'A');
         await expect(input).toHaveValue('draft A');
-        await page.screenshot({ path: `/tmp/xratu-drafts-${locale}-${width}.png` });
+        await page.screenshot({ path: testInfo.outputPath('drafts.png') });
     });
 }
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
-    test(`send receipts preserve newer typing and reject stale replies ${locale} ${width}`, async ({ page }) => {
+    test(`send receipts preserve newer typing and reject stale replies ${locale} ${width}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 900 });
         await installVscodeTheme(page);
         await page.addInitScript(() => {
@@ -92,6 +98,14 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await session(page, 'saved-new', '/project', 'fresh');
         await post(page, { type: 'sendReceipt', requestId: promoted.requestId, sessionKey: 'fresh', status: 'accepted' });
         await expect(input).toHaveValue('');
-        await page.screenshot({ path: `/tmp/xratu-receipts-${locale}-${width}.png` });
+        await post(page, { type: 'startResponse' });
+        await input.fill('rejected correction'); await input.press('Enter');
+        const steer = await page.evaluate(() => (window as unknown as { draftMessages: Array<Record<string, unknown>> }).draftMessages.filter(m => m.type === 'steerRun').at(-1)!);
+        await input.fill('newer draft');
+        await post(page, { type: 'composerError', valueKey: 'engineSteerCancelled', steerId: steer.steerId });
+        await expect(input).toHaveValue('newer draft');
+        await page.getByRole('button', { name: locale === 'en' ? 'Add rejected message' : 'افزودن پیام رد شده', exact: true }).click();
+        await expect(input).toHaveValue('newer draft\n\nrejected correction');
+        await page.screenshot({ path: testInfo.outputPath('receipts.png') });
     });
 }

@@ -38,6 +38,46 @@ export function saveComposerDraft(key: string, text: string, files: ComposerAtta
 export function promoteComposerDraft(from: string, to: string): void {
     if (from === to) return;
     const draft = readComposerDraft(from);
+    const queued = readComposerRecoveries(from);
+    if (queued.length) { saveComposerRecoveries(from, []); saveComposerRecoveries(to, queued); }
     saveComposerDraft(from, '', []);
     saveComposerDraft(to, draft.text, draft.attachments);
+}
+
+export interface ComposerRecovery {
+    id: string;
+    value: string;
+    attachments: ComposerAttachment[];
+    missingNames: string[];
+}
+const recoveries = new Map<string, ComposerRecovery[]>();
+
+/** Text and file names survive reload; attachment bytes never enter UI state. */
+export function readComposerRecoveries(key: string): ComposerRecovery[] {
+    const cached = recoveries.get(key);
+    if (cached) return cached;
+    const raw = getWebviewState().composerRecoveries;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const entries = (raw as Record<string, unknown>)[key];
+    if (!Array.isArray(entries)) return [];
+    return entries.slice(-MAX_DRAFTS).flatMap(entry => {
+        if (!entry || typeof entry.id !== 'string' || entry.id.length > 128 || typeof entry.value !== 'string') return [];
+        return [{ id: entry.id, value: entry.value.slice(0, MAX_TEXT), attachments: [], missingNames:
+            Array.isArray(entry.names) ? entry.names.filter((name: unknown): name is string => typeof name === 'string').slice(0, 20).map((name: string) => name.slice(0, 1024)) : [] }];
+    });
+}
+
+export function saveComposerRecoveries(key: string, entries: ComposerRecovery[]): void {
+    recoveries.delete(key);
+    recoveries.set(key, entries);
+    while (recoveries.size > MAX_DRAFTS) recoveries.delete(recoveries.keys().next().value!);
+    const raw = getWebviewState().composerRecoveries;
+    const state: Record<string, unknown> = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
+    delete state[key];
+    if (entries.length) state[key] = entries.slice(-MAX_DRAFTS).map(entry => ({
+        id: entry.id, value: entry.value.slice(0, MAX_TEXT), names: [...entry.missingNames, ...entry.attachments.map(file => file.name)].slice(0, 20),
+    }));
+    const keys = Object.keys(state);
+    while (keys.length > MAX_DRAFTS || JSON.stringify(state).length > MAX_TEXT) delete state[keys.shift()!];
+    patchWebviewState({ composerRecoveries: state });
 }

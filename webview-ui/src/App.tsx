@@ -196,7 +196,7 @@ export function App() {
     const [visionCapable, setVisionCapable] = useState<boolean | null>(null);
     /** Host rejected the last send - restore value + attachments so the
      *  user can retry without re-attaching everything. */
-    const [composerRestore, setComposerRestore] = useState<{ value: string; attachments: ComposerAttachment[] } | null>(null);
+    const [composerRestore, setComposerRestore] = useState<Array<{ id: string; value: string; attachments: ComposerAttachment[] }>>([]);
     const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; errorReported: boolean } | null>(null);
     const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number } | null>(null);
     /** Message being edited in the composer card (pencil → composer flow):
@@ -804,7 +804,7 @@ export function App() {
                             promoteComposerDraft(previous.key, key);
                         }
                         setEditDraft(null);
-                        setComposerRestore(null);
+                        setComposerRestore([]);
                         setHostAttachments(null);
                     }
                     const mount = composerDraftKey(msg.workspace ?? '', live);
@@ -924,7 +924,7 @@ export function App() {
                     // ALWAYS reaches the reducer: it clears the streaming/
                     // busy state so a rejected send can't leave the typing
                     // indicator spinning.
-                    setComposerRestore({ value: msg.prompt, attachments: msg.attachments ?? [] });
+                    setComposerRestore(previous => [...previous, { id: msg.requestId ?? `restore-${Date.now()}-${steerSeq.current++}`, value: msg.prompt, attachments: msg.attachments ?? [] }]);
                     dispatch({
                         type: 'sendFailed',
                         value: msg.valueKey ? '' : msg.value,
@@ -958,7 +958,7 @@ export function App() {
                     // queue - drop its held bubble + chip so it cannot render.
                     if (msg.steerId) {
                         const pending = releasePendingSteer(msg.steerId);
-                        if (pending) setComposerRestore({ value: pending.value, attachments: pending.rawAttachments });
+                        if (pending) setComposerRestore(previous => [...previous, { id: msg.steerId!, value: pending.value, attachments: pending.rawAttachments }]);
                     }
                     setComposerError((prev) => ({ id: (prev?.id ?? 0) + 1, value: msg.value ?? '', valueKey: msg.valueKey, params: msg.params }));
                     break;
@@ -1864,7 +1864,7 @@ export function App() {
                 }}
                 modelVisionCapable={visionCapable}
                 restoreDraft={composerRestore}
-                onRestoreApplied={() => setComposerRestore(null)}
+                onRestoreApplied={ids => setComposerRestore(previous => previous.filter(entry => !ids.includes(entry.id)))}
                 injectedAttachments={hostAttachments}
                 onInjectedAttachmentsApplied={() => setHostAttachments(null)}
                 hostError={composerError}
