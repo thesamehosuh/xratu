@@ -197,6 +197,8 @@ export function App() {
     /** Host rejected the last send - restore value + attachments so the
      *  user can retry without re-attaching everything. */
     const [composerRestore, setComposerRestore] = useState<{ value: string; attachments: ComposerAttachment[] } | null>(null);
+    const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; errorReported: boolean } | null>(null);
+    const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number } | null>(null);
     /** Message being edited in the composer card (pencil → composer flow):
      *  the composer prefills its text, sending performs the rewind-resend. */
     const [editDraft, setEditDraft] = useState<{ userIndex: number; value: string } | null>(null);
@@ -236,8 +238,9 @@ export function App() {
         return turns.map(({ message, userIndex }, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.message.cp, number: index + 1, userIndex }));
     }, [chat.messages]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-    const draftIdentity = useRef<{ key: string; live: string | null; id: string | null }>({ key: composerDraftKey('', null), live: null, id: null });
+    const draftIdentity = useRef<{ key: string; mount: string; live: string | null; id: string | null }>({ key: composerDraftKey('', null), mount: composerDraftKey('', null), live: null, id: null });
     const [draftKey, setDraftKey] = useState(draftIdentity.current.key);
+    const [composerMountKey, setComposerMountKey] = useState(draftIdentity.current.mount);
     const [turnFiles, setTurnFiles] = useState<{ session: string | null; files: Record<string, ReviewChange[]> }>({ session: null, files: {} });
     const recordTurnFiles = useCallback((turn: { sha: string; toSha?: string }, files: ReviewChange[]) => {
         const key = `${turn.sha}:${turn.toSha ?? ''}`;
@@ -765,6 +768,7 @@ export function App() {
 
         const handler = (event: MessageEvent) => {
             const msg = event.data as FromExtensionMessage;
+            if (pendingSend.current && ['error', 'composerError', 'sendFailed'].includes(msg.type)) pendingSend.current.errorReported = true;
             switch (msg.type) {
                 case 'openBrowser':
                     setScreen('chat');
@@ -803,7 +807,10 @@ export function App() {
                         setComposerRestore(null);
                         setHostAttachments(null);
                     }
-                    draftIdentity.current = { key, live, id: msg.id };
+                    const mount = composerDraftKey(msg.workspace ?? '', live);
+                    if (previous.mount !== mount) { pendingSend.current = null; setAcceptedSend(null); }
+                    draftIdentity.current = { key, mount, live, id: msg.id };
+                    setComposerMountKey(mount);
                     setDraftKey(key);
                     setCurrentSessionId(msg.id);
                     setCurrentBrowserSessionId(msg.browserSessionId ?? msg.id);
@@ -895,7 +902,23 @@ export function App() {
                 case 'modelsRefreshing':
                     setModelsRefreshing(msg.active);
                     break;
+                case 'sendReceipt': {
+                    const pending = pendingSend.current;
+                    if (!pending || pending.requestId !== msg.requestId || pending.mount !== draftIdentity.current.mount ||
+                        (pending.sessionKey && pending.sessionKey !== msg.sessionKey)) break;
+                    pendingSend.current = null;
+                    if (msg.status === 'accepted') setAcceptedSend({ requestId: msg.requestId, revision: pending.revision });
+                    else {
+                        dispatch({ type: 'sendFailed', requestId: msg.requestId, value: '', prompt: pending.prompt, silent: true });
+                        if (!pending.errorReported) setComposerError(previous => ({ id: (previous?.id ?? 0) + 1, value: '', valueKey: msg.valueKey ?? 'composerSendRejected' }));
+                    }
+                    break;
+                }
                 case 'sendFailed':
+                    if (pendingSend.current) {
+                        setComposerError(previous => ({ id: (previous?.id ?? 0) + 1, value: msg.value ?? '', valueKey: msg.valueKey, params: msg.params }));
+                        break;
+                    }
                     // Surface the host's error AND put the composer back
                     // the way it was before the failed send.
                     // ALWAYS reaches the reducer: it clears the streaming/
@@ -1058,7 +1081,8 @@ export function App() {
     useEffect(() => { if (!canRewind) setEditDraft(null); }, [canRewind]);
 
     const handleSend = useCallback(
-        (text: string, attachments: ComposerAttachment[]) => {
+        (text: string, attachments: ComposerAttachment[], revision = 0) => {
+            if (pendingSend.current) return false;
             const value = text.trim();
             // An attachment-only turn is a valid send even with no text -
             // the attachment hint instructs the model.
@@ -1085,8 +1109,11 @@ export function App() {
                 send({ type: 'steerRun', value, attachments, steerId });
                 return;
             }
+            const requestId = `send-${Date.now()}-${steerSeq.current++}`;
+            const sessionKey = draftIdentity.current.live ?? undefined;
+            pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, errorReported: false };
             dispatch({
-                type: 'restoreUser',
+                type: 'restoreUser', requestId,
                 value,
                 attachments: toAttachmentMeta(attachments),
             } as FromExtensionMessage);
@@ -1100,7 +1127,8 @@ export function App() {
                 el.scrollTo({ top: el.scrollHeight });
                 setShowJump(false);
             }
-            send({ type: 'askQuestion', value, attachments });
+            send({ type: 'askQuestion', requestId, sessionKey, value, attachments });
+            return false;
         },
         [chat.busy, send, editDraft]
     );
@@ -1766,8 +1794,10 @@ export function App() {
             )}
             </div>
             <InputBar
-                key={draftKey}
+                key={composerMountKey}
                 draftKey={draftKey}
+                acceptedSend={acceptedSend}
+                onAcceptedSendApplied={() => setAcceptedSend(null)}
                 yolo={yolo}
                 onTogglePlan={() => send({ type: 'togglePlanMode' })}
                 onToggleYolo={() => send({ type: 'toggleYolo' })}

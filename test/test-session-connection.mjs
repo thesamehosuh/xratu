@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url), ts = require('typescript');
+const { LocalSessionStore } = require('../out/local/localSessionStore.js');
+const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
+const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
+const provider = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
+const names = ['_restoreSessionConnection', '_rememberModelForActiveCredential', '_selectLlmCredential', '_handleChatRequest'];
+const methods = provider.members.filter(node => names.includes(node.name?.getText(file)));
+const sandbox = {};
+vm.runInNewContext(ts.transpileModule(`class Host { ${methods.map(node => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
+function host(active) {
+    const h = new sandbox.Host(), state = new Map([['xratu.activeLlmCredentialId', active]]), writes = [], messages = [];
+    h._sessionWorkspaceMatches = () => true; h._activeEngine = 'xratu'; h._selectedModel = 'current-model'; h._sessionEpoch = 1;
+    h._view = { webview: { postMessage: message => messages.push(message) } };
+    h._globalState = { get: key => state.get(key), update: async (key, value) => { state.set(key, value); writes.push([key, value]); } };
+    h._credentialModelMap = () => JSON.parse(state.get('xratu.modelsByCredential') ?? '{"A":"model-a","B":"model-b"}');
+    h._secrets = { store: async () => { throw Error('restoring history must not overwrite the legacy active model'); } };
+    h._getSavedCredentials = async () => [{ id: 'A' }, { id: 'B' }];
+    h._fetchModels = h._sendSavedCredentials = h._sendOAuthState = async () => {};
+    h.notifyBanner = () => {};
+    return { h, state, writes, messages };
+}
+const mismatch = host('B');
+mismatch.h._restoreSessionConnection({ workspace: 'default', connectionId: 'A', model: 'historical-model' });
+assert.equal(mismatch.h._selectedModel, 'current-model');
+assert.equal(mismatch.h._sessionConnectionConfirmed, false);
+assert.deepEqual(mismatch.writes, []);
+await mismatch.h._handleChatRequest('continue');
+assert.equal(mismatch.messages.at(-1).valueKey, 'sessionConnectionMismatch');
+await mismatch.h._selectLlmCredential('A');
+assert.equal(mismatch.h._sessionConnectionConfirmed, true);
+assert.equal(mismatch.state.get('xratu.activeLlmCredentialId'), 'A');
+const matched = host('A');
+matched.h._restoreSessionConnection({ workspace: 'default', connectionId: 'A', model: 'historical-model' });
+await Promise.resolve();
+assert.equal(matched.h._selectedModel, 'historical-model');
+assert.deepEqual(JSON.parse(matched.state.get('xratu.modelsByCredential')), { A: 'historical-model', B: 'model-b' });
+const legacy = host('B');
+legacy.h._restoreSessionConnection({ model: 'unbound-model' });
+assert.equal(legacy.h._selectedModel, 'current-model');
+assert.equal(legacy.h._sessionConnectionConfirmed, true);
+assert.deepEqual(legacy.writes, []);
+const root = mkdtempSync(path.join(tmpdir(), 'xratu-connection-'));
+try {
+    const store = new LocalSessionStore(root), session = await store.create('default');
+    await store.save(session.id, { connectionId: 'A', model: 'model-a', summary: null, localHistory: [], uiHistory: [] });
+    assert.equal((await store.load(session.id)).connectionId, 'A');
+} finally { rmSync(root, { recursive: true, force: true }); }
+console.log('session-connection: matching, mismatching, legacy, explicit choice and persistence passed');

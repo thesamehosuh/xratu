@@ -49,3 +49,49 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await page.screenshot({ path: `/tmp/xratu-drafts-${locale}-${width}.png` });
     });
 }
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
+    test(`send receipts preserve newer typing and reject stale replies ${locale} ${width}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await installVscodeTheme(page);
+        await page.addInitScript(() => {
+            const messages: Array<Record<string, unknown>> = [];
+            (window as unknown as { draftMessages: unknown }).draftMessages = messages;
+            (window as unknown as { acquireVsCodeApi: unknown }).acquireVsCodeApi = () => ({
+                postMessage: (message: Record<string, unknown>) => messages.push(message),
+                getState: () => undefined, setState: () => undefined,
+            });
+        });
+        const latest = () => page.evaluate(() => (window as unknown as { draftMessages: Array<Record<string, unknown>> }).draftMessages.filter(m => m.type === 'askQuestion').at(-1)!);
+        await page.goto('/');
+        await expect(page.locator('.app')).toBeAttached();
+        await post(page, { type: 'locale', locale });
+        await session(page, 'A');
+        await post(page, { type: 'showChat' });
+        const input = page.locator('.composer-input');
+        await input.fill('rejected draft'); await input.press('Enter');
+        const rejected = await latest();
+        await expect(input).toHaveValue('rejected draft');
+        await post(page, { type: 'sendReceipt', requestId: rejected.requestId, sessionKey: 'A', status: 'rejected' });
+        await expect(input).toHaveValue('rejected draft');
+        await expect(page.locator('article.msg.user')).toHaveCount(0);
+        await input.press('Enter');
+        const accepted = await latest();
+        await input.fill('newer typing');
+        await post(page, { type: 'sendReceipt', requestId: accepted.requestId, sessionKey: 'A', status: 'accepted' });
+        await expect(input).toHaveValue('newer typing');
+        await post(page, { type: 'sendReceipt', requestId: accepted.requestId, sessionKey: 'A', status: 'accepted' });
+        await expect(input).toHaveValue('newer typing');
+        await input.press('Enter');
+        const switched = await latest();
+        await session(page, 'B'); await input.fill('belongs to B');
+        await post(page, { type: 'sendReceipt', requestId: switched.requestId, sessionKey: 'A', status: 'rejected' });
+        await expect(input).toHaveValue('belongs to B');
+        await session(page, null); await input.fill('promoted send'); await input.press('Enter');
+        const promoted = await latest();
+        await session(page, 'saved-new', '/project', 'fresh');
+        await post(page, { type: 'sendReceipt', requestId: promoted.requestId, sessionKey: 'fresh', status: 'accepted' });
+        await expect(input).toHaveValue('');
+        await page.screenshot({ path: `/tmp/xratu-receipts-${locale}-${width}.png` });
+    });
+}

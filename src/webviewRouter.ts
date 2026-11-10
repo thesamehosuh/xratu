@@ -89,6 +89,7 @@ export interface WebviewMessageHost {
     _benchmarkProvider(): Promise<void>;
     _gitCheckout(branch: string): Promise<void>;
     _globalState: vscode.Memento;
+    _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string): Promise<void>;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
     _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void>;
     _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove?: boolean, _retryCount?: number): Promise<void>;
@@ -329,7 +330,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 }
                 case 'askQuestion':
-                    await host._handleChatRequest(data.value, data.attachments);
+                    await host._handleComposerSend(data.value, data.attachments, data.requestId, data.sessionKey);
                     break;
                 case 'steerRun':
                     void host._handleSteer(data.value, data.attachments, data.steerId)

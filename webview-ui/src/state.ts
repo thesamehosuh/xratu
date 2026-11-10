@@ -109,6 +109,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 status: 'done',
                 createdAt: Date.now(),
                 attachments: msg.attachments,
+                requestId: msg.requestId,
                 cp: msg.cp,
                 hidden: msg.hidden,
             });
@@ -732,7 +733,9 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             const value = msg.silent
                 ? ''
                 : (msg.valueKey ? tf(msg.valueKey, msg.params) : tOrRaw(msg.value ?? ''));
-            let messages = state.messages;
+            let messages = msg.requestId
+                ? state.messages.filter(message => message.requestId !== msg.requestId)
+                : state.messages;
             if (id && streaming) {
                 if (!streaming.text && streaming.steps.length === 0 && !streaming.renderedHtml) {
                     // Nothing streamed: silent drops the empty bubble, the
@@ -765,7 +768,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                     );
                 }
             } else if (!msg.silent && (msg.valueKey || msg.value)) {
-                return { ...append(state, {
+                return { ...append({ ...state, messages }, {
                     id: nextId(),
                     role: 'assistant',
                     text: value,
@@ -780,14 +783,14 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // the webview's user-bubble indexing stays aligned with the host
             // ledger, which commits user rows for streamed turns only.
             // Without this, the next edit/regenerate rewinds the WRONG turn.
-            if (msg.prompt) {
+            if (!msg.requestId && msg.prompt) {
                 const userIdx = messages.map((m) => m.role).lastIndexOf('user');
                 if (
                     userIdx >= 0 &&
                     messages[userIdx].text === msg.prompt &&
                     messages.slice(userIdx + 1).every((m) => (id && m.id === id) || m.role === 'system')
                 ) {
-                    messages = messages.slice(0, userIdx);
+                    messages = messages.filter((_, index) => index !== userIdx);
                 }
             }
             return { ...state, messages, busy: false, compacting: false, streamingId: null };

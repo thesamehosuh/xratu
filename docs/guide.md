@@ -41,13 +41,15 @@ be rewound by Xratu.
 Files selected from VS Code are delivered only to the chat that requested them.
 Switching chats during a file read discards that delayed delivery.
 
-Saved conversations keep their original workspace. To reopen a chat listed
-under **All workspaces**, open its original folder first. A mismatched chat is
-rejected before the current run is cancelled or either conversation is saved.
+Saved conversations keep their original workspace. Histories from other projects,
+missing folders, or legacy workspace markers remain readable. Execution and
+checkpoint restore are blocked until the original workspace is verified; open
+that folder or start a new chat here. Viewing history never rebinds its workspace.
 
-Tool execution is restricted to the active run's tool list, including delegated
-runs. Supported aliases use the canonical tool's approval policy. External MCP
-calls are refused in Plan mode even if a model invents a call.
+New chats save a nonsecret connection reference. If a restored chat's connection
+changed or was deleted, its transcript remains readable; select a connection in
+Providers explicitly before continuing. Legacy chats without a connection
+reference keep the current provider's model and do not overwrite its model memory.
 
 ## Unsent drafts
 
@@ -56,7 +58,9 @@ reloading the webview. A new chat keeps its draft when its first message assigns
 it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
 VS Code state retains up to 32 recent text drafts within 200,000 characters total;
 older drafts are evicted. Attachments are kept in memory only and must be
-attached again after reload, including session switches that reload the page. Send acknowledgements are not yet tracked.
+attached again after reload, including session switches that reload the page. Normal sends stay in the composer until the host saves and acknowledges the
+pending turn. Acceptance clears only the submitted revision; newer typing stays.
+Rejected submissions keep their draft, and repeated request IDs are not executed twice.
 
 ## OpenCode inside Xratu
 

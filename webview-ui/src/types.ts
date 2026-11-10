@@ -74,7 +74,7 @@ export type ToExtensionMessage =
     | { type: 'agentsManage' }
     | { type: 'agentFileOpen'; name: string; source: AgentProfileView['source'] }
     | { type: 'webviewReady' }
-    | { type: 'askQuestion'; value: string; attachments?: ComposerAttachment[] }
+    | { type: 'askQuestion'; requestId?: string; sessionKey?: string; value: string; attachments?: ComposerAttachment[] }
     /** Steer a LIVE run. `steerId` identifies the pending bubble the webview
      *  holds until the host confirms the message was actually injected (after
      *  the in-flight tool call finishes), so the timeline is never split while
@@ -420,7 +420,7 @@ export type FromExtensionMessage =
      *  or not-yet-started folder gets starting-from-scratch prompts instead.
      *  Absent (older host) means "assume a project". */
     | { type: 'showChat'; workspaceKind?: 'empty' | 'bare' | 'project' }
-    | { type: 'restoreUser'; hidden?: boolean; value: string; attachments?: AttachmentMeta[]; cp?: string }
+    | { type: 'restoreUser'; requestId?: string; hidden?: boolean; value: string; attachments?: AttachmentMeta[]; cp?: string }
     /** Live turn: the host created the pre-prompt shadow checkpoint for the
      *  userIndex-th user message - attaches the restore point to that bubble. */
     | { type: 'userCheckpoint'; userIndex: number; sha: string }
@@ -436,6 +436,7 @@ export type FromExtensionMessage =
      *  user bubble, not a steered one); `mode: 'drop'` discards the held
      *  bubble without rendering (session switched out from under it). */
     | { type: 'steerApplied'; steerId: string; mode?: 'steer' | 'turn' | 'drop' }
+    | { type: 'sendReceipt'; requestId: string; sessionKey: string; status: 'accepted' | 'rejected'; valueKey?: string }
     | { type: 'startResponse' }
     | { type: 'chunk'; value: string }
     // Throttled LIVE markdown render of the CURRENT text segment (host-side,
@@ -524,7 +525,7 @@ export type FromExtensionMessage =
      *  value/prompt/attachments are echoed back so the user can fix and
      *  retry without re-attaching everything. Host-side rejections arrive
      *  as valueKey, not raw text. */
-    | { type: 'sendFailed'; value: string; valueKey?: string; params?: Record<string, string>; prompt: string; attachments?: ComposerAttachment[]; silent?: boolean }
+    | { type: 'sendFailed'; requestId?: string; value: string; valueKey?: string; params?: Record<string, string>; prompt: string; attachments?: ComposerAttachment[]; silent?: boolean }
     /** Host-read files dragged from the VS Code explorer into the panel. */
     | { type: 'attachmentsFromHost'; attachments: ComposerAttachment[] }
     /** Attachment-rejection error - renders INLINE in the composer (not as a
@@ -992,6 +993,7 @@ export interface TokenUsage {
 }
 
 export interface ChatMessage {
+    requestId?: string;
     id: string;
     role: 'user' | 'assistant' | 'system';
     hidden?: boolean;

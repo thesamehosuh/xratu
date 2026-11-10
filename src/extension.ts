@@ -1,3 +1,4 @@
+import { readBoundedFile } from './tooling/boundedRead';
 import { setTimeout as nativeSetupDelay } from 'timers/promises';
 import type { NativeSetupState } from './engines/nativeSetup';
 import { readSubagentTrace, type SubagentApprovalSource } from './subagentObservation';
@@ -151,7 +152,7 @@ import type { LocalToolImage } from './local/localAgent';
 import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
 import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
-import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage } from './local/localSessionStore';
+import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage, type LocalSessionSnapshot } from './local/localSessionStore';
 import {
     UsageLedgerStore,
     aggregateByDayAndModel,
@@ -888,6 +889,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  Mirrors the server rule: first user message, truncated; a rename
      *  always wins. Null = untitled/new session. */
     private _sessionTitle: string | null = null;
+    private _sessionWorkspace: string | null = null;
+    private _sessionConnectionId: string | null = null;
+    private _sessionConnectionModel: string | null = null;
+    private _sessionConnectionConfirmed = true;
     /** Turn-scoped checkpoint store (owned by activate, shared with the bridge). */
     private readonly _checkpoints: ShadowCheckpointStore;
     private readonly _storagePath: string;
@@ -1930,6 +1935,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _restoreRequestActive = false;
 
     private _captureCheckpointAction(userIndex?: number, sha?: string, allowConversationOnly = false): CheckpointActionContext | undefined {
+        if (this._sessionWorkspace != null && !this._sessionWorkspaceMatches(this._sessionWorkspace)) {
+            this.notifyBanner('warning', 'sessionWorkspaceReadOnly'); return;
+        }
         if (userIndex !== undefined && !this._view) return;
         if (this._checkpointRestoreActive || this._sessionTransitionsPending > 0 || this._localRunActive || this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchBusy');
@@ -2109,11 +2117,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // all assume an established project ("tour this codebase", "hunt for
         // bugs"), which is dead on arrival in a folder that has nothing in it.
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        this._pushSessionState();
         this._view.webview.postMessage({
             type: 'showChat',
             workspaceKind: root ? classifyWorkspace(root) : 'empty',
         });
-        this._pushSessionState();
         void this._fetchModels();
     }
 
@@ -3175,6 +3183,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private async _oauthCompleteSignIn(handler: OAuthProviderHandler, tokens: OAuthTokenSet, flow: OAuthFlowState): Promise<void> {
+        const epoch = this._sessionEpoch;
         const storageKey = handler.subscription ? chatGptStorageKey(tokens) : handler.storageKey;
         let record!: StoredCredential;
         await this._oauthTokenManager().withTokenLock({ ...handler, storageKey }, async () => {
@@ -3197,6 +3206,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 await this._persistSavedCredentials([...credentials.filter((c) => c.id !== record.id), record]);
                 if (!this._runtimeSetup) {
                     await this._globalState.update('xratu.activeLlmCredentialId', record.id);
+                    if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
                     await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
                 }
             }, flow.controller.signal);
@@ -3286,6 +3296,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _saveLlmCredentials(base_url: string, api_key: string, returnToChat = false): Promise<void> {
+        const epoch = this._sessionEpoch;
         if (!base_url) {
             this._view?.webview.postMessage({ type: 'byokCredentialError', valueKey: 'credUrlRequired' });
             return;
@@ -3324,7 +3335,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         const onboarding = !!this._runtimeSetup;
         await this._persistSavedCredentials(next);
-        if (!onboarding) await this._globalState.update('xratu.activeLlmCredentialId', id);
+        if (!onboarding) {
+            await this._globalState.update('xratu.activeLlmCredentialId', id);
+            if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
+        }
 
         // Keep legacy slots synchronized for older Xratu code/data.
         if (!onboarding) {
@@ -3343,6 +3357,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _selectLlmCredential(id: string): Promise<void> {
+        const epoch = this._sessionEpoch;
         const credentials = await this._getSavedCredentials();
         if (!credentials.some((c) => c.id === id)) return;
         const currentId = this._globalState.get<string>('xratu.activeLlmCredentialId');
@@ -3358,7 +3373,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._view?.webview.postMessage({ type: 'credentialsSaved' });
             return;
         }
+        this._selectedModel = null;
         await this._globalState.update('xratu.activeLlmCredentialId', id);
+        if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
         await this._fetchModels();
         await this._sendSavedCredentials();
         await this._sendOAuthState();
@@ -3386,6 +3403,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _deleteLlmCredential(id: string, oauthCleared = false, refresh = true): Promise<void> {
+        if (this._sessionConnectionId === id) this._sessionConnectionConfirmed = false;
         const credentials = await this._getSavedCredentials();
         const target = credentials.find((c) => c.id === id);
         if (target?.oauthProviderId && !oauthCleared) return this._oauthSignOut(id);
@@ -3448,11 +3466,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return active.id;
     }
 
-    async _rememberModelForActiveCredential(model: string | null): Promise<void> {
+    async _rememberModelForActiveCredential(model: string | null, credentialId?: string): Promise<void> {
         if (this._activeEngine === 'opencode') { await this._globalState.update('xratu.engineModel.opencode', model ?? undefined); return; }
         if (!model) return;
-        await this._secrets.store('xratu.selectedModel', model);
-        const credId = await this._resolveActiveCredentialId();
+        if (!credentialId) await this._secrets.store('xratu.selectedModel', model);
+        const credId = credentialId ?? await this._resolveActiveCredentialId();
         if (!credId) return;
         const map = this._credentialModelMap();
         if (map[credId] === model) return;
@@ -4435,15 +4453,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         existingController?: AbortController,
         planMode?: boolean,
         hiddenPrompt?: boolean,
+        onAccepted?: () => void,
     ): Promise<StreamOutcome> {
-        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt);
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted);
+        const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
+        const model = this._selectedModel;
         const credentials = await this._getSavedCredentials();
-        if (!credentials.length) {
+        if (!credentials.length || activeId === '' || this._sessionConnectionConfirmed === false) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
             return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
         }
-        const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
-        const active = credentials.find((c) => c.id === activeId) ?? credentials[0];
+        const active = activeId ? credentials.find((c) => c.id === activeId) : credentials[0];
+        if (!active) {
+            this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
+            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+        }
         // The async seam: an OAuth connection resolves its token set ONCE per
         // turn (refreshing when stale), then everything downstream keeps
         // receiving a plain bearer string - no async plumbing through the
@@ -4475,11 +4499,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._view?.webview.postMessage({ type: 'error', valueKey: insecureError });
             return noRun();
         }
-        const model = this._selectedModel;
         if (!model) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'noModelSelected' });
             return noRun();
         }
+
+        this._sessionConnectionId = active.id;
+        this._sessionConnectionModel = model;
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : '';
@@ -4758,6 +4784,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._runInFlight = true;
             // Baseline for the run's cumulative dropped-user-turn report.
             this._compactionRunReplayBase = this._localReplayUserTurns;
+            if (onAccepted) {
+                await this._persistLocalSession();
+                if (!this._sessionId) throw new EngineError('sessionSaveFailed');
+                onAccepted();
+            }
             const agent = this._engines.get('xratu').runTurn(
                 { prompt, model, workspace: workspaceRoot, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, localRequest: {
                     baseUrl: active.baseUrl,
@@ -4896,7 +4927,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return outcome;
     }
 
-    private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean): Promise<StreamOutcome> {
+    private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean, onAccepted?: () => void): Promise<StreamOutcome> {
         const epoch = this._sessionEpoch;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
@@ -4915,6 +4946,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._localPendingTurn = { prompt, events: outcome.events, hidden: hiddenPrompt };
         this._postEngineState();
         try {
+            if (onAccepted) {
+                await this._persistLocalSession();
+                if (!this._sessionId) throw new EngineError('sessionSaveFailed');
+                onAccepted();
+            }
             const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             if (!workspace) throw new EngineError('engineWorkspaceRequired');
             if (!this._selectedModel) throw new EngineError('engineModelMissing');
@@ -6414,12 +6450,35 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return `xratu.lastSession.${this._workspaceName()}`;
     }
 
+    /** Viewing history must not bind it to a different provider implicitly. */
+    private _restoreSessionConnection(snapshot: LocalSessionSnapshot): void {
+        this._sessionWorkspace = snapshot.workspace ?? 'default';
+        this._sessionConnectionId = snapshot.connectionId ?? null;
+        this._sessionConnectionModel = snapshot.model;
+        const native = this._activeEngine === 'opencode';
+        this._sessionConnectionConfirmed = native || !snapshot.connectionId ||
+            snapshot.connectionId === this._globalState.get<string>('xratu.activeLlmCredentialId');
+        // Legacy chats keep the current provider's model because their original
+        // connection is unknown. Known mismatches remain readable but cannot run
+        // until the user explicitly selects a connection in Providers.
+        if (snapshot.model && (native || snapshot.connectionId && this._sessionConnectionConfirmed)) {
+            this._selectedModel = snapshot.model;
+            void this._rememberModelForActiveCredential(snapshot.model, native ? undefined : snapshot.connectionId)
+                .catch(() => this.notifyBanner('warning', 'sessionSaveFailed'));
+        }
+    }
+
+    private _draftWorkspaceIdentity(): string {
+        const root = this._sessionWorkspaceIdentity() ?? this._localWorkspaceKey();
+        return process.platform === 'win32' ? root.toLowerCase() : root;
+    }
+
     /** Echo current session identity to the webview (toolbar title button). */
     private _pushSessionState(): void {
         this._browser.setSession(this._browserSessionId());
         this._view?.webview.postMessage({
             type: 'sessionState',
-            workspace: this._localWorkspaceKey(),
+            workspace: this._draftWorkspaceIdentity(),
             browserSessionId: this._browserSessionId(),
             id: this._sessionId,
             title: this._sessionTitle,
@@ -6435,6 +6494,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Reset the per-session ledgers. Callers own cancel + epoch bump. */
     private _resetSessionLedgers(): void {
+        this._sessionWorkspace = null;
+        this._sessionConnectionId = null;
+        this._sessionConnectionModel = null;
+        this._sessionConnectionConfirmed = true;
         this._engineSession = { engineId: this._activeEngine };
         this._forgetSubagentRuns();
         this._sessionId = null;
@@ -6517,6 +6580,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         catch { return null; }
     }
 
+    private _sessionWorkspaceMatches(saved: string): boolean {
+        const current = this._sessionWorkspaceIdentity();
+        if ((saved === 'default' || saved === '') && current === '') return true;
+        if (!current || !path.isAbsolute(saved)) return false;
+        try { return path.relative(fs.realpathSync(saved), current) === ''; }
+        catch { return false; }
+    }
+
     private async _loadSessionForAdoption(id: string): Promise<Awaited<ReturnType<LocalSessionStore['load']>>> {
         try {
             const snapshot = await this._localSessionStore.load(id);
@@ -6537,18 +6608,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 typeof snapshot.workspace === 'string' && (snapshot.title == null || typeof snapshot.title === 'string') &&
                 (snapshot.model == null || typeof snapshot.model === 'string') &&
                 (snapshot.summary == null || typeof snapshot.summary === 'string')) {
-                // Do not adopt a transcript from A and then persist/run it as B.
-                // Check before cancelling the current run or changing any state.
-                const workspace = this._sessionWorkspaceIdentity();
-                let sameWorkspace = (snapshot.workspace === 'default' || snapshot.workspace === '') && workspace === '';
-                if (snapshot.workspace && snapshot.workspace !== 'default' && workspace) {
-                    try { sameWorkspace = path.relative(fs.realpathSync(snapshot.workspace), workspace) === ''; }
-                    catch { /* A missing original workspace cannot be rebound implicitly. */ }
-                }
-                if (!sameWorkspace) {
-                    this.notifyBanner('warning', 'sessionWorkspaceMismatch');
-                    return null;
-                }
+                // Foreign and legacy histories remain readable. Their stored
+                // workspace is retained; execution admission checks it separately.
                 return snapshot;
             }
         } catch { /* An unreadable target must leave the current conversation intact. */ }
@@ -6616,10 +6677,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // untitled - otherwise the placeholder blocks first-message seeding
         // and is locked in as renamedTitle on the next save.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
-        if (snapshot.model) {
-            this._selectedModel = snapshot.model;
-            void this._rememberModelForActiveCredential(snapshot.model);
-        }
+        this._restoreSessionConnection(snapshot);
         this._postEngineState();
         try {
             await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
@@ -6664,6 +6722,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         this._resetSessionLedgers();
         this._sessionId = meta.id;
+        this._sessionWorkspace = meta.workspace;
         this._sessionTitle = null;
         try {
             await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
@@ -6720,7 +6779,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const workspace = this._sessionWorkspaceIdentity();
         if (workspace === null) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
         const preferred = this._sessionId ?? this._globalState.get<string>(this._lastSessionStateKey());
-        const meta = await this._localSessionStore.findCurrent(this._localWorkspaceKey(), preferred);
+        const meta = await this._localSessionStore.findCurrent(this._localWorkspaceKey(), preferred, true);
         if (!meta) return;
         const snapshot = await this._loadSessionForAdoption(meta.id);
         if (!snapshot) return;
@@ -6763,8 +6822,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._sessionSummary = snapshot.summary ?? null;
         // Same placeholder rule as _openSessionNow - see resolveSessionTitle.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
-        this._selectedModel = snapshot.model || this._selectedModel;
-        if (snapshot.model) void this._rememberModelForActiveCredential(snapshot.model);
+        this._restoreSessionConnection(snapshot);
         if (snapshot.pendingTurn?.prompt) {
             // Crash mid-run: fold the interrupted turn into the ledgers
             // exactly like the cancel path - the partial pills/text stay
@@ -6852,6 +6910,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // on-disk copy consistent with what is in memory.
         this._trimLocalHistory();
         const epochAtEntry = this._sessionEpoch;
+        let createdSession = false;
         if (!this._sessionId) {
             // First send with no open local session (fresh install, or the
             // last snapshot was cleared) - create one on demand or history
@@ -6865,6 +6924,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     return;
                 }
                 this._sessionId = meta.id;
+                this._sessionWorkspace = meta.workspace;
+                createdSession = true;
                 await this._downloads.bindSession(this._browserSessionId(), meta.id).catch(error => diagnosticsChannel?.appendLine(`Downloads session: ${String(error)}`));
             } catch (e) {
                 console.error('xratu: create local session failed', e);
@@ -6882,10 +6943,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const saved = await this._localSessionStore.save(
             this._sessionId!,
             {
-                workspace: this._localWorkspaceKey(),
+                workspace: this._sessionWorkspace ?? this._localWorkspaceKey(),
                 researchConversationId: this._researchConversationId,
                 engineSession: this._engineSession ?? { engineId: this._activeEngine },
-                model: this._selectedModel,
+                connectionId: this._activeEngine === 'xratu' ? this._sessionConnectionId ?? undefined : undefined,
+                model: this._activeEngine === 'xratu' && this._sessionConnectionId ? this._sessionConnectionModel : this._selectedModel,
                 summary: this._sessionSummary,
                 localHistory: this._localHistory,
                 replayUserTurns: this._localReplayUserTurns,
@@ -6923,12 +6985,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // one.
         if (
             saved &&
-            titleWasNull &&
-            hasUserTurn &&
+            (createdSession || titleWasNull && hasUserTurn) &&
             epochAtEntry === this._sessionEpoch &&
             this._sessionId === sessionIdAtEntry
         ) {
-            this._sessionTitle = saved.meta.title;
+            if (titleWasNull && hasUserTurn) this._sessionTitle = saved.meta.title;
             this._pushSessionState();
         }
         await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
@@ -7160,7 +7221,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     error = { key: 'attachUnsupported', params: { name } };
                     continue;
                 }
-                const bytes = await vscode.workspace.fs.readFile(uri);
+                if (uri.scheme !== 'file') {
+                    error = { key: 'attachVirtualFile', params: { name } };
+                    continue;
+                }
+                const bytes = await readBoundedFile(uri.fsPath, ATTACH_MAX_BYTES);
                 if (!current()) return;
                 // A file may change between stat and read. Bound and describe
                 // the actual bytes, rather than trusting stale metadata.
@@ -7234,7 +7299,42 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
 
-    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean }): Promise<void> {
+    private _composerReceipts = new Map<string, 'pending' | 'accepted' | 'rejected'>();
+
+    /** Request identity protects admission; receipts never restart a mutation. */
+    async _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string): Promise<void> {
+        if (!requestId) return this._handleChatRequest(prompt, attachments);
+        if (typeof requestId !== 'string' || requestId.length > 128) return;
+        const view = this._view, epoch = this._sessionEpoch;
+        const identity = this._browserSessionId();
+        const current = () => view === this._view && epoch === this._sessionEpoch;
+        const reply = (status: 'accepted' | 'rejected', valueKey?: string) => {
+            if (current()) view?.webview.postMessage({ type: 'sendReceipt', requestId, sessionKey: sessionKey ?? identity, status, valueKey });
+        };
+        if (sessionKey && sessionKey !== identity) { reply('rejected', 'sessionSwitchStale'); return; }
+        const key = `${identity}:${requestId}`;
+        const previous = this._composerReceipts.get(key);
+        if (previous) { if (previous !== 'pending') reply(previous); return; }
+        this._composerReceipts.set(key, 'pending');
+        try {
+            if (this._localRunActive) { this._composerReceipts.set(key, 'rejected'); reply('rejected', 'sessionSwitchBusy'); return; }
+            await this._handleChatRequest(prompt, attachments, { onAccepted: () => {
+                if (this._composerReceipts.get(key) !== 'pending') return;
+                this._composerReceipts.set(key, 'accepted');
+                reply('accepted');
+            } });
+        } catch (error) {
+            if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : String(error) });
+        } finally {
+            if (this._composerReceipts.get(key) === 'pending') {
+                this._composerReceipts.set(key, 'rejected');
+                reply('rejected', 'composerSendRejected');
+            }
+            while (this._composerReceipts.size > 128) this._composerReceipts.delete(this._composerReceipts.keys().next().value!);
+        }
+    }
+
+    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void }): Promise<void> {
         if (!this._view) { return; }
         if (opts?.admittedEpoch !== undefined && opts.admittedEpoch !== this._sessionEpoch) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
@@ -7242,6 +7342,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         if (this._checkpointRestoreActive || (this._sessionTransitionsPending > 0 && opts?.admittedEpoch !== this._sessionEpoch)) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchBusy', prompt, attachments });
+            return;
+        }
+        if (this._sessionWorkspace != null && !this._sessionWorkspaceMatches(this._sessionWorkspace)) {
+            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionWorkspaceReadOnly', prompt, attachments });
+            return;
+        }
+        if (this._activeEngine === 'xratu' && this._sessionConnectionConfirmed === false) {
+            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionConnectionMismatch', prompt, attachments });
             return;
         }
         if (this._modelManagementController || this._benchmarkController) {
@@ -7433,7 +7541,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
                 agentStarted = true;
-                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt);
+                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, opts?.onAccepted);
                 this._endLiveMarkdown();
                 // Final pass over the run-lifetime ledger before either
                 // terminal path consumes it: a reasoning block (or carrier
@@ -7583,6 +7691,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
             else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
             if (!opts?.steerCarry) {
+                this._localPendingTurn = null;
+                if (this._localPartialTimer) { clearTimeout(this._localPartialTimer); this._localPartialTimer = null; }
                 this._localRunActive = false;
                 this._postEngineState();
                 this._settleLocalRun();

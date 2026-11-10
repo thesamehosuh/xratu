@@ -12,7 +12,8 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 function harness() {
     const messages = [], sandbox = { Buffer, path, crypto: { randomUUID: () => 'id' }, ATTACH_MAX_COUNT: 4, ATTACH_MAX_BYTES: 4, ATTACH_MAX_TOTAL_BYTES: 6,
         mimeFromFilename: () => 'text/plain', isImageAttachment: () => false, isTextAttachment: () => true, isPdfAttachment: () => false,
-        vscode: { Uri: { parse: raw => ({ fsPath: raw }) }, FileType: { Directory: 2 }, workspace: { fs: { stat: async () => ({ size: 2, type: 1 }), readFile: async () => Buffer.from('ok') } } } };
+        vscode: { Uri: { parse: raw => ({ scheme: 'file', fsPath: raw }) }, FileType: { Directory: 2 }, workspace: { fs: { stat: async () => ({ size: 2, type: 1 }), readFile: async () => Buffer.from('ok') } } } };
+    sandbox.readBoundedFile = file => sandbox.vscode.workspace.fs.readFile({ fsPath: file });
     vm.runInNewContext(ts.transpileModule(`class Host { ${method.getText(file)} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const host = new sandbox.Host();
     host._sessionEpoch = 1;

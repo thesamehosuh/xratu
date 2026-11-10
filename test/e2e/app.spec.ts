@@ -103,6 +103,8 @@ test('composer draft survives leaving and returning to the chat screen', async (
     await input.press('Enter');
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(sent).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'half-written message' }));
+    const request = (sent as Array<{ type: string; requestId?: string }>).findLast(message => message.type === 'askQuestion')!;
+    await hostMessage(page, { type: 'sendReceipt', requestId: request.requestId, sessionKey: '', status: 'accepted' });
     await page.locator('.session-cost').click();
     await page.locator('.sidebar-back').click();
     await expect(input).toHaveValue('');
@@ -199,6 +201,7 @@ test('locale message flips direction rtl -> ltr', async ({ page }) => {
 
 test('locale flip preserves content direction and translates existing bubble controls', async ({ page }) => {
     await page.goto('/');
+    await hostMessage(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
     const bubble = page.locator('article.msg.user').first();

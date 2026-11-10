@@ -1,3 +1,4 @@
+import { readBoundedFile } from './tooling/boundedRead';
 /**
  * Host-side attachment layer: validation (the layer that actually guards
  * the send - the webview's checks are UX only), mime/size helpers, prompt
@@ -169,7 +170,9 @@ export async function resolveReferenceAttachments(
         if (totalBytes + stat.size > ATTACH_MAX_TOTAL_BYTES) {
             return { key: 'attachTotalTooLarge' };
         }
-        const bytes = await vscode.workspace.fs.readFile(uri);
+        const bytes = await readBoundedFile(uri.fsPath, ATTACH_MAX_BYTES);
+        if (bytes.byteLength > ATTACH_MAX_BYTES) return { key: 'attachTooLarge', params: { name: rel } };
+        if (totalBytes + bytes.byteLength > ATTACH_MAX_TOTAL_BYTES) return { key: 'attachTotalTooLarge' };
         // mimeFromFilename returns '' for unknown extensions - sniff the
         // bytes instead of guessing: decodable NUL-free UTF-8 is text,
         // everything else is refused (fail-closed binary protection).
@@ -182,9 +185,9 @@ export async function resolveReferenceAttachments(
         if (isTextAttachment(mime) && (bytes.includes(0) || Buffer.from(bytes).toString('utf8').includes('\uFFFD'))) {
             return { key: 'attachUnsupported', params: { name: rel } };
         }
-        totalBytes += stat.size;
+        totalBytes += bytes.byteLength;
         a.dataBase64 = Buffer.from(bytes).toString('base64');
-        a.size = stat.size;
+        a.size = bytes.byteLength;
         a.mimeType = mime;
         // The model and every chip/history view identify the file by its
         // workspace-relative path (Cline-style), not the bare basename.

@@ -10,7 +10,7 @@ const { EngineError } = require('../out/engines/types.js');
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
-const names = ['_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
+const names = ['_sessionWorkspaceMatches', '_restoreSessionConnection', '_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
@@ -66,13 +66,16 @@ function intact(t) {
     assert.ok(!t.events.includes('reset'));
     assert.ok(!t.events.includes('reload'));
 }
-const foreign = harness();
-foreign.host._localSessionStore.load = async () => ({ ...snapshot('B'), workspace: path.resolve('other-project') });
-await foreign.host._openSession('B');
-intact(foreign);
-assert.ok(foreign.notices.some(n => n[1] === 'sessionWorkspaceMismatch'));
-assert.ok(!foreign.events.includes('cancel'), 'a foreign target must be rejected before cancelling the current run');
-console.log('ok foreign-workspace sessions cannot replace or rewrite the current chat');
+for (const savedWorkspace of [path.resolve('other-project'), 'workspace', 'default']) {
+    const foreign = harness();
+    foreign.host._localSessionStore.load = async () => ({ ...snapshot('B'), workspace: savedWorkspace });
+    await foreign.host._openSession('B');
+    assert.equal(foreign.host._sessionId, 'B', 'historical transcripts remain accessible');
+    assert.equal(foreign.host._sessionWorkspace, savedWorkspace, 'saved workspace must not be rebound');
+    await foreign.host._handleChatRequest('must not execute');
+    assert.ok(foreign.messages.some(m => m.type === 'sendFailed' && m.valueKey === 'sessionWorkspaceReadOnly'));
+}
+console.log('ok foreign and legacy histories remain readable but cannot execute in an unrelated workspace');
 
 const missing = harness();
 missing.host._localSessionStore.load = async () => null;
@@ -131,7 +134,7 @@ for (const stale of ['epoch', 'workspace', 'engine']) {
     await request;
     assert.equal(t.host._sessionId, 'A');
     assert.ok(!t.events.includes('reset'));
-    assert.ok(t.notices.some(n => n[1] === (stale === 'workspace' ? 'sessionWorkspaceMismatch' : 'sessionSwitchStale')));
+    assert.ok(t.notices.some(n => n[1] === 'sessionSwitchStale'));
     sandbox.vscode.workspace.workspaceFolders = [{ uri: { fsPath: path.resolve('workspace') } }];
 }
 console.log('ok epoch, engine and workspace changes during loading cannot adopt a stale target');

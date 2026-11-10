@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
@@ -258,7 +258,9 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
 interface InputBarProps {
     draftKey: string;
     busy: boolean;
-    onSend: (text: string, attachments: ComposerAttachment[]) => void;
+    onSend: (text: string, attachments: ComposerAttachment[], revision?: number) => boolean | void;
+    acceptedSend?: { requestId: string; revision: number } | null;
+    onAcceptedSendApplied?: () => void;
     onCancel: () => void;
     /** Suggestion-chip payload: typed into the composer char-by-char, then
      *  auto-sent. `id` re-triggers the effect for repeated picks. */
@@ -335,6 +337,8 @@ interface InputBarProps {
 
 export function InputBar({
     draftKey,
+    acceptedSend,
+    onAcceptedSendApplied,
     busy,
     onSend,
     onCancel,
@@ -397,6 +401,15 @@ export function InputBar({
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
     const [attachments, setAttachments] = useState<ComposerAttachment[]>(initialDraft.attachments);
+    const draftRevision = useRef(0);
+    useLayoutEffect(() => { draftRevision.current++; }, [value, attachments]);
+    useEffect(() => {
+        if (!acceptedSend) return;
+        if (acceptedSend.revision === draftRevision.current) {
+            setValue(''); setAttachments([]);
+        }
+        onAcceptedSendApplied?.();
+    }, [acceptedSend, onAcceptedSendApplied]);
     const [attachError, setAttachError] = useState<string | null>(null);
     // Attachment errors auto-dismiss - they describe a single rejected file,
     // so lingering forever is noise (the chips themselves persist).
@@ -537,8 +550,7 @@ export function InputBar({
                 sendBeatRef.current = null;
                 injectedAppliedRef.current?.();
                 if (modelSelectionRequiredRef.current) return;
-                sendRef.current(full, []);
-                setValue('');
+                if (sendRef.current(full, [], draftRevision.current) !== false) setValue('');
             }, 450);
             return clearInjectionTimers;
         }
@@ -560,8 +572,7 @@ export function InputBar({
                     sendBeatRef.current = null;
                     injectedAppliedRef.current?.();
                     if (modelSelectionRequiredRef.current) return;
-                    sendRef.current(full, []);
-                    setValue('');
+                    if (sendRef.current(full, [], draftRevision.current) !== false) setValue('');
                 }, 450);
             }
         }, 16);
@@ -809,9 +820,10 @@ export function InputBar({
         // No busy guard here: while a run streams, onSend QUEUES the turn
         // (App decides send-vs-queue) - dropping the input would lose it.
         if ((!text && attachments.length === 0)) return;
-        onSend(text, attachments);
-        setValue('');
-        setAttachments([]);
+        if (onSend(text, attachments, draftRevision.current) !== false) {
+            setValue('');
+            setAttachments([]);
+        }
         setAttachError(null);
     };
 

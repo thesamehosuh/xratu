@@ -561,5 +561,12 @@ ok(
     'result closes the owning pill after a steer split',
 );
 
+// Rejection removes its identified optimistic user, even with identical text.
+s = reduceChat(createInitialChatState(), M('restoreUser', { value: 'same', requestId: 'old' }));
+s = reduceChat(s, M('restoreUser', { value: 'same', requestId: 'new' }));
+s = reduceChat(s, M('sendFailed', { value: '', prompt: 'same', requestId: 'old', silent: true }));
+ok(s.messages.some(message => message.requestId === 'new'), 'rejection keeps the newer identical prompt');
+ok(!s.messages.some(message => message.requestId === 'old'), 'rejection removes only its own optimistic user');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
