@@ -321,6 +321,7 @@
     "test:downloads": "node test/test-downloads.mjs",
     "test:bounded-read": "node test/test-bounded-read.mjs",
     "test:send-receipts": "node test/test-send-receipts.mjs",
+    "test:steer-admission": "node test/test-steer-admission.mjs",
     "test:session-connection": "node test/test-session-connection.mjs",
     "test:tool-admission": "node test/test-tool-admission.mjs",
     "test:attachment-session": "node test/test-attachment-session.mjs",

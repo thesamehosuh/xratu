@@ -948,6 +948,7 @@ export function App() {
                     if (!pending || msg.mode === 'drop') break;
                     dispatch({
                         type: msg.mode === 'turn' ? 'restoreUser' : 'steerUser',
+                        requestId: msg.mode === 'turn' ? msg.steerId : undefined,
                         value: pending.value,
                         attachments: pending.attachments,
                     } as FromExtensionMessage);

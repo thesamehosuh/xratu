@@ -4253,92 +4253,108 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  boundary. With no live run (race: the turn settled first) it
      *  degrades to an ordinary send. */
     async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
-        const text = value.trim();
-        if (!text && !(attachments && attachments.length > 0)) {
-            this._confirmSteer(steerId, 'drop');
-            return;
-        }
-        // The webview holds the steer bubble until we confirm injection; a
-        // rejection below must release it (the composerError carries the id).
-        if (!this._localRunActive) {
-            // Race: the run already settled. Degrade to an ordinary turn - the
-            // webview rendered nothing yet, so confirm first (mode 'turn').
-            this._confirmSteer(steerId, 'turn');
-            void this._handleChatRequest(text, attachments);
-            return;
-        }
-        // Identity of the run this steer is AIMED at - captured before any
-        // await. Attachment processing (reference resolution, PDF text
-        // extraction) can take seconds; if the targeted run settles in that
-        // window, queueing would land the steer in the SHARED queue where an
-        // unrelated next run drains it. Re-check on append instead. A session
-        // switch (epoch bump - clearHistory/openSession) invalidates the
-        // steer outright: its webview bubbles no longer exist to match.
-        const turnToken = this._localTurnToken;
-        const sessionEpochAtEntry = this._sessionEpoch;
-        const refError = await resolveReferenceAttachments(attachments);
-        if (refError) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params, ...(steerId ? { steerId } : {}) });
-            return;
-        }
-        const attachValidationError = validateHostAttachments(attachments);
-        if (attachValidationError) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: attachValidationError.key, params: attachValidationError.params, ...(steerId ? { steerId } : {}) });
-            return;
-        }
-        const pdfExtraction = await extractPdfAttachments(attachments ?? []);
-        if (pdfExtraction.error) {
-            this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params, ...(steerId ? { steerId } : {}) });
-            return;
-        }
-        const sendAttachments = pdfExtraction.attachments;
-        if (this._sessionEpoch !== sessionEpochAtEntry) {
-            // The session this steer belonged to was cleared/switched while
-            // attachments were processed - drop it; its bubbles are gone and
-            // queueing would corrupt the fresh session.
-            this._confirmSteer(steerId, 'drop');
-            return;
-        }
-        if (!this._localRunActive || this._localTurnToken !== turnToken) {
-            // The targeted run settled while attachments were processed - the
-            // webview held the bubble, so confirm it as a plain turn (its own
-            // user row keeps the ledgers aligned) and run it standalone.
-            this._confirmSteer(steerId, 'turn');
-            void this._handleChatRequest(text, sendAttachments);
-            return;
-        }
-        const images = sendAttachments
-            ?.filter((a) => isImageAttachment(a.mimeType))
-            .map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 }));
-        if (this._activeEngine === 'opencode') {
-            try {
-                const accepted = await this._openCodeEngine?.steer({ text, attachments: sendAttachments, steerId });
-                if (accepted) return;
-                if (!this._localRunActive) {
-                    this._confirmSteer(steerId, 'turn');
-                    void this._handleChatRequest(text, sendAttachments);
-                    return;
-                }
-            } catch (error) {
-                this._view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : String(error), ...(steerId ? { steerId } : {}) });
+        const view = this._view, sessionEpochAtEntry = this._sessionEpoch;
+        const current = () => view === this._view && sessionEpochAtEntry === this._sessionEpoch;
+        const reject = (valueKey = 'engineSteerCancelled', error?: unknown) => {
+            if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : '', valueKey: error instanceof Error ? undefined : valueKey, ...(steerId ? { steerId } : {}) });
+        };
+        try {
+            const text = value.trim();
+            if (!text && !(attachments && attachments.length > 0)) {
+                this._confirmSteer(steerId, 'drop');
                 return;
             }
+            // The webview holds the steer bubble until we confirm injection; a
+            // rejection below must release it (the composerError carries the id).
+            if (!this._localRunActive) {
+                // Race: the run already settled. Degrade to an ordinary turn - the
+                // webview rendered nothing yet, so confirm first (mode 'turn').
+                await this._degradeSteerToTurn(text, attachments, steerId);
+                return;
+            }
+            // Identity of the run this steer is AIMED at - captured before any
+            // await. Attachment processing (reference resolution, PDF text
+            // extraction) can take seconds; if the targeted run settles in that
+            // window, queueing would land the steer in the SHARED queue where an
+            // unrelated next run drains it. Re-check on append instead. A session
+            // switch (epoch bump - clearHistory/openSession) invalidates the
+            // steer outright: its webview bubbles no longer exist to match.
+            const turnToken = this._localTurnToken;
+            const refError = await resolveReferenceAttachments(attachments);
+            if (!current()) return;
+            if (refError) {
+                this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params, ...(steerId ? { steerId } : {}) });
+                return;
+            }
+            const attachValidationError = validateHostAttachments(attachments);
+            if (attachValidationError) {
+                this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: attachValidationError.key, params: attachValidationError.params, ...(steerId ? { steerId } : {}) });
+                return;
+            }
+            const pdfExtraction = await extractPdfAttachments(attachments ?? []);
+            if (!current()) return;
+            if (pdfExtraction.error) {
+                this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params, ...(steerId ? { steerId } : {}) });
+                return;
+            }
+            const sendAttachments = pdfExtraction.attachments;
+            if (!this._localRunActive) {
+                // The targeted run settled while attachments were processed - the
+                // webview held the bubble, so confirm it as a plain turn (its own
+                // user row keeps the ledgers aligned) and run it standalone.
+                await this._degradeSteerToTurn(text, sendAttachments, steerId);
+                return;
+            }
+            if (this._localTurnToken !== turnToken) { reject(); return; }
+            const images = sendAttachments
+                ?.filter((a) => isImageAttachment(a.mimeType))
+                .map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 }));
+            if (this._activeEngine === 'opencode') {
+                try {
+                    const accepted = await this._openCodeEngine?.steer({ text, attachments: sendAttachments, steerId });
+                    if (!current()) return;
+                    if (accepted) return;
+                    if (!this._localRunActive) {
+                        await this._degradeSteerToTurn(text, sendAttachments, steerId);
+                        return;
+                    }
+                    if (this._localTurnToken !== turnToken) { reject(); return; }
+                } catch (error) {
+                    reject('engineSteerCancelled', error);
+                    return;
+                }
+            }
+            const native = this._activeEngine === 'opencode';
+            const queuedAttachments = native ? sendAttachments : images;
+            this._localSteerQueue.push({
+                text: native ? text : buildLocalUserText(text, sendAttachments),
+                ...(queuedAttachments?.length ? { images: queuedAttachments } : {}),
+                ...(sendAttachments?.length ? {
+                    meta: sendAttachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size })),
+                    // Built-in text is already fenced; native turns need every
+                    // attachment's bytes so their tools can read the full file.
+                    carryAttachments: sendAttachments
+                        .filter((a) => native || isImageAttachment(a.mimeType))
+                        .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
+                } : {}),
+                ...(steerId ? { steerId } : {}),
+            });
+        } catch (error) { reject('engineSteerCancelled', error); }
+    }
+
+    /** A late correction becomes a normal turn, but its raw draft remains
+     * recoverable if normal admission fails before the prompt is saved. */
+    private async _degradeSteerToTurn(text: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
+        const view = this._view, epoch = this._sessionEpoch;
+        this._confirmSteer(steerId, 'turn');
+        let accepted = false;
+        try {
+            await this._handleChatRequest(text, attachments, steerId ? { onAccepted: () => { accepted = true; } } : undefined);
+        } finally {
+            if (steerId && !accepted && view === this._view && epoch === this._sessionEpoch) {
+                view?.webview.postMessage({ type: 'sendFailed', requestId: steerId, prompt: text, attachments, valueKey: 'engineSteerCancelled', silent: true });
+            }
         }
-        const native = this._activeEngine === 'opencode';
-        const queuedAttachments = native ? sendAttachments : images;
-        this._localSteerQueue.push({
-            text: native ? text : buildLocalUserText(text, sendAttachments),
-            ...(queuedAttachments?.length ? { images: queuedAttachments } : {}),
-            ...(sendAttachments?.length ? {
-                meta: sendAttachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size })),
-                // Built-in text is already fenced; native turns need every
-                // attachment's bytes so their tools can read the full file.
-                carryAttachments: sendAttachments
-                    .filter((a) => native || isImageAttachment(a.mimeType))
-                    .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
-            } : {}),
-            ...(steerId ? { steerId } : {}),
-        });
     }
 
     /** Confirm a pending steer bubble to the webview. Only steers that came
@@ -7398,23 +7414,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }): Promise<void> {
         if (!this._view) { return; }
         if (opts?.admittedEpoch !== undefined && opts.admittedEpoch !== this._sessionEpoch) {
-            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
+            this._view.webview.postMessage({ type: opts?.onAccepted ? 'composerError' : 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
             return;
         }
         if (this._checkpointRestoreActive || (this._sessionTransitionsPending > 0 && opts?.admittedEpoch !== this._sessionEpoch)) {
-            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchBusy', prompt, attachments });
+            this._view.webview.postMessage({ type: opts?.onAccepted ? 'composerError' : 'sendFailed', valueKey: 'sessionSwitchBusy', prompt, attachments });
             return;
         }
         if (this._sessionWorkspace != null && !this._sessionWorkspaceMatches(this._sessionWorkspace)) {
-            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionWorkspaceReadOnly', prompt, attachments });
+            this._view.webview.postMessage({ type: opts?.onAccepted ? 'composerError' : 'sendFailed', valueKey: 'sessionWorkspaceReadOnly', prompt, attachments });
             return;
         }
         if (this._activeEngine === 'xratu' && this._sessionConnectionConfirmed === false) {
-            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionConnectionMismatch', prompt, attachments });
+            this._view.webview.postMessage({ type: opts?.onAccepted ? 'composerError' : 'sendFailed', valueKey: 'sessionConnectionMismatch', prompt, attachments });
             return;
         }
         if (this._modelManagementController || this._benchmarkController) {
-            this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'localModelBusy', prompt, attachments });
+            this._view.webview.postMessage({ type: opts?.onAccepted ? 'composerError' : 'sendFailed', valueKey: 'localModelBusy', prompt, attachments });
             return;
         }
         // Plan mode is captured BEFORE any await: the run later builds its
