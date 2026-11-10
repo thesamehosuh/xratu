@@ -6536,7 +6536,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (validPending && snapshot?.sessionId === id && ledger(snapshot.localHistory) && ledger(snapshot.uiHistory) &&
                 typeof snapshot.workspace === 'string' && (snapshot.title == null || typeof snapshot.title === 'string') &&
                 (snapshot.model == null || typeof snapshot.model === 'string') &&
-                (snapshot.summary == null || typeof snapshot.summary === 'string')) return snapshot;
+                (snapshot.summary == null || typeof snapshot.summary === 'string')) {
+                // Do not adopt a transcript from A and then persist/run it as B.
+                // Check before cancelling the current run or changing any state.
+                const workspace = this._sessionWorkspaceIdentity();
+                let sameWorkspace = (snapshot.workspace === 'default' || snapshot.workspace === '') && workspace === '';
+                if (snapshot.workspace && snapshot.workspace !== 'default' && workspace) {
+                    try { sameWorkspace = path.relative(fs.realpathSync(snapshot.workspace), workspace) === ''; }
+                    catch { /* A missing original workspace cannot be rebound implicitly. */ }
+                }
+                if (!sameWorkspace) {
+                    this.notifyBanner('warning', 'sessionWorkspaceMismatch');
+                    return null;
+                }
+                return snapshot;
+            }
         } catch { /* An unreadable target must leave the current conversation intact. */ }
         this.notifyBanner('warning', 'sessionLoadFailed');
         return null;

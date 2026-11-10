@@ -41,6 +41,10 @@ be rewound by Xratu.
 Files selected from VS Code are delivered only to the chat that requested them.
 Switching chats during a file read discards that delayed delivery.
 
+Saved conversations keep their original workspace. To reopen a chat listed
+under **All workspaces**, open its original folder first. A mismatched chat is
+rejected before the current run is cancelled or either conversation is saved.
+
 ## Unsent drafts
 
 Unsent text stays with its conversation and workspace when switching chats or
