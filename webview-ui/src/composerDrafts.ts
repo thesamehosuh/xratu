@@ -77,7 +77,21 @@ export function saveComposerRecoveries(key: string, entries: ComposerRecovery[])
     if (entries.length) state[key] = entries.slice(-MAX_DRAFTS).map(entry => ({
         id: entry.id, value: entry.value.slice(0, MAX_TEXT), names: [...entry.missingNames, ...entry.attachments.map(file => file.name)].slice(0, 20),
     }));
-    const keys = Object.keys(state);
-    while (keys.length > MAX_DRAFTS || JSON.stringify(state).length > MAX_TEXT) delete state[keys.shift()!];
-    patchWebviewState({ composerRecoveries: state });
+    // Budget text separately from metadata: a maximum-length newest draft
+    // must not be evicted merely because its JSON envelope adds characters.
+    let remaining = MAX_TEXT;
+    const kept: Record<string, unknown> = {};
+    for (const savedKey of Object.keys(state).slice(-MAX_DRAFTS).reverse()) {
+        const queue = state[savedKey];
+        if (!Array.isArray(queue)) continue;
+        const values = queue.slice(-MAX_DRAFTS).reverse().flatMap(entry => {
+            if (!entry || typeof entry.id !== 'string' || entry.id.length > 128 || typeof entry.value !== 'string') return [];
+            const value = entry.value.slice(0, remaining);
+            remaining -= value.length;
+            const names = Array.isArray(entry.names) ? entry.names.filter((name: unknown): name is string => typeof name === 'string').slice(0, 20).map((name: string) => name.slice(0, 1024)) : [];
+            return value || names.length ? [{ id: entry.id, value, names }] : [];
+        }).reverse();
+        if (values.length) kept[savedKey] = values;
+    }
+    patchWebviewState({ composerRecoveries: Object.fromEntries(Object.entries(kept).reverse()) });
 }

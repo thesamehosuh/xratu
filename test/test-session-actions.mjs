@@ -24,6 +24,11 @@ const routerFile = ts.createSourceFile('webviewRouter.ts', readFileSync(new URL(
 const router = routerFile.statements.find(n => ts.isFunctionDeclaration(n) && n.name.text === 'routeWebviewMessage');
 vm.runInNewContext(ts.transpileModule(router.getText(routerFile).replace('export function', 'function'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+for (const history of [[], [{ role: 'user' }, { role: 'assistant' }], [{ role: 'user' }, { role: 'assistant' }, { role: 'user' }, { role: 'assistant' }]]) {
+    const rewinds = [];
+    sandbox.routeWebviewMessage({ _history: history, _rewindAndResend: async index => rewinds.push(index) }, { type: 'regenerate' }, {});
+    assert.deepEqual(rewinds, history.length ? [history.filter(row => row.role === 'user').length - 1] : []);
+}
 const snapshot = id => ({ sessionId: id, model: 'target-model', summary: null, title: id, workspace: path.resolve('workspace'), renamed: false, localHistory: [{ role: 'user', content: id }], uiHistory: [{ role: 'user', content: id }], totalCostUsd: 3 });
 function harness() {
     const host = new sandbox.Host(), notices = [], messages = [], state = new Map(), events = [];

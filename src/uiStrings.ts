@@ -53,6 +53,7 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     notifReviewTooLarge: { fa: '{file} خیلی بزرگه و پیش نمایش براش باز نمیشه', en: '{file} is too large to preview' },
     notifReviewFailed: { fa: 'بررسی تغییرات ناموفق بود: {error}', en: 'Reviewing changes failed: {error}' },
     notifRewindNoText: { fa: 'متن این پیام برای ارسال دوباره پیدا نشد', en: 'The text of this message could not be found for resending' },
+    notifRewindAttachments: { fa: 'برای ارسال دوباره، پیام رو ویرایش کن و فایل هاش رو دوباره پیوست کن', en: 'Edit this message and reattach its files before resending' },
     notifCpRestoreFailed: { fa: 'بازیابی نقطه بازرسی ناموفق بود: {error}', en: 'Checkpoint restore failed: {error}' },
     notifEditFailed: { fa: 'ویرایش پیام ناموفق بود: {error}', en: 'Editing the message failed: {error}' },
     notifRegenerateFailed: { fa: 'تولید دوباره ناموفق بود: {error}', en: 'Regeneration failed: {error}' },

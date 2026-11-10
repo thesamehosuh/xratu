@@ -89,7 +89,7 @@ export interface WebviewMessageHost {
     _benchmarkProvider(): Promise<void>;
     _gitCheckout(branch: string): Promise<void>;
     _globalState: vscode.Memento;
-    _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string): Promise<void>;
+    _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string, editIndex?: number): Promise<void>;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
     _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void>;
     _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove?: boolean, _retryCount?: number): Promise<void>;
@@ -511,7 +511,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 }
                 case 'editMessage':
-                    host._rewindAndResend(data.userIndex, data.value, data.attachments).catch((e) => {
+                    host._handleComposerSend(data.value, data.attachments, data.requestId, data.sessionKey, data.userIndex).catch((e) => {
                         host.notifyBanner('error', 'notifEditFailed', {
                             error: e instanceof Error ? e.message : String(e)
                         });
@@ -712,10 +712,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'regenerate': {
                     // Re-run the LAST exchange: rewind to its own
                     // pre-prompt checkpoint and resend unchanged.
-                    let lastUser = -1;
-                    for (let i = 0; i < host._history.length; i++) {
-                        if (host._history[i].role === 'user') lastUser = i;
-                    }
+                    const lastUser = host._history.filter(message => message.role === 'user').length - 1;
                     if (lastUser >= 0) {
                         host._rewindAndResend(lastUser, null).catch((e) => {
                             host.notifyBanner('error', 'notifRegenerateFailed', {

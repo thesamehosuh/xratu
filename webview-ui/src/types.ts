@@ -141,7 +141,7 @@ export type ToExtensionMessage =
     | { type: 'setNativeVariant'; model: string; variant: string | null }
     /** Edit the userIndex-th user message and resend (workspace rewinds).
      *  Attachments ride along when the composer edit added files. */
-    | { type: 'editMessage'; userIndex: number; value: string; attachments?: ComposerAttachment[] }
+    | { type: 'editMessage'; requestId?: string; sessionKey?: string; userIndex: number; value: string; attachments?: ComposerAttachment[] }
     /** Regenerate the last exchange (same prompt, fresh response). */
     | { type: 'regenerate' }
     /** Open the raw MCP config file (workspace mcp.json when present, else global) in the editor. */

@@ -2234,15 +2234,39 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             console.error('xratu: task list edit persist failed:', e));
     }
 
-    async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[]): Promise<void> {
+    async _rewindAndResend(userIndex: number, newText: string | null, attachments?: ComposerAttachment[], onAccepted?: () => void): Promise<void> {
         if (this._activeEngine === 'opencode') { this.notifyBanner('warning', 'engineRewindUnsupported'); return; }
+        if (this._sessionConnectionConfirmed === false) { this.notifyBanner('warning', 'sessionConnectionMismatch'); return; }
+        if (this._modelManagementController || this._benchmarkController) { this.notifyBanner('warning', 'localModelBusy'); return; }
         const context = this._captureCheckpointAction(userIndex, undefined, true);
         if (!context) return;
+        if (newText === null && context.turn?.attachments?.length && !attachments?.length) {
+            this.notifyBanner('warning', 'notifRewindAttachments'); return;
+        }
         const text = (newText ?? context.turn?.content ?? '').trim();
         if (!text && !attachments?.length) { this.notifyBanner('warning', 'notifRewindNoText'); return; }
         let run: Promise<void> | undefined;
         await this._serializeSessionTransition(async () => {
             if (!this._checkpointActionCurrent(context, userIndex)) return;
+            // All admission checks precede workspace/history mutations. Keep
+            // resolved file bytes and auth pinned to this specific resend.
+            const refError = await resolveReferenceAttachments(attachments);
+            const attachmentError = refError ?? validateHostAttachments(attachments);
+            if (attachmentError) {
+                this._view?.webview.postMessage({ type: 'composerError', valueKey: attachmentError.key, params: attachmentError.params });
+                return;
+            }
+            const extracted = await extractPdfAttachments(attachments ?? []);
+            if (extracted.error) {
+                this._view?.webview.postMessage({ type: 'composerError', valueKey: extracted.error.key, params: extracted.error.params });
+                return;
+            }
+            const controller = new AbortController();
+            this._abortControllers.set('chat', controller);
+            let connection: Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>;
+            try { connection = await this._prepareLocalRun(controller); }
+            finally { this._abortControllers.delete('chat'); }
+            if (!connection || controller.signal.aborted || !this._checkpointActionCurrent(context, userIndex)) return;
             const targetIdx = this._findUserEntry(userIndex);
             // Legacy turns without their own checkpoint use the closest earlier
             // one, preserving the existing conversation-only fallback.
@@ -2253,12 +2277,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }
             }
             this._checkpointRestoreActive = true;
+            const previous = { history: this._history, localHistory: this._localHistory,
+                evicted: this._localEvictedUserTurns, replay: this._localReplayUserTurns,
+                connectionId: this._sessionConnectionId, connectionModel: this._sessionConnectionModel };
+            let saved = false;
+            let safety = '';
             try {
                 if (context.root && baseSha) {
                     validateReviewCheckpoint(baseSha);
                     baseSha = await this._checkpoints.resolveCheckpoint(context.root, baseSha);
                     if (!this._checkpointActionCurrent(context, userIndex)) return;
-                    try { await this._checkpoints.restoreCheckpoint(context.root, baseSha); }
+                    try { safety = (await this._checkpoints.restoreCheckpoint(context.root, baseSha)).safety; }
                     catch (e) {
                         // Empty seed still refuses to erase new files; only the
                         // conversation rewinds, as it did before this guard.
@@ -2266,19 +2295,37 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         else throw e;
                     }
                 }
+                // Read the restored rules before discarding the old transcript.
+                const rulesContext = await this._localRulesContext();
                 this._approvalCloseItems = {};
                 this._history = this._history.slice(0, targetIdx);
                 this._truncateLocalHistoryAt(userIndex);
+                this._sessionConnectionId = connection.active.id;
+                this._sessionConnectionModel = connection.model;
+                this._localPendingTurn = { prompt: text, events: [], attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
+                await this._persistLocalSession();
+                saved = true;
                 this._dropOrphanedTaskListEdit();
                 this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
                 this._view?.webview.postMessage({ type: 'restoreUser', value: text });
-                await this._persistLocalSession();
+                onAccepted?.();
                 this._checkpointRestoreActive = false;
                 // Claim the resend synchronously inside admission, but release
                 // the queue before awaiting inference so switches can cancel it.
                 run = this._handleChatRequest(text, attachments?.length ? attachments : undefined,
-                    { baseSha: context.root ? baseSha : undefined, admittedEpoch: context.epoch });
+                    { baseSha: context.root ? baseSha : undefined, admittedEpoch: context.epoch,
+                        prepared: { connection, attachments: extracted.attachments, rulesContext } });
             } catch (e) {
+                if (!saved) {
+                    this._history = previous.history; this._localHistory = previous.localHistory;
+                    this._localEvictedUserTurns = previous.evicted; this._localReplayUserTurns = previous.replay;
+                    this._sessionConnectionId = previous.connectionId; this._sessionConnectionModel = previous.connectionModel;
+                    this._localPendingTurn = null;
+                    if (context.root && safety) {
+                        try { await this._checkpoints.restoreCheckpoint(context.root, safety); }
+                        catch (rollbackError) { this.notifyBanner('error', 'notifCpRestoreFailed', { error: String(rollbackError) }); }
+                    }
+                }
                 this.notifyBanner('error', 'notifCpRestoreFailed', { error: e instanceof Error ? e.message : String(e) });
             } finally { this._checkpointRestoreActive = false; }
         });
@@ -4446,27 +4493,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         else this._localSteerQueue.splice(fromIndex);
     }
 
-    private async _runLocalAgent(
-        prompt: string,
-        rulesContext: string,
-        attachments?: ComposerAttachment[],
-        existingController?: AbortController,
-        planMode?: boolean,
-        hiddenPrompt?: boolean,
-        onAccepted?: () => void,
-    ): Promise<StreamOutcome> {
-        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted);
+    /** Resolve once before an ordinary run or any destructive edit rewind. */
+    private async _prepareLocalRun(controller: AbortController) {
         const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
         const model = this._selectedModel;
         const credentials = await this._getSavedCredentials();
         if (!credentials.length || activeId === '' || this._sessionConnectionConfirmed === false) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return null;
         }
         const active = activeId ? credentials.find((c) => c.id === activeId) : credentials[0];
         if (!active) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'localCredMissing' });
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+            return null;
         }
         // The async seam: an OAuth connection resolves its token set ONCE per
         // turn (refreshing when stale), then everything downstream keeps
@@ -4478,12 +4517,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // leave the composer spinning with no explanation. "Sign in again" is
         // a different action from "something went wrong" and the user needs to
         // be told which one happened.
-        const controller = existingController ?? new AbortController();
-        this._abortControllers.set('chat', controller);
-        const noRun = (): StreamOutcome => {
-            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
-            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
-        };
         let auth: Awaited<ReturnType<typeof this._resolveCredentialAuth>>;
         try {
             auth = await this._resolveCredentialAuth(active, controller.signal);
@@ -4492,17 +4525,40 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._view?.webview.postMessage({ type: 'error', valueKey: oauthErrorValueKey(e) });
                 if (active.oauthProviderId) await this._sendOAuthState();
             }
-            return noRun();
+            return null;
         }
         const insecureError = insecureRemoteHttpError(active.baseUrl, auth.apiKey);
         if (insecureError) {
             this._view?.webview.postMessage({ type: 'error', valueKey: insecureError });
-            return noRun();
+            return null;
         }
         if (!model) {
             this._view?.webview.postMessage({ type: 'error', valueKey: 'noModelSelected' });
-            return noRun();
+            return null;
         }
+
+        return { active, model, auth };
+    }
+
+    private async _runLocalAgent(
+        prompt: string,
+        rulesContext: string,
+        attachments?: ComposerAttachment[],
+        existingController?: AbortController,
+        planMode?: boolean,
+        hiddenPrompt?: boolean,
+        onAccepted?: () => void,
+        prepared?: Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>,
+    ): Promise<StreamOutcome> {
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted);
+        const controller = existingController ?? new AbortController();
+        this._abortControllers.set('chat', controller);
+        const connection = prepared ?? await this._prepareLocalRun(controller);
+        if (!connection || controller.signal.aborted) {
+            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
+            return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
+        }
+        const { active, model, auth } = connection;
 
         this._sessionConnectionId = active.id;
         this._sessionConnectionModel = model;
@@ -7302,8 +7358,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _composerReceipts = new Map<string, 'pending' | 'accepted' | 'rejected'>();
 
     /** Request identity protects admission; receipts never restart a mutation. */
-    async _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string): Promise<void> {
-        if (!requestId) return this._handleChatRequest(prompt, attachments);
+    async _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string, editIndex?: number): Promise<void> {
+        if (!requestId) return editIndex === undefined ? this._handleChatRequest(prompt, attachments) : this._rewindAndResend(editIndex, prompt, attachments);
         if (typeof requestId !== 'string' || requestId.length > 128) return;
         const view = this._view, epoch = this._sessionEpoch;
         const identity = this._browserSessionId();
@@ -7318,11 +7374,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._composerReceipts.set(key, 'pending');
         try {
             if (this._localRunActive) { this._composerReceipts.set(key, 'rejected'); reply('rejected', 'sessionSwitchBusy'); return; }
-            await this._handleChatRequest(prompt, attachments, { onAccepted: () => {
+            const onAccepted = () => {
                 if (this._composerReceipts.get(key) !== 'pending') return;
                 this._composerReceipts.set(key, 'accepted');
                 reply('accepted');
-            } });
+            };
+            if (editIndex === undefined) await this._handleChatRequest(prompt, attachments, { onAccepted });
+            else await this._rewindAndResend(editIndex, prompt, attachments, onAccepted);
         } catch (error) {
             if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : String(error) });
         } finally {
@@ -7334,7 +7392,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
-    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void }): Promise<void> {
+    async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: {
+        baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void;
+        prepared?: { connection: NonNullable<Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>>; attachments: ComposerAttachment[]; rulesContext: string };
+    }): Promise<void> {
         if (!this._view) { return; }
         if (opts?.admittedEpoch !== undefined && opts.admittedEpoch !== this._sessionEpoch) {
             this._view.webview.postMessage({ type: 'sendFailed', valueKey: 'sessionSwitchStale', prompt, attachments });
@@ -7427,19 +7488,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // through its own tools when it needs their content.
             // @-mention refs resolve FIRST (filling path-only chips with fresh
             // bytes); everything downstream validates them like any attachment.
-            const refError = await resolveReferenceAttachments(attachments);
+            const refError = opts?.prepared ? null : await resolveReferenceAttachments(attachments);
             if (refError) {
                 this._view.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params });
                 return;
             }
-            const attachValidationError = validateHostAttachments(attachments);
+            const attachValidationError = opts?.prepared ? null : validateHostAttachments(attachments);
             if (attachValidationError) {
                 this._view.webview.postMessage({ type: 'composerError', value: '', valueKey: attachValidationError.key, params: attachValidationError.params });
                 return;
             }
             // PDFs become text attachments HERE (single pipeline for cloud AND
             // local); the display metadata below keeps the original pdf identity.
-            const pdfExtraction = await extractPdfAttachments(attachments ?? []);
+            const pdfExtraction = opts?.prepared ? { attachments: opts.prepared.attachments, error: null } : await extractPdfAttachments(attachments ?? []);
             if (pdfExtraction.error) {
                 this._view.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params });
                 return;
@@ -7496,7 +7557,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 let rulesContext = '';
                 if (this._activeEngine !== 'opencode') {
                     try {
-                        rulesContext = await this._localRulesContext();
+                        rulesContext = opts?.prepared?.rulesContext ?? await this._localRulesContext();
                     } catch (error) {
                         // Unreadable rules fail LOUDLY and once. startResponse is
                         // already posted, so rethrowing would strand the webview
@@ -7541,7 +7602,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
                 agentStarted = true;
-                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, opts?.onAccepted);
+                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, opts?.onAccepted, opts?.prepared?.connection);
                 this._endLiveMarkdown();
                 // Final pass over the run-lifetime ledger before either
                 // terminal path consumes it: a reasoning block (or carrier

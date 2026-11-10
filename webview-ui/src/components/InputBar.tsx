@@ -259,7 +259,7 @@ interface InputBarProps {
     draftKey: string;
     busy: boolean;
     onSend: (text: string, attachments: ComposerAttachment[], revision?: number) => boolean | void;
-    acceptedSend?: { requestId: string; revision: number } | null;
+    acceptedSend?: { requestId: string; revision: number; edit?: boolean } | null;
     onAcceptedSendApplied?: () => void;
     onCancel: () => void;
     /** Suggestion-chip payload: typed into the composer char-by-char, then
@@ -407,7 +407,9 @@ export function InputBar({
     useLayoutEffect(() => { draftRevision.current++; }, [value, attachments]);
     useEffect(() => {
         if (!acceptedSend) return;
-        if (acceptedSend.revision === draftRevision.current) {
+        if (acceptedSend.edit && editDraft && acceptedSend.revision !== draftRevision.current) {
+            setRecoveryDrafts(previous => previous.some(draft => draft.id === acceptedSend.requestId) ? previous : [...previous, { id: acceptedSend.requestId, value, attachments, missingNames: [] }]);
+        } else if (!acceptedSend.edit && acceptedSend.revision === draftRevision.current) {
             setValue(''); setAttachments([]);
         }
         onAcceptedSendApplied?.();

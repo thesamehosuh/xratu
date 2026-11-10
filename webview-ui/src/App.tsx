@@ -197,8 +197,8 @@ export function App() {
     /** Host rejected the last send - restore value + attachments so the
      *  user can retry without re-attaching everything. */
     const [composerRestore, setComposerRestore] = useState<Array<{ id: string; value: string; attachments: ComposerAttachment[] }>>([]);
-    const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; errorReported: boolean } | null>(null);
-    const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number } | null>(null);
+    const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; errorReported: boolean; edit?: boolean } | null>(null);
+    const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number; edit?: boolean } | null>(null);
     /** Message being edited in the composer card (pencil → composer flow):
      *  the composer prefills its text, sending performs the rewind-resend. */
     const [editDraft, setEditDraft] = useState<{ userIndex: number; value: string } | null>(null);
@@ -907,9 +907,9 @@ export function App() {
                     if (!pending || pending.requestId !== msg.requestId || pending.mount !== draftIdentity.current.mount ||
                         (pending.sessionKey && pending.sessionKey !== msg.sessionKey)) break;
                     pendingSend.current = null;
-                    if (msg.status === 'accepted') setAcceptedSend({ requestId: msg.requestId, revision: pending.revision });
+                    if (msg.status === 'accepted') setAcceptedSend({ requestId: msg.requestId, revision: pending.revision, edit: pending.edit });
                     else {
-                        dispatch({ type: 'sendFailed', requestId: msg.requestId, value: '', prompt: pending.prompt, silent: true });
+                        if (!pending.edit) dispatch({ type: 'sendFailed', requestId: msg.requestId, value: '', prompt: pending.prompt, silent: true });
                         if (!pending.errorReported) setComposerError(previous => ({ id: (previous?.id ?? 0) + 1, value: '', valueKey: msg.valueKey ?? 'composerSendRejected' }));
                     }
                     break;
@@ -1090,9 +1090,11 @@ export function App() {
             // Composer edit mode: the pencil loaded a past user message;
             // sending it rewinds + resends instead of opening a new turn.
             if (editDraft) {
-                setEditDraft(null);
-                send({ type: 'editMessage', userIndex: editDraft.userIndex, value, attachments });
-                return;
+                const requestId = `edit-${Date.now()}-${steerSeq.current++}`;
+                const sessionKey = draftIdentity.current.live ?? undefined;
+                pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, errorReported: false, edit: true };
+                send({ type: 'editMessage', requestId, sessionKey, userIndex: editDraft.userIndex, value, attachments });
+                return false;
             }
             if (chat.busy) {
                 // The agent loop lives in the extension - STEER the live run.
@@ -1797,7 +1799,7 @@ export function App() {
                 key={composerMountKey}
                 draftKey={draftKey}
                 acceptedSend={acceptedSend}
-                onAcceptedSendApplied={() => setAcceptedSend(null)}
+                onAcceptedSendApplied={() => { if (acceptedSend?.edit) setEditDraft(null); setAcceptedSend(null); }}
                 yolo={yolo}
                 onTogglePlan={() => send({ type: 'togglePlanMode' })}
                 onToggleYolo={() => send({ type: 'toggleYolo' })}

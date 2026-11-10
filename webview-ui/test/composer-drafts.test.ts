@@ -36,4 +36,6 @@ const restored = composerDraftKey('/restored', 'A');
 patchWebviewState({ composerRecoveries: { [restored]: [{ id: 'disk', value: 'recover text', names: ['private.txt'] }] } });
 assert.deepEqual(readComposerRecoveries(restored)[0].missingNames, ['private.txt']);
 assert.deepEqual(readComposerRecoveries(restored)[0].attachments, []);
+saveComposerRecoveries(a, [{ id: 'large', value: 'x'.repeat(200_000), attachments: [], missingNames: [] }]);
+assert.equal((getWebviewState().composerRecoveries as Record<string, Array<{ value: string }>>)[a][0].value.length, 200_000, 'metadata must not evict the newest maximum-length recovery');
 console.log('composer-drafts: isolation, promotion, merged state, validation and bounds passed');

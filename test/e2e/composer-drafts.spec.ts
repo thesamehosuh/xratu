@@ -104,8 +104,47 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await input.fill('newer draft');
         await post(page, { type: 'composerError', valueKey: 'engineSteerCancelled', steerId: steer.steerId });
         await expect(input).toHaveValue('newer draft');
-        await page.getByRole('button', { name: locale === 'en' ? 'Add rejected message' : 'افزودن پیام رد شده', exact: true }).click();
+        await page.getByRole('button', { name: locale === 'en' ? 'Recover draft' : 'بازیابی پیش نویس', exact: true }).click();
         await expect(input).toHaveValue('newer draft\n\nrejected correction');
         await page.screenshot({ path: testInfo.outputPath('receipts.png') });
+    });
+}
+
+for (const locale of ['en', 'fa']) {
+    test(`edit receipts preserve ordinary and newer edit drafts ${locale}`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 420, height: 900 });
+        await installVscodeTheme(page);
+        await page.addInitScript(() => {
+            const messages: Array<Record<string, unknown>> = [];
+            Object.assign(window, { draftMessages: messages, acquireVsCodeApi: () => ({ postMessage: (message: Record<string, unknown>) => messages.push(message), getState: () => undefined, setState: () => undefined }) });
+        });
+        await page.goto('/');
+        await expect(page.locator('.app')).toBeAttached();
+        await post(page, { type: 'locale', locale });
+        await session(page, 'A');
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+        await post(page, { type: 'restoreUser', value: 'Previous request' });
+        const input = page.locator('.composer-input');
+        await input.fill('Ordinary draft');
+        await page.getByRole('button', { name: locale === 'en' ? 'Edit message' : 'ویرایش پیام', exact: true }).click();
+        await expect(input).toHaveValue('Previous request');
+        await input.fill('Edited request'); await input.press('Enter');
+        const latest = () => page.evaluate(() => (window as unknown as { draftMessages: Array<Record<string, unknown>> }).draftMessages.filter(message => message.type === 'editMessage').at(-1)!);
+        const rejected = await latest();
+        await post(page, { type: 'sendReceipt', requestId: rejected.requestId, sessionKey: 'A', status: 'rejected' });
+        await expect(input).toHaveValue('Edited request');
+        await expect(page.locator('article.msg.user')).toContainText('Previous request');
+        await input.press('Enter');
+        const accepted = await latest();
+        expect(accepted.requestId).not.toBe(rejected.requestId);
+        await input.fill('Newer edit draft');
+        await post(page, { type: 'truncateFromUser', userIndex: 0 });
+        await post(page, { type: 'restoreUser', value: 'Edited request' });
+        await post(page, { type: 'sendReceipt', requestId: accepted.requestId, sessionKey: 'A', status: 'accepted' });
+        await expect(input).toHaveValue('Ordinary draft');
+        await page.getByRole('button', { name: locale === 'en' ? 'Recover draft' : 'بازیابی پیش نویس', exact: true }).click();
+        await expect(input).toHaveValue('Ordinary draft\n\nNewer edit draft');
+        await page.screenshot({ path: testInfo.outputPath('edit-receipts.png') });
     });
 }

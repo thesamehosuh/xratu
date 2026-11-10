@@ -36,6 +36,8 @@ function harness() {
     host._truncateLocalHistoryAt = index => truncations.push(index);
     host._dropOrphanedTaskListEdit = () => {};
     host._persistLocalSession = async () => {};
+    host._prepareLocalRun = async () => ({ active: { id: 'fixture' }, model: 'fixture', auth: { apiKey: null } });
+    host._localRulesContext = async () => '';
     const confirm = deferred(), shown = deferred();
     host.confirmBanner = (...args) => { shown.resolve(args); return confirm.promise; };
     return { host, notices, messages, restores, truncations, confirm, shown };
@@ -244,6 +246,35 @@ try {
         sandbox.vscode.workspace.workspaceFolders = [{ uri: { fsPath: root } }];
     }
     console.log('ok edit rejects stale targets and writers while preserving empty-seed, no-workspace and legacy-turn policy');
+
+    for (const mode of ['connection', 'no-model', 'invalid-reference', 'bad-pdf', 'save-failure', 'rules-failure', 'regenerate-attachment']) {
+        const t = harness();
+        const original = t.host._history;
+        let accepted = false, sends = 0;
+        t.host._handleChatRequest = async () => { sends++; };
+        if (mode === 'connection') t.host._sessionConnectionConfirmed = false;
+        if (mode === 'no-model') t.host._prepareLocalRun = async () => null;
+        if (mode === 'invalid-reference') sandbox.resolveReferenceAttachments = async () => ({ key: 'attachFileMissing' });
+        if (mode === 'bad-pdf') sandbox.extractPdfAttachments = async () => ({ error: { key: 'attachPdfFailed' } });
+        if (mode === 'save-failure') t.host._persistLocalSession = async () => { throw Error('disk full'); };
+        if (mode === 'rules-failure') t.host._localRulesContext = async () => { throw Error('unreadable restored rules'); };
+        if (mode === 'regenerate-attachment') original[0].attachments = [{ name: 'original.png' }];
+        await t.host._rewindAndResend(0, mode === 'regenerate-attachment' ? null : 'Edited', [], () => { accepted = true; });
+        assert.equal(accepted, false);
+        assert.equal(sends, 0);
+        assert.equal(t.host._history, original, `${mode} must retain the original transcript`);
+        assert.ok(!t.messages.some(message => message.type === 'truncateFromUser'));
+        assert.equal(t.restores.length, ['save-failure', 'rules-failure'].includes(mode) ? 2 : 0, `${mode} must either avoid writes or roll back to its safety snapshot`);
+        assert.equal(t.host._abortControllers.size, 0);
+        sandbox.resolveReferenceAttachments = async () => null;
+        sandbox.extractPdfAttachments = async () => ({ error: null, attachments: [] });
+    }
+    const durable = harness(); let snapshot, acknowledged = false;
+    durable.host._persistLocalSession = async () => { snapshot = durable.host._localPendingTurn?.prompt; };
+    durable.host._handleChatRequest = async () => { assert.ok(acknowledged); };
+    await durable.host._rewindAndResend(0, 'Durable edit', [], () => { assert.equal(snapshot, 'Durable edit'); acknowledged = true; });
+    assert.ok(acknowledged);
+    console.log('ok edit preflight failures retain history; storage/rules failures restore files; acceptance follows durable revised text');
 
     const storage = mkdtempSync(path.join(tmpdir(), 'xratu-action-storage-'));
     try {
