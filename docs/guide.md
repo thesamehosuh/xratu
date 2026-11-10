@@ -34,6 +34,10 @@ remain unavailable.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
 
+Historical edit/resend is available only with the built-in engine. OpenCode
+keeps the copy action and file-only checkpoint restore; its native history cannot
+be rewound by Xratu.
+
 ## Unsent drafts
 
 Unsent text stays with its conversation and workspace when switching chats or

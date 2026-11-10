@@ -1054,6 +1054,9 @@ export function App() {
         send({ type: 'gitStatusGetState' });
     }, [chat.busy, send]);
 
+    const canRewind = !!engineState && ENGINE_CAPABILITIES[engineState.active]?.rewind === true;
+    useEffect(() => { if (!canRewind) setEditDraft(null); }, [canRewind]);
+
     const handleSend = useCallback(
         (text: string, attachments: ComposerAttachment[]) => {
             const value = text.trim();
@@ -1688,8 +1691,8 @@ export function App() {
                     onPickSuggestion={(text) => setInjectedText({ id: Date.now(), text })}
                     onApprovalDecision={handleApprovalDecision}
                     onDecisionResponse={handleDecisionResponse}
-                    onRegenerate={handleRegenerate}
-                    onEditMessage={handleEditMessage}
+                    onRegenerate={canRewind ? handleRegenerate : undefined}
+                    onEditMessage={canRewind ? handleEditMessage : undefined}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     onReviewChanges={handleReviewChanges}
                     onAskReview={addReviewFeedback}
