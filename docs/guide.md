@@ -38,6 +38,9 @@ Historical edit/resend is available only with the built-in engine. OpenCode
 keeps the copy action and file-only checkpoint restore; its native history cannot
 be rewound by Xratu.
 
+Files selected from VS Code are delivered only to the chat that requested them.
+Switching chats during a file read discards that delayed delivery.
+
 ## Unsent drafts
 
 Unsent text stays with its conversation and workspace when switching chats or
