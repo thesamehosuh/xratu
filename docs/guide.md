@@ -34,6 +34,15 @@ remain unavailable.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
 
+## Unsent drafts
+
+Unsent text stays with its conversation and workspace when switching chats or
+reloading the webview. A new chat keeps its draft when its first message assigns
+it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
+VS Code state retains up to 32 recent text drafts within 200,000 characters total;
+older drafts are evicted. Attachments are kept in memory only and must be
+attached again after reload, including session switches that reload the page. Send acknowledgements are not yet tracked.
+
 ## OpenCode inside Xratu
 
 Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x

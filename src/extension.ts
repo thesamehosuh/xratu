@@ -6419,6 +6419,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._browser.setSession(this._browserSessionId());
         this._view?.webview.postMessage({
             type: 'sessionState',
+            workspace: this._localWorkspaceKey(),
             browserSessionId: this._browserSessionId(),
             id: this._sessionId,
             title: this._sessionTitle,

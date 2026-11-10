@@ -1,0 +1,43 @@
+import type { ComposerAttachment } from './types';
+import { getWebviewState, patchWebviewState } from './vscode';
+
+/** Only text goes into VS Code state. Attachment bytes remain in memory. */
+const attachments = new Map<string, ComposerAttachment[]>();
+const MAX_DRAFTS = 32;
+const MAX_TEXT = 200_000;
+export const composerDraftKey = (workspace: string, session: string | null) => JSON.stringify([workspace, session]);
+
+function savedTexts(): Record<string, string> {
+    const raw = getWebviewState().composerDrafts;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter(([key, value]) =>
+        key.length <= 4096 && typeof value === 'string' && value.length <= MAX_TEXT).slice(-MAX_DRAFTS));
+}
+
+export function readComposerDraft(key: string): { text: string; attachments: ComposerAttachment[] } {
+    return { text: savedTexts()[key] ?? '', attachments: attachments.get(key) ?? [] };
+}
+
+export function saveComposerDraft(key: string, text: string, files: ComposerAttachment[]): void {
+    const texts = savedTexts();
+    delete texts[key];
+    if (text) texts[key] = text.slice(0, MAX_TEXT);
+    // Keep the newest drafts under a total character budget as well as a count.
+    let total = 0;
+    const kept = Object.entries(texts).reverse().filter(([, value], index) => {
+        total += value.length;
+        return index < MAX_DRAFTS && total <= MAX_TEXT;
+    }).reverse();
+    patchWebviewState({ composerDrafts: Object.fromEntries(kept) });
+    attachments.delete(key);
+    if (files.length) attachments.set(key, files);
+    while (attachments.size > MAX_DRAFTS) attachments.delete(attachments.keys().next().value!);
+}
+
+/** A disk ID is assigned after the first send; this is still the same chat. */
+export function promoteComposerDraft(from: string, to: string): void {
+    if (from === to) return;
+    const draft = readComposerDraft(from);
+    saveComposerDraft(from, '', []);
+    saveComposerDraft(to, draft.text, draft.attachments);
+}
