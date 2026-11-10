@@ -34,6 +34,10 @@ remain unavailable.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
 
+Tool execution is restricted to the active run's tool list, including delegated
+runs. Supported aliases use the canonical tool's approval policy. External MCP
+calls are refused in Plan mode even if a model invents a call.
+
 ## OpenCode inside Xratu
 
 Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x
