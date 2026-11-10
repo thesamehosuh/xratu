@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "2.6.2",
+  "version": "2.6.7",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -319,6 +319,8 @@
     "test:first-token-timeout": "node test/test-first-token-timeout.mjs",
     "test:browser": "node test/test-browser.mjs",
     "test:downloads": "node test/test-downloads.mjs",
+    "test:tool-admission": "node test/test-tool-admission.mjs",
+    "test:attachment-session": "node test/test-attachment-session.mjs",
     "test:archives": "node test/test-archives.mjs",
     "test:web-research": "node test/test-web-research.mjs"
   },

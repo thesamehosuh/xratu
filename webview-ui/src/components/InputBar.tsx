@@ -29,6 +29,7 @@ import { applyMentionPick, detectMention, filterFiles, type MentionState } from 
 import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf, tOrRaw } from '../i18n';
 import { prefersReducedMotion } from '../motion';
+import { readComposerDraft, saveComposerDraft } from '../composerDrafts';
 
 /** Fallback when no window is known for this model yet. */
 const DEFAULT_CONTEXT_LIMIT = 131_072;
@@ -254,19 +255,8 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
     }
 }
 
-/**
- * Composer draft that OUTLIVES the component instance.
- *
- * Navigating to Settings / Capabilities / Usage makes App render a different
- * screen tree, which unmounts InputBar - so a half-written message used to be
- * discarded by navigation alone. Module scope survives the unmount, the store
- * is mirrored on every change, and the normal send path (which already resets
- * both pieces of state) clears it for free.
- */
-let draftText = '';
-let draftAttachments: ComposerAttachment[] = [];
-
 interface InputBarProps {
+    draftKey: string;
     busy: boolean;
     onSend: (text: string, attachments: ComposerAttachment[]) => void;
     onCancel: () => void;
@@ -344,6 +334,7 @@ interface InputBarProps {
 }
 
 export function InputBar({
+    draftKey,
     busy,
     onSend,
     onCancel,
@@ -388,9 +379,8 @@ export function InputBar({
     onRequestFiles,
     branchPicker,
 }: InputBarProps) {
-    // Seeded from the module-level draft store: a remount (navigating back
-    // from another screen) restores exactly what the user had typed.
-    const [value, setValue] = useState(draftText);
+    const [initialDraft] = useState(() => readComposerDraft(draftKey));
+    const [value, setValue] = useState(initialDraft.text);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [filter, setFilter] = useState('');
     const [freeOnly, setFreeOnly] = useState(true);
@@ -406,7 +396,7 @@ export function InputBar({
     }, [pickerOpen, models, modelCapabilities, modelPings, onPingModel]);
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-    const [attachments, setAttachments] = useState<ComposerAttachment[]>(draftAttachments);
+    const [attachments, setAttachments] = useState<ComposerAttachment[]>(initialDraft.attachments);
     const [attachError, setAttachError] = useState<string | null>(null);
     // Attachment errors auto-dismiss - they describe a single rejected file,
     // so lingering forever is noise (the chips themselves persist).
@@ -415,15 +405,23 @@ export function InputBar({
         const timer = setTimeout(() => setAttachError(null), 5000);
         return () => clearTimeout(timer);
     }, [attachError]);
-    // Mirror the draft into module scope on every change, so unmounting the
-    // composer (any screen switch) cannot drop it. Sending clears both states,
-    // which clears the store through these same effects.
+    // Historical edits are temporary; cancelling returns to the normal draft.
+    const ordinaryDraft = useRef(initialDraft);
+    const wasEditing = useRef(false);
     useEffect(() => {
-        draftText = value;
-    }, [value]);
-    useEffect(() => {
-        draftAttachments = attachments;
-    }, [attachments]);
+        if (editDraft) {
+            wasEditing.current = true;
+            return;
+        }
+        if (wasEditing.current) {
+            wasEditing.current = false;
+            setValue(ordinaryDraft.current.text);
+            setAttachments(ordinaryDraft.current.attachments);
+            return;
+        }
+        ordinaryDraft.current = { text: value, attachments };
+        saveComposerDraft(draftKey, value, attachments);
+    }, [draftKey, value, attachments, editDraft]);
     // @-mention popup state: a live `@token` under the caret opens the
     // workspace-file picker; the textarea itself is the search field.
     const [mention, setMention] = useState<MentionState | null>(null);

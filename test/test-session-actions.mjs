@@ -66,6 +66,14 @@ function intact(t) {
     assert.ok(!t.events.includes('reset'));
     assert.ok(!t.events.includes('reload'));
 }
+const foreign = harness();
+foreign.host._localSessionStore.load = async () => ({ ...snapshot('B'), workspace: path.resolve('other-project') });
+await foreign.host._openSession('B');
+intact(foreign);
+assert.ok(foreign.notices.some(n => n[1] === 'sessionWorkspaceMismatch'));
+assert.ok(!foreign.events.includes('cancel'), 'a foreign target must be rejected before cancelling the current run');
+console.log('ok foreign-workspace sessions cannot replace or rewrite the current chat');
+
 const missing = harness();
 missing.host._localSessionStore.load = async () => null;
 await missing.host._openSession('missing');
@@ -123,7 +131,7 @@ for (const stale of ['epoch', 'workspace', 'engine']) {
     await request;
     assert.equal(t.host._sessionId, 'A');
     assert.ok(!t.events.includes('reset'));
-    assert.ok(t.notices.some(n => n[1] === 'sessionSwitchStale'));
+    assert.ok(t.notices.some(n => n[1] === (stale === 'workspace' ? 'sessionWorkspaceMismatch' : 'sessionSwitchStale')));
     sandbox.vscode.workspace.workspaceFolders = [{ uri: { fsPath: path.resolve('workspace') } }];
 }
 console.log('ok epoch, engine and workspace changes during loading cannot adopt a stale target');

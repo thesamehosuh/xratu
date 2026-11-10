@@ -77,6 +77,7 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     gitCheckoutBusy: { fa: 'صبر کن تا اجرای فعلی یا کار گفتگو تموم بشه؛ بعد branch رو عوض کن.', en: 'Wait for the current run or session action to finish before switching branches.' },
     sessionCreateFailed: { fa: 'گفتگوی جدید ساخته نشد. دوباره امتحان کن.', en: 'Could not create a new conversation. Try again.' },
     sessionSaveFailed: { fa: 'تغییر گفتگو انجام شد، ولی ذخیره سازی کامل نشد. قبل از بستن پنجره دوباره امتحان کن.', en: 'The session changed, but saving did not finish. Try again before closing the window.' },
+    sessionWorkspaceMismatch: { fa: 'این گفتگو متعلق به پروژه دیگه ایه. پوشه اصلیش رو باز کن یا توی پروژه فعلی یه گفتگوی تازه بساز.', en: 'This conversation belongs to another workspace. Open its original folder or start a new conversation in this workspace.' },
     sessionLoadFailed: { fa: 'گفتگو بارگذاری نشد. گفتگوی فعلیت سر جاشه؛ یه گفتگوی دیگه رو انتخاب کن یا دوباره امتحان کن.', en: 'Could not load the conversation. Your current chat is preserved; choose another session or try again.' },
     geoBlockedHint: { fa: 'این ارائه دهنده از IP شما جواب نمیده. سوئیچ کنی به یه ارائه دهنده ایرانی؟', en: 'This provider refuses your region/IP. Switch to an Iranian provider?' },
     geoBlockedSwitch: { fa: 'سوئیچ به ارائه دهنده ایرانی', en: 'Switch to an Iranian provider' },

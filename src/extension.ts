@@ -6419,6 +6419,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._browser.setSession(this._browserSessionId());
         this._view?.webview.postMessage({
             type: 'sessionState',
+            workspace: this._localWorkspaceKey(),
             browserSessionId: this._browserSessionId(),
             id: this._sessionId,
             title: this._sessionTitle,
@@ -6535,7 +6536,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (validPending && snapshot?.sessionId === id && ledger(snapshot.localHistory) && ledger(snapshot.uiHistory) &&
                 typeof snapshot.workspace === 'string' && (snapshot.title == null || typeof snapshot.title === 'string') &&
                 (snapshot.model == null || typeof snapshot.model === 'string') &&
-                (snapshot.summary == null || typeof snapshot.summary === 'string')) return snapshot;
+                (snapshot.summary == null || typeof snapshot.summary === 'string')) {
+                // Do not adopt a transcript from A and then persist/run it as B.
+                // Check before cancelling the current run or changing any state.
+                const workspace = this._sessionWorkspaceIdentity();
+                let sameWorkspace = (snapshot.workspace === 'default' || snapshot.workspace === '') && workspace === '';
+                if (snapshot.workspace && snapshot.workspace !== 'default' && workspace) {
+                    try { sameWorkspace = path.relative(fs.realpathSync(snapshot.workspace), workspace) === ''; }
+                    catch { /* A missing original workspace cannot be rebound implicitly. */ }
+                }
+                if (!sameWorkspace) {
+                    this.notifyBanner('warning', 'sessionWorkspaceMismatch');
+                    return null;
+                }
+                return snapshot;
+            }
         } catch { /* An unreadable target must leave the current conversation intact. */ }
         this.notifyBanner('warning', 'sessionLoadFailed');
         return null;
@@ -7107,6 +7122,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  derives the MIME from the filename and echoes full attachments back. */
     private async _handleUriAttachments(uris: string[]): Promise<void> {
         if (!this._view || !uris.length) return;
+        const view = this._view;
+        const epoch = this._sessionEpoch;
+        const current = () => this._view === view && this._sessionEpoch === epoch;
         const attachments: ComposerAttachment[] = [];
         let totalBytes = 0;
         let error: { key: string; params?: Record<string, string> } | null = null;
@@ -7120,6 +7138,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const name = path.basename(uri.fsPath);
             try {
                 const stat = await vscode.workspace.fs.stat(uri);
+                if (!current()) return;
                 if (stat.type & vscode.FileType.Directory) {
                     error = { key: 'attachIsFolder', params: { name } };
                     continue;
@@ -7142,23 +7161,39 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     continue;
                 }
                 const bytes = await vscode.workspace.fs.readFile(uri);
-                totalBytes += stat.size;
+                if (!current()) return;
+                // A file may change between stat and read. Bound and describe
+                // the actual bytes, rather than trusting stale metadata.
+                if (bytes.byteLength === 0) {
+                    error = { key: 'attachEmpty', params: { name } };
+                    continue;
+                }
+                if (bytes.byteLength > ATTACH_MAX_BYTES) {
+                    error = { key: 'attachTooLarge', params: { name } };
+                    continue;
+                }
+                if (totalBytes + bytes.byteLength > ATTACH_MAX_TOTAL_BYTES) {
+                    error = { key: 'attachTotalTooLarge' };
+                    break;
+                }
+                totalBytes += bytes.byteLength;
                 attachments.push({
                     id: `a-${crypto.randomUUID()}`,
                     name,
                     mimeType: mime,
-                    size: stat.size,
+                    size: bytes.byteLength,
                     dataBase64: Buffer.from(bytes).toString('base64'),
                 });
             } catch {
                 error = { key: 'attachReadError', params: { name } };
             }
         }
+        if (!current()) return;
         if (error) {
-            this._view.webview.postMessage({ type: 'composerError', value: '', valueKey: error.key, params: error.params });
+            view.webview.postMessage({ type: 'composerError', value: '', valueKey: error.key, params: error.params });
         }
         if (attachments.length > 0) {
-            this._view.webview.postMessage({ type: 'attachmentsFromHost', attachments });
+            view.webview.postMessage({ type: 'attachmentsFromHost', attachments });
         }
     }
 

@@ -1495,6 +1495,9 @@ export function createLocalToolExecutor(
         opts?.signal?.throwIfAborted();
     };
     const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (opts?.plan && call.name.startsWith(EXTERNAL_PREFIX)) {
+            return { output: 'Error: external MCP tools are disabled in plan mode.', isError: true };
+        }
         if (ARCHIVE_TOOLS.some(tool => tool.name === call.name)) {
             if (opts?.plan && ARCHIVE_MUTATIONS.has(call.name)) return { output: 'Error: archive extraction is disabled in plan mode.', isError: true };
             if (ARCHIVE_MUTATIONS.has(call.name)) await snapshot(workspaceRoot, call.name);

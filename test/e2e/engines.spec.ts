@@ -327,3 +327,25 @@ test('free-only selection stays explicit when the catalog only contains paid mod
     await expect(page.getByRole('option')).toHaveCount(1);
     expect((await sent(page)).some((message) => (message as { type: string }).type === 'pingFreeModel')).toBe(false);
 });
+
+for (const locale of ['en', 'fa'] as const) {
+    test(`historical edits follow the chat engine (${locale})`, async ({ page }) => {
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'restoreUser', value: 'Previous request' });
+        const state = { phase: 'ready', customPath: '', installedByXratu: false, busy: false };
+        const edit = page.getByRole('button', { name: locale === 'en' ? 'Edit message' : 'ویرایش پیام', exact: true });
+        await post(page, { type: 'enginesState', state: { ...state, active: 'opencode' } });
+        await expect(edit).toHaveCount(0);
+        await post(page, { type: 'enginesState', state: { ...state, active: 'xratu' } });
+        await expect(edit).toBeVisible();
+        await page.locator('.composer-input').fill('Ordinary draft');
+        await edit.click();
+        await expect(page.locator('.composer-input')).toHaveValue('Previous request');
+        // An engine change while editing must return to the ordinary draft,
+        // never submit a rewind the new engine cannot perform.
+        await post(page, { type: 'enginesState', state: { ...state, active: 'opencode' } });
+        await expect(page.locator('.composer-edit-cancel')).toHaveCount(0);
+        await expect(page.locator('.composer-input')).toHaveValue('Ordinary draft');
+    });
+}

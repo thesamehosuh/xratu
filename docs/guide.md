@@ -30,9 +30,33 @@ scope selected. OpenCode accesses enabled Xratu skills and their bundled resourc
 through the shared skill tool. Its own native resources remain a separate read-only
 inventory. The browser, task list, reply language, and plan handoff also work
 with OpenCode; ending a plan unlocks execution on the next turn. Native subagents
-remain unavailable.
+appear in Agents with their own traces, attributed approvals, and stop controls.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
+
+Historical edit/resend is available only with the built-in engine. OpenCode
+keeps the copy action and file-only checkpoint restore; its native history cannot
+be rewound by Xratu.
+
+Files selected from VS Code are delivered only to the chat that requested them.
+Switching chats during a file read discards that delayed delivery.
+
+Saved conversations keep their original workspace. To reopen a chat listed
+under **All workspaces**, open its original folder first. A mismatched chat is
+rejected before the current run is cancelled or either conversation is saved.
+
+Tool execution is restricted to the active run's tool list, including delegated
+runs. Supported aliases use the canonical tool's approval policy. External MCP
+calls are refused in Plan mode even if a model invents a call.
+
+## Unsent drafts
+
+Unsent text stays with its conversation and workspace when switching chats or
+reloading the webview. A new chat keeps its draft when its first message assigns
+it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
+VS Code state retains up to 32 recent text drafts within 200,000 characters total;
+older drafts are evicted. Attachments are kept in memory only and must be
+attached again after reload, including session switches that reload the page. Send acknowledgements are not yet tracked.
 
 ## OpenCode inside Xratu
 
@@ -90,8 +114,10 @@ an authenticated loopback bridge. Their transports, proxy routing, timeouts,
 images, and explicit auto-approval choices stay with Xratu. Changes apply on
 the next turn; shared MCP tools are denied in Plan mode. OpenCode keeps its
 native file and terminal tools and its separately configured MCP servers.
-OpenCode subagents and conversation rewind are not yet
-supported. File-only shadow checkpoint restore remains available. Offline
+Native subagents use OpenCode agent definitions and permissions. Stop one child
+from Agents or stop the whole tree from the composer; the parent turn stays active
+until nested/background work and reports settle. Plan mode denies delegation.
+Conversation rewind is unavailable; file-only shadow checkpoint restore remains available. Offline
 mode blocks this engine because Xratu cannot enforce network isolation on the
 OpenCode process. Xratu's file-path and web-fetch guards apply to its own tools;
 OpenCode's native tools use OpenCode's permission boundary.
@@ -340,6 +366,9 @@ and deleted skills stay deleted.
 | `iranian-marketplaces` | Chooses Digikala, Torob or Divar tools for shopping and classifieds; compares sellers, variants and prices in Toman, and handles rental deposits and placeholder prices. |
 
 ## Subagents
+
+The profile format below applies to the built-in engine. OpenCode uses its own
+native agent definitions; Xratu displays those as a read-only inventory.
 
 A subagent is a named agent profile the main agent can hand a
 self-contained task to with the `task` tool. The subagent runs a full agent

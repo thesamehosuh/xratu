@@ -12,6 +12,7 @@
 import { reminderTaskList, taskListReminderLine } from '../taskList';
 import { providerHttpStatus } from '../providerErrors';
 import { resolveAgentRounds } from '../tooling/agentRounds';
+import { resolveToolName } from '../tooling/toolNames';
 import {
     IMAGE_FORMAT_ERROR_RE,
     imageFallbackApplies,
@@ -778,7 +779,17 @@ export async function* runLocalAgent(
             ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
         });
 
-        const approvalCalls = finalResult.toolCalls.filter((call) => toolRequiresApproval(call.name, request.tools));
+        // The model's response is untrusted. Resolve supported aliases against
+        // THIS run's snapshot before consent; never use the executor's broader
+        // tool inventory to grant a capability omitted from the run.
+        const toolNames = request.tools.map(tool => tool.name);
+        const availableTools = new Set(toolNames);
+        const executionCalls = finalResult.toolCalls.map(call => ({
+            ...call, name: resolveToolName(call.name, toolNames).name,
+        }));
+        // Keep original names in assistantMessage/provider history above. Only
+        // permission checks and execution use the canonical spelling.
+        const approvalCalls = executionCalls.filter((call) => availableTools.has(call.name) && toolRequiresApproval(call.name, request.tools));
         let decisions: Record<string, boolean> = {};
         if (approvalCalls.length) {
             const approvalId = `local-${cryptoRandomId()}`;
@@ -803,12 +814,12 @@ export async function* runLocalAgent(
         // replayed history stores the same order, so cache prefixes match).
         // Rounds without a parallel-tool call take the untouched serial path
         // below.
-        const parallelNames = new Set(request.parallelTools ?? []);
+        const parallelNames = new Set((request.parallelTools ?? []).map(name => resolveToolName(name, toolNames).name));
         const parallelCalls = parallelNames.size
-            ? finalResult.toolCalls.filter((call) => parallelNames.has(call.name))
+            ? executionCalls.filter((call) => parallelNames.has(call.name))
             : [];
         if (parallelCalls.length) {
-            for (const call of finalResult.toolCalls) {
+            for (const call of executionCalls) {
                 yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
             }
             const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
@@ -817,13 +828,14 @@ export async function* runLocalAgent(
             // used to return early and leak the count, hanging the round), and
             // the serial tail never observes a premature zero between two of
             // its own awaits (which would drop the rest of its results).
-            let remaining = finalResult.toolCalls.length;
+            let remaining = executionCalls.length;
             let execError: unknown = null;
             const runOne = async (call: LocalToolCall): Promise<void> => {
                 try {
-                    const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
+                    const available = availableTools.has(call.name);
+                    const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
                     if (!approved) {
-                        const output = 'Tool execution denied by the user.';
+                        const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
                         messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
                         eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
                         return;
@@ -875,7 +887,7 @@ export async function* runLocalAgent(
                 ));
             })();
             void (async () => {
-                for (const call of finalResult.toolCalls) {
+                for (const call of executionCalls) {
                     if (parallelNames.has(call.name)) continue;
                     await runOne(call);
                 }
@@ -889,12 +901,13 @@ export async function* runLocalAgent(
             continue;
         }
 
-        for (const call of finalResult.toolCalls) {
-            const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
+        for (const call of executionCalls) {
+            const available = availableTools.has(call.name);
+            const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
             yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
 
             if (!approved) {
-                const output = 'Tool execution denied by the user.';
+                const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
                 messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
                 yield { type: 'toolResult', id: call.id, tool: call.name, output, isError: true };
                 continue;

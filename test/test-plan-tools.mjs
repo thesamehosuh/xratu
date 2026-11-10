@@ -30,7 +30,7 @@ Module._load = function (request, parent, isMain) {
 };
 
 const require = createRequire(import.meta.url);
-const { getLocalToolDefinitions } = require('../out/mcp.js');
+const { getLocalToolDefinitions, createLocalToolExecutor } = require('../out/mcp.js');
 const { builtinSubagents } = require('../out/subagents.js');
 
 let failed = 0;
@@ -110,6 +110,15 @@ check('plan: keeps fetch_url (read-only)', planNames.has('fetch_url'), true);
     check('plan gate never bypasses approval through YOLO', (await planGate.requestApproval('three', calls)).browser, false);
     check('plan gate reaches real approval', approvals, 2);
 }
+
+// Enforce Plan at execution too, rather than relying only on schemas.
+let externalInvocations = 0;
+const executor = createLocalToolExecutor('', async () => {}, {
+    callTool: async () => { externalInvocations++; return { text: 'executed', images: [] }; },
+}, undefined, undefined, undefined, { plan: true });
+const blocked = await executor.execute({ id: 'invented', name: 'mcp__remote__mutate', arguments: {}, argumentsJson: '{}' });
+check('plan executor refuses an invented external call', blocked.isError, true);
+check('plan executor never invokes the external manager', externalInvocations, 0);
 
 console.log(failed === 0 ? '\nplan-tools: all tests passed' : `\nplan-tools: ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -24,6 +24,7 @@ import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { BookOpen, WifiOff, ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
 import { postMessage } from './vscode';
+import { composerDraftKey, promoteComposerDraft } from './composerDrafts';
 import type {
     ConnectionStatus as ConnStatus,
     AttachmentMeta,
@@ -235,6 +236,8 @@ export function App() {
         return turns.map(({ message, userIndex }, index) => ({ sha: message.cp!, toSha: turns[index + 1]?.message.cp, number: index + 1, userIndex }));
     }, [chat.messages]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const draftIdentity = useRef<{ key: string; live: string | null; id: string | null }>({ key: composerDraftKey('', null), live: null, id: null });
+    const [draftKey, setDraftKey] = useState(draftIdentity.current.key);
     const [turnFiles, setTurnFiles] = useState<{ session: string | null; files: Record<string, ReviewChange[]> }>({ session: null, files: {} });
     const recordTurnFiles = useCallback((turn: { sha: string; toSha?: string }, files: ReviewChange[]) => {
         const key = `${turn.sha}:${turn.toSha ?? ''}`;
@@ -788,11 +791,25 @@ export function App() {
                     setAgentProfiles(msg.profiles);
                     setAgentsError(msg.errorKey);
                     break;
-                case 'sessionState':
+                case 'sessionState': {
+                    const previous = draftIdentity.current;
+                    const key = composerDraftKey(msg.workspace ?? '', msg.id);
+                    const live = msg.browserSessionId ?? msg.id;
+                    if (previous.key !== key) {
+                        if (previous.id === null && msg.id !== null && previous.live !== null && previous.live === live) {
+                            promoteComposerDraft(previous.key, key);
+                        }
+                        setEditDraft(null);
+                        setComposerRestore(null);
+                        setHostAttachments(null);
+                    }
+                    draftIdentity.current = { key, live, id: msg.id };
+                    setDraftKey(key);
                     setCurrentSessionId(msg.id);
                     setCurrentBrowserSessionId(msg.browserSessionId ?? msg.id);
                     setSessionTitle(msg.title);
                     break;
+                }
                 case 'sessionList':
                     setSessions(msg.items);
                     setCurrentSessionId(msg.currentId);
@@ -1036,6 +1053,9 @@ export function App() {
         if (chat.busy) return;
         send({ type: 'gitStatusGetState' });
     }, [chat.busy, send]);
+
+    const canRewind = !!engineState && ENGINE_CAPABILITIES[engineState.active]?.rewind === true;
+    useEffect(() => { if (!canRewind) setEditDraft(null); }, [canRewind]);
 
     const handleSend = useCallback(
         (text: string, attachments: ComposerAttachment[]) => {
@@ -1671,8 +1691,8 @@ export function App() {
                     onPickSuggestion={(text) => setInjectedText({ id: Date.now(), text })}
                     onApprovalDecision={handleApprovalDecision}
                     onDecisionResponse={handleDecisionResponse}
-                    onRegenerate={handleRegenerate}
-                    onEditMessage={handleEditMessage}
+                    onRegenerate={canRewind ? handleRegenerate : undefined}
+                    onEditMessage={canRewind ? handleEditMessage : undefined}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     onReviewChanges={handleReviewChanges}
                     onAskReview={addReviewFeedback}
@@ -1746,6 +1766,8 @@ export function App() {
             )}
             </div>
             <InputBar
+                key={draftKey}
+                draftKey={draftKey}
                 yolo={yolo}
                 onTogglePlan={() => send({ type: 'togglePlanMode' })}
                 onToggleYolo={() => send({ type: 'toggleYolo' })}
