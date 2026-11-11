@@ -44,6 +44,26 @@ const ok = (name, cond, detail = '') => {
     console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond || !detail ? '' : ` - ${detail}`}`);
 };
 
+// A large-window run must not lose tool findings or rewrite cached arguments
+// at the event -> history boundary before the window-aware ledger sees them.
+{
+    const { contentCapForWindow, MAX_CONTENT_CAP } = require('../out/local/historyBounds.js');
+    const cap = contentCapForWindow(1_000_000);
+    const output = `HEAD\n${'finding '.repeat(12_000)}\nTAIL`;
+    const argumentsJson = JSON.stringify({ path: 'large.txt', content: 'source '.repeat(12_000) });
+    const assistant = { type: 'assistantMessage', text: 'Inspecting a large finding.', toolCalls: [
+        { id: 'large-call', name: 'write_file', argumentsJson },
+    ] };
+    const result = { type: 'toolResult', id: 'large-call', tool: 'write_file', output };
+    const rows = [assistant, result].map(event => historyRowFromEvent(persistedEventFromAgentEvent(event, cap)));
+    const replay = buildReplayHistory(rows);
+    ok('large-window tool output survives event capture and replay byte-for-byte', replay[1].content === output);
+    ok('large-window tool arguments survive event capture and replay byte-for-byte', replay[0].tool_calls[0].function.arguments === argumentsJson);
+    const limited = persistedEventFromAgentEvent({ ...result, output: 'x'.repeat(MAX_CONTENT_CAP * 2) }, cap);
+    ok('large-window event capture still enforces the absolute message ceiling', limited.output.length <= MAX_CONTENT_CAP);
+    ok('unknown-window event capture retains its conservative ceiling', persistedEventFromAgentEvent(result).output.length <= 40_000);
+}
+
 // ---------------------------------------------------------------------------
 // Mock transport: one SSE shape per API style.
 // ---------------------------------------------------------------------------

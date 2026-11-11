@@ -129,7 +129,10 @@ export class OAuthTokenManager {
         });
         this.inFlight.set(key, promise);
         this.inFlightForced.set(key, force);
-        return promise;
+        // The first caller owns only its wait, just like callers joining the
+        // single-flight. Once dispatched, refresh may rotate the credential
+        // remotely and must finish saving it even when that turn is stopped.
+        return abortable(promise, ctx.signal);
     }
 
     private async doResolve(handler: OAuthProviderHandler, ctx: OAuthLoginContext, force: boolean): Promise<OAuthTokenSet> {
@@ -152,8 +155,13 @@ export class OAuthTokenManager {
             }
             if (!force && !isTokenExpired(working, this.skewMs)) return working;
 
-            const result = await abortable(handler.refresh(working, ctx), ctx.signal);
             ctx.signal?.throwIfAborted();
+            // Cancellation still fences lock acquisition and dispatch. After
+            // dispatch use a separate bounded lifetime, retaining the mutex
+            // through the stale-write guard and save so another window cannot
+            // reuse the refresh token while its replacement is in flight.
+            const refreshSignal = AbortSignal.timeout(60_000);
+            const result = await abortable(handler.refresh(working, { ...ctx, signal: refreshSignal }), refreshSignal);
 
             // Layer 4: stale-write guard. A sign-out or re-auth that landed
             // while our refresh was in flight must not be overwritten.

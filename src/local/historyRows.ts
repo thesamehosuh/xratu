@@ -20,7 +20,7 @@ import { readResearchEvidence } from '../web/types';
  */
 import { base64ByteLength, type LocalAgentEvent, type LocalAgentMessage } from './localAgent';
 import type { LocalSessionHistoryMessage } from './localSessionStore';
-import { clipHistoryContent, clipToolCallArguments } from './historyBounds';
+import { IN_MEMORY_CONTENT_CAP, clipHistoryContent, clipToolCallArguments } from './historyBounds';
 
 /**
  * What a persisted tool row remembers about an image it no longer carries:
@@ -43,14 +43,15 @@ export interface ToolImageMeta {
  *
  * It lives here, next to `historyRowFromEvent`, so the host and the cache-rate
  * suite run the SAME pipeline: raw agent event -> persisted event -> history
- * row -> replayed message. Content is clipped at the in-memory floor; the
- * per-message window cap is applied later by the host's `_pushLocalHistory`.
+ * row -> replayed message. Capture uses the run's window-relative cap too:
+ * clipping at a smaller floor here would irreversibly lose content before
+ * `_pushLocalHistory` can apply its more generous large-window bound.
  */
-export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null {
+export function persistedEventFromAgentEvent(event: LocalAgentEvent, cap = IN_MEMORY_CONTENT_CAP): any | null {
     if (event.type === 'assistantMessage') {
         return {
             type: 'assistant_message',
-            content: clipHistoryContent(event.text),
+            content: clipHistoryContent(event.text, cap),
             tool_calls: event.toolCalls.map((call) => ({
                 id: call.id,
                 type: 'function',
@@ -59,7 +60,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
                 // (LM Studio) 400 on the NEXT request. Bounded as valid JSON: a
                 // large edit patch must not sit in the per-turn array at full
                 // size.
-                function: { name: call.name, arguments: clipToolCallArguments(call.argumentsJson) },
+                function: { name: call.name, arguments: clipToolCallArguments(call.argumentsJson, cap) },
             })),
             // Provider-native replay carriers: persisted into the MODEL ledger
             // so the next request replays the bytes the provider cached.
@@ -79,7 +80,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
             // Bound the retained copy: a single terminal/expansion result can
             // be 100k+ chars and this array is held for the whole turn. The live
             // webview postMessage stays full so the render is unchanged.
-            output: clipHistoryContent(event.output),
+            output: clipHistoryContent(event.output, cap),
             // Replayed to the provider (Messages maps it to `is_error`);
             // keeping the exact flag makes the replayed tool row byte-identical
             // to the one the provider cached.

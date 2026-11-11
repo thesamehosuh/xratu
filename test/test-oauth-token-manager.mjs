@@ -522,13 +522,43 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     const store = memoryStore({ k: EXPIRED });
     const m = managerFor(store);
     const controller = new AbortController();
-    let started;
+    let started, release;
     const ready = new Promise((r) => { started = r; });
-    const pending = m.resolve(handler(async () => { started(); return new Promise(() => {}); }), { ...ctx, signal: controller.signal }).catch((e) => e);
+    const gate = new Promise((r) => { release = r; });
+    let refreshSignal;
+    let calls = 0;
+    const h = handler(async (_tokens, refreshCtx) => {
+        calls++; refreshSignal = refreshCtx.signal; started(); await gate;
+        return { kind: 'refreshed', tokens: RENEWED };
+    });
+    const pending = m.resolve(h, { ...ctx, signal: controller.signal }).catch((e) => e);
     await ready;
+    const waiter = m.resolve(h, ctx).catch((e) => e);
     controller.abort();
     check('refresh waiting honors cancellation', (await pending).name, 'AbortError');
-    check('cancelled refresh keeps the credential', store.data.get('k'), EXPIRED);
+    check('turn cancellation does not cancel an already-dispatched token rotation', refreshSignal?.aborted, false);
+    release();
+    check('another refresh waiter survives the first caller cancelling', await waiter, 'AT-NEW');
+    check('cancelled caller still preserves the returned rotating credential', store.data.get('k')?.refreshToken, 'RT-2');
+    check('cancelled caller and waiter share exactly one rotation', calls, 1);
+}
+{
+    const store = memoryStore({ k: EXPIRED });
+    const m = managerFor(store);
+    const controller = new AbortController();
+    let started, release;
+    const ready = new Promise((r) => { started = r; });
+    const gate = new Promise((r) => { release = r; });
+    const h = handler(async () => { started(); await gate; return { kind: 'refreshed', tokens: RENEWED }; });
+    const pending = m.resolve(h, { ...ctx, signal: controller.signal }).catch((e) => e);
+    await ready;
+    controller.abort();
+    await pending;
+    const joined = m.resolve(h, ctx).catch((e) => e);
+    await store.write('k', null);
+    release();
+    check('detached rotation still respects sign-out', (await joined) instanceof OAuthReauthRequiredError, true);
+    check('detached rotation cannot resurrect a signed-out account', store.data.has('k'), false);
 }
 {
     const store = memoryStore({ k: EXPIRED });

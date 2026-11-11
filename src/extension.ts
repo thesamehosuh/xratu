@@ -2592,14 +2592,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     /** Add one non-estimated round to the session token ledgers. */
-    private _addSessionUsage(usage: LocalUsage): void {
+    private _addSessionUsage(usage: LocalUsage, nativeProvider = this._runNativeProvider): void {
         const prompt = usage.promptTokens ?? 0;
         const completion = usage.completionTokens ?? 0;
         const cached = usage.cachedTokens ?? 0;
         this._sessionUsage.input += prompt;
         this._sessionUsage.output += completion;
         this._sessionUsage.cached += cached;
-        const host = this._runNativeProvider ?? baseUrlHost(this._runBaseUrl ?? '');
+        const host = nativeProvider ?? baseUrlHost(this._runBaseUrl ?? '');
         if (!host) return;
         const entry = this._sessionUsageByHost[host] ?? { input: 0, output: 0, cached: 0 };
         entry.input += prompt;
@@ -5215,7 +5215,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._flushLiveSegment();
                 this._localThinkingBlockEvent = null;
                 this._localThinkingBlockRaw = null;
-                const persisted = persistedEventFromAgentEvent(event);
+                const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(this._contextWindowHint(this._runModel)));
                 if (persisted) outcome.events.push({ ...persisted, timestamp });
                 // Re-enforce the run-lifetime bounds (output budget, thinking
                 // ceiling, carrier budget) after every payload-bearing push.
@@ -5268,7 +5268,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 });
                 break;
             case 'assistantMessage': {
-                const persisted = persistedEventFromAgentEvent(event);
+                const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(this._contextWindowHint(this._runModel)));
                 if (persisted) outcome.events.push(persisted);
                 boundOutcomeEvents(outcome.events);
                 this._scheduleLocalPartialPersist();
@@ -5279,6 +5279,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // meter; the turn's recorded usage stays on the real
                 // round-end event (server-reported).
                 if (!event.estimated) {
+                    const nativeProvider = this._runNativeProvider && event.model?.includes('/')
+                        ? event.model.slice(0, event.model.indexOf('/')) : this._runNativeProvider;
                     if (!event.source) this._localCurrentUsage = event.usage;
                     // A turn can span several model rounds (tool calls); the
                     // turn's COST is the sum across rounds, not just the last.
@@ -5296,14 +5298,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         this._scheduleLocalPartialPersist();
                     }
                     // Token ledger rides alongside the cost ledger.
-                    this._addSessionUsage(event.usage);
+                    this._addSessionUsage(event.usage, nativeProvider);
                     this._scheduleLocalPartialPersist();
                     // Global timestamped ledger: the daily chart and retroactive
                     // repricing both read from it (see usageLedger.ts).
                     void this._recordUsage({
                         ts: Date.now(),
                         sessionId: this._sessionId,
-                        host: this._runNativeProvider ?? baseUrlHost(this._runBaseUrl ?? '') ?? '',
+                        host: nativeProvider ?? baseUrlHost(this._runBaseUrl ?? '') ?? '',
                         engine: this._runNativeProvider ? 'opencode' : 'xratu',
                         ...(this._runNativeProvider ? { costSource: event.usage.costUsd === undefined ? 'unknown' as const : 'reported' as const } : {}),
                         model: event.model ?? this._runModel ?? this._selectedModel ?? '',

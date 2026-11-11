@@ -143,7 +143,7 @@ export function trimDisplayEvent(event: any): any {
  * ledger.
  *
  * Each output is bounded upstream (terminal 200k, expansion 120k, then the
- * 40k in-memory floor in `persistedEventFromAgentEvent`), but that is per
+ * window-relative cap in `persistedEventFromAgentEvent`), but that is per
  * EVENT: a single turn can run unbounded rounds (`resolveAgentRounds`), so
  * hundreds of capped outputs could still reach tens of MB before the turn
  * ends. 2 MB mirrors `CARRIER_BUDGET` and sits far above any realistic turn,

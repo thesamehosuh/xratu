@@ -162,6 +162,7 @@ try {
             await test.ready(); test.emit('session.execution.started', 'root');
             for (const id of ['one', 'two']) {
                 test.child('root', `delegate-${id}`, id);
+                if (id === 'two') test.emit('session.model.selected', id, { model: { providerID: 'other-provider', id: 'other-child-model' } });
                 test.tool(id, 'same-id', 'shell', { command: `echo ${id}` });
                 test.emit('permission.asked', id, { id: 'same-request', action: 'shell', resources: [`echo ${id}`], source: { type: 'tool', id: 'same-id' }, metadata: { command: 'spoofed command', action: 'read' } });
                 test.emit('session.text.delta', id, { delta: `private ${id}` });
@@ -187,9 +188,13 @@ try {
             test.emit('session.execution.succeeded', 'root'); await done;
             assert.equal(test.outcome(), 'done');
             assert.equal(test.events.filter(event => event.type === 'usage').length, 2);
+            assert.deepEqual(test.events.filter(event => event.type === 'usage').map(event => ({ model: event.model, source: event.source })), [
+                { model: 'opencode/child-model', source: 'subagent' },
+                { model: 'other-provider/other-child-model', source: 'subagent' },
+            ], 'native children retain their actual billing model without replacing the parent context meter');
             for (const id of ['one', 'two']) {
                 const trace = test.observations.filter(value => value.callId === `delegate-${id}`).at(-1).trace;
-                assert.equal(trace.status, 'done'); assert.equal(trace.model, 'opencode/child-model');
+                assert.equal(trace.status, 'done'); assert.equal(trace.model, id === 'two' ? 'other-provider/other-child-model' : 'opencode/child-model');
                 assert.equal(trace.inputTokens, 2); assert.equal(trace.outputTokens, 4);
                 assert.equal(trace.entries.find(entry => entry.kind === 'tool').id, `${id}:same-id`);
             }
