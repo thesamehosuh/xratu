@@ -753,8 +753,13 @@ export class LocalSessionStore {
             const temp = path.join(dir, 'snapshot.json.tmp');
             await fs.writeFile(temp, JSON.stringify(parsed), 'utf8');
             await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
-        } catch {
-            /* index is the list source of truth; directory drift heals on reconcile */
+        } catch (error) {
+            // Reconciliation treats the snapshot as authoritative. A rename
+            // cannot be acknowledged if only the derived picker changed.
+            index[id] = existing;
+            try { await this.writeIndex(index); }
+            catch (rollbackError) { console.error('xratu: rename index rollback failed:', rollbackError); }
+            throw error;
         }
         return true;
     }

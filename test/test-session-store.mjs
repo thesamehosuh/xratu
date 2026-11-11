@@ -61,6 +61,25 @@ try {
     const restarted = new LocalSessionStore(root);
     await restarted.reconcile();
     check('startup repairs stale existing index metadata from the authoritative snapshot', (await restarted.list(ws)).find(meta => meta.id === indexFailure.id)?.title, 'Durably owned prompt');
+    store.writeIndex = async () => { throw Error('picker index is temporarily unwritable'); };
+    let renamed;
+    try { renamed = await store.rename(indexFailure.id, 'Durable renamed chat').catch(() => false); }
+    finally { store.writeIndex = writeIndex; }
+    check('failed index rename is not acknowledged', renamed, false);
+    await restarted.reconcile();
+    check('failed index rename preserves the durable title', (await restarted.load(indexFailure.id)).title, 'Durably owned prompt');
+    await store.rename(indexFailure.id, 'Durable renamed chat');
+    const nativeFs = require('node:fs/promises'), writeFile = nativeFs.writeFile;
+    nativeFs.writeFile = async (file, ...args) => {
+        if (String(file) === join(root, 'sessions', indexFailure.id, 'snapshot.json.tmp')) throw Error('snapshot write denied');
+        return writeFile(file, ...args);
+    };
+    let renameError;
+    try { await store.rename(indexFailure.id, 'Must not announce success'); }
+    catch (error) { renameError = error; }
+    finally { nativeFs.writeFile = writeFile; }
+    checkTrue('failed snapshot rename is reported to its caller', !!renameError);
+    check('failed snapshot rename keeps the picker title unchanged', (await store.list(ws)).find(meta => meta.id === indexFailure.id)?.title, 'Durable renamed chat');
     await store.delete(indexFailure.id);
     const corrupt = await store.create(ws);
     for (const value of [null, [], 7, 'not a snapshot']) {

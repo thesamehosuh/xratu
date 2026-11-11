@@ -11,6 +11,7 @@ const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'ut
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
 const names = ['_sessionWorkspaceMatches', '_restoreSessionConnection', '_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
+names.push('_renameSession');
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
@@ -433,3 +434,16 @@ intact(canonical);
 assert.ok(canonical.notices.some(n => n[1] === 'sessionSwitchStale'));
 sandbox.fs.realpathSync = value => path.resolve(value);
 console.log('ok retargeting the same workspace path during loading invalidates its canonical identity');
+
+for (const result of [true, false, 'disk-failure']) {
+    const renamed = harness();
+    let updates = 0;
+    renamed.host._localSessionStore.rename = async () => { if (result === 'disk-failure') throw Error('snapshot write denied'); return result; };
+    renamed.host._pushSessionState = () => { updates++; };
+    renamed.host._listSessions = async () => {};
+    await renamed.host._renameSession('A', '  New title  ');
+    assert.equal(renamed.host._sessionTitle, result === true ? 'New title' : 'A title', 'only a durable rename changes the active title');
+    assert.equal(updates, result === true ? 1 : 0);
+    assert.equal(renamed.notices.some(notice => notice[1] === 'sessionRenameFailed'), result !== true);
+}
+console.log('ok failed renames preserve the active title and show a localized retry error');

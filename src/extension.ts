@@ -6876,7 +6876,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     async _renameSession(id: string, title: string): Promise<void> {
         const clean = title.replace(/\s+/g, ' ').trim();
         if (!clean) return;
-        await this._localSessionStore.rename(id, clean);
+        try {
+            if (!(await this._localSessionStore.rename(id, clean))) {
+                this.notifyBanner('warning', 'sessionRenameFailed');
+                return;
+            }
+        } catch (error) {
+            console.error('xratu: session rename failed', error);
+            this.notifyBanner('warning', 'sessionRenameFailed');
+            return;
+        }
         if (id === this._sessionId) {
             this._sessionTitle = clean.slice(0, 128);
             this._pushSessionState();
