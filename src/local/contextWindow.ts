@@ -242,7 +242,7 @@ export function compactMessages(
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'user') { lastUser = i; break; }
     }
-    const turnStart = protectFromIndex != null && protectFromIndex > 1 ? protectFromIndex : lastUser;
+    const turnStart = protectFromIndex != null && protectFromIndex > 0 ? protectFromIndex : lastUser;
     if (turnStart <= 1) return [];
 
     // Forced recovery targets a fraction of the OBSERVED size, not of the
@@ -292,7 +292,10 @@ export function compactMessages(
         let end = start + 1;
         while (end < turnStart && messages[end].role !== 'user') end++;
         const groupCost = estimateRunTokens(messages.slice(start, end));
-        if (!force && total - groupCost < target) break;
+        // Make progress even when the first old turn crosses the soft target.
+        // After that, retain a recent complete turn if there is already safe
+        // headroom; an overflowing request must still be allowed to cross it.
+        if (!force && start > 1 && total - groupCost < target && total < windowTokens * AUTO_COMPACT_RATIO) break;
         total -= groupCost;
         start = end;
     }

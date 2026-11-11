@@ -1297,7 +1297,8 @@ async function testMessagesApiToolUse() {
             `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"a.txt"}' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'content_block_stop', index: 1 })}\n\n`,
-            `data: ${JSON.stringify({ type: 'message_delta', usage: { output_tokens: 5 } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text' } })}\n\n`,
@@ -1369,14 +1370,17 @@ async function testMessagesApiToolUse() {
 
 async function testResponsesApiTextToolAndUsage() {
     const calls: Array<{ url: string; body: any }> = [];
+    const reasoning = { id: 'rs_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'weighing' }], encrypted_content: 'enc-1' };
+    const functionCall = { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' };
     const responses = [
         sse([
             `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [] } })}\n\n`,
-            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'weighing' }], encrypted_content: 'enc-1' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: reasoning })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"path":"' })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: 'a.txt"}' })}\n\n`,
-            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 1, item: functionCall })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.completed', response: { output: [reasoning, functionCall] } })}\n\n`,
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'done' })}\n\n`,
@@ -1485,7 +1489,7 @@ async function testGoogleApiTextToolAndUsage() {
     const calls: Array<{ url: string; body: any; headers: any }> = [];
     const responses = [
         sse([
-            `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'read_file', args: { path: 'a.txt' } } }] } }] })}\n\n`,
+            `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'read_file', args: { path: 'a.txt' } } }] }, finishReason: 'STOP' }] })}\n\n`,
             `data: ${JSON.stringify({ usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 4, totalTokenCount: 34, cachedContentTokenCount: 12 } })}\n\n`,
         ]),
         sse([
@@ -2230,6 +2234,8 @@ async function testWrapupPreservesMessagesCacheBreakpoints() {
             `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'read_file' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a.txt"}' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
+            `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'tool_use' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text' } })}\n\n`,

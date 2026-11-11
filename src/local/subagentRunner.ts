@@ -27,6 +27,7 @@ import {
     buildReplayHistory,
 } from './historyRows';
 import type { LocalSessionHistoryMessage } from './localSessionStore';
+import { boundCarriers, contentCapForWindow, countUserRows, skipLeadingUserTurns } from './historyBounds';
 import {
     DEFAULT_SUBAGENT_ROUNDS,
     SUBAGENT_TOOL_NAME,
@@ -37,10 +38,10 @@ import {
 } from '../subagents';
 
 export interface SubagentHostContext {
-    /** Model/transport identity shared with the parent run - called ONCE PER
-     *  TASK so every child gets a fresh conversation identity (cacheKey /
-     *  OpenCode sessionId): two delegated tasks are two different
-     *  conversations and must not share a provider-side session. The runner
+    /** Model/transport identity shared with the parent run - called once per
+     * invocation with a conversationId that stays stable across resumes.
+     * Different children receive different cacheKey/OpenCode session IDs.
+     * The runner
      *  fills in the per-agent pieces (systemPrompt, userText, history, tools,
      *  maxRounds) - `maxRounds`/`sessionSummary`/`taskList`/`toolChoice`/
      *  `attachments` from the parent must NOT leak into the child (the
@@ -51,11 +52,13 @@ export interface SubagentHostContext {
      *  THAT model's output cap, context window and thinking level, never the
      *  parent's - a window/limit computed for the wrong model is how small
      *  local children end up overflowing their context. */
-    baseRequest(def: SubagentDefinition): Omit<
+    baseRequest(def: SubagentDefinition, conversationId: string): Omit<
         LocalAgentRequest,
         'systemPrompt' | 'userText' | 'history' | 'tools' | 'attachments'
-        | 'maxRounds' | 'sessionSummary' | 'taskList' | 'taskListProvider' | 'toolChoice'
+        | 'maxRounds' | 'sessionSummary' | 'taskList' | 'taskListProvider' | 'toolChoice' | 'onCompactionUsage'
     >;
+    /** Nonsecret provider identity, used to invalidate opaque replay state. */
+    connectionId?: string;
     /** Build the child toolset (host applies plan/yolo/external/skills, this
      *  layer only enforces the per-agent allow-list and the recursion deny). */
     tools(def: SubagentDefinition): LocalToolDefinition[];
@@ -65,7 +68,7 @@ export interface SubagentHostContext {
     executor(signal: AbortSignal, source?: SubagentApprovalSource): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
-    onUsage?(usage: LocalUsage): void;
+    onUsage?(usage: LocalUsage, model: string): void;
     onObservation?(parentCallId: string, trace: SubagentTrace): void;
     /** Registers (or clears, with `undefined`) the stop control for ONE live
      *  task call. The host keeps it keyed by the parent call id so the Agents
@@ -106,6 +109,11 @@ export interface SubagentRunRecord {
     /** Committed model-ledger rows of everything the run has done so far. */
     rows: LocalSessionHistoryMessage[];
     startedAt: number;
+    conversationId?: string;
+    contextIdentity?: { connectionId?: string; baseUrl: string; model: string; apiStyle?: LocalAgentRequest['apiStyle'] };
+    summary?: string | null;
+    replayUserTurns?: number | null;
+    historyTrimmed?: boolean;
     /** True while a run is inside `runLocalAgent`. A resume (task_id) targeting
      *  an in-flight run would replay the same committed rows from two
      *  interleaved loops and corrupt them - rejected in `runSubagentTask`.
@@ -124,6 +132,19 @@ export const MAX_SUBAGENT_RUNS = 8;
 /** Row bound per run: a pathological resume marathon must not grow the
  *  in-memory transcript without limit. */
 export const MAX_SUBAGENT_RUN_ROWS = 600;
+
+/** Keep the memory bound without starting a resumed history on an assistant
+ * or cutting into a batch of tool results. A very large single turn retains
+ * its opener and a complete recent suffix; the caller reports omitted context. */
+export function boundSubagentHistory(rows: LocalSessionHistoryMessage[]): LocalSessionHistoryMessage[] {
+    if (rows.length <= MAX_SUBAGENT_RUN_ROWS) return boundCarriers(rows);
+    const cut = rows.length - MAX_SUBAGENT_RUN_ROWS;
+    const nextUser = rows.findIndex((row, index) => index >= cut && row.role === 'user');
+    if (nextUser >= 0) return boundCarriers(rows.slice(nextUser));
+    const opener = [...rows].reverse().find(row => row.role === 'user');
+    const nextAssistant = rows.findIndex((row, index) => index > cut && row.role === 'assistant');
+    return boundCarriers(opener && nextAssistant >= 0 ? [opener, ...rows.slice(nextAssistant)] : []);
+}
 
 function newTaskId(): string {
     return crypto.randomUUID().replace(/-/g, '').slice(0, 10);
@@ -254,7 +275,15 @@ export async function runSubagentTask(
     allowed.delete(SUBAGENT_TOOL_NAME);
     onOutput?.(`▶ ${def.name}${resumed ? ' (resume)' : ''}\n`);
 
-    const base = ctx.baseRequest(def);
+    const base = ctx.baseRequest(def, record.conversationId ??= crypto.randomUUID());
+    const identity = { connectionId: ctx.connectionId, baseUrl: base.baseUrl, model: base.model, apiStyle: base.apiStyle };
+    if (JSON.stringify(record.contextIdentity) !== JSON.stringify(identity)) {
+        record.rows = record.rows.map(row => {
+            const { providerBlocks: _blocks, reasoningContent: _reasoning, ...rest } = row;
+            return rest;
+        });
+    }
+    record.contextIdentity = identity;
     // One stop control per delegated run. It is combined with the turn signal
     // so stopping a single agent ends only THIS loop: the parent keeps running
     // and receives the cancelled report, exactly like a user Stop at the root.
@@ -265,15 +294,21 @@ export async function runSubagentTask(
         effort: base.reasoningEffort, tools: tools.map(tool => tool.name), resumed,
         status: 'running', startedAt: Date.now(), updatedAt: Date.now(), entries: [], toolCalls: 0, inputTokens: 0, outputTokens: 0,
     }, trace => { if (req.parentCallId) ctx.onObservation?.(req.parentCallId, trace); });
+    const total = countUserRows(record.rows);
+    const replayAtEntry = record.replayUserTurns == null ? total : Math.max(0, Math.min(record.replayUserTurns, total));
     const request: LocalAgentRequest = {
         ...base,
         signal,
-        systemPrompt: ctx.systemPrompt(def),
+        systemPrompt: ctx.systemPrompt(def)
+            + (record.summary ? `\n\n[Summary of earlier work in this child session:]\n${record.summary}` : '')
+            + (record.historyTrimmed ? '\n\n[Some earlier child history was omitted to bound memory. Verify current state before repeating actions.]' : ''),
+        sessionSummary: record.summary ?? null,
+        onCompactionUsage: undefined,
         userText: req.prompt,
         // Fresh context by contract on a NEW run; a resume replays the run's
         // committed rows so the child remembers its own earlier work (and
         // never the parent's conversation).
-        history: buildReplayHistory(record.rows),
+        history: buildReplayHistory(skipLeadingUserTurns(record.rows, total - replayAtEntry)),
         tools,
         maxRounds: def.maxRounds ?? DEFAULT_SUBAGENT_ROUNDS,
     };
@@ -281,20 +316,24 @@ export async function runSubagentTask(
     // Everything THIS invocation commits is appended to the registry on the
     // way out (success, failure or abort) - that is what makes an
     // interrupted run resumable instead of lost.
-    const turnRows: LocalSessionHistoryMessage[] = [];
+    let turnRows: LocalSessionHistoryMessage[] = [];
+    let finalText = '';
+    let lastError = '';
+    let toolCallCount = 0;
     const commitTurn = (): void => {
+        if (!finalText.trim()) turnRows.push({ role: 'assistant', content: '[The child run ended without a final report. Tool effects may already have occurred; verify current state before repeating actions.]' });
         record.rows.push({ role: 'user', content: req.prompt }, ...turnRows);
+        if (record.replayUserTurns != null) record.replayUserTurns++;
         if (record.rows.length > MAX_SUBAGENT_RUN_ROWS) {
-            record.rows = record.rows.slice(-MAX_SUBAGENT_RUN_ROWS);
+            record.historyTrimmed = true;
         }
+        record.rows = boundSubagentHistory(record.rows);
+        if (record.replayUserTurns != null) record.replayUserTurns = Math.min(record.replayUserTurns, countUserRows(record.rows));
         rememberRun(registry, taskId, record);
     };
 
     rememberRun(registry, taskId, record);
     ctx.onControl?.(req.parentCallId, () => stop.abort());
-    let finalText = '';
-    let lastError = '';
-    let toolCallCount = 0;
     // Marked synchronously (no await since the resume check above), so two
     // concurrent `task` calls carrying this task_id cannot both start.
     record.running = true;
@@ -326,15 +365,19 @@ export async function runSubagentTask(
                 case 'usage':
                     // Estimates stay display-only; the authoritative
                     // round-end copy is what cost ledgers count.
-                    if (!event.estimated) ctx.onUsage?.(event.usage);
+                    if (!event.estimated) ctx.onUsage?.(event.usage, event.model ?? request.model);
+                    break;
+                case 'compactionSummary':
+                    record.summary = event.value;
+                    record.replayUserTurns = Math.max(0, replayAtEntry - Math.max(0, event.droppedUserTurns ?? 0));
                     break;
                 default:
                     break;
             }
             // Committed model-ledger rows only (assistant/tool carriers).
-            const persisted = persistedEventFromAgentEvent(event);
+            const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(request.contextWindow));
             const row = persisted ? historyRowFromEvent(persisted) : null;
-            if (row) turnRows.push(row);
+            if (row) { turnRows.push(row); turnRows = boundCarriers(turnRows); }
         }
     } catch (err) {
         commitTurn();

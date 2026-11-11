@@ -16,6 +16,7 @@
 import { createHash } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
 import { resolveMcpSecrets } from './mcpSecrets';
 import { isOfflineMode } from './networkPolicy';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -45,6 +46,8 @@ export const EXTERNAL_PREFIX = 'mcp__';
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 /** Default connection timeout - a dead external server must never wedge the bridge. */
 const CONNECT_TIMEOUT_MS = 15_000;
+const MAX_TOOL_LIST_PAGES = 64;
+const MAX_DISCOVERED_TOOLS = 4096;
 
 export type ExternalServerState = 'disabled' | 'connected' | 'error' | 'unconfigured';
 
@@ -65,6 +68,8 @@ export interface AggregatedTool {
     inputSchema: Record<string, unknown>;
     /** User trusts this tool - the approval gate is skipped for it. */
     autoApprove: boolean;
+    /** Nonsecret binding to the configured target whose schema was listed. */
+    serverConfigHash?: string;
 }
 
 /**
@@ -98,10 +103,18 @@ function resolveTransport(cfg: ExternalServerConfig): McpTransportType | null {
 interface ServerState {
     name: string;
     client: Client;
+    configHash?: string;
+    /** SDK v1 replaces its metadata cache on each list page. Retain every
+     * page's validators and task requirements until the next full listing. */
+    toolMetadata?: Map<string, { validator?: ReturnType<AjvJsonSchemaValidator['getValidator']>; requiresTask: boolean }>;
     /** stdio child pid - lets close paths kill the WHOLE process tree
      *  (on Windows, npx/uvx run through a cmd.exe shim: killing the direct
      *  child orphans the actual node grandchild without taskkill /T). */
     pid?: number;
+}
+
+function serverConfigHash(cfg: ExternalServerConfig, source: string, generation?: number): string {
+    return createHash('sha256').update(JSON.stringify([source, cfg, generation])).digest('hex');
 }
 
 /** Close one external server's stdio process tree and client (a no-op for
@@ -138,6 +151,7 @@ async function closeState(state: ServerState | null | undefined): Promise<void> 
 }
 
 export class ExternalMcpManager {
+    private readonly _schemaValidator = new AjvJsonSchemaValidator();
     private _states = new Map<string, Promise<ServerState | null>>();
     private _retryAfter = new Map<string, number>();
     private _connectingTransports = new Set<{ close: () => Promise<void>; pid?: number | null }>();
@@ -150,6 +164,17 @@ export class ExternalMcpManager {
     private _generation = 0;
 
     constructor(private readonly loadConfig: () => Promise<LoadedMcpConfig>) {}
+
+    /** A run may only dispatch to the target whose tool schema it received.
+     * Reloads must not retarget an already-approved name to another server. */
+    bindTools(tools: readonly AggregatedTool[]): Pick<ExternalMcpManager, 'callTool'> {
+        const hashes = new Map(tools.map(tool => [tool.name, tool.serverConfigHash]));
+        return { callTool: (name, args, signal) => {
+            const hash = hashes.get(name);
+            return hash ? this.callTool(name, args, signal, hash)
+                : Promise.resolve(textResult('MCP tool binding is unavailable. Start a new turn to refresh its tools.'));
+        } };
+    }
 
     async stopAll(): Promise<void> {
         this._stopped = true;
@@ -195,7 +220,7 @@ export class ExternalMcpManager {
      *  the MCP page's status reflects the retry immediately. */
     async restart(name: string): Promise<void> {
         this._generation++; this._listing = undefined; this._inventoryAt = 0;
-        this._inventory = this._inventory.filter(tool => tool.serverName !== name);
+        this._inventory = [];
         this._retryAfter.delete(name);
         const pending = this._states.get(name);
         this._states.delete(name);
@@ -337,7 +362,7 @@ export class ExternalMcpManager {
                     this._markStatus(name, { state: 'error', transport: 'unknown', lastError: 'missing url/command' }, source);
                     return null;
                 }
-                const client = new Client({ name: 'xratu-external-bridge', version: '1.0.0' });
+                const client = new Client({ name: 'xratu-external-bridge', version: '1.0.0' }, { jsonSchemaValidator: this._schemaValidator });
                 client.onerror = (e) => console.error(`xratu mcpServers[${name}] error:`, e);
                 const transport = built.transport as { close: () => Promise<void>; pid?: number | null };
                 this._connectingTransports.add(transport);
@@ -351,7 +376,7 @@ export class ExternalMcpManager {
                 }
                 console.log(`xratu: connected to external MCP server '${name}' (${built.type})`);
                 this._markStatus(name, { state: 'connected', transport: built.type }, source);
-                return { name, client, pid: (built.transport as { pid?: number | null }).pid ?? undefined };
+                return { name, client, configHash: serverConfigHash(cfg, source), pid: (built.transport as { pid?: number | null }).pid ?? undefined };
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.error(`xratu: failed to connect external MCP server '${name}':`, e);
@@ -425,8 +450,30 @@ export class ExternalMcpManager {
             try {
                 const state = await this.getState(name, cfg, source);
                 if (!state) return out;
-                const res = await state.client.listTools();
-                const tools = res.tools ?? [];
+                const tools: Awaited<ReturnType<Client['listTools']>>['tools'] = [];
+                const cursors = new Set<string>();
+                const toolNames = new Set<string>();
+                const metadata: NonNullable<ServerState['toolMetadata']> = new Map();
+                let cursor: string | undefined;
+                const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+                for (let page = 0; ; page++) {
+                    if (generation !== this._generation || this._stopped || isOfflineMode()) return out;
+                    if (page >= MAX_TOOL_LIST_PAGES || Date.now() >= deadline) throw new Error('MCP tool listing exceeded its page/time limit.');
+                    const res = await state.client.listTools(cursor === undefined ? undefined : { cursor }, { timeout: Math.max(1, deadline - Date.now()) });
+                    if (tools.length + res.tools.length > MAX_DISCOVERED_TOOLS) throw new Error('MCP tool listing exceeded its tool limit.');
+                    for (const tool of res.tools) {
+                        if (toolNames.has(tool.name)) throw new Error('MCP tool listing returned duplicate tool names.');
+                        toolNames.add(tool.name);
+                        tools.push(tool);
+                        metadata.set(tool.name, { validator: tool.outputSchema ? this._schemaValidator.getValidator(tool.outputSchema) : undefined, requiresTask: tool.execution?.taskSupport === 'required' });
+                    }
+                    if (res.nextCursor == null) break;
+                    if (cursors.has(res.nextCursor)) throw new Error('MCP tool listing repeated a pagination cursor.');
+                    cursors.add(res.nextCursor);
+                    cursor = res.nextCursor;
+                }
+                if (generation !== this._generation || this._stopped || isOfflineMode()) return out;
+                state.toolMetadata = metadata;
                 this._markStatus(name, { state: 'connected', toolCount: tools.length }, source);
                 for (const t of tools) {
                     out.push({
@@ -436,9 +483,11 @@ export class ExternalMcpManager {
                         description: `[mcp:${name}; untrusted external metadata] ${t.description ?? ''}`.trim(),
                         inputSchema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
                         autoApprove: auto.has(t.name),
+                        serverConfigHash: serverConfigHash(cfg, source, generation),
                     });
                 }
             } catch (e) {
+                if (generation !== this._generation || this._stopped) return out;
                 const msg = e instanceof Error ? e.message : String(e);
                 console.error(`xratu: listTools failed for '${name}':`, e);
                 this._markStatus(name, { state: 'error', lastError: msg }, source);
@@ -450,7 +499,7 @@ export class ExternalMcpManager {
     }
 
     /** Route a namespaced call. No automatic replay after dispatch; side effects may already have occurred. */
-    async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ExternalToolResult> {
+    async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal, expectedConfigHash?: string): Promise<ExternalToolResult> {
         signal?.throwIfAborted();
         if (isOfflineMode()) return textResult('Error: external MCP is disabled in offline mode.');
         const rest = namespaced.startsWith(EXTERNAL_PREFIX)
@@ -460,10 +509,16 @@ export class ExternalMcpManager {
         if (sep < 0) {
             return textResult(`Error: malformed external tool name '${namespaced}'`);
         }
-        const serverName = rest.slice(0, sep);
-        const toolName = rest.slice(sep + 2);
-
+        const generation = this._generation;
         const config = await this.loadConfig();
+        // Server and tool names can both contain the namespace separator.
+        // Resolve against configured names; never guess the first segment
+        // and accidentally dispatch an approved call to another server.
+        const matches = Object.keys(config.servers).filter(name => rest.startsWith(`${name}__`));
+        if (matches.length > 1) return textResult('Error: ambiguous MCP tool namespace. Rename the overlapping MCP servers before calling this tool.');
+        const serverName = matches[0] ?? rest.slice(0, sep);
+        const toolName = rest.slice(serverName.length + 2);
+        if (!toolName) return textResult(`Error: malformed external tool name '${namespaced}'`);
         const cfg = config.servers[serverName];
         if (!cfg) {
             return textResult(`Error: no MCP server configured under name '${serverName}'`);
@@ -472,6 +527,8 @@ export class ExternalMcpManager {
             return textResult(`Error: MCP server '${serverName}' is disabled`);
         }
         const source = config.sources[serverName] ?? 'global';
+        const configHash = serverConfigHash(cfg, source);
+        if (expectedConfigHash && expectedConfigHash !== serverConfigHash(cfg, source, generation)) return textResult('MCP server configuration changed. Start a new turn to refresh its tools.');
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
         const stateRequest = this.getState(serverName, cfg, source);
@@ -481,12 +538,23 @@ export class ExternalMcpManager {
         if (!state) {
             return textResult(`Error: MCP server '${serverName}' is not reachable`);
         }
+        if ((expectedConfigHash && generation !== this._generation) || (state.configHash && state.configHash !== configHash)) {
+            return textResult('MCP server configuration changed while connecting. Start a new turn to refresh its tools.');
+        }
         try {
+            const metadata = state.toolMetadata?.get(toolName);
+            if (metadata?.requiresTask) return textResult(`Error: MCP tool '${toolName}' requires task-based execution, which this bridge does not support.`);
             const res = await state.client.callTool(
                 { name: toolName, arguments: args ?? {} },
                 undefined,
                 { ...(timeoutMs > 0 ? { timeout: timeoutMs } : {}), ...(signal ? { signal } : {}) },
             );
+            // Preserve SDK v1's output-schema checks for earlier list pages,
+            // which its own last-page cache no longer knows about.
+            if (metadata?.validator) {
+                if (!res.structuredContent && !res.isError) throw new McpError(ErrorCode.InvalidRequest, 'MCP tool omitted required structured output.');
+                if (res.structuredContent && !metadata.validator(res.structuredContent).valid) throw new McpError(ErrorCode.InvalidParams, 'MCP tool returned structured output that does not match its schema.');
+            }
             if (res.isError) {
                 const error = mapMcpToolResult(res, toolName);
                 return { ...error, text: `Error from MCP server '${serverName}': ${error.text || 'Unknown tool error'}`, images: [], isError: true };

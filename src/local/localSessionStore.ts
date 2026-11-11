@@ -31,6 +31,7 @@ export interface LocalSessionHistoryMessage {
  *  restore it instead of dropping the whole response. */
 export interface LocalPendingTurn {
     hidden?: boolean;
+    cp?: string;
     prompt: string;
     events: any[];
     text: string;
@@ -39,6 +40,8 @@ export interface LocalPendingTurn {
 }
 
 export interface LocalSessionSnapshot {
+    /** Nonsecret saved connection identity; absent in legacy sessions. */
+    connectionId?: string;
     /** Random per-chat research ID, unrelated to paths or native session IDs. */
     researchConversationId?: string;
     engineSession?: EngineSessionRef;
@@ -429,6 +432,7 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
     }) : [];
     return {
         prompt: clipHistoryContent(pt.prompt, contentCap),
+        ...(typeof pt.cp === 'string' && /^[a-f0-9]{7,40}$/i.test(pt.cp) ? { cp: pt.cp } : {}),
         ...(pt.hidden === true ? { hidden: true } : {}),
         events: boundCarriers(events),
         text: clipHistoryContent(pt.text, contentCap),
@@ -520,7 +524,6 @@ export class LocalSessionStore {
         const entries = await fs.readdir(this.rootDir, { withFileTypes: true });
         for (const entry of entries) {
             if (!entry.isDirectory() || !/^[a-f0-9-]{16,64}$/i.test(entry.name)) continue;
-            if (index[entry.name]) continue;
             try {
                 const raw = await fs.readFile(path.join(this.rootDir, entry.name, 'snapshot.json'), 'utf8');
                 const parsed = JSON.parse(raw);
@@ -620,12 +623,13 @@ export class LocalSessionStore {
 
     /** Session to reopen for a workspace: the preferred id when it still
      *  exists, else the most recent, else null. */
-    async findCurrent(workspaceRoot: string, preferredId?: string | null): Promise<LocalSessionMeta | null> {
-        const all = await this.list(workspaceRoot);
-        if (preferredId && all.some((m) => m.id === preferredId)) {
-            return all.find((m) => m.id === preferredId) ?? null;
+    async findCurrent(workspaceRoot: string, preferredId?: string | null, allowForeignPreferred = false): Promise<LocalSessionMeta | null> {
+        const all = await this.list(allowForeignPreferred ? undefined : workspaceRoot);
+        if (preferredId) {
+            const preferred = all.find(meta => meta.id === preferredId);
+            if (preferred) return preferred;
         }
-        return all[0] ?? null;
+        return all.find(meta => meta.workspace === workspaceRoot) ?? null;
     }
 
     async create(workspaceRoot: string): Promise<LocalSessionMeta> {
@@ -645,11 +649,13 @@ export class LocalSessionStore {
             const raw = await fs.readFile(path.join(this.sessionDir(id), 'snapshot.json'), 'utf8');
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+            if (parsed.connectionId != null && (typeof parsed.connectionId !== 'string' || !parsed.connectionId || parsed.connectionId.length > 4096)) return null;
             return {
                 sessionId: id,
                 title: parsed?.title ?? null,
                 workspace: parsed?.workspace ?? 'default',
                 renamed: !!parsed?.renamed,
+                connectionId: parsed.connectionId ?? undefined,
                 model: parsed?.model ?? null,
                 engineSession: readEngineSession(parsed?.engineSession),
                 researchConversationId: typeof parsed.researchConversationId === 'string' && /^[a-f0-9-]{36}$/i.test(parsed.researchConversationId) ? parsed.researchConversationId : undefined,
@@ -693,7 +699,11 @@ export class LocalSessionStore {
         await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
         const index = await this.readIndex();
         index[meta.id] = meta;
-        await this.writeIndex(index);
+        // snapshot.json is the durable ownership boundary. The picker index
+        // is derived data; failure after the snapshot rename must not reject
+        // an already-owned send or make a rewind roll back only its files.
+        try { await this.writeIndex(index); }
+        catch (error) { console.error('xratu: session saved; picker index update failed (reconciled on startup):', error); }
     }
 
     /** Persist the transcript snapshot. The title tracks the first user
@@ -739,12 +749,18 @@ export class LocalSessionStore {
             const raw = await fs.readFile(path.join(dir, 'snapshot.json'), 'utf8');
             const parsed = JSON.parse(raw);
             parsed.title = meta.title;
+            parsed.updatedAt = meta.updatedAt;
             parsed.renamed = true;
             const temp = path.join(dir, 'snapshot.json.tmp');
             await fs.writeFile(temp, JSON.stringify(parsed), 'utf8');
             await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
-        } catch {
-            /* index is the list source of truth; directory drift heals on reconcile */
+        } catch (error) {
+            // Reconciliation treats the snapshot as authoritative. A rename
+            // cannot be acknowledged if only the derived picker changed.
+            index[id] = existing;
+            try { await this.writeIndex(index); }
+            catch (rollbackError) { console.error('xratu: rename index rollback failed:', rollbackError); }
+            throw error;
         }
         return true;
     }

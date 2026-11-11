@@ -699,7 +699,7 @@ async function dispatchProcessTool(args: any): Promise<{
     if (job.status !== 'running') {
         return text(`${job.id} already ${job.status === 'killed' ? 'killed' : `finished (${describeTerminalJob(job)})`}. Nothing to stop.`);
     }
-    job.kill('killed by the agent');
+    if (job.kill('killed by the agent') === false) return text('Error: process identity could not be verified. Nothing was stopped; retry after the identity probe is available.', true);
     await job.finished;
     // The kill path hands back the full finished report, so the notice would
     // be a duplicate.
@@ -1435,7 +1435,7 @@ export async function executeLocalTool(
     name: string,
     args: Record<string, unknown>,
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
-    externalMcp?: ExternalMcpManager,
+    externalMcp?: Pick<ExternalMcpManager, 'callTool'>,
     skillResolver?: (name: string) => SkillResolution,
     onOutput?: (chunk: string) => void,
     subagentRunner?: SubagentRunner,
@@ -1482,7 +1482,7 @@ export async function executeLocalTool(
 export function createLocalToolExecutor(
     workspaceRoot: string,
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
-    externalMcp?: ExternalMcpManager,
+    externalMcp?: Pick<ExternalMcpManager, 'callTool'>,
     skillResolver?: (name: string) => SkillResolution,
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
@@ -1495,6 +1495,9 @@ export function createLocalToolExecutor(
         opts?.signal?.throwIfAborted();
     };
     const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (opts?.plan && call.name.startsWith(EXTERNAL_PREFIX)) {
+            return { output: 'Error: external MCP tools are disabled in plan mode.', isError: true };
+        }
         if (ARCHIVE_TOOLS.some(tool => tool.name === call.name)) {
             if (opts?.plan && ARCHIVE_MUTATIONS.has(call.name)) return { output: 'Error: archive extraction is disabled in plan mode.', isError: true };
             if (ARCHIVE_MUTATIONS.has(call.name)) await snapshot(workspaceRoot, call.name);

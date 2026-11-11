@@ -198,7 +198,10 @@ export function boundCarriers<T extends CarrierRow>(rows: readonly T[], budget: 
         const size = carrierSize(row);
         const invalidNote = row.contextNote != null
             && (typeof row.contextNote !== 'string' || !serializedWithinCap(row.contextNote));
-        if (size > 0 && !invalidNote && used + size <= budget) {
+        const invalidBlocks = row.providerBlocks != null && !serializedWithinCap(row.providerBlocks);
+        const invalidReasoning = row.reasoningContent != null
+            && (typeof row.reasoningContent !== 'string' || !serializedWithinCap(row.reasoningContent));
+        if (size > 0 && !invalidNote && !invalidBlocks && !invalidReasoning && used + size <= budget) {
             used += size;
             continue;
         }

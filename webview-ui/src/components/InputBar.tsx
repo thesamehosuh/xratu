@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
@@ -29,6 +29,7 @@ import { applyMentionPick, detectMention, filterFiles, type MentionState } from 
 import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf, tOrRaw } from '../i18n';
 import { prefersReducedMotion } from '../motion';
+import { readComposerDraft, saveComposerDraft, readComposerRecoveries, saveComposerRecoveries, type ComposerRecovery } from '../composerDrafts';
 
 /** Fallback when no window is known for this model yet. */
 const DEFAULT_CONTEXT_LIMIT = 131_072;
@@ -254,21 +255,12 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
     }
 }
 
-/**
- * Composer draft that OUTLIVES the component instance.
- *
- * Navigating to Settings / Capabilities / Usage makes App render a different
- * screen tree, which unmounts InputBar - so a half-written message used to be
- * discarded by navigation alone. Module scope survives the unmount, the store
- * is mirrored on every change, and the normal send path (which already resets
- * both pieces of state) clears it for free.
- */
-let draftText = '';
-let draftAttachments: ComposerAttachment[] = [];
-
 interface InputBarProps {
+    draftKey: string;
     busy: boolean;
-    onSend: (text: string, attachments: ComposerAttachment[]) => void;
+    onSend: (text: string, attachments: ComposerAttachment[], revision?: number) => boolean | void;
+    acceptedSend?: { requestId: string; revision: number; edit?: boolean; attachments?: ComposerAttachment[] } | null;
+    onAcceptedSendApplied?: () => void;
     onCancel: () => void;
     /** Suggestion-chip payload: typed into the composer char-by-char, then
      *  auto-sent. `id` re-triggers the effect for repeated picks. */
@@ -321,8 +313,8 @@ interface InputBarProps {
     /** Heuristic vision support of the selected model (null = unknown). */
     modelVisionCapable?: boolean | null;
     /** The host rejected the last send - restore its value + attachments. */
-    restoreDraft?: { value: string; attachments: ComposerAttachment[] } | null;
-    onRestoreApplied?: () => void;
+    restoreDraft?: Array<{ id: string; value: string; attachments: ComposerAttachment[] }>;
+    onRestoreApplied?: (ids: string[]) => void;
     /** Files the host read for attachment (picker/commands via attachUris). */
     injectedAttachments?: ComposerAttachment[] | null;
     onInjectedAttachmentsApplied?: () => void;
@@ -344,6 +336,9 @@ interface InputBarProps {
 }
 
 export function InputBar({
+    draftKey,
+    acceptedSend,
+    onAcceptedSendApplied,
     busy,
     onSend,
     onCancel,
@@ -388,9 +383,9 @@ export function InputBar({
     onRequestFiles,
     branchPicker,
 }: InputBarProps) {
-    // Seeded from the module-level draft store: a remount (navigating back
-    // from another screen) restores exactly what the user had typed.
-    const [value, setValue] = useState(draftText);
+    const [initialDraft] = useState(() => readComposerDraft(draftKey));
+    const [value, setValue] = useState(initialDraft.text);
+    const [recoveryDrafts, setRecoveryDrafts] = useState<ComposerRecovery[]>(() => readComposerRecoveries(draftKey));
     const [pickerOpen, setPickerOpen] = useState(false);
     const [filter, setFilter] = useState('');
     const [freeOnly, setFreeOnly] = useState(true);
@@ -406,7 +401,26 @@ export function InputBar({
     }, [pickerOpen, models, modelCapabilities, modelPings, onPingModel]);
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-    const [attachments, setAttachments] = useState<ComposerAttachment[]>(draftAttachments);
+    const [attachments, setAttachments] = useState<ComposerAttachment[]>(initialDraft.attachments);
+    const editRecoveryId = useRef(`edit-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    useEffect(() => {
+        // Reloading during an edit recovers its text separately from the
+        // ordinary draft; it never repeats the rewind automatically.
+        saveComposerRecoveries(draftKey, editDraft && (value || attachments.length)
+            ? [...recoveryDrafts, { id: editRecoveryId.current, value, attachments, missingNames: [] }]
+            : recoveryDrafts);
+    }, [draftKey, recoveryDrafts, editDraft, value, attachments]);
+    const draftRevision = useRef(0);
+    useLayoutEffect(() => { draftRevision.current++; }, [value, attachments]);
+    useEffect(() => {
+        if (!acceptedSend) return;
+        if (acceptedSend.edit && editDraft && acceptedSend.revision !== draftRevision.current) {
+            setRecoveryDrafts(previous => previous.some(draft => draft.id === acceptedSend.requestId) ? previous : [...previous, { id: acceptedSend.requestId, value, attachments, missingNames: [] }]);
+        } else if (!acceptedSend.edit && acceptedSend.revision === draftRevision.current) {
+            setValue(''); setAttachments(previous => previous.filter(file => !acceptedSend.attachments?.includes(file)));
+        }
+        onAcceptedSendApplied?.();
+    }, [acceptedSend, onAcceptedSendApplied]);
     const [attachError, setAttachError] = useState<string | null>(null);
     // Attachment errors auto-dismiss - they describe a single rejected file,
     // so lingering forever is noise (the chips themselves persist).
@@ -415,15 +429,23 @@ export function InputBar({
         const timer = setTimeout(() => setAttachError(null), 5000);
         return () => clearTimeout(timer);
     }, [attachError]);
-    // Mirror the draft into module scope on every change, so unmounting the
-    // composer (any screen switch) cannot drop it. Sending clears both states,
-    // which clears the store through these same effects.
+    // Historical edits are temporary; cancelling returns to the normal draft.
+    const ordinaryDraft = useRef(initialDraft);
+    const wasEditing = useRef(false);
     useEffect(() => {
-        draftText = value;
-    }, [value]);
-    useEffect(() => {
-        draftAttachments = attachments;
-    }, [attachments]);
+        if (editDraft) {
+            wasEditing.current = true;
+            return;
+        }
+        if (wasEditing.current) {
+            wasEditing.current = false;
+            setValue(ordinaryDraft.current.text);
+            setAttachments(ordinaryDraft.current.attachments);
+            return;
+        }
+        ordinaryDraft.current = { text: value, attachments };
+        saveComposerDraft(draftKey, value, attachments);
+    }, [draftKey, value, attachments, editDraft]);
     // @-mention popup state: a live `@token` under the caret opens the
     // workspace-file picker; the textarea itself is the search field.
     const [mention, setMention] = useState<MentionState | null>(null);
@@ -491,6 +513,20 @@ export function InputBar({
         [attachments]
     );
 
+    const recoverDraft = (draft: ComposerRecovery) => {
+        const ids = new Set(attachments.map(file => file.id));
+        const next = [...attachments, ...draft.attachments.filter(file => !ids.has(file.id))];
+        if (next.length > ATTACH_MAX_COUNT || next.reduce((sum, file) => sum + file.size, 0) > ATTACH_MAX_TOTAL_BYTES) {
+            setAttachError(t('attachTotalTooLarge')); return;
+        }
+        if (draft.value) setValue(current => current.trim() ? `${current}\n\n${draft.value}` : draft.value);
+        setAttachments(next);
+        setRecoveryDrafts(previous => draft.missingNames.length
+            ? previous.map(entry => entry.id === draft.id ? { ...entry, value: '', attachments: [] } : entry)
+            : previous.filter(entry => entry.id !== draft.id));
+        ref.current?.focus();
+    };
+
     // Suggestion chips: the picked prompt is typed into the composer
     // char-by-char (visible "someone is writing this" beat) and auto-sent
     // after a short pause. Any user keypress takes over - typing keeps the
@@ -539,8 +575,7 @@ export function InputBar({
                 sendBeatRef.current = null;
                 injectedAppliedRef.current?.();
                 if (modelSelectionRequiredRef.current) return;
-                sendRef.current(full, []);
-                setValue('');
+                if (sendRef.current(full, [], draftRevision.current) !== false) setValue('');
             }, 450);
             return clearInjectionTimers;
         }
@@ -562,26 +597,28 @@ export function InputBar({
                     sendBeatRef.current = null;
                     injectedAppliedRef.current?.();
                     if (modelSelectionRequiredRef.current) return;
-                    sendRef.current(full, []);
-                    setValue('');
+                    if (sendRef.current(full, [], draftRevision.current) !== false) setValue('');
                 }, 450);
             }
         }, 16);
         return clearInjectionTimers;
     }, [injectedText, clearInjectionTimers]);
 
-    // Restore the composer after a failed send: value + attachments come
-    // back from the host so the user can fix and retry without re-attaching.
+    // A rejected steer must not replace newer typing. When the composer is
+    // empty, restore directly; otherwise expose an explicit recovery action.
     useEffect(() => {
-        if (restoreDraft) {
-            setValue(restoreDraft.value);
-            setAttachments(restoreDraft.attachments);
-            // Restored text has no live caret token - close any popup.
-            setMention(null);
-            ref.current?.focus();
-            onRestoreApplied?.();
+        if (!restoreDraft?.length) return;
+        if (restoreDraft.length === 1 && !value && attachments.length === 0 && !editDraft && recoveryDrafts.length === 0) {
+            setValue(restoreDraft[0].value);
+            setAttachments(restoreDraft[0].attachments);
+        } else {
+            setRecoveryDrafts(previous => {
+                const ids = new Set(previous.map(entry => entry.id));
+                return [...previous, ...restoreDraft.filter(draft => !ids.has(draft.id)).map(draft => ({ ...draft, missingNames: [] }))];
+            });
         }
-    }, [restoreDraft, onRestoreApplied]);
+        onRestoreApplied?.(restoreDraft.map(draft => draft.id));
+    }, [restoreDraft, onRestoreApplied, value, attachments, editDraft, recoveryDrafts.length]);
 
     // Edit mode: the pencil loaded a past user message - prefill the
     // composer, drop any in-flight suggestion/mention, and focus. Sending
@@ -811,9 +848,10 @@ export function InputBar({
         // No busy guard here: while a run streams, onSend QUEUES the turn
         // (App decides send-vs-queue) - dropping the input would lose it.
         if ((!text && attachments.length === 0)) return;
-        onSend(text, attachments);
-        setValue('');
-        setAttachments([]);
+        if (onSend(text, attachments, draftRevision.current) !== false) {
+            setValue('');
+            setAttachments([]);
+        }
         setAttachError(null);
     };
 
@@ -1026,6 +1064,11 @@ export function InputBar({
                 className={`composer${typing ? ' is-typing' : ''}${editDraft ? ' is-editing' : ''}${attachments.length > 0 ? ' has-attachments' : ''}${value.trim() ? ' has-draft' : ''}`}
                 ref={composerRef}
             >
+                {recoveryDrafts.map(draft => <div className="composer-edit-banner" key={draft.id}>
+                    <span dir="auto">{draft.missingNames.length ? tf('composerRecoveryMissing', { names: draft.missingNames.join(', ') }) : (draft.value || draft.attachments.map(file => file.name).join(', ')).slice(0, 80)}</span>
+                    {(draft.value || draft.attachments.length > 0) && <button type="button" className="settings-ghost-action" onClick={() => recoverDraft(draft)}><span>{t('composerRecoverDraft')}</span></button>}
+                    <button type="button" className="composer-edit-cancel" aria-label={t('notifDismiss')} onClick={() => setRecoveryDrafts(previous => previous.filter(entry => entry.id !== draft.id))}><X size={12} /></button>
+                </div>)}
                 {editDraft && (
                     <div className="composer-edit-banner">
                         <PencilLine size={12} aria-hidden="true" />

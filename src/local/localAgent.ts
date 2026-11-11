@@ -12,6 +12,7 @@
 import { reminderTaskList, taskListReminderLine } from '../taskList';
 import { providerHttpStatus } from '../providerErrors';
 import { resolveAgentRounds } from '../tooling/agentRounds';
+import { resolveToolName } from '../tooling/toolNames';
 import {
     IMAGE_FORMAT_ERROR_RE,
     imageFallbackApplies,
@@ -46,6 +47,7 @@ import type {
     LocalToolCall,
     LocalToolDefinition,
     LocalToolExecutor,
+    LocalUsage,
 } from './localTypes';
 import {
     CONTEXT_OVERFLOW_RE,
@@ -267,7 +269,12 @@ export async function* runLocalAgent(
     approvalGate: LocalApprovalGate,
     steerFeed?: LocalSteerFeed,
 ): AsyncGenerator<LocalAgentEvent> {
-    request = { ...request, promptCacheState: {} };
+    const compactionUsage: LocalUsage[] = [];
+    const onCompactionUsage = request.onCompactionUsage;
+    request = { ...request, promptCacheState: {}, onCompactionUsage: usage => {
+        compactionUsage.push(usage);
+        onCompactionUsage?.(usage);
+    } };
     const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
     // Threshold for this run: the host's setting, else the default. Used by the
@@ -334,11 +341,26 @@ export async function* runLocalAgent(
         currentTurnMessage,
     ];
     let messages: LocalAgentMessage[] = buildMessages();
+    // Both serial and parallel rounds deliver corrections after the complete
+    // tool batch and before another model request (including wrap-up).
+    function* applySteers(): Generator<LocalAgentEvent> {
+        request.signal?.throwIfAborted();
+        for (const steer of steerFeed?.drain() ?? []) {
+            const text = steer.text.trim();
+            if (!text && !steer.attachments?.length) continue;
+            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
+            yield {
+                type: 'steer', text,
+                ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+                ...(steer.steerId ? { steerId: steer.steerId } : {}),
+            };
+        }
+    }
     /** Index of the current turn's opener in `messages` (undefined when absent
      *  or at the system boundary), for `compactMessages`' protectFromIndex. */
     const turnStartIndex = (): number | undefined => {
         const index = messages.indexOf(currentTurnMessage);
-        return index > 1 ? index : undefined;
+        return index > 0 ? index : undefined;
     };
     // How many user turns the run has folded into the rolling summary so far.
     const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
@@ -379,6 +401,7 @@ export async function* runLocalAgent(
         messages, request, windowTokens, undefined, sessionSummary, toolTokens, turnStartIndex(),
         Math.min(request.autoCompactRatio ?? AUTO_COMPACT_RATIO, HISTORY_BOUND_RATIO),
     );
+    for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
     request.signal?.throwIfAborted();
     if (preSummary) {
         sessionSummary = preSummary;
@@ -720,6 +743,7 @@ export async function* runLocalAgent(
                     // the steering-safe boundary.
                     messages, request, windowTokens, used, sessionSummary, 0, turnStartIndex(),
                 );
+                for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
                 if (summary) {
                     sessionSummary = summary;
                     yield { type: 'compactionSummary', value: summary, droppedUserTurns: compactedUserTurns() };
@@ -778,7 +802,17 @@ export async function* runLocalAgent(
             ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
         });
 
-        const approvalCalls = finalResult.toolCalls.filter((call) => toolRequiresApproval(call.name, request.tools));
+        // The model's response is untrusted. Resolve supported aliases against
+        // THIS run's snapshot before consent; never use the executor's broader
+        // tool inventory to grant a capability omitted from the run.
+        const toolNames = request.tools.map(tool => tool.name);
+        const availableTools = new Set(toolNames);
+        const executionCalls = finalResult.toolCalls.map(call => ({
+            ...call, name: resolveToolName(call.name, toolNames).name,
+        }));
+        // Keep original names in assistantMessage/provider history above. Only
+        // permission checks and execution use the canonical spelling.
+        const approvalCalls = executionCalls.filter((call) => availableTools.has(call.name) && toolRequiresApproval(call.name, request.tools));
         let decisions: Record<string, boolean> = {};
         if (approvalCalls.length) {
             const approvalId = `local-${cryptoRandomId()}`;
@@ -803,12 +837,12 @@ export async function* runLocalAgent(
         // replayed history stores the same order, so cache prefixes match).
         // Rounds without a parallel-tool call take the untouched serial path
         // below.
-        const parallelNames = new Set(request.parallelTools ?? []);
+        const parallelNames = new Set((request.parallelTools ?? []).map(name => resolveToolName(name, toolNames).name));
         const parallelCalls = parallelNames.size
-            ? finalResult.toolCalls.filter((call) => parallelNames.has(call.name))
+            ? executionCalls.filter((call) => parallelNames.has(call.name))
             : [];
         if (parallelCalls.length) {
-            for (const call of finalResult.toolCalls) {
+            for (const call of executionCalls) {
                 yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
             }
             const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
@@ -817,13 +851,14 @@ export async function* runLocalAgent(
             // used to return early and leak the count, hanging the round), and
             // the serial tail never observes a premature zero between two of
             // its own awaits (which would drop the rest of its results).
-            let remaining = finalResult.toolCalls.length;
+            let remaining = executionCalls.length;
             let execError: unknown = null;
             const runOne = async (call: LocalToolCall): Promise<void> => {
                 try {
-                    const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
+                    const available = availableTools.has(call.name);
+                    const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
                     if (!approved) {
-                        const output = 'Tool execution denied by the user.';
+                        const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
                         messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
                         eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
                         return;
@@ -875,7 +910,7 @@ export async function* runLocalAgent(
                 ));
             })();
             void (async () => {
-                for (const call of finalResult.toolCalls) {
+                for (const call of executionCalls) {
                     if (parallelNames.has(call.name)) continue;
                     await runOne(call);
                 }
@@ -886,15 +921,17 @@ export async function* runLocalAgent(
                 yield event;
             }
             if (execError) throw execError;
+            yield* applySteers();
             continue;
         }
 
-        for (const call of finalResult.toolCalls) {
-            const approved = !toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true;
+        for (const call of executionCalls) {
+            const available = availableTools.has(call.name);
+            const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
             yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
 
             if (!approved) {
-                const output = 'Tool execution denied by the user.';
+                const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
                 messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
                 yield { type: 'toolResult', id: call.id, tool: call.name, output, isError: true };
                 continue;
@@ -949,19 +986,7 @@ export async function* runLocalAgent(
         // conversation HERE - after the current tool results, BEFORE the
         // next model request - so the model reads them when it reasons
         // about its next tool call. No turn restart, no lost tool state.
-        if (steerFeed) {
-            for (const steer of steerFeed.drain()) {
-                const text = steer.text.trim();
-                if (!text && !steer.attachments?.length) continue;
-                messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
-                yield {
-                    type: 'steer',
-                    text,
-                    ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-                    ...(steer.steerId ? { steerId: steer.steerId } : {}),
-                };
-            }
-        }
+        yield* applySteers();
     }
 
     // Round budget exhausted while the model was still calling tools. A hard

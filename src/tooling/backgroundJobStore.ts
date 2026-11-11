@@ -19,7 +19,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { renameWithRetry } from '../local/localSessionStore';
 import { withDirectoryLock } from '../oauth/refreshLock';
-import { isOurProcess } from './processIdentity';
+import { processIdentityStatus } from './processIdentity';
 import type { BackgroundJobRecord } from './backgroundJobs';
 
 /** Jobs whose recorded process is gone, or whose record is malformed. */
@@ -155,7 +155,7 @@ export class BackgroundJobStore {
             // backwards: a long-lived database is exactly the case where the
             // user still needs the stop handle, and dropping it left a live
             // process that no window could signal.
-            if (!isOurProcess(entry.identity)) {
+            if (['gone', 'different'].includes(processIdentityStatus(entry.identity))) {
                 dropped.push(entry.id);
                 // A failed identity probe can be temporary (e.g. PowerShell
                 // timing out). Retain its record for a later restart unless

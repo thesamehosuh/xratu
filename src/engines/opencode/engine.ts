@@ -476,7 +476,7 @@ export class OpenCodeEngine implements AgentEngine {
                         case 'session.step.ended': {
                             const tokens = data.tokens as { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
                             if (tokens && [tokens.input, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) {
-                                const usage: LocalAgentEvent = { type: 'usage', usage: { promptTokens: tokens.input + tokens.cache.read + tokens.cache.write, completionTokens: tokens.output + tokens.reasoning, cachedTokens: tokens.cache.read, cacheWriteTokens: tokens.cache.write, totalTokens: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning, ...(typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0 ? { costUsd: data.cost } : {}) } };
+                                const usage: LocalAgentEvent = { type: 'usage', model: coordinator.sessions.get(eventSessionID)?.model ?? turn.model, ...(childEvent ? { source: 'subagent' as const } : {}), usage: { promptTokens: tokens.input + tokens.cache.read + tokens.cache.write, completionTokens: tokens.output + tokens.reasoning, cachedTokens: tokens.cache.read, cacheWriteTokens: tokens.cache.write, totalTokens: tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning, ...(typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost >= 0 ? { costUsd: data.cost } : {}) } };
                                 coordinator.usage(eventSessionID, usage);
                                 yield usage;
                             }

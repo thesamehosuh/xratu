@@ -30,9 +30,38 @@ scope selected. OpenCode accesses enabled Xratu skills and their bundled resourc
 through the shared skill tool. Its own native resources remain a separate read-only
 inventory. The browser, task list, reply language, and plan handoff also work
 with OpenCode; ending a plan unlocks execution on the next turn. Native subagents
-remain unavailable.
+appear in Agents with their own traces, attributed approvals, and stop controls.
 Usage attributes new native rounds to their engine/provider and preserves reported
 costs when Xratu pricing is edited.
+
+Historical edit/resend is available only with the built-in engine. OpenCode
+keeps the copy action and file-only checkpoint restore; its native history cannot
+be rewound by Xratu.
+
+Files selected from VS Code are delivered only to the chat that requested them.
+Switching chats during a file read discards that delayed delivery.
+
+Saved conversations keep their original workspace. Histories from other projects,
+missing folders, or legacy workspace markers remain readable. Execution and
+checkpoint restore are blocked until the original workspace is verified; open
+that folder or start a new chat here. Viewing history never rebinds its workspace.
+
+New chats save a nonsecret connection reference. If a restored chat's connection
+changed or was deleted, its transcript remains readable; select a connection in
+Providers explicitly before continuing. Legacy chats without a connection
+reference keep the current provider's model and do not overwrite its model memory.
+
+## Unsent drafts
+
+Unsent text stays with its conversation and workspace when switching chats or
+reloading the webview. A new chat keeps its draft when its first message assigns
+it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
+Only the first 200,000 UTF-16 code units of each draft survive a composer reload.
+VS Code state retains up to 32 recent text drafts within 200,000 characters total;
+older drafts are evicted. Attachments are kept in memory only and must be
+attached again after reload, including session switches that reload the page. Normal sends stay in the composer until the host saves and acknowledges the
+pending turn. Acceptance clears only the submitted revision; newer typing stays.
+Rejected submissions keep their draft, and repeated request IDs are not executed twice.
 
 ## OpenCode inside Xratu
 
@@ -90,8 +119,10 @@ an authenticated loopback bridge. Their transports, proxy routing, timeouts,
 images, and explicit auto-approval choices stay with Xratu. Changes apply on
 the next turn; shared MCP tools are denied in Plan mode. OpenCode keeps its
 native file and terminal tools and its separately configured MCP servers.
-OpenCode subagents and conversation rewind are not yet
-supported. File-only shadow checkpoint restore remains available. Offline
+Native subagents use OpenCode agent definitions and permissions. Stop one child
+from Agents or stop the whole tree from the composer; the parent turn stays active
+until nested/background work and reports settle. Plan mode denies delegation.
+Conversation rewind is unavailable; file-only shadow checkpoint restore remains available. Offline
 mode blocks this engine because Xratu cannot enforce network isolation on the
 OpenCode process. Xratu's file-path and web-fetch guards apply to its own tools;
 OpenCode's native tools use OpenCode's permission boundary.
@@ -341,6 +372,9 @@ and deleted skills stay deleted.
 
 ## Subagents
 
+The profile format below applies to the built-in engine. OpenCode uses its own
+native agent definitions; Xratu displays those as a read-only inventory.
+
 A subagent is a named agent profile the main agent can hand a
 self-contained task to with the `task` tool. The subagent runs a full agent
 loop in a **fresh context** - it cannot see your conversation - and only its
@@ -425,7 +459,7 @@ files written for other tools spell them `Read`, `Grep`, `Bash`. Run
 **Xratu: Agent Files** (or look in the **Xratu** output channel) to see
 these.
 
-A subagent keeps its own context, cannot delegate further, cannot ask you
+A built-in subagent keeps its own context, cannot delegate further, cannot ask you
 anything mid-run, and its own edits and commands go through the same
 approval gate as yours. Its run is reported back with a `task_id`: pass that
 id back in a later `task` call to continue the same subagent with its

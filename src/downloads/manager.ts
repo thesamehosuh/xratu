@@ -140,6 +140,8 @@ export class DownloadManager {
                 || !integer(r.attempts) || !integer(r.createdAt) || !integer(r.updatedAt)
                 || (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !r.sessionId || r.sessionId.length > 256))
                 || (r.sha256 !== undefined && !/^[a-f0-9]{64}$/.test(r.sha256))
+                || (r.publication !== undefined && (!r.publication || ![r.publication.dev, r.publication.ino, r.publication.size, r.publication.mtimeMs].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0)
+                    || r.publication.size !== r.received || r.total !== r.received))
                 || [r.etag, r.lastModified].some(v => v !== undefined && (typeof v !== 'string' || v.length > 1024 || /[\r\n]/.test(v)))) throw new Error('Invalid download record.');
             validateRecordPath(r.path);
             const source = new URL(r.source);
@@ -151,7 +153,27 @@ export class DownloadManager {
             delete r.error;
             delete r.httpStatus;
             if (!settled.has(r.status)) {
-                try { this.target(r); }
+                try {
+                    this.target(r);
+                    if (r.publication?.ino) {
+                        // Do not follow a replacement at the destination leaf.
+                        const target = path.join(sanitizePath(path.dirname(r.path), this.workspace), path.basename(r.path));
+                        const current = await fs.lstat(target).catch(error => { if (error.code !== 'ENOENT') throw error; return undefined; });
+                        const published = r.publication;
+                        if (current?.isFile() && current.dev === published.dev && current.ino === published.ino
+                            && current.size === published.size && current.mtimeMs === published.mtimeMs) {
+                            r.status = 'completed';
+                            // A crash between link and unlink leaves both names.
+                            const partial = this.partial(r);
+                            const leftover = await fs.lstat(partial).catch(() => undefined);
+                            if (leftover?.isFile() && leftover.dev === current.dev && leftover.ino === current.ino) {
+                                await fs.unlink(partial).catch(error => this.deps.diagnostic(error));
+                            }
+                            try { await this.deps.secrets.delete(this.key(r.id)); }
+                            catch (error) { this.deps.diagnostic(error); }
+                        }
+                    }
+                }
                 catch { r.status = 'failed'; r.error = 'downloadFileError'; }
             }
             this.records.set(r.id, r);
@@ -311,6 +333,7 @@ export class DownloadManager {
                 const file = await this.openPartial(r);
                 try { await file.truncate(0); await file.sync(); } finally { await file.close(); }
                 r.received = 0; r.total = null; delete r.etag; delete r.lastModified;
+                delete r.publication;
             }
             r.route = route; r.source = new URL(url).origin; r.status = 'queued'; r.attempts = 0;
             delete r.effectiveRoute;
@@ -342,7 +365,10 @@ export class DownloadManager {
                 await this.save(); this.emit();
                 await this.transfer(r, signal);
                 r.status = 'completed'; r.bytesPerSecond = 0; r.updatedAt = Date.now();
-                await this.save();
+                // link() already published the file. A metadata failure cannot
+                // turn that success into another transfer or a failed download.
+                try { await this.save(); }
+                catch (error) { this.deps.diagnostic(error); }
                 // Publication is complete; credential cleanup must not retry
                 // the transfer after its partial has already been removed.
                 try { await this.deps.secrets.delete(this.key(r.id)); }
@@ -387,6 +413,7 @@ export class DownloadManager {
 
     private async transfer(r: DownloadRecord, signal: AbortSignal): Promise<void> {
         const file = await this.openPartial(r);
+        delete r.publication;
         const controller = new AbortController();
         const combined = AbortSignal.any([signal, controller.signal]);
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -509,8 +536,10 @@ export class DownloadManager {
         }
         signal.throwIfAborted();
         const expected = await file.stat();
+        if (expected.size !== r.received) throw new DownloadFailure('downloadFileError');
         try { await this.deps.prepareDestination?.(r.path, r.received); }
         catch (error) { this.deps.diagnostic(error); }
+        r.publication = { dev: expected.dev, ino: expected.ino, size: expected.size, mtimeMs: expected.mtimeMs };
         await this.save();
         await file.close();
         // Same-directory hard link atomically publishes without overwriting.

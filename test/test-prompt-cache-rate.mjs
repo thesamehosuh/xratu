@@ -44,6 +44,26 @@ const ok = (name, cond, detail = '') => {
     console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond || !detail ? '' : ` - ${detail}`}`);
 };
 
+// A large-window run must not lose tool findings or rewrite cached arguments
+// at the event -> history boundary before the window-aware ledger sees them.
+{
+    const { contentCapForWindow, MAX_CONTENT_CAP } = require('../out/local/historyBounds.js');
+    const cap = contentCapForWindow(1_000_000);
+    const output = `HEAD\n${'finding '.repeat(12_000)}\nTAIL`;
+    const argumentsJson = JSON.stringify({ path: 'large.txt', content: 'source '.repeat(12_000) });
+    const assistant = { type: 'assistantMessage', text: 'Inspecting a large finding.', toolCalls: [
+        { id: 'large-call', name: 'write_file', argumentsJson },
+    ] };
+    const result = { type: 'toolResult', id: 'large-call', tool: 'write_file', output };
+    const rows = [assistant, result].map(event => historyRowFromEvent(persistedEventFromAgentEvent(event, cap)));
+    const replay = buildReplayHistory(rows);
+    ok('large-window tool output survives event capture and replay byte-for-byte', replay[1].content === output);
+    ok('large-window tool arguments survive event capture and replay byte-for-byte', replay[0].tool_calls[0].function.arguments === argumentsJson);
+    const limited = persistedEventFromAgentEvent({ ...result, output: 'x'.repeat(MAX_CONTENT_CAP * 2) }, cap);
+    ok('large-window event capture still enforces the absolute message ceiling', limited.output.length <= MAX_CONTENT_CAP);
+    ok('unknown-window event capture retains its conservative ceiling', persistedEventFromAgentEvent(result).output.length <= 40_000);
+}
+
 // ---------------------------------------------------------------------------
 // Mock transport: one SSE shape per API style.
 // ---------------------------------------------------------------------------
@@ -101,6 +121,7 @@ function messagesTool(name, args, id, _callId, n, reasoning) {
         frame({ type: 'content_block_delta', index: toolIndex, delta: { type: 'input_json_delta', partial_json: args } }),
         frame({ type: 'content_block_stop', index: toolIndex }),
         frame({ type: 'message_delta', usage: { output_tokens: 5 } }),
+        frame({ type: 'message_stop' }),
     );
     return out;
 }
@@ -120,6 +141,7 @@ function messagesText(text, n, reasoning) {
         frame({ type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text } }),
         frame({ type: 'content_block_stop', index: textIndex }),
         frame({ type: 'message_delta', usage: { output_tokens: 5 } }),
+        frame({ type: 'message_stop' }),
     );
     return out;
 }
@@ -172,13 +194,13 @@ function googleTool(name, args, _id, _callId, n, reasoning) {
     const parts = [];
     if (reasoning) parts.push({ text: REASONING(n), thought: true, thoughtSignature: `sig-${n}` });
     parts.push({ functionCall: { name, args: JSON.parse(args) } });
-    return [frame({ candidates: [{ content: { role: 'model', parts } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } })];
+    return [frame({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } })];
 }
 function googleText(text, n, reasoning) {
     const parts = [];
     if (reasoning) parts.push({ text: REASONING(n), thought: true, thoughtSignature: `sig-${n}` });
     parts.push({ text });
-    return [frame({ candidates: [{ content: { role: 'model', parts } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } })];
+    return [frame({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } })];
 }
 
 const RESPONDERS = {
@@ -518,10 +540,11 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
     ok('a tool row with no tool_call_id is dropped',
         buildReplayHistory([{ role: 'user', content: 'go' }, { role: 'tool', content: 'x' }]).length === 1);
 
-    // The mirror case is NOT this function's job: an unanswered assistant
-    // tool_call is repaired by the commit paths (placeholder result rows).
-    ok('an assistant tool_call is still replayed (commit paths answer it)',
-        buildReplayHistory([assistant('dangling')]).length === 1);
+    // Replay also repairs interrupted children and legacy snapshots that did
+    // not reach a commit path capable of recording a result.
+    const interrupted = buildReplayHistory([assistant('dangling')]);
+    ok('an interrupted tool call is replayed with explicit unknown completion',
+        interrupted.length === 2 && interrupted[1].role === 'tool' && interrupted[1].isError === true && interrupted[1].content.includes('Completion is unknown'));
 
     // Well-formed ledgers must pass through untouched, in order.
     const clean = buildReplayHistory([
@@ -571,6 +594,10 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
         contextNote: 'x'.repeat(3_000_000) }]);
     ok('an oversized note cannot bypass carrier bounds beside valid reasoning',
         !badNote[0].contextNote && badNote[0].content === 'a');
+    const badBlocks = boundCarriers([{ role: 'assistant', content: 'kept', providerBlocks: [big], reasoningContent: 'valid', contextNote: 'valid note' }]);
+    ok('oversized provider blocks cannot hide behind another accepted carrier', !badBlocks[0].providerBlocks && badBlocks[0].content === 'kept');
+    const badReasoning = boundCarriers([{ role: 'assistant', content: 'kept', providerBlocks: [{ type: 'text', text: 'valid' }], reasoningContent: 'x'.repeat(400_000) }]);
+    ok('oversized reasoning cannot hide behind accepted provider blocks', !badReasoning[0].reasoningContent && badReasoning[0].content === 'kept');
 }
 
 console.log(failed === 0 ? '\nall prompt-cache-rate checks passed' : `\n${failed} check(s) failed`);

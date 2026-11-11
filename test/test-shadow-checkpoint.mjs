@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync,
-    renameSync, utimesSync, chmodSync } from 'fs';
+    renameSync, utimesSync, chmodSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 
@@ -35,6 +35,125 @@ const store = new ShadowCheckpointStore({ globalStorageUri: { fsPath: storageRoo
 const work = mkdtempSync(join(tmpdir(), 'xratu-cp-work-'));
 
 try {
+    const createCheckpoint = store.createCheckpoint;
+    let releaseCapture, captureCount = 0, secondCaptured = false;
+    const captureGate = new Promise(resolve => { releaseCapture = resolve; });
+    store.createCheckpoint = async () => { captureCount++; await captureGate; return 'captured'; };
+    store.beginTurn();
+    const firstCapture = store.ensureTurnSnapshot(work, 'first mutation');
+    const secondCapture = store.ensureTurnSnapshot(work, 'parallel mutation').then(() => { secondCaptured = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    ok('parallel mutations wait for the same in-flight checkpoint', secondCaptured === false);
+    releaseCapture(); await Promise.all([firstCapture, secondCapture]);
+    ok('parallel mutations capture their baseline exactly once', captureCount === 1);
+    store.createCheckpoint = createCheckpoint;
+    store.beginTurn();
+    const otherStore = new ShadowCheckpointStore({ globalStorageUri: { fsPath: storageRoot } });
+    const firstInner = store._createCheckpointInner, otherInner = otherStore._createCheckpointInner;
+    let enterFirst, releaseFirst, otherEntered = false;
+    const firstEntered = new Promise(resolve => { enterFirst = resolve; });
+    const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+    store._createCheckpointInner = async () => { enterFirst(); await firstGate; return 'first'; };
+    otherStore._createCheckpointInner = async () => { otherEntered = true; return 'other'; };
+    const firstWindow = store.createCheckpoint(work, 'first window');
+    await firstEntered;
+    const otherWindow = otherStore.createCheckpoint(work, 'other window');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    ok('separate windows serialize checkpoint writes to the same shadow repository', otherEntered === false);
+    releaseFirst(); await Promise.all([firstWindow, otherWindow]);
+    store._createCheckpointInner = firstInner; otherStore._createCheckpointInner = otherInner;
+    const attributed = mkdtempSync(join(tmpdir(), 'xratu-cp-attributes-'));
+    try {
+        const attributes = '* text eol=lf ident\nlegacy.txt working-tree-encoding=UTF-16\n';
+        const textBytes = Buffer.from('$Id$\r\nWindows line endings\r\n');
+        const legacyBytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('$Id$\r\nLegacy encoding\r\n', 'utf16le')]);
+        writeFileSync(join(attributed, '.gitattributes'), attributes);
+        writeFileSync(join(attributed, 'text.txt'), textBytes);
+        writeFileSync(join(attributed, 'legacy.txt'), legacyBytes);
+        const raw = await store.createCheckpoint(attributed, 'literal bytes despite attributes');
+        writeFileSync(join(attributed, 'text.txt'), 'changed\r\n');
+        writeFileSync(join(attributed, 'legacy.txt'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('changed\r\n', 'utf16le')]));
+        await store.restoreCheckpoint(attributed, raw);
+        ok('checkpoint restore preserves CRLF and literal ident keywords byte for byte', readFileSync(join(attributed, 'text.txt')).equals(textBytes));
+        ok('checkpoint restore preserves original working-tree encoding byte for byte', readFileSync(join(attributed, 'legacy.txt')).equals(legacyBytes));
+        ok('shadow overrides never edit workspace attributes', readFileSync(join(attributed, '.gitattributes'), 'utf8') === attributes);
+    } finally { rmSync(attributed, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+    const transactional = mkdtempSync(join(tmpdir(), 'xratu-cp-transaction-'));
+    try {
+        writeFileSync(join(transactional, 'same.txt'), 'checkpoint content\n');
+        const baseline = await store.createCheckpoint(transactional, 'transaction baseline');
+        writeFileSync(join(transactional, 'same.txt'), 'current content\n');
+        writeFileSync(join(transactional, ' same.txt'), 'new spaced file\n');
+        await store.restoreCheckpoint(transactional, baseline);
+        ok('restore deletes the literal leading-space filename', !existsSync(join(transactional, ' same.txt')));
+        ok('restore never deletes its trimmed-name checkpoint sibling', existsSync(join(transactional, 'same.txt')) && readFileSync(join(transactional, 'same.txt'), 'utf8') === 'checkpoint content\n');
+        const literalNames = process.platform === 'win32' ? [' leading again.txt'] : [' leading again.txt', 'trailing .txt ', 'line\nname.txt', 'quote"name.txt'];
+        for (const name of literalNames) writeFileSync(join(transactional, name), 'literal new file\n');
+        await store.restoreCheckpoint(transactional, baseline);
+        ok('restore removes literal quoted, spaced and control-character paths', literalNames.every(name => !existsSync(join(transactional, name))));
+        rmSync(join(transactional, ' same.txt'), { force: true });
+        writeFileSync(join(transactional, 'same.txt'), 'current content\n');
+        writeFileSync(join(transactional, 'new.txt'), 'current new file\n');
+        const gitAsync = store.gitAsync;
+        let injected = false;
+        store.gitAsync = async function (args, ...rest) {
+            const result = await gitAsync.call(this, args, ...rest);
+            if (!injected && args.includes('checkout-index')) {
+                injected = true;
+                return { ...result, code: 1, stderr: 'injected failure after workspace writes' };
+            }
+            return result;
+        };
+        let restoreError;
+        try { await store.restoreCheckpoint(transactional, baseline); }
+        catch (error) { restoreError = error; }
+        finally { store.gitAsync = gitAsync; }
+        ok('restore reports a materialization failure', !!restoreError);
+        ok('failed restore rolls modified files back automatically', readFileSync(join(transactional, 'same.txt'), 'utf8') === 'current content\n');
+        ok('failed restore preserves current created files', readFileSync(join(transactional, 'new.txt'), 'utf8') === 'current new file\n');
+        writeFileSync(join(transactional, 'gone-first.txt'), 'must recover after a later cleanup error\n');
+        const removals = require('fs'), remove = removals.rmSync;
+        // sanitizePath resolves macOS /var -> /private/var (and other temp
+        // aliases). Match the physical path used by restore, not its spelling.
+        const deniedRemoval = join(realpathSync(transactional), 'new.txt');
+        let removalInjected = false;
+        removals.rmSync = (file, ...args) => {
+            if (file === deniedRemoval) { removalInjected = true; throw Object.assign(Error('injected removal denied'), { code: 'EACCES' }); }
+            return remove(file, ...args);
+        };
+        let removalError;
+        try { await store.restoreCheckpoint(transactional, baseline); }
+        catch (error) { removalError = error; }
+        finally { removals.rmSync = remove; }
+        ok('cleanup fault injection reaches canonical workspace paths', removalInjected);
+        ok('failed cleanup never announces a successful restore', !!removalError);
+        ok('failed cleanup rolls overwritten files back', readFileSync(join(transactional, 'same.txt'), 'utf8') === 'current content\n');
+        ok('failed cleanup restores files it already deleted', existsSync(join(transactional, 'gone-first.txt')) && readFileSync(join(transactional, 'gone-first.txt'), 'utf8') === 'must recover after a later cleanup error\n');
+        const headTarget = await store.createCheckpoint(transactional, 'symbolic restore target');
+        writeFileSync(join(transactional, 'same.txt'), 'later content\n');
+        const symbolic = await store.restoreCheckpoint(transactional, 'HEAD');
+        ok('symbolic restore targets are pinned before the safety commit advances HEAD', symbolic.sha === headTarget && readFileSync(join(transactional, 'same.txt'), 'utf8') === 'current content\n');
+        writeFileSync(join(transactional, '.gitignore'), 'same.txt\n');
+        rmSync(join(transactional, 'same.txt'));
+        await store.createCheckpoint(transactional, 'remove tracked path before ignored replacement');
+        writeFileSync(join(transactional, 'same.txt'), 'ignored content absent from safety backup\n');
+        let excludedError;
+        try { await store.restoreCheckpoint(transactional, baseline); } catch (error) { excludedError = error; }
+        ok('restore refuses to overwrite an excluded file absent from its safety checkpoint', !!excludedError && readFileSync(join(transactional, 'same.txt'), 'utf8') === 'ignored content absent from safety backup\n');
+        rmSync(join(transactional, 'same.txt'));
+        mkdirSync(join(transactional, 'same.txt'));
+        writeFileSync(join(transactional, 'same.txt', 'secret'), 'excluded descendant');
+        let directoryError;
+        try { await store.restoreCheckpoint(transactional, baseline); } catch (error) { directoryError = error; }
+        ok('restore preserves excluded descendants under a replaced directory', !!directoryError && readFileSync(join(transactional, 'same.txt', 'secret'), 'utf8') === 'excluded descendant');
+        writeFileSync(join(transactional, '.gitignore'), '');
+        await store.createCheckpoint(transactional, 'recoverable directory replacement');
+        await store.restoreCheckpoint(transactional, baseline);
+        ok('restore replaces a fully recoverable directory with its original file', !existsSync(join(transactional, 'same.txt', 'secret')) && !!readFileSync(join(transactional, 'same.txt'), 'utf8'));
+
+
+    } finally { rmSync(transactional, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+
     // --- baseline checkpoint: one tracked file ---
     writeFileSync(join(work, 'a.txt'), 'one\n');
     const sha1 = await store.createCheckpoint(work, 'baseline');
@@ -209,28 +328,43 @@ try {
         const hook = join(gpgHome, 'hooks', 'post-commit');
         writeFileSync(hook, `#!/bin/sh\necho ran > "${hookFired}"\n`);
         chmodSync(hook, 0o755);
+        mkdirSync(join(gpgHome, 'template', 'hooks'), { recursive: true });
+        const templateHook = join(gpgHome, 'template', 'hooks', 'post-commit');
+        writeFileSync(templateHook, readFileSync(hook)); chmodSync(templateHook, 0o755);
         writeFileSync(join(gpgHome, '.gitconfig'),
             `[user]\n\tname = T\n\temail = t@example.invalid\n`
             + `[commit]\n\tgpgsign = true\n`
+            + `[init]\n\ttemplateDir = ${join(gpgHome, 'template').replace(/\\/g, '/')}\n`
             + `[core]\n\thooksPath = ${join(gpgHome, 'hooks').replace(/\\/g, '/')}\n`);
         writeFileSync(join(gpgWork, 'f.txt'), 'f\n');
 
         const prevHome = process.env.HOME;
         const prevUserProfile = process.env.USERPROFILE;
+        const injected = ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_DEFAULT_HASH'];
+        const inherited = injected.map(key => process.env[key]);
         let gpgSha = '';
         let gpgErr = '';
+        let pinnedTarget = '';
         try {
             process.env.HOME = gpgHome;
             process.env.USERPROFILE = gpgHome;
+            process.env.GIT_CONFIG_COUNT = '1';
+            process.env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+            process.env.GIT_CONFIG_VALUE_0 = join(gpgHome, 'hooks');
+            process.env.GIT_DEFAULT_HASH = 'sha256';
             gpgSha = await store.createCheckpoint(gpgWork, 'under hostile global config');
+            pinnedTarget = await store.resolveCheckpoint(gpgWork, gpgSha);
         } catch (e) {
             gpgErr = e instanceof Error ? e.message : String(e);
         } finally {
             if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
             if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+            injected.forEach((key, index) => { if (inherited[index] === undefined) delete process.env[key]; else process.env[key] = inherited[index]; });
         }
         ok('checkpoint survives commit.gpgsign=true in global config', !!gpgSha, gpgErr);
+        ok('shadow storage pins its supported hash format despite inherited defaults', /^[a-f0-9]{40}$/.test(pinnedTarget), gpgErr);
         ok('global core.hooksPath post-commit hook does NOT run', !existsSync(hookFired));
+        ok('global init templates cannot install shadow hooks', !existsSync(hookFired));
     } finally {
         rmSync(gpgWork, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
         rmSync(gpgHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

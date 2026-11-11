@@ -116,7 +116,7 @@ async function drive(apiStyle, { images } = {}) {
                         output_index: 0,
                         item: { id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: TOOL_CALL_ARGS },
                     }),
-                    frame({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 }, output: [] } }),
+                    frame({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 }, output: [{ id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: TOOL_CALL_ARGS }] } }),
                 ]);
             }
             if (url.includes('GenerateContent')) {
@@ -431,7 +431,7 @@ for (const style of ['messages', 'responses', 'google']) {
                     frame({ type: 'response.output_item.added', output_index: 0, item: { id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: '' } }),
                     frame({ type: 'response.function_call_arguments.delta', item_id: 'fc1', delta: TOOL_CALL_ARGS }),
                     frame({ type: 'response.output_item.done', output_index: 0, item: { id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: TOOL_CALL_ARGS } }),
-                    frame({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 }, output: [] } }),
+                    frame({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 }, output: [{ id: 'fc1', type: 'function_call', call_id: 'call1', name: SHOT_TOOL[0].name, arguments: TOOL_CALL_ARGS }] } }),
                 ]);
             }
             return sse([

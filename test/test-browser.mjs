@@ -157,6 +157,7 @@ test('the host preserves its browser through persistence and rejects a replaced 
     const fake = fakeBrowser(), messages = [];
     host._browser = new BrowserController({ emit: message => messages.push(message), executablePath: () => '', launch: async () => fake.browser });
     host._view = { webview: { postMessage: message => messages.push(message) } };
+    host._localWorkspaceKey = host._draftWorkspaceIdentity = () => 'test-workspace';
     host._pushTaskListState = host._postSessionCost = host._sendDownloads = () => {};
     host._sessionId = host._ephemeralSessionId = host._sessionTitle = null;
     try {
@@ -172,6 +173,7 @@ test('the host preserves its browser through persistence and rejects a replaced 
         assert.equal(persisted.status, 'ready');
         const session = messages.findLast(message => message.type === 'sessionState');
         assert.equal(session.id, 'persisted-chat');
+        assert.equal(session.workspace, 'test-workspace');
         assert.equal(session.browserSessionId, before.sessionId);
         await host._browserCommand(before.sessionId, before.browserId, { action: 'press', key: 'Enter' });
         assert.ok(fake.calls.some(([name]) => name === 'press'));

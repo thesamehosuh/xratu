@@ -48,6 +48,39 @@ try {
     }
 
     const store = new LocalSessionStore(root);
+    const indexFailure = await store.create(ws);
+    const writeIndex = store.writeIndex;
+    store.writeIndex = async () => { throw Error('picker index is temporarily unwritable'); };
+    let durableSave;
+    try {
+        durableSave = await store.save(indexFailure.id, { workspace: ws, model: null, summary: null,
+            localHistory: [{ role: 'user', content: 'Durably owned prompt' }], uiHistory: [{ role: 'user', content: 'Durably owned prompt' }] });
+    } finally { store.writeIndex = writeIndex; }
+    checkTrue('auxiliary index failure cannot reject a durable prompt', !!durableSave);
+    check('snapshot remains readable after picker index failure', (await store.load(indexFailure.id)).uiHistory[0].content, 'Durably owned prompt');
+    const restarted = new LocalSessionStore(root);
+    await restarted.reconcile();
+    check('startup repairs stale existing index metadata from the authoritative snapshot', (await restarted.list(ws)).find(meta => meta.id === indexFailure.id)?.title, 'Durably owned prompt');
+    store.writeIndex = async () => { throw Error('picker index is temporarily unwritable'); };
+    let renamed;
+    try { renamed = await store.rename(indexFailure.id, 'Durable renamed chat').catch(() => false); }
+    finally { store.writeIndex = writeIndex; }
+    check('failed index rename is not acknowledged', renamed, false);
+    await restarted.reconcile();
+    check('failed index rename preserves the durable title', (await restarted.load(indexFailure.id)).title, 'Durably owned prompt');
+    await store.rename(indexFailure.id, 'Durable renamed chat');
+    const nativeFs = require('node:fs/promises'), writeFile = nativeFs.writeFile;
+    nativeFs.writeFile = async (file, ...args) => {
+        if (String(file) === join(root, 'sessions', indexFailure.id, 'snapshot.json.tmp')) throw Error('snapshot write denied');
+        return writeFile(file, ...args);
+    };
+    let renameError;
+    try { await store.rename(indexFailure.id, 'Must not announce success'); }
+    catch (error) { renameError = error; }
+    finally { nativeFs.writeFile = writeFile; }
+    checkTrue('failed snapshot rename is reported to its caller', !!renameError);
+    check('failed snapshot rename keeps the picker title unchanged', (await store.list(ws)).find(meta => meta.id === indexFailure.id)?.title, 'Durable renamed chat');
+    await store.delete(indexFailure.id);
     const corrupt = await store.create(ws);
     for (const value of [null, [], 7, 'not a snapshot']) {
         writeFileSync(join(root, 'sessions', corrupt.id, 'snapshot.json'), JSON.stringify(value));
@@ -108,6 +141,12 @@ try {
 
     // 4. Explicit rename locks the title (renamed flag) across later saves.
     await store.rename(meta.id, 'my custom name');
+    const renamedSnapshot = JSON.parse(readFileSync(join(root, 'sessions', meta.id, 'snapshot.json'), 'utf8'));
+    const renamedMeta = (await store.list(ws)).find(item => item.id === meta.id);
+    check('rename snapshot and picker timestamps agree', renamedSnapshot.updatedAt, renamedMeta.updatedAt);
+    await store.reconcile(ws);
+    check('reconciliation preserves rename timestamp', (await store.list(ws)).find(item => item.id === meta.id).updatedAt, renamedMeta.updatedAt);
+
     await store.save(meta.id, {
         workspace: ws,
         model: null,

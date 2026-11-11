@@ -86,13 +86,10 @@ jobs:
           XRATU_VISUAL: ${{ runner.os == 'Linux' && '1' || '' }}
         run: npm run test:e2e
 
-      # A failed Playwright run writes `test-results/*/error-context.md` - a
-      # page snapshot per failure. Without this they are thrown away, and the
-      # next platform-specific failure is only diagnosable from the assertion
-      # diff in the log. Uploads on failure only; `!cancelled()` so a
-      # fail-fast sibling kill does not upload a misleading empty report.
-      - name: Upload Playwright failure artifacts
-        if: failure() && !cancelled()
+      # Keep screenshots for visual review even when assertions pass, along
+      # with error contexts and traces for any failures.
+      - name: Upload Playwright results
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-${{ matrix.os }}

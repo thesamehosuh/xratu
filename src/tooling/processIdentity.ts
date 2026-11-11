@@ -257,19 +257,20 @@ export function captureIdentityAsync(
  * enough - that is precisely the recycled-number case.
  */
 export function isOurProcess(identity: ProcessIdentity | null | undefined): boolean {
-    if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0) return false;
-    if (identity.token === 'unverified') return false;
-    let alive = false;
+    return processIdentityStatus(identity) === 'same';
+}
+
+/** Failure to read an incarnation token is uncertainty, not proof of exit.
+ * Callers may retain an unknown process, but must never signal it. */
+export function processIdentityStatus(identity: ProcessIdentity | null | undefined): 'same' | 'different' | 'gone' | 'unknown' {
+    if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0 || identity.pid > 0x7fffffff
+        || typeof identity.token !== 'string' || !identity.token) return 'different';
     try {
         process.kill(identity.pid, 0);
-        alive = true;
     } catch (err: any) {
-        // EPERM means the process exists but belongs to another user - alive,
-        // and still not ours to signal.
-        if (err?.code !== 'EPERM') return false;
-        alive = true;
+        return err?.code === 'ESRCH' ? 'gone' : 'unknown';
     }
-    if (!alive) return false;
+    if (identity.token === 'unverified') return 'unknown';
     const current = processStartToken(identity.pid);
-    return current !== null && current === identity.token;
+    return current === null ? 'unknown' : current === identity.token ? 'same' : 'different';
 }

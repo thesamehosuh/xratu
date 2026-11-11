@@ -24,6 +24,8 @@ import type {
 import {
     FIRST_BYTE_TIMEOUT_MS,
     MAX_TOKENS_REJECT_RE,
+    chatOutputTokenField,
+    swapChatOutputTokenField,
     PROMPT_CACHE_KEY_REJECT_RE,
     REASONING_REJECT_RE,
     STREAM_OPTIONS_REJECT_RE,
@@ -322,6 +324,27 @@ export async function requestStreamingCompletion(
     } finally { clearTimeout(timer); }
 }
 
+function chatUsage(rawUsage: any): LocalUsage {
+    // Cache-hit accounting differs per provider: OpenAI nests it under
+    // prompt_tokens_details, Anthropic-style gateways use
+    // cache_read_input_tokens, DeepSeek uses prompt_cache_hit_tokens.
+    const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
+        ?? rawUsage.cache_read_input_tokens
+        ?? rawUsage.prompt_cache_hit_tokens;
+    // Cache-WRITE tokens are reported separately (OpenAI
+    // `cache_write_tokens`, Anthropic-style `cache_creation_input_tokens`)
+    // and are billed at 1.25x input, so they must reach cost accounting.
+    const writeRaw = rawUsage.prompt_tokens_details?.cache_write_tokens
+        ?? rawUsage.cache_creation_input_tokens;
+    return {
+        promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
+        completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
+        totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
+        cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
+        cacheWriteTokens: Number.isFinite(writeRaw) ? writeRaw : null,
+    };
+}
+
 async function requestChatCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -343,7 +366,7 @@ async function requestChatCompletion(
         stream_options: { include_usage: true },
     };
     if (request.tools.length) body.tools = toOpenAITools(request.tools);
-    body.max_tokens = outputCapFor(request);
+    body[chatOutputTokenField(request.baseUrl)] = outputCapFor(request);
     if (request.temperature != null) body.temperature = request.temperature;
     // Reasoning effort. OpenRouter accepts the unified `reasoning: { effort }`
     // object for every reasoning model, while a bare top-level `reasoning_effort`
@@ -395,17 +418,21 @@ async function requestChatCompletion(
     try {
         response = await send(body);
         // Strict OpenAI-compatible servers reject non-standard or unsupported
-        // fields with a 400. Drop them one at a time - `stream_options` first
-        // (usage then comes from the final chunk if the server sends it), then
-        // the DERIVED `max_tokens`, which not every gateway accepts - and
-        // retry rather than failing the whole turn. An explicitly requested
-        // cap is never dropped: that is the caller's intent, so the 400 stands.
-        for (let attempt = 0; attempt < 3 && !response.ok && response.status === 400; attempt++) {
+        // fields with a 400. Negotiate the cap's spelling before considering
+        // an unsupported derived cap optional. An explicit caller cap is never
+        // dropped. Other optional fields degrade one at a time, with a bound
+        // large enough to negotiate every supported field without looping.
+        let capSpellingRetried = false;
+        for (let attempt = 0; attempt < 8 && !response.ok && response.status === 400; attempt++) {
             const text = await response.text().catch(() => '');
-            if (body.stream_options && STREAM_OPTIONS_REJECT_RE.test(text)) {
-                delete body.stream_options;
-            } else if (request.maxTokens == null && body.max_tokens != null && MAX_TOKENS_REJECT_RE.test(text)) {
+            if ((body.max_tokens != null || body.max_completion_tokens != null) && MAX_TOKENS_REJECT_RE.test(text) && !capSpellingRetried) {
+                swapChatOutputTokenField(body);
+                capSpellingRetried = true;
+            } else if (request.maxTokens == null && (body.max_tokens != null || body.max_completion_tokens != null) && MAX_TOKENS_REJECT_RE.test(text)) {
                 delete body.max_tokens;
+                delete body.max_completion_tokens;
+            } else if (body.stream_options && STREAM_OPTIONS_REJECT_RE.test(text)) {
+                delete body.stream_options;
             } else if (REASONING_CONTENT_REJECT_RE.test(text)) {
                 // Thinking mode demands the assistant turn's reasoning BACK.
                 // Checked BEFORE the generic reasoning-effort branch, which also
@@ -456,9 +483,11 @@ async function requestChatCompletion(
     let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number, { id: string; name: string; arguments: string }>();
+    let streamEnded = false;
+    let finishReason: string | null = null;
 
     const consume = (payload: string) => {
-        if (payload === '[DONE]') return;
+        if (payload === '[DONE]') { streamEnded = true; return; }
         let json: any;
         try {
             json = JSON.parse(payload);
@@ -466,27 +495,10 @@ async function requestChatCompletion(
             return;
         }
 
-        const rawUsage = json?.usage;
-        if (rawUsage) {
-            // Cache-hit accounting differs per provider: OpenAI nests it under
-            // prompt_tokens_details, Anthropic-style gateways use
-            // cache_read_input_tokens, DeepSeek uses prompt_cache_hit_tokens.
-            const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
-                ?? rawUsage.cache_read_input_tokens
-                ?? rawUsage.prompt_cache_hit_tokens;
-            // Cache-WRITE tokens are reported separately (OpenAI
-            // `cache_write_tokens`, Anthropic-style `cache_creation_input_tokens`)
-            // and are billed at 1.25x input, so they must reach cost accounting.
-            const writeRaw = rawUsage.prompt_tokens_details?.cache_write_tokens
-                ?? rawUsage.cache_creation_input_tokens;
-            usage = {
-                promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
-                completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
-                totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
-                cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
-                cacheWriteTokens: Number.isFinite(writeRaw) ? writeRaw : null,
-            };
-        }
+        if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
+        if (json?.usage) usage = chatUsage(json.usage);
+        const reason = json?.choices?.[0]?.finish_reason;
+        if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
 
         const delta = json?.choices?.[0]?.delta;
         if (!delta) return;
@@ -547,21 +559,16 @@ async function requestChatCompletion(
         if (done) break;
     }
 
-    const toolCalls: LocalToolCall[] = [];
-    for (const call of toolDeltas.values()) {
-        if (!call.id || !call.name) continue;
-        toolCalls.push({
-            id: call.id,
-            name: call.name,
-            argumentsJson: call.arguments,
-            arguments: parseArguments(call.arguments),
-        });
+    // Compatible servers may use [DONE] instead of finish_reason. Neither
+    // clean TCP EOF nor a token/filter cutoff completes an actionable batch.
+    if (toolDeltas.size && (!streamEnded || (finishReason != null && !['tool_calls', 'stop', 'function_call'].includes(finishReason)))) {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
     }
 
     // `reasoning` MUST ride along: it is the only carrier of the thinking state
     // for this transport, and the next round has to replay it (see
     // withReasoningContent). Dropping it here is what caused the 400.
-    return { text, toolCalls, usage, reasoningContent: reasoning || undefined };
+    return { ...finalizeCompletion(text, toolDeltas, usage), reasoningContent: reasoning || undefined };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal (parity with the
@@ -597,6 +604,20 @@ function messagesContentBlocks(content: LocalAgentMessage['content']): any[] {
     return blocks;
 }
 
+/** Legacy snapshots may contain carriers from an earlier API dialect. Only
+ * replay shapes this adapter understands; ordinary text/tool rows are the
+ * portable fallback when a model or provider has changed. */
+function hasReplayBlocks(value: unknown, style: 'messages' | 'responses' | 'google'): value is Record<string, unknown>[] {
+    if (!Array.isArray(value) || !value.length) return false;
+    return value.every((raw: unknown) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        const block = raw as Record<string, unknown>;
+        if (style === 'messages') return ['text', 'thinking', 'redacted_thinking', 'tool_use'].includes(String(block.type));
+        if (style === 'responses') return ['message', 'reasoning', 'function_call'].includes(String(block.type));
+        return !('type' in block) && ['text', 'functionCall', 'thoughtSignature', 'inlineData', 'fileData', 'executableCode', 'codeExecutionResult'].some(key => key in block);
+    });
+}
+
 function toMessagesBody(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -624,7 +645,7 @@ function toMessagesBody(
             // (thinking + signature + tool_use). Reconstructing from text and
             // tool_calls would drop the thinking state the API requires when a
             // thinking turn is continued.
-            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+            if (hasReplayBlocks(msg.providerBlocks, 'messages')) {
                 out.push({ role: 'assistant', content: msg.providerBlocks.map(block => {
                     const { cache_control: _cacheControl, ...content } = block as Record<string, unknown>;
                     return content;
@@ -856,6 +877,8 @@ async function requestMessagesCompletion(
     const blockOrder: number[] = [];
     const blocks = new Map<number, any>();
     const partialJson = new Map<number, string>();
+    let streamEnded = false;
+    let stopReason: string | null = null;
 
     const consume = (payload: string) => {
         let json: any;
@@ -934,6 +957,10 @@ async function requestMessagesCompletion(
             }
             case 'message_delta':
                 if (json.usage) usage = mergeMessagesUsage(json.usage, usage);
+                if (typeof json.delta?.stop_reason === 'string') stopReason = json.delta.stop_reason;
+                break;
+            case 'message_stop':
+                streamEnded = true;
                 break;
             case 'error':
                 throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
@@ -947,6 +974,9 @@ async function requestMessagesCompletion(
         buffer = parsed.remainder;
         for (const payload of parsed.events) consume(payload);
         if (done) break;
+    }
+    if (toolDeltas.size && (!streamEnded || (stopReason != null && !['tool_use', 'end_turn'].includes(stopReason)))) {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
     }
     const providerBlocks = blockOrder.map((index) => blocks.get(index)).filter(Boolean);
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
@@ -1032,7 +1062,7 @@ function toResponsesBody(
             // Prefer the provider-native output items (reasoning + message +
             // function_call) captured while streaming; the Responses API wants
             // them replayed verbatim so reasoning state survives a tool turn.
-            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+            if (hasReplayBlocks(msg.providerBlocks, 'responses')) {
                 for (const item of msg.providerBlocks) input.push(item);
                 continue;
             }
@@ -1266,6 +1296,19 @@ async function requestResponsesCompletion(
     let completed = false;
     let cacheDiagnostic: CompletionResult['cacheDiagnostic'];
 
+    const rememberCall = (item: any) => {
+        if (item?.type !== 'function_call') return;
+        const key = String(item.id ?? item.call_id ?? '');
+        if (!key) return;
+        const previous = toolDeltas.get(key);
+        if (!previous) onToolCall?.();
+        toolDeltas.set(key, {
+            id: String(item.call_id ?? item.id ?? ''),
+            name: String(item.name ?? previous?.name ?? ''),
+            arguments: typeof item.arguments === 'string' ? item.arguments : previous?.arguments ?? '',
+        });
+    };
+
     const consume = (payload: string) => {
         let json: any;
         try {
@@ -1275,6 +1318,7 @@ async function requestResponsesCompletion(
         }
         switch (json?.type) {
             case 'response.output_text.delta':
+            case 'response.refusal.delta':
                 if (typeof json.delta === 'string' && json.delta) {
                     text += json.delta;
                     onDelta(json.delta);
@@ -1290,27 +1334,25 @@ async function requestResponsesCompletion(
             case 'response.output_item.added': {
                 const item = json.item;
                 if (item) itemsByIndex.set(Number(json.output_index ?? 0), item);
-                if (item?.type === 'function_call') {
-                    onToolCall?.();
-                    // Key by the ITEM id: arguments deltas reference it.
-                    toolDeltas.set(String(item.id ?? item.call_id ?? ''), {
-                        id: String(item.call_id ?? item.id ?? ''),
-                        name: String(item.name ?? ''),
-                        arguments: '',
-                    });
-                }
+                rememberCall(item);
                 break;
             }
             case 'response.output_item.done': {
                 // The done event carries the COMPLETE item (with arguments and
                 // any reasoning payload) - the best thing to replay.
                 if (json.item) itemsByIndex.set(Number(json.output_index ?? 0), json.item);
+                rememberCall(json.item);
                 break;
             }
             case 'response.function_call_arguments.delta': {
                 onToolCall?.();
                 const current = toolDeltas.get(String(json.item_id ?? ''));
                 if (current && typeof json.delta === 'string') current.arguments += json.delta;
+                break;
+            }
+            case 'response.function_call_arguments.done': {
+                const current = toolDeltas.get(String(json.item_id ?? ''));
+                if (current && typeof json.arguments === 'string') current.arguments = json.arguments;
                 break;
             }
             case 'response.completed':
@@ -1346,7 +1388,9 @@ async function requestResponsesCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
-    if (request.subscription && !completed) throw new Error('Model stream ended without response.completed');
+    if (!completed && (request.subscription || toolDeltas.size > 0)) {
+        throw new Error('Model stream ended without response.completed');
+    }
     // If the stream omitted output_item.done / completed.output, the stored
     // function_call item still has empty arguments - backfill from the
     // accumulated deltas so the continuation isn't sent with an empty call.
@@ -1358,6 +1402,19 @@ async function requestResponsesCompletion(
     }
     const providerBlocks = completedItems
         ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    // Finalized items are authoritative for execution as well as replay.
+    // Relays may coalesce deltas, and an interrupted argument delta must not
+    // replace the complete JSON that the final item actually approved.
+    if (completedItems) toolDeltas.clear();
+    for (const item of providerBlocks) rememberCall(item);
+    const finalText = providerBlocks.filter(item => item?.type === 'message')
+        .flatMap(item => Array.isArray(item.content) ? item.content : [])
+        .map(block => block?.type === 'output_text' ? block.text : block?.type === 'refusal' ? block.refusal : '')
+        .filter(value => typeof value === 'string').join('');
+    if (finalText) {
+        if (finalText.startsWith(text) && finalText.length > text.length) onDelta(finalText.slice(text.length));
+        text = finalText;
+    }
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks, cacheDiagnostic };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
@@ -1400,6 +1457,27 @@ function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
     return parts;
 }
 
+/** Parallel executors report in completion order. Older Google models have
+ * no call IDs, so preserve declaration order when returning a result batch,
+ * especially when several calls share the same function name. */
+function orderedToolResults(messages: LocalAgentMessage[]): LocalAgentMessage[] {
+    const out: LocalAgentMessage[] = [];
+    let order = new Map<string, number>();
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'tool') {
+            order = new Map((message.tool_calls ?? []).map((call, index) => [call.id, index]));
+            out.push(message);
+            continue;
+        }
+        const batch: LocalAgentMessage[] = [message];
+        while (messages[i + 1]?.role === 'tool') batch.push(messages[++i]);
+        batch.sort((a, b) => (order.get(a.tool_call_id ?? '') ?? Infinity) - (order.get(b.tool_call_id ?? '') ?? Infinity));
+        out.push(...batch);
+    }
+    return out;
+}
+
 function toGoogleBody(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -1408,8 +1486,9 @@ function toGoogleBody(
     const systemParts: string[] = [];
     const contents: any[] = [];
     const toolNameById = new Map<string, string>();
+    const nativeIdByCallId = new Map<string, string>();
 
-    for (const msg of messages) {
+    for (const msg of orderedToolResults(messages)) {
         if (msg.role === 'system') {
             if (typeof msg.content === 'string' && msg.content) systemParts.push(msg.content);
             continue;
@@ -1424,13 +1503,19 @@ function toGoogleBody(
         }
         if (msg.role === 'assistant') {
             appendGoogleNote(contents, msg.contextNote ?? '');
-            if (Array.isArray(msg.providerBlocks) && msg.providerBlocks.length) {
+            if (hasReplayBlocks(msg.providerBlocks, 'google')) {
                 // Replay Google's own model parts (functionCall + thoughtSignature).
                 const parts = msg.providerBlocks as any[];
                 const last = contents[contents.length - 1];
                 if (last && last.role === 'model') last.parts.push(...parts);
                 else contents.push({ role: 'model', parts: [...parts] });
-                for (const call of msg.tool_calls ?? []) toolNameById.set(call.id, call.function.name);
+                const nativeCalls = parts.filter(part => part?.functionCall);
+                for (const [index, call] of (msg.tool_calls ?? []).entries()) {
+                    toolNameById.set(call.id, call.function.name);
+                    const nativeId = nativeCalls.find(part => part.functionCall.id === call.id)?.functionCall.id
+                        ?? nativeCalls[index]?.functionCall.id;
+                    if (typeof nativeId === 'string' && nativeId) nativeIdByCallId.set(call.id, nativeId);
+                }
                 continue;
             }
             const parts: any[] = [];
@@ -1449,10 +1534,13 @@ function toGoogleBody(
             continue;
         }
         if (msg.role === 'tool') {
-            // Google matches a function response by NAME, not by call id.
+            // Preserve a provider-issued ID when present; older models match
+            // by name and must not receive Xratu's synthetic fallback IDs.
             const name = toolNameById.get(msg.tool_call_id ?? '') ?? 'tool';
+            const nativeId = nativeIdByCallId.get(msg.tool_call_id ?? '');
             const part = {
-                functionResponse: { name, response: { result: textPartOf(msg.content) } },
+                functionResponse: { ...(nativeId ? { id: nativeId } : {}), name,
+                    response: msg.isError ? { error: textPartOf(msg.content) } : { result: textPartOf(msg.content) } },
             };
             const last = contents[contents.length - 1];
             // A multimodal tool result rides the SAME user turn as its
@@ -1520,9 +1608,11 @@ function toGoogleBody(
 
 function googleUsage(raw: any): LocalUsage {
     const cached = raw?.cachedContentTokenCount;
+    const candidates = Number.isFinite(raw?.candidatesTokenCount) ? raw.candidatesTokenCount : null;
+    const thoughts = Number.isFinite(raw?.thoughtsTokenCount) ? raw.thoughtsTokenCount : null;
     return {
         promptTokens: Number.isFinite(raw?.promptTokenCount) ? raw.promptTokenCount : null,
-        completionTokens: Number.isFinite(raw?.candidatesTokenCount) ? raw.candidatesTokenCount : null,
+        completionTokens: candidates == null && thoughts == null ? null : (candidates ?? 0) + (thoughts ?? 0),
         totalTokens: Number.isFinite(raw?.totalTokenCount) ? raw.totalTokenCount : null,
         cachedTokens: Number.isFinite(cached) ? cached : null,
     };
@@ -1619,6 +1709,7 @@ async function requestGoogleCompletion(
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
     const modelParts: any[] = [];
+    let finishReason: string | null = null;
 
     const consume = (payload: string) => {
         let json: any;
@@ -1629,6 +1720,7 @@ async function requestGoogleCompletion(
         }
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
+        if (typeof json?.candidates?.[0]?.finishReason === 'string') finishReason = json.candidates[0].finishReason;
         const parts = json?.candidates?.[0]?.content?.parts;
         if (!Array.isArray(parts)) return;
         for (const part of parts) {
@@ -1644,7 +1736,8 @@ async function requestGoogleCompletion(
                 modelParts.push(part);
             } else if (part?.functionCall) {
                 onToolCall?.();
-                const id = `google-call-${toolDeltas.size}`;
+                const id = typeof part.functionCall.id === 'string' && part.functionCall.id
+                    ? part.functionCall.id : `google-call-${toolDeltas.size}`;
                 toolDeltas.set(id, {
                     id,
                     name: String(part.functionCall.name ?? ''),
@@ -1665,6 +1758,9 @@ async function requestGoogleCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
+    if (toolDeltas.size && finishReason !== 'STOP') {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+    }
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks: modelParts };
     } finally {
         outerSignal.removeEventListener('abort', onOuterAbort);
@@ -1677,14 +1773,28 @@ function finalizeCompletion(
     usage: LocalUsage | null,
 ): CompletionResult {
     const toolCalls: LocalToolCall[] = [];
+    const seen = new Set<string>();
     for (const call of toolDeltas.values()) {
         if (!call.id || !call.name) continue;
+        if (seen.has(call.id)) throw new Error('Model returned duplicate tool call IDs; the batch was not executed.');
+        seen.add(call.id);
+        const args = parseArguments(call.arguments);
+        if (UNPARSED_ARGS_KEY in args) throw new Error('Model returned invalid tool arguments; the batch was not executed.');
         toolCalls.push({
             id: call.id,
             name: call.name,
             argumentsJson: call.arguments,
-            arguments: parseArguments(call.arguments),
+            arguments: args,
         });
     }
     return { text, toolCalls, usage };
+}
+
+/** Normalize non-streaming completion usage through the same wire rules. */
+export function completionUsage(style: NonNullable<LocalAgentRequest['apiStyle']>, data: any): LocalUsage | null {
+    if (style === 'google') return data?.usageMetadata ? googleUsage(data.usageMetadata) : null;
+    if (!data?.usage) return null;
+    if (style === 'messages') return mergeMessagesUsage(data.usage, null);
+    if (style === 'responses') return responsesUsage(data.usage);
+    return chatUsage(data.usage);
 }

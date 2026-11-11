@@ -20,7 +20,7 @@ import { readResearchEvidence } from '../web/types';
  */
 import { base64ByteLength, type LocalAgentEvent, type LocalAgentMessage } from './localAgent';
 import type { LocalSessionHistoryMessage } from './localSessionStore';
-import { clipHistoryContent, clipToolCallArguments } from './historyBounds';
+import { IN_MEMORY_CONTENT_CAP, clipHistoryContent, clipToolCallArguments } from './historyBounds';
 
 /**
  * What a persisted tool row remembers about an image it no longer carries:
@@ -43,14 +43,15 @@ export interface ToolImageMeta {
  *
  * It lives here, next to `historyRowFromEvent`, so the host and the cache-rate
  * suite run the SAME pipeline: raw agent event -> persisted event -> history
- * row -> replayed message. Content is clipped at the in-memory floor; the
- * per-message window cap is applied later by the host's `_pushLocalHistory`.
+ * row -> replayed message. Capture uses the run's window-relative cap too:
+ * clipping at a smaller floor here would irreversibly lose content before
+ * `_pushLocalHistory` can apply its more generous large-window bound.
  */
-export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null {
+export function persistedEventFromAgentEvent(event: LocalAgentEvent, cap = IN_MEMORY_CONTENT_CAP): any | null {
     if (event.type === 'assistantMessage') {
         return {
             type: 'assistant_message',
-            content: clipHistoryContent(event.text),
+            content: clipHistoryContent(event.text, cap),
             tool_calls: event.toolCalls.map((call) => ({
                 id: call.id,
                 type: 'function',
@@ -59,7 +60,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
                 // (LM Studio) 400 on the NEXT request. Bounded as valid JSON: a
                 // large edit patch must not sit in the per-turn array at full
                 // size.
-                function: { name: call.name, arguments: clipToolCallArguments(call.argumentsJson) },
+                function: { name: call.name, arguments: clipToolCallArguments(call.argumentsJson, cap) },
             })),
             // Provider-native replay carriers: persisted into the MODEL ledger
             // so the next request replays the bytes the provider cached.
@@ -79,7 +80,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent): any | null
             // Bound the retained copy: a single terminal/expansion result can
             // be 100k+ chars and this array is held for the whole turn. The live
             // webview postMessage stays full so the render is unchanged.
-            output: clipHistoryContent(event.output),
+            output: clipHistoryContent(event.output, cap),
             // Replayed to the provider (Messages maps it to `is_error`);
             // keeping the exact flag makes the replayed tool row byte-identical
             // to the one the provider cached.
@@ -176,14 +177,20 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
  * Filtering here rather than only at persist time is deliberate: it also
  * REPAIRS snapshots already on disk, which no re-save would otherwise fix.
  *
- * The complementary case (an assistant `tool_calls` with no answer) is handled
- * by the commit paths, which append a placeholder result row.
+ * Missing answers are closed with an explicit unknown-completion result.
+ * This also repairs interrupted child runs and legacy snapshots whose commit
+ * path did not record a result; it never re-executes the action.
  */
 export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]): LocalAgentMessage[] {
     const out: LocalAgentMessage[] = [];
-    // Ids of tool_calls declared by assistant rows already emitted. A `tool` row
-    // is only replayable while its owner is still in the message list.
+    // Only the current unanswered batch owns tool results. IDs from older
+    // batches must not make duplicate or displaced results look valid.
     const declared = new Set<string>();
+    const closeInterruptedBatch = () => {
+        for (const id of declared) out.push({ role: 'tool', tool_call_id: id,
+            content: '[No result was recorded before interruption. Completion is unknown; verify the current state before retrying this action.]', isError: true });
+        declared.clear();
+    };
     for (const row of rows) {
         if (row.role === 'tool') {
             if (row.tool_call_id == null || !declared.has(row.tool_call_id)) continue;
@@ -193,9 +200,11 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
                 content: row.content ?? '',
                 ...(row.isError != null ? { isError: row.isError } : {}),
             });
+            declared.delete(row.tool_call_id);
             continue;
         }
-        const toolCalls = row.tool_calls?.map((tc) => ({
+        closeInterruptedBatch();
+        const toolCalls = (row.role === 'assistant' ? row.tool_calls : undefined)?.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
             function: {
@@ -218,5 +227,6 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
             ...(row.role === 'assistant' && typeof row.contextNote === 'string' && row.contextNote ? { contextNote: row.contextNote } : {}),
         });
     }
+    closeInterruptedBatch();
     return out;
 }

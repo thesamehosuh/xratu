@@ -26,6 +26,7 @@ const {
     summaryMaxTokens,
 } = require('../out/local/localAgent.js');
 const { skipLeadingUserTurns } = require('../out/local/historyBounds.js');
+const { compactWithSummary } = require('../out/local/compaction.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -49,6 +50,31 @@ const sse = (lines) => ({
 const jsonResponse = (obj) => ({ ok: true, status: 200, json: async () => obj });
 
 const SUMMARY_TEXT = '## Goal\nprobe goal\n## State\n- Done: x\n## Highlights\n- none\n## Next\n- none\n## Files\n- none';
+
+// With no older history, the turn opener is index 1. A steer must not become
+// the protected boundary and let ground-truth compaction discard that opener.
+{
+    const original = globalThis.fetch;
+    const requests = [], steers = [];
+    let summaries = 0, executions = 0;
+    globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(init.body);
+        if (body.stream !== true) { summaries++; return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }] }); }
+        requests.push(body);
+        const delta = requests.length < 3 ? { tool_calls: [{ index: 0, id: `first-turn-${requests.length}`, function: { name: 'read_file', arguments: '{}' } }] } : { content: 'Done' };
+        return sse([frame({ choices: [{ delta }], usage: { prompt_tokens: 7800, completion_tokens: 100 } }), 'data: [DONE]\n\n']);
+    };
+    try {
+        for await (const _event of runLocalAgent({ baseUrl: 'http://127.0.0.1:11434/v1', apiKey: null, model: 'test',
+            systemPrompt: 'Test', userText: 'ORIGINAL FIRST-TURN REQUIREMENT', contextWindow: 8192, maxRounds: 4,
+            tools: [{ name: 'read_file', description: '', inputSchema: {} }],
+        }, { execute: async () => { if (++executions === 1) steers.push({ text: 'Additional first-turn constraint' }); return { output: 'Current finding' }; } }, {
+            requestApproval: async () => ({}),
+        }, { drain: () => steers.splice(0) })) { /* Exercise the real run loop. */ }
+        ok('a first-turn steer never makes the live opener eligible for summarization', summaries === 0);
+        ok('the first-turn opener reaches every continuation intact', requests.length === 3 && requests.every(body => body.messages.some(message => message.role === 'user' && message.content.includes('ORIGINAL FIRST-TURN REQUIREMENT'))));
+    } finally { globalThis.fetch = original; }
+}
 const SYSTEM_PROMPT = 'You are Xratu, a coding agent. ' + 'S'.repeat(18000 - 31);
 
 /** A history big enough to trip proactive compaction (history under the 72%
@@ -75,14 +101,14 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
         const url = String(input);
         const body = JSON.parse(String(init.body));
         requests.push({ url, ...body });
-        const budget = body.max_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
+        const budget = body.max_tokens ?? body.max_completion_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
         if (budget === summaryMaxTokens(WINDOW)) {
             summaryCalls++;
             if (summarizerMode === 'fail' || (summarizerMode === 'fail-first' && summaryCalls === 1)) {
                 return { ok: false, status: 500, json: async () => ({}), text: async () => 'upstream failed' };
             }
-            if (summarizerMode === 'empty') {
-                return jsonResponse({ choices: [{ message: { content: '   ' } }] });
+            if (summarizerMode === 'empty' || summarizerMode === 'empty-usage') {
+                return jsonResponse({ choices: [{ message: { content: '   ' } }], ...(summarizerMode === 'empty-usage' ? { usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } : {}) });
             }
             if (summarizerMode === 'temperature-400' && body.temperature !== undefined) {
                 return {
@@ -91,6 +117,9 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
                     json: async () => ({}),
                     text: async () => "Unsupported parameter: 'temperature' is not supported with this model.",
                 };
+            }
+            if (summarizerMode === 'cap-spelling-400' && body.max_tokens != null) {
+                return { ok: false, status: 400, text: async () => 'Unsupported parameter max_tokens; use max_completion_tokens' };
             }
             // Summarizer: answer in the shape of the endpoint it hit.
             if (url.endsWith('/messages')) {
@@ -102,7 +131,7 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
             if (url.includes(':generateContent')) {
                 return jsonResponse({ candidates: [{ content: { parts: [{ text: SUMMARY_TEXT }] } }] });
             }
-            return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }] });
+            return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }], ...(summarizerMode === 'usage' ? { usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } : {}) });
         }
         // Main request: answer in the shape of the endpoint it hit.
         if (url.endsWith('/responses')) {
@@ -124,7 +153,7 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
     };
 }
 
-async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok', mainUsage = null, onCompactionState } = {}) {
+async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', baseUrl = 'https://example.invalid/v1', summarizerMode = 'ok', mainUsage = null, onCompactionState } = {}) {
     const requests = [];
     const original = globalThis.fetch;
     globalThis.fetch = mockFetch(requests, summarizerMode, mainUsage);
@@ -133,7 +162,7 @@ async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYST
     try {
         for await (const event of runLocalAgent(
             {
-                baseUrl: 'https://example.invalid/v1',
+                baseUrl,
                 apiKey: 'k',
                 model: 'test-model',
                 onCompactionState: active => { compactionStates.push(active); onCompactionState?.(active); },
@@ -170,6 +199,11 @@ ok('it reports a positive cumulative dropped count',
 ok('the summary is non-empty', !!compaction && compaction.value.includes('probe goal'));
 
 const summarizerCalls = turn1.requests.filter((r) => r.stream === false);
+for (const mode of ['usage', 'empty-usage']) {
+    const r = await drive(makeHistory(), null, { summarizerMode: mode });
+    const billed = r.events.filter(event => event.type === 'usage' && event.source === 'compaction');
+    ok('reported summarizer spend is accounted even when the summary is empty', billed.length === 1 && billed[0].usage.promptTokens === 100 && billed[0].usage.completionTokens === 20 && billed[0].model === 'test-model');
+}
 ok('compaction lifecycle starts and settles around the summarizer', JSON.stringify(turn1.compactionStates) === '[true,false]');
 ok('exactly one summarizer call', summarizerCalls.length === 1, `got ${summarizerCalls.length}`);
 const throwingDisplay = await drive(makeHistory(), null, { onCompactionState: () => { throw new Error('display unavailable'); } });
@@ -319,6 +353,24 @@ for (const mode of ['fail', 'empty']) {
     ok('temperature-400: summary extracted after the retry', !!comp && comp.value.includes('probe goal'));
 }
 
+for (const [baseUrl, mode] of [['https://api.openai.com/v1', 'ok'], ['https://example.invalid/v1', 'cap-spelling-400']]) {
+    const r = await drive(makeHistory(), null, { baseUrl, summarizerMode: mode });
+    const summaries = r.requests.filter(q => (q.max_tokens ?? q.max_completion_tokens) === summaryMaxTokens(WINDOW));
+    ok('chat compaction preserves its budget on the modern cap field', summaries.at(-1)?.max_completion_tokens === summaryMaxTokens(WINDOW));
+    ok('chat cap negotiation retains a real summary', r.events.some(event => event.type === 'compactionSummary'));
+}
+
+{
+    const history = makeHistory(16).map((row, index) => row.role === 'tool' ? { ...row, content: `UNIQUE_RESULT_${Math.floor(index / 3)} ${'R'.repeat(900)}` } : row);
+    const r = await drive(history, null, { systemPrompt: 'S'.repeat(24000) });
+    const summary = r.requests.find(q => (q.max_tokens ?? q.max_completion_tokens) === summaryMaxTokens(WINDOW));
+    ok('full summary reads original findings rather than cheap-elision markers', summary?.messages?.[0]?.content.includes('UNIQUE_RESULT_0'));
+}
+{
+    const r = await drive([{ role: 'user', content: 'Large earlier task ' + 'U'.repeat(18000) }, { role: 'assistant', content: 'Earlier findings ' + 'A'.repeat(9000) }], null);
+    ok('an oversized old turn is summarized before the main request', r.events.some(event => event.type === 'compactionSummary'));
+}
+
 // Cancelling while summarization is pending must reach the request signal,
 // settle the real loop, preserve the caller's history, and never dial main.
 for (const lateSuccess of [false, true]) {
@@ -389,6 +441,60 @@ for (const lateSuccess of [false, true]) {
         ok('huge current result: clipping marked', result && /truncat|omitt|clip/i.test(result.content));
         ok('huge current result: current user preserved', replay.some((m) => m.role === 'user' && m.content.includes('read a file')));
         ok('huge current result: call immediately precedes result', replay[replay.indexOf(result) - 1]?.tool_calls?.[0]?.id === 'huge');
+    } finally { globalThis.fetch = original; }
+}
+
+// OAuth expiry belongs to the whole run, including its auxiliary summary.
+// Exercise JSON and subscription SSE paths without spending provider tokens.
+for (const style of ['chat', 'messages', 'responses', 'google', 'subscription']) {
+    for (const keepsFailing of [false, true]) {
+        const original = globalThis.fetch;
+        const bearers = [];
+        let refreshes = 0;
+        const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...makeHistory(), { role: 'user', content: 'Continue' }];
+        const before = JSON.stringify(messages);
+        const request = { baseUrl: style === 'subscription' ? 'https://chatgpt.com/backend-api/codex' : 'https://example.invalid/v1',
+            apiStyle: style === 'subscription' ? 'responses' : style, apiKey: 'expired', model: 'test-model', tools: [],
+            systemPrompt: SYSTEM_PROMPT, userText: 'Continue', onUnauthorized: async () => { refreshes++; return 'fresh'; } };
+        globalThis.fetch = async (_url, init) => {
+            bearers.push(new Headers(init.headers).get('Authorization'));
+            if (bearers.length === 1 || keepsFailing) return { ok: false, status: 401, text: async () => 'expired token' };
+            if (style === 'subscription') return sse([frame({ type: 'response.completed', response: { output: [{ type: 'message', content: [{ type: 'output_text', text: SUMMARY_TEXT }] }] } })]);
+            return jsonResponse(style === 'messages' ? { content: [{ type: 'text', text: SUMMARY_TEXT }] }
+                : style === 'responses' ? { output: [{ type: 'message', content: [{ type: 'output_text', text: SUMMARY_TEXT }] }] }
+                    : style === 'google' ? { candidates: [{ content: { parts: [{ text: SUMMARY_TEXT }] } }] }
+                        : { choices: [{ message: { content: SUMMARY_TEXT } }] });
+        };
+        try {
+            const summary = await compactWithSummary(messages, request, WINDOW, WINDOW, null);
+            ok(`${style}: summary refreshes OAuth only once`, refreshes === 1 && bearers.length === 2);
+            ok(`${style}: retry uses the fresh bearer`, bearers[0] === 'Bearer expired' && bearers[1] === 'Bearer fresh');
+            ok(`${style}: following run requests retain fresh auth`, request.apiKey === 'fresh');
+            ok(`${style}: summary survives token expiry or leaves history intact`, keepsFailing
+                ? summary === null && JSON.stringify(messages) === before : summary === SUMMARY_TEXT);
+        } finally { globalThis.fetch = original; }
+    }
+}
+
+
+{
+    const original = globalThis.fetch;
+    const controller = new AbortController();
+    let entered;
+    const refreshing = new Promise(resolve => { entered = resolve; });
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return { ok: false, status: 401, text: async () => 'expired' }; };
+    try {
+        const request = { baseUrl: 'https://example.invalid/v1', apiKey: 'expired', model: 'test-model', tools: [],
+            systemPrompt: SYSTEM_PROMPT, userText: 'Continue', signal: controller.signal,
+            onUnauthorized: () => { entered(); return new Promise(() => {}); } };
+        const result = compactWithSummary([{ role: 'system', content: SYSTEM_PROMPT }, ...makeHistory(), { role: 'user', content: 'Continue' }], request, WINDOW, WINDOW, null);
+        await refreshing;
+        controller.abort();
+        let timer;
+        const settled = await Promise.race([result.then(() => true, () => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })]);
+        clearTimeout(timer);
+        ok('Stop releases a pending OAuth summary refresh without retrying', settled && calls === 1);
     } finally { globalThis.fetch = original; }
 }
 

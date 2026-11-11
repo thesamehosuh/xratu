@@ -19,6 +19,8 @@ import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { sanitizePath } from './paths';
+import { withDirectoryLock } from './oauth/refreshLock';
 
 /**
  * ALL git work here is ASYNCHRONOUS on purpose: spawnSync would freeze the
@@ -81,7 +83,7 @@ function gitExec(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Pro
     });
 }
 
-/** Inherited git variables that relocate a repository's refs/objects. The
+/** Inherited git variables that relocate refs/objects or inject configuration. The
  *  shadow store is the only writer and must only ever write inside its own
  *  dir, so these are deleted from the inherited environment (see `env`). */
 const INHERITED_GIT_REPO_VARS = [
@@ -89,6 +91,8 @@ const INHERITED_GIT_REPO_VARS = [
     'GIT_OBJECT_DIRECTORY',
     'GIT_ALTERNATE_OBJECT_DIRECTORIES',
     'GIT_NAMESPACE',
+    'GIT_CONFIG_COUNT',
+    'GIT_CONFIG_PARAMETERS',
 ];
 
 /** Extra patterns excluded ONLY from the shadow repo (never shipped anywhere). */
@@ -131,13 +135,13 @@ function report(message: string, err?: unknown): void {
 
 export class ShadowCheckpointStore {
     /** Turn-scoped snapshot bookkeeping: one automatic snapshot per turn. */
-    private _turnSnapshotDone = false;
+    private _turnSnapshot?: Promise<void>;
 
     constructor(private readonly _context: vscode.ExtensionContext) {}
 
     /** Call when a brand-new assistant turn begins (fresh prompt or approval round). */
     beginTurn(): void {
-        this._turnSnapshotDone = false;
+        this._turnSnapshot = undefined;
     }
 
     private repoDir(workspaceRoot: string): string {
@@ -172,8 +176,10 @@ export class ShadowCheckpointStore {
         // GIT_WORK_TREE and GIT_INDEX_FILE are set below and win regardless.
         const env: NodeJS.ProcessEnv = { ...process.env };
         for (const k of INHERITED_GIT_REPO_VARS) delete env[k];
+        for (const key of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key];
         return {
             ...env,
+            GIT_DEFAULT_HASH: 'sha1',
             GIT_DIR: dir,
             GIT_WORK_TREE: workspaceRoot,
             GIT_INDEX_FILE: path.join(dir, 'index'),
@@ -238,7 +244,10 @@ export class ShadowCheckpointStore {
             // under dir/.git and every GIT_DIR-based call would fail with
             // "not a git repository".  The init must also NOT see inherited
             // GIT_* env (a bare init rejects GIT_WORK_TREE).
-            const initEnv = { ...process.env };
+            // Initialization must use the same neutralized configuration too:
+            // a global init.templateDir can otherwise copy executable hooks
+            // into the shadow repo before later commands disable global config.
+            const initEnv = this.env(workspaceRoot);
             delete initEnv.GIT_DIR;
             delete initEnv.GIT_WORK_TREE;
             delete initEnv.GIT_INDEX_FILE;
@@ -257,6 +266,12 @@ export class ShadowCheckpointStore {
             }
         }
         fs.mkdirSync(path.join(dir, 'info'), { recursive: true });
+        // Worktree .gitattributes override core.autocrlf=false: text/eol,
+        // ident and encoding conversion would still change checkpoint bytes.
+        // info/attributes has highest precedence and belongs only to shadow git.
+        const attributesPath = path.join(dir, 'info', 'attributes');
+        const attributes = '* -text -eol -filter -ident -working-tree-encoding\n';
+        if (!fs.existsSync(attributesPath) || fs.readFileSync(attributesPath, 'utf8') !== attributes) fs.writeFileSync(attributesPath, attributes);
         const excludes = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf-8') : '';
         const lines = new Set(excludes.split(/\r?\n/));
         const missing = SHADOW_EXCLUDES.filter(pattern => !lines.has(pattern));
@@ -269,11 +284,13 @@ export class ShadowCheckpointStore {
     async excludeDownload(workspaceRoot: string, relativePath: string): Promise<void> {
         const parts = relativePath.split(/[\\/]/);
         if (!relativePath || path.isAbsolute(relativePath) || parts.some(part => part === '..') || /[\r\n\0]/.test(relativePath)) throw new Error('Invalid download checkpoint path');
-        await this.ensureRepo(workspaceRoot);
-        const pattern = '/' + parts.join('/').replace(/[\\*?\[\]#! ]/g, '\\$&');
-        const file = path.join(this.repoDir(workspaceRoot), 'info', 'exclude');
-        const current = fs.readFileSync(file, 'utf8');
-        if (!current.split(/\r?\n/).includes(pattern)) fs.appendFileSync(file, pattern + '\n', 'utf8');
+        return this._serialized(workspaceRoot, async () => {
+            await this.ensureRepo(workspaceRoot);
+            const pattern = '/' + parts.join('/').replace(/[\\*?\[\]#! ]/g, '\\$&');
+            const file = path.join(this.repoDir(workspaceRoot), 'info', 'exclude');
+            const current = fs.readFileSync(file, 'utf8');
+            if (!current.split(/\r?\n/).includes(pattern)) fs.appendFileSync(file, pattern + '\n', 'utf8');
+        });
     }
 
     /** A killed process (reload mid-snapshot, or a `git commit` terminated by
@@ -318,30 +335,38 @@ export class ShadowCheckpointStore {
      * side effects starts from a restorable point without asking anyone.
      */
     async ensureTurnSnapshot(workspaceRoot: string, description: string): Promise<void> {
-        if (this._turnSnapshotDone) return;
-        this._turnSnapshotDone = true;
-        try {
-            await this.createCheckpoint(workspaceRoot, description);
-        } catch (e) {
-            // A failed checkpoint must not block the user's requested action -
-            // but it MUST be reported, or the workspace silently loses its
-            // undo points (see `report`).
-            report(`turn snapshot FAILED ("${description}") - edits this turn are NOT restorable`, e);
-        }
+        return this._turnSnapshot ??= (async () => {
+            try {
+                await this.createCheckpoint(workspaceRoot, description);
+            } catch (e) {
+                // A failed checkpoint must not block the user's requested action -
+                // but it MUST be reported, or the workspace silently loses its
+                // undo points (see `report`).
+                report(`turn snapshot FAILED ("${description}") - edits this turn are NOT restorable`, e);
+            }
+        })();
     }
 
     /** Serialize snapshot/restore operations per store so overlapping tool
      *  calls can't interleave index manipulation. */
     private _queue: Promise<unknown> = Promise.resolve();
 
-    private _serialized<T>(fn: () => Promise<T>): Promise<T> {
-        const next = this._queue.then(fn, fn);
+    private _serialized<T>(workspaceRoot: string, fn: () => Promise<T>): Promise<T> {
+        const locked = async () => {
+            const dir = this.repoDir(workspaceRoot);
+            await fs.promises.mkdir(dir, { recursive: true });
+            // A restore plus safety capture/rollback spans several bounded
+            // git calls. Another window must not replace their shared index
+            // or steal the lease while that sequence is still running.
+            return withDirectoryLock(path.join(dir, 'xratu-operation.lock.d'), { staleMs: 600_000 }, fn);
+        };
+        const next = this._queue.then(locked, locked);
         this._queue = next.catch(() => undefined);
         return next;
     }
 
     async createCheckpoint(workspaceRoot: string, description: string): Promise<string> {
-        return this._serialized(() => this._createCheckpointInner(workspaceRoot, description));
+        return this._serialized(workspaceRoot, () => this._createCheckpointInner(workspaceRoot, description));
     }
 
     private async _createCheckpointInner(workspaceRoot: string, description: string): Promise<string> {
@@ -376,21 +401,25 @@ export class ShadowCheckpointStore {
     }
 
     async restoreCheckpoint(workspaceRoot: string, sha: string): Promise<RestoreResult> {
-        return this._serialized(() => this._restoreInner(workspaceRoot, sha));
+        return this._serialized(workspaceRoot, () => this._restoreInner(workspaceRoot, sha));
     }
 
     private async _restoreInner(workspaceRoot: string, sha: string): Promise<RestoreResult> {
         await this.ensureRepo(workspaceRoot);
 
-        const verify = await this.gitAsync(['cat-file', '-t', sha], workspaceRoot);
-        if (verify.code !== 0 || verify.stdout.trim() !== 'commit') {
+        const verify = await this.gitAsync(['rev-parse', '--verify', `${sha}^{commit}`], workspaceRoot);
+        if (verify.code !== 0 || !/^[a-f0-9]{40}$/i.test(verify.stdout.trim())) {
             throw new Error(`Checkpoint not found: ${shortSha(sha)}`);
         }
+        // Safety capture commits to HEAD. Resolve symbolic targets before it
+        // advances, so restoring HEAD means the checkpoint the user selected.
+        sha = verify.stdout.trim();
 
         // Refuse the empty seed commit: "restoring" to it would mean
         // deleting every file added since - never a real user intent.
-        const treeList = await this.gitAsync(['ls-tree', '-r', '--name-only', sha], workspaceRoot);
-        if (treeList.code === 0 && treeList.stdout.trim() === '') {
+        const treeList = await this.gitAsync(['ls-tree', '-r', '--name-only', '-z', sha], workspaceRoot);
+        if (treeList.code !== 0) throw new Error(`Could not read checkpoint tree: ${treeList.stderr.trim()}`);
+        if (treeList.code === 0 && treeList.stdout === '') {
             throw new EmptySeedError();
         }
 
@@ -406,16 +435,66 @@ export class ShadowCheckpointStore {
         const same = await this.gitAsync([...this.repoConfigArgs(), 'diff', '--quiet', sha], workspaceRoot);
         if (same.code === 0) {
             const others = await this.gitAsync(
-                [...this.repoConfigArgs(), 'ls-files', '--others', '--exclude-standard'],
+                [...this.repoConfigArgs(), 'ls-files', '-z', '--others', '--exclude-standard'],
                 workspaceRoot
             );
-            if (others.code === 0 && others.stdout.trim() === '') {
+            if (others.code === 0 && others.stdout === '') {
                 return { changed: false, sha: shortSha(sha), safety: '' };
             }
         }
 
         // Safety net first: the CURRENT state becomes restorable too.
         const safety = await this._createCheckpointInner(workspaceRoot, 'before restore');
+
+        // An old tracked path may now contain a new ignored file. Git's
+        // safety snapshot omits that replacement, so overwriting it would
+        // destroy bytes that neither a rollback nor the safety commit has.
+        const introduced = await this.gitAsync(
+            [...this.repoConfigArgs(), 'diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', `${safety}..${sha}`], workspaceRoot);
+        if (introduced.code !== 0) throw new Error(`Restore preflight failed: ${introduced.stderr.trim()}`);
+        for (const rel of introduced.stdout.split('\0')) {
+            if (!rel) continue;
+            const parent = sanitizePath(path.dirname(rel), workspaceRoot);
+            const abs = path.join(parent, path.basename(rel));
+            try {
+                const stat = fs.lstatSync(abs);
+                const unsafe = () => new Error(`Restore would overwrite an excluded path absent from its safety checkpoint: ${rel}`);
+                if (!stat.isDirectory()) throw unsafe();
+                const saved = await this.gitAsync([...this.repoConfigArgs(), 'ls-tree', '-r', '--name-only', '-z', safety], workspaceRoot);
+                if (saved.code !== 0) throw unsafe();
+                const recoverable = new Set(saved.stdout.split('\0'));
+                const check = (dir: string, prefix: string): void => {
+                    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                        const child = path.join(dir, entry.name);
+                        const key = `${prefix}/${entry.name}`;
+                        if (entry.isDirectory()) check(child, key);
+                        else if (!recoverable.has(key)) throw unsafe();
+                    }
+                };
+                check(abs, rel);
+            } catch (error) {
+                if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+            }
+        }
+
+        try {
+            await this._materializeTree(workspaceRoot, sha, safety);
+        } catch (error) {
+            // A failed checkout can already have overwritten some files, and
+            // cleanup can fail after earlier deletions. The caller never gets
+            // a RestoreResult in this case, so rollback must happen here.
+            try { await this._materializeTree(workspaceRoot, safety, sha); }
+            catch (rollbackError) {
+                throw new Error(`Restore failed and automatic rollback failed. Safety checkpoint ${safety}: ${String(error)}; rollback: ${String(rollbackError)}`);
+            }
+            throw error;
+        }
+        return { changed: true, sha: shortSha(sha), safety };
+    }
+
+    /** Apply a tree without creating another checkpoint (also used to undo a
+     * failed restore). `previous` identifies files that must be removed. */
+    private async _materializeTree(workspaceRoot: string, sha: string, previous: string): Promise<void> {
 
         // Materialize the target BEFORE anything destructive: load its tree
         // into the index, then force-write every entry into the worktree.
@@ -432,8 +511,7 @@ export class ShadowCheckpointStore {
 
         // Files created AFTER the checkpoint are removed (checkout-index
         // cannot delete); everything else was just rewritten above.
-        const head = (await this.gitAsync(['rev-parse', 'HEAD'], workspaceRoot)).stdout.trim();
-        if (head && head !== sha) {
+        if (previous !== sha) {
             // --no-renames is REQUIRED here: with rename detection on (the
             // default since git 2.9) a rename between the two trees is
             // reported as a single `R` entry, whose destination is not `A`, so
@@ -442,39 +520,43 @@ export class ShadowCheckpointStore {
             // restore. Without renames git reports `D old` + `A new`, which is
             // exactly what this loop needs.
             const added = await this.gitAsync(
-                [...this.repoConfigArgs(), 'diff', '--name-only', '--no-renames', '--diff-filter=A', `${sha}..${head}`],
+                [...this.repoConfigArgs(), 'diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', `${sha}..${previous}`],
                 workspaceRoot
             );
             if (added.code !== 0) {
                 throw new Error(`Restore failed while removing files added after the checkpoint: ${added.stderr.trim() || `git exited ${added.code}`}`);
             }
-            for (const rel of added.stdout.split('\n')) {
-                const relTrimmed = rel.trim();
-                if (!relTrimmed) continue;
-                const abs = path.join(workspaceRoot, relTrimmed);
+            for (const rel of added.stdout.split('\0')) {
+                if (!rel) continue;
+                // Resolve ancestors without following a symlink at the leaf:
+                // unlinking that leaf is safe; traversing one outside is not.
+                const parent = sanitizePath(path.dirname(rel), workspaceRoot);
+                const abs = path.join(parent, path.basename(rel));
                 try {
-                    if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
-                } catch { /* best effort */ }
+                    if (!fs.lstatSync(abs).isDirectory()) fs.rmSync(abs, { force: true });
+                } catch (error) {
+                    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+                }
             }
         }
-
-        return { changed: true, sha: shortSha(sha), safety };
     }
 
     async listCheckpoints(workspaceRoot: string, limit: number): Promise<string> {
-        await this.ensureRepo(workspaceRoot);
-        const capped = Math.max(1, Math.min(Number(limit) || 10, 50));
-        const log = await this.gitAsync(
-            ['log', '--format=%h|%ai|%s', `-n${capped}`],
-            workspaceRoot
-        );
-        if (log.code !== 0 || !log.stdout.trim()) {
-            return 'No checkpoints found.';
-        }
-        return log.stdout.trim().split('\n').map((line) => {
-            const [hash, date, subject] = line.split('|');
-            return `${hash} | ${date} | ${subject}`;
-        }).join('\n');
+        return this._serialized(workspaceRoot, async () => {
+            await this.ensureRepo(workspaceRoot);
+            const capped = Math.max(1, Math.min(Number(limit) || 10, 50));
+            const log = await this.gitAsync(
+                ['log', '--format=%h|%ai|%s', `-n${capped}`],
+                workspaceRoot
+            );
+            if (log.code !== 0 || !log.stdout.trim()) {
+                return 'No checkpoints found.';
+            }
+            return log.stdout.trim().split('\n').map((line) => {
+                const [hash, date, subject] = line.split('|');
+                return `${hash} | ${date} | ${subject}`;
+            }).join('\n');
+        });
     }
 
     /** Files changed from `fromSha` to a saved checkpoint or the current
@@ -482,7 +564,7 @@ export class ShadowCheckpointStore {
      *  serialized with snapshot/restore so it never samples a half-restored
      *  tree. */
     async diffCheckpoint(workspaceRoot: string, fromSha: string, toSha?: string): Promise<ChangedFile[]> {
-        return this._serialized(async () => {
+        return this._serialized(workspaceRoot, async () => {
             await this.ensureRepo(workspaceRoot);
             const numstat = await this.gitAsync(
                 [...this.repoConfigArgs(), 'diff', '--numstat', '-z', '--no-renames', fromSha, ...(toSha ? [toSha] : []), '--'],
