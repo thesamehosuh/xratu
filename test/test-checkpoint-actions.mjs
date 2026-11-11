@@ -166,6 +166,25 @@ try {
     assert.equal(rules.host._abortControllers.size, 0, 'the chat controller was cleaned up');
     console.log('ok unreadable project rules end the turn with a localized terminal error');
 
+    for (const accepts of [false, true]) {
+        const t = harness(); let committed = 0, acknowledged = false;
+        Object.assign(t.host, { _sessionTitle: 'T', _localSteerQueue: [], _pendingJobNotices: [],
+            _resetLiveSegments: () => {}, _endLiveMarkdown: () => {}, _discardQueuedSteers: () => {},
+            _postEngineState: () => {}, _settleLocalRun: () => {}, _commitUnfinishedLocalTurn: () => { committed++; },
+            _runLocalAgent: async (_prompt, _rules, _files, _controller, _plan, _hidden, accept) => {
+                if (accepts) accept();
+                return { events: [], errorEvent: { error: accepts ? 'provider error' : 'snapshot save failed' } };
+            } });
+        t.host._checkpoints.createCheckpoint = async () => sha;
+        t.host._checkpoints.beginTurn = () => {};
+        sandbox.boundOutcomeEvents = () => {};
+        await t.host._handleChatRequest('receipt-owned turn', [], { onAccepted: () => { acknowledged = true; } });
+        assert.equal(acknowledged, accepts);
+        assert.equal(committed, accepts ? 1 : 0, 'a rejected draft must not create a phantom user turn in host history');
+        assert.equal(t.host._localRunActive, false);
+    }
+    console.log('ok admission-save failures do not commit turns; accepted provider failures retain history');
+
     const serial = harness(), entered = deferred(), finish = deferred();
     serial.host._checkpoints.restoreCheckpoint = async (...args) => { serial.restores.push(args); entered.resolve(); await finish.promise; return { changed: true, sha, safety: 'safe' }; };
     const restoring = serial.host._restoreCheckpointAt(0, sha.slice(0, 12));
@@ -270,7 +289,13 @@ try {
         sandbox.extractPdfAttachments = async () => ({ error: null, attachments: [] });
     }
     const durable = harness(); let snapshot, acknowledged = false;
-    durable.host._persistLocalSession = async () => { snapshot = durable.host._localPendingTurn?.prompt; };
+    durable.host._localAccumulatedText = 'previous answer'; durable.host._localAccumulatedThinking = 'previous reasoning';
+    durable.host._persistLocalSession = async () => {
+        snapshot = durable.host._localPendingTurn?.prompt;
+        assert.equal(durable.host._localPendingTurn.cp, sha);
+        assert.equal(durable.host._localAccumulatedText, '', 'an edited pending turn cannot inherit the previous answer');
+        assert.equal(durable.host._localAccumulatedThinking, '');
+    };
     durable.host._handleChatRequest = async () => { assert.ok(acknowledged); };
     await durable.host._rewindAndResend(0, 'Durable edit', [], () => { assert.equal(snapshot, 'Durable edit'); acknowledged = true; });
     assert.ok(acknowledged);

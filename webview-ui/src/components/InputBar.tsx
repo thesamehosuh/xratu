@@ -386,7 +386,6 @@ export function InputBar({
     const [initialDraft] = useState(() => readComposerDraft(draftKey));
     const [value, setValue] = useState(initialDraft.text);
     const [recoveryDrafts, setRecoveryDrafts] = useState<ComposerRecovery[]>(() => readComposerRecoveries(draftKey));
-    useEffect(() => { saveComposerRecoveries(draftKey, recoveryDrafts); }, [draftKey, recoveryDrafts]);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [filter, setFilter] = useState('');
     const [freeOnly, setFreeOnly] = useState(true);
@@ -403,6 +402,14 @@ export function InputBar({
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
     const [attachments, setAttachments] = useState<ComposerAttachment[]>(initialDraft.attachments);
+    const editRecoveryId = useRef(`edit-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    useEffect(() => {
+        // Reloading during an edit recovers its text separately from the
+        // ordinary draft; it never repeats the rewind automatically.
+        saveComposerRecoveries(draftKey, editDraft && (value || attachments.length)
+            ? [...recoveryDrafts, { id: editRecoveryId.current, value, attachments, missingNames: [] }]
+            : recoveryDrafts);
+    }, [draftKey, recoveryDrafts, editDraft, value, attachments]);
     const draftRevision = useRef(0);
     useLayoutEffect(() => { draftRevision.current++; }, [value, attachments]);
     useEffect(() => {

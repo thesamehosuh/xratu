@@ -1164,7 +1164,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  BEFORE the run commits - a host crash mid-run used to lose the whole
      *  turn (local mode has no server copy). Cleared in _runLocalAgent's
      *  finally; the ledgers alone are authoritative after that. */
-    private _localPendingTurn: { hidden?: boolean; prompt: string; events: any[]; attachments?: AttachmentMeta[] } | null = null;
+    private _localPendingTurn: { hidden?: boolean; cp?: string; prompt: string; events: any[]; attachments?: AttachmentMeta[] } | null = null;
     private _localPartialTimer: ReturnType<typeof setTimeout> | null = null;
     readonly _localSessionStore: LocalSessionStore;
     /** Seq for in-app notification banners (replaces vscode.window toasts). */
@@ -2279,7 +2279,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._checkpointRestoreActive = true;
             const previous = { history: this._history, localHistory: this._localHistory,
                 evicted: this._localEvictedUserTurns, replay: this._localReplayUserTurns,
-                connectionId: this._sessionConnectionId, connectionModel: this._sessionConnectionModel };
+                connectionId: this._sessionConnectionId, connectionModel: this._sessionConnectionModel,
+                text: this._localAccumulatedText, thinking: this._localAccumulatedThinking };
             let saved = false;
             let safety = '';
             try {
@@ -2302,7 +2303,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._truncateLocalHistoryAt(userIndex);
                 this._sessionConnectionId = connection.active.id;
                 this._sessionConnectionModel = connection.model;
-                this._localPendingTurn = { prompt: text, events: [], attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
+                this._localAccumulatedText = ''; this._localAccumulatedThinking = '';
+                this._localPendingTurn = { prompt: text, cp: context.root ? baseSha : undefined, events: [], attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
                 await this._persistLocalSession();
                 saved = true;
                 this._dropOrphanedTaskListEdit();
@@ -2320,6 +2322,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._history = previous.history; this._localHistory = previous.localHistory;
                     this._localEvictedUserTurns = previous.evicted; this._localReplayUserTurns = previous.replay;
                     this._sessionConnectionId = previous.connectionId; this._sessionConnectionModel = previous.connectionModel;
+                    this._localAccumulatedText = previous.text; this._localAccumulatedThinking = previous.thinking;
                     this._localPendingTurn = null;
                     if (context.root && safety) {
                         try { await this._checkpoints.restoreCheckpoint(context.root, safety); }
@@ -4565,8 +4568,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         hiddenPrompt?: boolean,
         onAccepted?: () => void,
         prepared?: Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>,
+        checkpoint?: string,
     ): Promise<StreamOutcome> {
-        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted);
+        if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted, checkpoint);
         const controller = existingController ?? new AbortController();
         this._abortControllers.set('chat', controller);
         const connection = prepared ?? await this._prepareLocalRun(controller);
@@ -4606,6 +4610,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // throttled snapshot below always captures the current tail.
         this._localPendingTurn = {
             hidden: hiddenPrompt,
+            cp: checkpoint,
             prompt,
             events: outcome.events,
             ...(attachments?.length ? {
@@ -4999,7 +5004,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return outcome;
     }
 
-    private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean, onAccepted?: () => void): Promise<StreamOutcome> {
+    private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean, onAccepted?: () => void, checkpoint?: string): Promise<StreamOutcome> {
         const epoch = this._sessionEpoch;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
@@ -5015,7 +5020,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._runNativeProvider = `opencode/${this._selectedModel?.split('/')[0] ?? 'unknown'}`;
         this._runSubscription = false;
         this._runCostCurrency = 'USD';
-        this._localPendingTurn = { prompt, events: outcome.events, hidden: hiddenPrompt };
+        this._localPendingTurn = { prompt, events: outcome.events, hidden: hiddenPrompt, cp: checkpoint,
+            attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
         this._postEngineState();
         try {
             if (onAccepted) {
@@ -6917,6 +6923,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 role: 'user',
                 content: pt.prompt,
                 hidden: pt.hidden,
+                ...(typeof pt.cp === 'string' && /^[a-f0-9]{7,40}$/i.test(pt.cp) ? { cp: pt.cp } : {}),
                 ...(pt.attachments?.length ? { attachments: pt.attachments } : {}),
             });
             // Steered user messages were real turns: mirror the success path so
@@ -7032,6 +7039,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 usageByHost: this._sessionUsageByHost,
                 pendingTurn: this._localPendingTurn ? {
                     prompt: this._localPendingTurn.prompt,
+                    cp: this._localPendingTurn.cp,
                     hidden: this._localPendingTurn.hidden,
                     events: this._localPendingTurn.events,
                     text: this._localAccumulatedText,
@@ -7047,6 +7055,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // shortened copy of it (the reload-loss sawtooth).
             contentCapForWindow(this._contextWindowHint())
         );
+        if (!saved) throw new EngineError('sessionSaveFailed');
         // The store derives the title from the first user message when the
         // user has not renamed the session - adopt it so the toolbar shows
         // the real name without a reload. Only after a user turn is actually
@@ -7064,7 +7073,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (titleWasNull && hasUserTurn) this._sessionTitle = saved.meta.title;
             this._pushSessionState();
         }
-        await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
+        try { await this._globalState.update(this._lastSessionStateKey(), this._sessionId); }
+        catch (error) { console.error('xratu: last session preference save failed:', error); }
     }
 
     // Live markdown during streaming: text deltas accumulate here and a
@@ -7618,8 +7628,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // startResponse (covering checkpoint/rules work) - the loop's
                 // fetches and pre-flight checks share it.
                 agentStarted = true;
-                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, opts?.onAccepted, opts?.prepared?.connection);
+                let accepted = !opts?.onAccepted;
+                const onAccepted = opts?.onAccepted ? () => { opts.onAccepted!(); accepted = true; } : undefined;
+                const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, onAccepted, opts?.prepared?.connection, prePromptSha);
                 this._endLiveMarkdown();
+                if (!accepted) {
+                    this._discardQueuedSteers(steerQueueFloor);
+                    return;
+                }
                 // Final pass over the run-lifetime ledger before either
                 // terminal path consumes it: a reasoning block (or carrier
                 // pileup) that never crossed another tool push gets bounded

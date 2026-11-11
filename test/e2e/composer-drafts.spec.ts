@@ -52,6 +52,19 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await expect(input).toHaveValue('follow-up');
         await session(page, 'A');
         await expect(input).toHaveValue('draft A');
+        await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+        await post(page, { type: 'restoreUser', value: 'Previous request' });
+        await page.getByRole('button', { name: locale === 'en' ? 'Edit message' : 'ویرایش پیام', exact: true }).click();
+        await expect(input).toHaveValue('Previous request');
+        await input.fill('Unsent edit');
+        await page.reload();
+        await expect(page.locator('.app')).toBeAttached();
+        await post(page, { type: 'locale', locale });
+        await session(page, 'A');
+        await post(page, { type: 'showChat' });
+        await expect(input).toHaveValue('draft A');
+        await page.getByRole('button', { name: locale === 'en' ? 'Recover draft' : 'بازیابی پیش نویس', exact: true }).click();
+        await expect(input).toHaveValue('draft A\n\nUnsent edit');
         await page.screenshot({ path: testInfo.outputPath('drafts.png') });
     });
 }

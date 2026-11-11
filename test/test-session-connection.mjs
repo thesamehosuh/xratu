@@ -55,5 +55,7 @@ try {
     const store = new LocalSessionStore(root), session = await store.create('default');
     await store.save(session.id, { connectionId: 'A', model: 'model-a', summary: null, localHistory: [], uiHistory: [] });
     assert.equal((await store.load(session.id)).connectionId, 'A');
+    await store.save(session.id, { connectionId: 'A', model: 'model-a', summary: null, localHistory: [], uiHistory: [], pendingTurn: { prompt: 'interrupted', cp: 'a'.repeat(40), events: [], text: '', thinking: '' } });
+    assert.equal((await store.load(session.id)).pendingTurn.cp, 'a'.repeat(40), 'the interrupted turn retains its file-restore boundary');
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log('session-connection: matching, mismatching, legacy, explicit choice and persistence passed');

@@ -31,6 +31,7 @@ export interface LocalSessionHistoryMessage {
  *  restore it instead of dropping the whole response. */
 export interface LocalPendingTurn {
     hidden?: boolean;
+    cp?: string;
     prompt: string;
     events: any[];
     text: string;
@@ -431,6 +432,7 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
     }) : [];
     return {
         prompt: clipHistoryContent(pt.prompt, contentCap),
+        ...(typeof pt.cp === 'string' && /^[a-f0-9]{7,40}$/i.test(pt.cp) ? { cp: pt.cp } : {}),
         ...(pt.hidden === true ? { hidden: true } : {}),
         events: boundCarriers(events),
         text: clipHistoryContent(pt.text, contentCap),
