@@ -1435,7 +1435,7 @@ export async function executeLocalTool(
     name: string,
     args: Record<string, unknown>,
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
-    externalMcp?: ExternalMcpManager,
+    externalMcp?: Pick<ExternalMcpManager, 'callTool'>,
     skillResolver?: (name: string) => SkillResolution,
     onOutput?: (chunk: string) => void,
     subagentRunner?: SubagentRunner,
@@ -1482,7 +1482,7 @@ export async function executeLocalTool(
 export function createLocalToolExecutor(
     workspaceRoot: string,
     ensureTurnSnapshot: (workspaceRoot: string, reason: string) => Promise<void>,
-    externalMcp?: ExternalMcpManager,
+    externalMcp?: Pick<ExternalMcpManager, 'callTool'>,
     skillResolver?: (name: string) => SkillResolution,
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,

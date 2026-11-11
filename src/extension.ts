@@ -861,7 +861,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         return { text: result.output, images: [], isError: result.isError };
                     }
                     if (!externalMcpInstance) return { text: 'MCP server unavailable', images: [], isError: true };
-                    return externalMcpInstance.callTool(name, args, signal);
+                    return externalMcpInstance.callTool(name, args, signal, context.toolConfigHash);
                 },
             }, path.join(this._storagePath, 'opencode-attachments'));
             this._openCodeEnvironmentKey = environmentKey;
@@ -4808,7 +4808,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 executor: (signal, source) => createLocalToolExecutor(
                     workspaceRoot,
                     (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
-                    externalMcpInstance ?? undefined,
+                    externalMcpInstance?.bindTools(externalTools),
                     (skillName) => resolveSkillForRun(
                         workspaceRoot || undefined,
                         skillName,
@@ -4849,7 +4849,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const rawExecutor = createLocalToolExecutor(
             workspaceRoot,
             (wsRoot, reason) => this._checkpoints.ensureTurnSnapshot(wsRoot, reason),
-            externalMcpInstance ?? undefined,
+            externalMcpInstance?.bindTools(externalTools),
             // Dispatch-time gate + body source in ONE resolver: the skill
             // call resolves the winning copy (per-source identity, shadowed
             // copies excluded), checks the live disabled list, and reuses the

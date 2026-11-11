@@ -587,6 +587,40 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     assert.equal(calls.length, 1);
 }
 
+// An approval made against one catalog must never dispatch its arguments to
+// a replacement endpoint/configuration under the same namespaced tool name.
+{
+    const config = { servers: { target: { url: 'https://first.example/mcp' } }, sources: { target: 'global' }, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
+    const manager = new ExternalMcpManager(async () => config);
+    let dispatched = 0;
+    const state = { name: 'target', client: {
+        listTools: async () => ({ tools: [{ name: 'mutate', inputSchema: {} }] }),
+        callTool: async () => { dispatched++; return { content: [{ type: 'text', text: 'committed' }] }; },
+    } };
+    manager.getState = async () => state;
+    const tools = await manager.listTools();
+    const original = manager.bindTools(tools);
+    assert.equal((await original.callTool('mcp__target__mutate', { private: 'payload' })).text, 'committed');
+    config.servers.target.url = 'https://replacement.example/mcp';
+    assert.match((await original.callTool('mcp__target__mutate', { private: 'payload' })).text, /configuration changed/);
+    assert.equal(dispatched, 1, 'a stale approval cannot reach the replacement endpoint');
+    const refreshedTools = await manager.listTools(), refreshed = manager.bindTools(refreshedTools);
+    state.configHash = 'stale-connection';
+    assert.match((await refreshed.callTool('mcp__target__mutate', {})).text, /configuration changed/, 'an old cached connection cannot serve a freshly configured target');
+    delete state.configHash;
+    assert.equal((await refreshed.callTool('mcp__target__mutate', {})).text, 'committed');
+    assert.equal((await refreshed.callTool('mcp__target__not_in_snapshot', {})).isError, true);
+    let release, started;
+    const gate = new Promise(resolve => { release = resolve; }), ready = new Promise(resolve => { started = resolve; });
+    manager.getState = async () => { started(); await gate; return state; };
+    const pending = refreshed.callTool('mcp__target__mutate', {});
+    await ready; await manager.reload(); release();
+    assert.match((await pending).text, /configuration changed while connecting/);
+    assert.equal(dispatched, 2, 'reload during connection acquisition cannot dispatch through a stale binding');
+    assert.match((await refreshed.callTool('mcp__target__mutate', {})).text, /configuration changed/);
+    assert.equal(dispatched, 2, 'even same-config reloads fence old runs because secret references may now resolve to another account');
+}
+
 // --- summary -------------------------------------------------------------
 {
     const config = { servers: { old: {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };

@@ -8,7 +8,7 @@ import { isNativePlanTool } from './services';
 import { readResearchEvidence, type ResearchEvidence } from '../../web/types';
 import { abortable } from '../../oauth/refreshLock';
 
-export interface NativeMcpContext { sessionID: string; plan: boolean; rootSessionID?: string; rootSignal?: AbortSignal }
+export interface NativeMcpContext { sessionID: string; plan: boolean; rootSessionID?: string; rootSignal?: AbortSignal; toolConfigHash?: string }
 export interface NativeMcpSource {
     listTools: ExternalMcpManager['listTools'];
     callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, context: NativeMcpContext): ReturnType<ExternalMcpManager['callTool']>;
@@ -77,7 +77,7 @@ export class OpenCodeMcpBridge {
                 if (!session || session.signal.aborted || !tool || (session.rootSessionID && parentControl) || (session.plan && !this.planSafe(tool))) {
                     return { isError: true, content: [{ type: 'text', text: 'Xratu MCP call is not allowed in this session.' }] };
                 }
-                const result = await abortable(this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan, ...(session.rootSessionID ? { rootSessionID: session.rootSessionID } : {}), ...(session.rootSignal ? { rootSignal: session.rootSignal } : {}) }), session.signal);
+                const result = await abortable(this.source.callTool(tool.name, call.params.arguments ?? {}, session.signal, { sessionID: sessionID as string, plan: session.plan, ...(tool.serverConfigHash ? { toolConfigHash: tool.serverConfigHash } : {}), ...(session.rootSessionID ? { rootSessionID: session.rootSessionID } : {}), ...(session.rootSignal ? { rootSignal: session.rootSignal } : {}) }), session.signal);
                 const research = readResearchEvidence(result.research);
                 if (research) { this.researchResults.push({ sessionID: sessionID as string, text: result.text, research }); if (this.researchResults.length > 64) this.researchResults.shift(); }
                 return { isError: result.isError === true, ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}), content: [

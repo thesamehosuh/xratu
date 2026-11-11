@@ -68,6 +68,8 @@ export interface AggregatedTool {
     inputSchema: Record<string, unknown>;
     /** User trusts this tool - the approval gate is skipped for it. */
     autoApprove: boolean;
+    /** Nonsecret binding to the configured target whose schema was listed. */
+    serverConfigHash?: string;
 }
 
 /**
@@ -101,6 +103,7 @@ function resolveTransport(cfg: ExternalServerConfig): McpTransportType | null {
 interface ServerState {
     name: string;
     client: Client;
+    configHash?: string;
     /** SDK v1 replaces its metadata cache on each list page. Retain every
      * page's validators and task requirements until the next full listing. */
     toolMetadata?: Map<string, { validator?: ReturnType<AjvJsonSchemaValidator['getValidator']>; requiresTask: boolean }>;
@@ -108,6 +111,10 @@ interface ServerState {
      *  (on Windows, npx/uvx run through a cmd.exe shim: killing the direct
      *  child orphans the actual node grandchild without taskkill /T). */
     pid?: number;
+}
+
+function serverConfigHash(cfg: ExternalServerConfig, source: string, generation?: number): string {
+    return createHash('sha256').update(JSON.stringify([source, cfg, generation])).digest('hex');
 }
 
 /** Close one external server's stdio process tree and client (a no-op for
@@ -157,6 +164,17 @@ export class ExternalMcpManager {
     private _generation = 0;
 
     constructor(private readonly loadConfig: () => Promise<LoadedMcpConfig>) {}
+
+    /** A run may only dispatch to the target whose tool schema it received.
+     * Reloads must not retarget an already-approved name to another server. */
+    bindTools(tools: readonly AggregatedTool[]): Pick<ExternalMcpManager, 'callTool'> {
+        const hashes = new Map(tools.map(tool => [tool.name, tool.serverConfigHash]));
+        return { callTool: (name, args, signal) => {
+            const hash = hashes.get(name);
+            return hash ? this.callTool(name, args, signal, hash)
+                : Promise.resolve(textResult('MCP tool binding is unavailable. Start a new turn to refresh its tools.'));
+        } };
+    }
 
     async stopAll(): Promise<void> {
         this._stopped = true;
@@ -358,7 +376,7 @@ export class ExternalMcpManager {
                 }
                 console.log(`xratu: connected to external MCP server '${name}' (${built.type})`);
                 this._markStatus(name, { state: 'connected', transport: built.type }, source);
-                return { name, client, pid: (built.transport as { pid?: number | null }).pid ?? undefined };
+                return { name, client, configHash: serverConfigHash(cfg, source), pid: (built.transport as { pid?: number | null }).pid ?? undefined };
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.error(`xratu: failed to connect external MCP server '${name}':`, e);
@@ -465,6 +483,7 @@ export class ExternalMcpManager {
                         description: `[mcp:${name}; untrusted external metadata] ${t.description ?? ''}`.trim(),
                         inputSchema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
                         autoApprove: auto.has(t.name),
+                        serverConfigHash: serverConfigHash(cfg, source, generation),
                     });
                 }
             } catch (e) {
@@ -480,7 +499,7 @@ export class ExternalMcpManager {
     }
 
     /** Route a namespaced call. No automatic replay after dispatch; side effects may already have occurred. */
-    async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ExternalToolResult> {
+    async callTool(namespaced: string, args: Record<string, unknown>, signal?: AbortSignal, expectedConfigHash?: string): Promise<ExternalToolResult> {
         signal?.throwIfAborted();
         if (isOfflineMode()) return textResult('Error: external MCP is disabled in offline mode.');
         const rest = namespaced.startsWith(EXTERNAL_PREFIX)
@@ -490,6 +509,7 @@ export class ExternalMcpManager {
         if (sep < 0) {
             return textResult(`Error: malformed external tool name '${namespaced}'`);
         }
+        const generation = this._generation;
         const config = await this.loadConfig();
         // Server and tool names can both contain the namespace separator.
         // Resolve against configured names; never guess the first segment
@@ -507,6 +527,8 @@ export class ExternalMcpManager {
             return textResult(`Error: MCP server '${serverName}' is disabled`);
         }
         const source = config.sources[serverName] ?? 'global';
+        const configHash = serverConfigHash(cfg, source);
+        if (expectedConfigHash && expectedConfigHash !== serverConfigHash(cfg, source, generation)) return textResult('MCP server configuration changed. Start a new turn to refresh its tools.');
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
         const stateRequest = this.getState(serverName, cfg, source);
@@ -515,6 +537,9 @@ export class ExternalMcpManager {
         signal?.throwIfAborted();
         if (!state) {
             return textResult(`Error: MCP server '${serverName}' is not reachable`);
+        }
+        if ((expectedConfigHash && generation !== this._generation) || (state.configHash && state.configHash !== configHash)) {
+            return textResult('MCP server configuration changed while connecting. Start a new turn to refresh its tools.');
         }
         try {
             const metadata = state.toolMetadata?.get(toolName);

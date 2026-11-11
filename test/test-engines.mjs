@@ -329,11 +329,11 @@ try {
             console.log(`ok OpenCode cancel during pending ${gate}`);
         } finally { await test.close(); }
     }
-    const mcpTools = [{ name: 'mcp__docs__lookup', serverName: 'docs', originalName: 'lookup', description: 'Find documentation', inputSchema: { type: 'object', properties: {} }, autoApprove: true }];
+    const mcpTools = [{ name: 'mcp__docs__lookup', serverName: 'docs', originalName: 'lookup', description: 'Find documentation', inputSchema: { type: 'object', properties: {} }, autoApprove: true, serverConfigHash: 'fixture-target-binding' }];
     const mcpCalls = [];
     let currentTools = mcpTools;
-    const mcpSource = { listTools: async () => currentTools, callTool: async (name, args, signal) => {
-        mcpCalls.push({ name, args, signal });
+    const mcpSource = { listTools: async () => currentTools, callTool: async (name, args, signal, context) => {
+        mcpCalls.push({ name, args, signal, context });
         return { text: 'Documentation', images: [{ mimeType: 'image/png', dataBase64: 'aW1hZ2U=' }], structuredContent: { title: 'Documentation' }, research: { version:1,provider:'direct',outcome:'success',freshness:'live',sources:[],warnings:[],document:{handle:'a'.repeat(24),start:0,end:100,total:500} } };
     } };
     const bridge = new OpenCodeMcpBridge(mcpSource);
@@ -358,6 +358,7 @@ try {
         assert.deepEqual(result.structuredContent, { title: 'Documentation' });
         assert.deepEqual(bridge.takeResearch('native-1','Documentation').document,{handle:'a'.repeat(24),start:0,end:100,total:500});
         assert.equal(mcpCalls[0].signal, controller.signal, 'native cancellation reaches the real MCP request');
+        assert.equal(mcpCalls[0].context.toolConfigHash, 'fixture-target-binding', 'the native bridge retains the target binding from its tool catalog');
         controller.abort();
         assert.equal((await call()).isError, true, 'cancelled turns cannot invoke tools');
         assert.equal(mcpCalls.length, 1);
