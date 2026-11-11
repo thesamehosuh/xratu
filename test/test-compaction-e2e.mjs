@@ -26,6 +26,7 @@ const {
     summaryMaxTokens,
 } = require('../out/local/localAgent.js');
 const { skipLeadingUserTurns } = require('../out/local/historyBounds.js');
+const { compactWithSummary } = require('../out/local/compaction.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -416,6 +417,38 @@ for (const lateSuccess of [false, true]) {
         ok('huge current result: current user preserved', replay.some((m) => m.role === 'user' && m.content.includes('read a file')));
         ok('huge current result: call immediately precedes result', replay[replay.indexOf(result) - 1]?.tool_calls?.[0]?.id === 'huge');
     } finally { globalThis.fetch = original; }
+}
+
+// OAuth expiry belongs to the whole run, including its auxiliary summary.
+// Exercise JSON and subscription SSE paths without spending provider tokens.
+for (const style of ['chat', 'messages', 'responses', 'google', 'subscription']) {
+    for (const keepsFailing of [false, true]) {
+        const original = globalThis.fetch;
+        const bearers = [];
+        let refreshes = 0;
+        const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...makeHistory(), { role: 'user', content: 'Continue' }];
+        const before = JSON.stringify(messages);
+        const request = { baseUrl: style === 'subscription' ? 'https://chatgpt.com/backend-api/codex' : 'https://example.invalid/v1',
+            apiStyle: style === 'subscription' ? 'responses' : style, apiKey: 'expired', model: 'test-model', tools: [],
+            systemPrompt: SYSTEM_PROMPT, userText: 'Continue', onUnauthorized: async () => { refreshes++; return 'fresh'; } };
+        globalThis.fetch = async (_url, init) => {
+            bearers.push(new Headers(init.headers).get('Authorization'));
+            if (bearers.length === 1 || keepsFailing) return { ok: false, status: 401, text: async () => 'expired token' };
+            if (style === 'subscription') return sse([frame({ type: 'response.completed', response: { output: [{ type: 'message', content: [{ type: 'output_text', text: SUMMARY_TEXT }] }] } })]);
+            return jsonResponse(style === 'messages' ? { content: [{ type: 'text', text: SUMMARY_TEXT }] }
+                : style === 'responses' ? { output: [{ type: 'message', content: [{ type: 'output_text', text: SUMMARY_TEXT }] }] }
+                    : style === 'google' ? { candidates: [{ content: { parts: [{ text: SUMMARY_TEXT }] } }] }
+                        : { choices: [{ message: { content: SUMMARY_TEXT } }] });
+        };
+        try {
+            const summary = await compactWithSummary(messages, request, WINDOW, WINDOW, null);
+            ok(`${style}: summary refreshes OAuth only once`, refreshes === 1 && bearers.length === 2);
+            ok(`${style}: retry uses the fresh bearer`, bearers[0] === 'Bearer expired' && bearers[1] === 'Bearer fresh');
+            ok(`${style}: following run requests retain fresh auth`, request.apiKey === 'fresh');
+            ok(`${style}: summary survives token expiry or leaves history intact`, keepsFailing
+                ? summary === null && JSON.stringify(messages) === before : summary === SUMMARY_TEXT);
+        } finally { globalThis.fetch = original; }
+    }
 }
 
 if (failed) {

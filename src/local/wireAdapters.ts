@@ -483,9 +483,11 @@ async function requestChatCompletion(
     let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number, { id: string; name: string; arguments: string }>();
+    let streamEnded = false;
+    let finishReason: string | null = null;
 
     const consume = (payload: string) => {
-        if (payload === '[DONE]') return;
+        if (payload === '[DONE]') { streamEnded = true; return; }
         let json: any;
         try {
             json = JSON.parse(payload);
@@ -493,7 +495,10 @@ async function requestChatCompletion(
             return;
         }
 
+        if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usage) usage = chatUsage(json.usage);
+        const reason = json?.choices?.[0]?.finish_reason;
+        if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
 
         const delta = json?.choices?.[0]?.delta;
         if (!delta) return;
@@ -554,21 +559,16 @@ async function requestChatCompletion(
         if (done) break;
     }
 
-    const toolCalls: LocalToolCall[] = [];
-    for (const call of toolDeltas.values()) {
-        if (!call.id || !call.name) continue;
-        toolCalls.push({
-            id: call.id,
-            name: call.name,
-            argumentsJson: call.arguments,
-            arguments: parseArguments(call.arguments),
-        });
+    // Compatible servers may use [DONE] instead of finish_reason. Neither
+    // clean TCP EOF nor a token/filter cutoff completes an actionable batch.
+    if (toolDeltas.size && (!streamEnded || (finishReason != null && !['tool_calls', 'stop', 'function_call'].includes(finishReason)))) {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
     }
 
     // `reasoning` MUST ride along: it is the only carrier of the thinking state
     // for this transport, and the next round has to replay it (see
     // withReasoningContent). Dropping it here is what caused the 400.
-    return { text, toolCalls, usage, reasoningContent: reasoning || undefined };
+    return { ...finalizeCompletion(text, toolDeltas, usage), reasoningContent: reasoning || undefined };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the
         // listener bound to the caller's long-lived run signal (parity with the
@@ -877,6 +877,8 @@ async function requestMessagesCompletion(
     const blockOrder: number[] = [];
     const blocks = new Map<number, any>();
     const partialJson = new Map<number, string>();
+    let streamEnded = false;
+    let stopReason: string | null = null;
 
     const consume = (payload: string) => {
         let json: any;
@@ -955,6 +957,10 @@ async function requestMessagesCompletion(
             }
             case 'message_delta':
                 if (json.usage) usage = mergeMessagesUsage(json.usage, usage);
+                if (typeof json.delta?.stop_reason === 'string') stopReason = json.delta.stop_reason;
+                break;
+            case 'message_stop':
+                streamEnded = true;
                 break;
             case 'error':
                 throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
@@ -968,6 +974,9 @@ async function requestMessagesCompletion(
         buffer = parsed.remainder;
         for (const payload of parsed.events) consume(payload);
         if (done) break;
+    }
+    if (toolDeltas.size && (!streamEnded || (stopReason != null && !['tool_use', 'end_turn'].includes(stopReason)))) {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
     }
     const providerBlocks = blockOrder.map((index) => blocks.get(index)).filter(Boolean);
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
@@ -1448,6 +1457,27 @@ function googlePartsFromContent(content: LocalAgentMessage['content']): any[] {
     return parts;
 }
 
+/** Parallel executors report in completion order. Older Google models have
+ * no call IDs, so preserve declaration order when returning a result batch,
+ * especially when several calls share the same function name. */
+function orderedToolResults(messages: LocalAgentMessage[]): LocalAgentMessage[] {
+    const out: LocalAgentMessage[] = [];
+    let order = new Map<string, number>();
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'tool') {
+            order = new Map((message.tool_calls ?? []).map((call, index) => [call.id, index]));
+            out.push(message);
+            continue;
+        }
+        const batch: LocalAgentMessage[] = [message];
+        while (messages[i + 1]?.role === 'tool') batch.push(messages[++i]);
+        batch.sort((a, b) => (order.get(a.tool_call_id ?? '') ?? Infinity) - (order.get(b.tool_call_id ?? '') ?? Infinity));
+        out.push(...batch);
+    }
+    return out;
+}
+
 function toGoogleBody(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -1458,7 +1488,7 @@ function toGoogleBody(
     const toolNameById = new Map<string, string>();
     const nativeIdByCallId = new Map<string, string>();
 
-    for (const msg of messages) {
+    for (const msg of orderedToolResults(messages)) {
         if (msg.role === 'system') {
             if (typeof msg.content === 'string' && msg.content) systemParts.push(msg.content);
             continue;
@@ -1509,7 +1539,8 @@ function toGoogleBody(
             const name = toolNameById.get(msg.tool_call_id ?? '') ?? 'tool';
             const nativeId = nativeIdByCallId.get(msg.tool_call_id ?? '');
             const part = {
-                functionResponse: { ...(nativeId ? { id: nativeId } : {}), name, response: { result: textPartOf(msg.content) } },
+                functionResponse: { ...(nativeId ? { id: nativeId } : {}), name,
+                    response: msg.isError ? { error: textPartOf(msg.content) } : { result: textPartOf(msg.content) } },
             };
             const last = contents[contents.length - 1];
             // A multimodal tool result rides the SAME user turn as its
@@ -1678,6 +1709,7 @@ async function requestGoogleCompletion(
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number | string, { id: string; name: string; arguments: string }>();
     const modelParts: any[] = [];
+    let finishReason: string | null = null;
 
     const consume = (payload: string) => {
         let json: any;
@@ -1688,6 +1720,7 @@ async function requestGoogleCompletion(
         }
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
+        if (typeof json?.candidates?.[0]?.finishReason === 'string') finishReason = json.candidates[0].finishReason;
         const parts = json?.candidates?.[0]?.content?.parts;
         if (!Array.isArray(parts)) return;
         for (const part of parts) {
@@ -1725,6 +1758,9 @@ async function requestGoogleCompletion(
         for (const payload of parsed.events) consume(payload);
         if (done) break;
     }
+    if (toolDeltas.size && finishReason !== 'STOP') {
+        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+    }
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks: modelParts };
     } finally {
         outerSignal.removeEventListener('abort', onOuterAbort);
@@ -1737,13 +1773,18 @@ function finalizeCompletion(
     usage: LocalUsage | null,
 ): CompletionResult {
     const toolCalls: LocalToolCall[] = [];
+    const seen = new Set<string>();
     for (const call of toolDeltas.values()) {
         if (!call.id || !call.name) continue;
+        if (seen.has(call.id)) throw new Error('Model returned duplicate tool call IDs; the batch was not executed.');
+        seen.add(call.id);
+        const args = parseArguments(call.arguments);
+        if (UNPARSED_ARGS_KEY in args) throw new Error('Model returned invalid tool arguments; the batch was not executed.');
         toolCalls.push({
             id: call.id,
             name: call.name,
             argumentsJson: call.arguments,
-            arguments: parseArguments(call.arguments),
+            arguments: args,
         });
     }
     return { text, toolCalls, usage };

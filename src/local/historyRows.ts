@@ -176,14 +176,20 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
  * Filtering here rather than only at persist time is deliberate: it also
  * REPAIRS snapshots already on disk, which no re-save would otherwise fix.
  *
- * The complementary case (an assistant `tool_calls` with no answer) is handled
- * by the commit paths, which append a placeholder result row.
+ * Missing answers are closed with an explicit unknown-completion result.
+ * This also repairs interrupted child runs and legacy snapshots whose commit
+ * path did not record a result; it never re-executes the action.
  */
 export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]): LocalAgentMessage[] {
     const out: LocalAgentMessage[] = [];
-    // Ids of tool_calls declared by assistant rows already emitted. A `tool` row
-    // is only replayable while its owner is still in the message list.
+    // Only the current unanswered batch owns tool results. IDs from older
+    // batches must not make duplicate or displaced results look valid.
     const declared = new Set<string>();
+    const closeInterruptedBatch = () => {
+        for (const id of declared) out.push({ role: 'tool', tool_call_id: id,
+            content: '[No result was recorded before interruption. Completion is unknown; verify the current state before retrying this action.]', isError: true });
+        declared.clear();
+    };
     for (const row of rows) {
         if (row.role === 'tool') {
             if (row.tool_call_id == null || !declared.has(row.tool_call_id)) continue;
@@ -193,9 +199,11 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
                 content: row.content ?? '',
                 ...(row.isError != null ? { isError: row.isError } : {}),
             });
+            declared.delete(row.tool_call_id);
             continue;
         }
-        const toolCalls = row.tool_calls?.map((tc) => ({
+        closeInterruptedBatch();
+        const toolCalls = (row.role === 'assistant' ? row.tool_calls : undefined)?.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
             function: {
@@ -218,5 +226,6 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
             ...(row.role === 'assistant' && typeof row.contextNote === 'string' && row.contextNote ? { contextNote: row.contextNote } : {}),
         });
     }
+    closeInterruptedBatch();
     return out;
 }

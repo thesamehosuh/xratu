@@ -22,7 +22,10 @@ const {
     runSubagentTask,
     createSubagentRunner,
     wrapRestrictedExecutor,
+    boundSubagentHistory,
+    MAX_SUBAGENT_RUN_ROWS,
 } = require('../out/local/subagentRunner.js');
+const { buildReplayHistory } = require('../out/local/historyRows.js');
 const {
     builtinSubagents,
     discoverSubagents,
@@ -104,7 +107,7 @@ function queueFetch(handlers, seen) {
         }
         const url = String(input);
         const body = JSON.parse(String(init?.body ?? '{}'));
-        seen.push({ url, body });
+        seen.push({ url, body, headers: new Headers(init?.headers) });
         const handler = handlers[i++];
         if (!handler) throw new Error(`unexpected fetch #${i} to ${url}`);
         return handler(body, url);
@@ -150,7 +153,7 @@ function childContext(extra = {}) {
         lastDef: () => lastDef,
         ctx: {
             // Factory: one invocation per task (fresh conversation identity).
-            baseRequest: (def) => {
+            baseRequest: (def, conversationId) => {
                 requestCount++;
                 lastDef = def;
                 return {
@@ -159,6 +162,7 @@ function childContext(extra = {}) {
                     model: 'test-model',
                     apiStyle: 'chat',
                     contextWindow: 100000,
+                    cacheKey: conversationId, sessionId: conversationId,
                     ...(extra.baseRequest ?? {}),
                 };
             },
@@ -419,7 +423,7 @@ function childContext(extra = {}) {
 // 6. Resume/heal: task_id continues the same subagent with its context.
 // ---------------------------------------------------------------------------
 {
-    const { ctx } = childContext();
+    const { ctx } = childContext({ baseRequest: { baseUrl: 'https://api.openai.com/v1' } });
     const registry = new Map();
     const first = await withMockFetch([
         () => toolReply('read_file', { path: 'src/x.ts' }, 'c1'),
@@ -452,6 +456,9 @@ function childContext(extra = {}) {
     ok('the task_id note states its lifetime',
         second.result.output.includes('resumable while this chat stays open'), second.result.output);
     const resumedMessages = second.seen[0].body.messages;
+    check('resuming a child preserves its actual cache routing key', second.seen[0].body.prompt_cache_key, first.seen[0].body.prompt_cache_key);
+    ok('child cache routing key exists', typeof first.seen[0].body.prompt_cache_key === 'string' && first.seen[0].body.prompt_cache_key.length > 0);
+    check('resuming a child preserves its provider session header', second.seen[0].headers.get('x-opencode-session'), first.seen[0].headers.get('x-opencode-session'));
     ok('resume restores the run history (not a fresh context)',
         resumedMessages.length > 2, `messages=${resumedMessages.length}`);
     ok('history carries the earlier prompt',
@@ -463,6 +470,45 @@ function childContext(extra = {}) {
         String(resumedMessages[resumedMessages.length - 1].content ?? '').startsWith('Now finish checking y.'),
         JSON.stringify(resumedMessages[resumedMessages.length - 1].content));
     ok('resume trace announces the continuation', trace.join('').includes('▶ explore (resume)'), trace.join(''));
+    const sibling = await withMockFetch([() => textReply('Sibling done')], () => runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'sibling', prompt: 'Independent task' }, registry));
+    ok('different children do not share cache routing identity', sibling.seen[0].body.prompt_cache_key !== first.seen[0].body.prompt_cache_key);
+}
+{
+    const config = { baseRequest: { contextWindow: 16384, model: 'original-child' } };
+    const { ctx } = childContext(config), registry = new Map();
+    const rows = [];
+    for (let i = 0; i < 30; i++) rows.push({ role: 'user', content: `OLD_CHILD_${i} ${'U'.repeat(1000)}` }, { role: 'assistant', content: 'A'.repeat(1000) });
+    registry.set('resume-summary', { defName: 'explore', rows, startedAt: Date.now() });
+    const first = await withMockFetch([
+        () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Earlier child findings remain verified.' } }] }) }),
+        () => textReply('Compacted child report'),
+    ], () => runSubagentTask(ctx, DEFS, { subagentType: '', taskId: 'resume-summary', description: 'continue', prompt: 'Continue the investigation' }, registry));
+    ok('child compaction uses a real summary request', first.seen[0]?.body.stream === false, first.result.output);
+    check('child retains its rolling compaction summary', registry.get('resume-summary').summary, 'Earlier child findings remain verified.');
+    const second = await withMockFetch([() => textReply('Resumed with retained context')], () => runSubagentTask(ctx, DEFS, { subagentType: '', taskId: 'resume-summary', description: 'resume again', prompt: 'Finish' }, registry));
+    const replay = second.seen[0].body.messages;
+    ok('child resume carries its summary in system context', replay[0].content.includes('Earlier child findings remain verified.'));
+    ok('child resume does not re-send already summarized turns', !JSON.stringify(replay.slice(1)).includes('OLD_CHILD_0'));
+    registry.get('resume-summary').rows.at(-1).reasoningContent = 'OPAQUE_OLD_MODEL';
+    config.baseRequest.model = 'replacement-child';
+    const changed = await withMockFetch([() => textReply('Portable context retained')], () => runSubagentTask(ctx, DEFS, { subagentType: '', taskId: 'resume-summary', description: 'new model', prompt: 'Continue' }, registry));
+    ok('resuming on a new model drops old opaque reasoning', !JSON.stringify(changed.seen[0].body).includes('OPAQUE_OLD_MODEL'));
+    ok('model changes retain portable child findings', changed.seen[0].body.messages[0].content.includes('Earlier child findings remain verified.'));
+}
+{
+    const rows = [{ role: 'user', content: 'Original child task' }];
+    for (let i = 0; i < 400; i++) rows.push({ role: 'assistant', content: '', tool_calls: [{ id: `bounded-${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `bounded-${i}`, content: `result ${i}` });
+    rows.push({ role: 'assistant', content: 'Final child findings' });
+    const bounded = boundSubagentHistory(rows), replay = buildReplayHistory(bounded);
+    ok('child memory bound is enforced', bounded.length <= MAX_SUBAGENT_RUN_ROWS);
+    check('bounded child context retains its task opener', replay[0].content, 'Original child task');
+    check('bounded child context retains the final report', replay.at(-1).content, 'Final child findings');
+    const declared = new Set(); let paired = true;
+    for (const row of replay) {
+        for (const call of row.tool_calls ?? []) declared.add(call.id);
+        if (row.role === 'tool' && !declared.has(row.tool_call_id)) paired = false;
+    }
+    ok('bounded child tool results retain their owners', paired);
 }
 {
     // Unknown task_id fails with the available list; type mismatch refuses.

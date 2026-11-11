@@ -17,6 +17,7 @@ import {
 } from './contextWindow';
 import type { LocalAgentMessage, LocalAgentRequest } from './localTypes';
 import { isChatGptSubscriptionHost } from '../providerIdentity';
+import { providerHttpStatus } from '../providerErrors';
 import { completionUsage, requestStreamingCompletion } from './wireAdapters';
 import {
     endpointUrl,
@@ -27,6 +28,7 @@ import {
     chatOutputTokenField,
     swapChatOutputTokenField,
     MAX_TOKENS_REJECT_RE,
+    providerHttpError,
 } from './transport';
 
 // --- AI compaction for the local loop ---
@@ -187,6 +189,26 @@ async function requestSummaryCompletion(
     maxTokens: number,
     signal: AbortSignal,
 ): Promise<string | null> {
+    // Token expiry during compaction must not silently replace the rolling
+    // summary with a mechanical trim. Refresh once, keeping the new bearer
+    // on the same run request for the following main-model round.
+    try {
+        return await requestSummaryAttempt(request, prompt, maxTokens, signal);
+    } catch (error) {
+        if (signal.aborted || !request.onUnauthorized || providerHttpStatus(error)?.status !== 401) throw error;
+        const fresh = await request.onUnauthorized();
+        if (!fresh || signal.aborted) throw error;
+        request.apiKey = fresh;
+        return requestSummaryAttempt(request, prompt, maxTokens, signal);
+    }
+}
+
+async function requestSummaryAttempt(
+    request: LocalAgentRequest,
+    prompt: string,
+    maxTokens: number,
+    signal: AbortSignal,
+): Promise<string | null> {
     const style = request.apiStyle ?? 'chat';
     if (style === 'responses' && (request.subscription || isChatGptSubscriptionHost(request.baseUrl))) {
         const result = await requestStreamingCompletion({
@@ -257,7 +279,10 @@ async function requestSummaryCompletion(
         } else return null;
         resp = await send();
     }
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+        if (resp.status === 401) throw providerHttpError(401, await resp.text().catch(() => ''));
+        return null;
+    }
     const data = await resp.json() as any;
     const usage = completionUsage(style, data);
     if (usage) { try { request.onCompactionUsage?.(usage); } catch { /* Accounting cannot invalidate a completed summary. */ } }

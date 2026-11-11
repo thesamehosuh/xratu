@@ -20,6 +20,10 @@ import Module from 'module';
 import { createRequire } from 'module';
 
 const FAKE_SYSTEM_PROXY = 'xratu-test-system-proxy';
+// The fixture selects its own proxy source; inherited CI/developer proxies
+// must not override its explicit "no proxy" case or no_proxy routing.
+const inheritedProxyEnv = Object.entries(process.env).filter(([name]) => /^(https?|all|no)_proxy$/i.test(name));
+for (const [name] of inheritedProxyEnv) delete process.env[name];
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
     // webTools imports `vscode`, and reaches the proxy through ./systemProxy.
@@ -185,6 +189,7 @@ try {
     }
 } finally {
     delete process.env[FAKE_SYSTEM_PROXY];
+    for (const [name, value] of inheritedProxyEnv) process.env[name] = value;
     globalThis.fetch = realFetch;
     proxyFetchModule.proxyFetch = realProxyFetch;
 }

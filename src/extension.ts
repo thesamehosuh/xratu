@@ -4736,8 +4736,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._logSubagentIssues(subagentDefs);
         const subagentRunner = createSubagentRunner(
             {
-                baseRequest: (def) => {
-                    const subagentConversationId = `${conversationId}::subagent-${crypto.randomUUID()}`;
+                connectionId: active.id,
+                baseRequest: (def, childConversationId) => {
+                    const subagentConversationId = `xratu-subagent-${childConversationId}`;
                     // A profile may name its own model/reasoning level; the
                     // caps and the window follow THAT model, never the parent's.
                     const childModel = def.model || model;
