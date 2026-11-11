@@ -496,6 +496,17 @@ function childContext(extra = {}) {
     ok('model changes retain portable child findings', changed.seen[0].body.messages[0].content.includes('Earlier child findings remain verified.'));
 }
 {
+    const { ctx } = childContext({ baseRequest: { contextWindow: 1_000_000 } }), registry = new Map();
+    const finding = 'IMPORTANT CHILD FINDING '.repeat(4000);
+    ctx.executor = () => ({ execute: async () => ({ output: finding }) });
+    const first = await withMockFetch([() => toolReply('read_file', { path: 'large.txt' }), () => textReply('Finding inspected')],
+        () => runSubagentTask(ctx, DEFS, { subagentType: 'explore', description: 'large finding', prompt: 'Inspect the large finding' }, registry));
+    const taskId = /\[task_id: ([0-9a-f]{10}) /.exec(first.result.output)?.[1];
+    const second = await withMockFetch([() => textReply('Finding still available')],
+        () => runSubagentTask(ctx, DEFS, { taskId, description: 'continue', prompt: 'Use the earlier finding' }, registry));
+    ok('large-window children retain their full tool findings across resume', second.seen[0].body.messages.find(message => message.role === 'tool')?.content === finding);
+}
+{
     const rows = [{ role: 'user', content: 'Original child task' }];
     for (let i = 0; i < 400; i++) rows.push({ role: 'assistant', content: '', tool_calls: [{ id: `bounded-${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: `bounded-${i}`, content: `result ${i}` });
     rows.push({ role: 'assistant', content: 'Final child findings' });

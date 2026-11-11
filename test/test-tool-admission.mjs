@@ -23,6 +23,30 @@ async function scenario(name, definitions, { parallel = false, allow = false } =
 }
 try {
     for (const parallel of [false, true]) {
+        for (const maxRounds of [1, 3]) {
+            const bodies = [], queued = [], events = [];
+            const correction = { text: 'Stop the old plan. Inspect the replacement target instead.', steerId: 'correction' };
+            globalThis.fetch = async (_url, init) => {
+                bodies.push(JSON.parse(init.body));
+                const delta = bodies.length === 1 ? { tool_calls: ['task', 'read_file'].map((name, index) => ({ index, id: `mixed-${index}`, function: { name, arguments: '{}' } })) } : { content: 'Corrected answer' };
+                return new Response(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+            };
+            for await (const event of runLocalAgent({
+                baseUrl: 'http://127.0.0.1:11434/v1', apiKey: null, model: 'test', systemPrompt: 'test', userText: 'Original plan',
+                tools: ['task', 'read_file'].map(name => ({ name, description: '', inputSchema: {} })), maxRounds,
+                ...(parallel ? { parallelTools: ['task'], parallelToolLimit: 1 } : {}),
+            }, { execute: async call => { if (call.name === 'task') queued.push(correction); return { output: 'completed' }; } }, {
+                requestApproval: async () => ({}),
+            }, { drain: () => queued.splice(0) })) events.push(event);
+            const messages = bodies[1].messages;
+            const steerIndex = messages.findIndex(message => message.role === 'user' && message.content.includes(correction.text));
+            assert.ok(steerIndex >= 0, `correction reaches the very next ${maxRounds === 1 ? 'wrap-up' : 'model'} request (${parallel ? 'parallel' : 'serial'})`);
+            assert.equal(messages.slice(0, steerIndex).filter(message => message.role === 'tool').length, 2, 'corrections follow the complete mixed tool batch');
+            assert.equal(events.filter(event => event.type === 'steer' && event.steerId === correction.steerId).length, 1, 'corrections are confirmed exactly once');
+            assert.equal(queued.length, 0);
+        }
+    }
+    for (const parallel of [false, true]) {
         for (const name of ['mcp__remote__mutate', 'write_file', 'task']) {
             const result = await scenario(name, [{ name: 'read_file', description: '', inputSchema: {} }], { parallel });
             assert.deepEqual(result.executed, [], `${name} absent from run tools must not execute (${parallel ? 'parallel' : 'serial'})`);

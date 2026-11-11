@@ -242,7 +242,7 @@ export function compactMessages(
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'user') { lastUser = i; break; }
     }
-    const turnStart = protectFromIndex != null && protectFromIndex > 1 ? protectFromIndex : lastUser;
+    const turnStart = protectFromIndex != null && protectFromIndex > 0 ? protectFromIndex : lastUser;
     if (turnStart <= 1) return [];
 
     // Forced recovery targets a fraction of the OBSERVED size, not of the

@@ -341,11 +341,26 @@ export async function* runLocalAgent(
         currentTurnMessage,
     ];
     let messages: LocalAgentMessage[] = buildMessages();
+    // Both serial and parallel rounds deliver corrections after the complete
+    // tool batch and before another model request (including wrap-up).
+    function* applySteers(): Generator<LocalAgentEvent> {
+        request.signal?.throwIfAborted();
+        for (const steer of steerFeed?.drain() ?? []) {
+            const text = steer.text.trim();
+            if (!text && !steer.attachments?.length) continue;
+            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
+            yield {
+                type: 'steer', text,
+                ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+                ...(steer.steerId ? { steerId: steer.steerId } : {}),
+            };
+        }
+    }
     /** Index of the current turn's opener in `messages` (undefined when absent
      *  or at the system boundary), for `compactMessages`' protectFromIndex. */
     const turnStartIndex = (): number | undefined => {
         const index = messages.indexOf(currentTurnMessage);
-        return index > 1 ? index : undefined;
+        return index > 0 ? index : undefined;
     };
     // How many user turns the run has folded into the rolling summary so far.
     const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
@@ -906,6 +921,7 @@ export async function* runLocalAgent(
                 yield event;
             }
             if (execError) throw execError;
+            yield* applySteers();
             continue;
         }
 
@@ -970,19 +986,7 @@ export async function* runLocalAgent(
         // conversation HERE - after the current tool results, BEFORE the
         // next model request - so the model reads them when it reasons
         // about its next tool call. No turn restart, no lost tool state.
-        if (steerFeed) {
-            for (const steer of steerFeed.drain()) {
-                const text = steer.text.trim();
-                if (!text && !steer.attachments?.length) continue;
-                messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
-                yield {
-                    type: 'steer',
-                    text,
-                    ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-                    ...(steer.steerId ? { steerId: steer.steerId } : {}),
-                };
-            }
-        }
+        yield* applySteers();
     }
 
     // Round budget exhausted while the model was still calling tools. A hard

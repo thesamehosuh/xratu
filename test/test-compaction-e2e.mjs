@@ -50,6 +50,31 @@ const sse = (lines) => ({
 const jsonResponse = (obj) => ({ ok: true, status: 200, json: async () => obj });
 
 const SUMMARY_TEXT = '## Goal\nprobe goal\n## State\n- Done: x\n## Highlights\n- none\n## Next\n- none\n## Files\n- none';
+
+// With no older history, the turn opener is index 1. A steer must not become
+// the protected boundary and let ground-truth compaction discard that opener.
+{
+    const original = globalThis.fetch;
+    const requests = [], steers = [];
+    let summaries = 0, executions = 0;
+    globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(init.body);
+        if (body.stream !== true) { summaries++; return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }] }); }
+        requests.push(body);
+        const delta = requests.length < 3 ? { tool_calls: [{ index: 0, id: `first-turn-${requests.length}`, function: { name: 'read_file', arguments: '{}' } }] } : { content: 'Done' };
+        return sse([frame({ choices: [{ delta }], usage: { prompt_tokens: 7800, completion_tokens: 100 } }), 'data: [DONE]\n\n']);
+    };
+    try {
+        for await (const _event of runLocalAgent({ baseUrl: 'http://127.0.0.1:11434/v1', apiKey: null, model: 'test',
+            systemPrompt: 'Test', userText: 'ORIGINAL FIRST-TURN REQUIREMENT', contextWindow: 8192, maxRounds: 4,
+            tools: [{ name: 'read_file', description: '', inputSchema: {} }],
+        }, { execute: async () => { if (++executions === 1) steers.push({ text: 'Additional first-turn constraint' }); return { output: 'Current finding' }; } }, {
+            requestApproval: async () => ({}),
+        }, { drain: () => steers.splice(0) })) { /* Exercise the real run loop. */ }
+        ok('a first-turn steer never makes the live opener eligible for summarization', summaries === 0);
+        ok('the first-turn opener reaches every continuation intact', requests.length === 3 && requests.every(body => body.messages.some(message => message.role === 'user' && message.content.includes('ORIGINAL FIRST-TURN REQUIREMENT'))));
+    } finally { globalThis.fetch = original; }
+}
 const SYSTEM_PROMPT = 'You are Xratu, a coding agent. ' + 'S'.repeat(18000 - 31);
 
 /** A history big enough to trip proactive compaction (history under the 72%

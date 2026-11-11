@@ -27,7 +27,7 @@ import {
     buildReplayHistory,
 } from './historyRows';
 import type { LocalSessionHistoryMessage } from './localSessionStore';
-import { boundCarriers, countUserRows, skipLeadingUserTurns } from './historyBounds';
+import { boundCarriers, contentCapForWindow, countUserRows, skipLeadingUserTurns } from './historyBounds';
 import {
     DEFAULT_SUBAGENT_ROUNDS,
     SUBAGENT_TOOL_NAME,
@@ -375,7 +375,7 @@ export async function runSubagentTask(
                     break;
             }
             // Committed model-ledger rows only (assistant/tool carriers).
-            const persisted = persistedEventFromAgentEvent(event);
+            const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(request.contextWindow));
             const row = persisted ? historyRowFromEvent(persisted) : null;
             if (row) { turnRows.push(row); turnRows = boundCarriers(turnRows); }
         }
