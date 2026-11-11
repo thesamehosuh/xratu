@@ -324,6 +324,27 @@ export async function requestStreamingCompletion(
     } finally { clearTimeout(timer); }
 }
 
+function chatUsage(rawUsage: any): LocalUsage {
+    // Cache-hit accounting differs per provider: OpenAI nests it under
+    // prompt_tokens_details, Anthropic-style gateways use
+    // cache_read_input_tokens, DeepSeek uses prompt_cache_hit_tokens.
+    const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
+        ?? rawUsage.cache_read_input_tokens
+        ?? rawUsage.prompt_cache_hit_tokens;
+    // Cache-WRITE tokens are reported separately (OpenAI
+    // `cache_write_tokens`, Anthropic-style `cache_creation_input_tokens`)
+    // and are billed at 1.25x input, so they must reach cost accounting.
+    const writeRaw = rawUsage.prompt_tokens_details?.cache_write_tokens
+        ?? rawUsage.cache_creation_input_tokens;
+    return {
+        promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
+        completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
+        totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
+        cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
+        cacheWriteTokens: Number.isFinite(writeRaw) ? writeRaw : null,
+    };
+}
+
 async function requestChatCompletion(
     request: LocalAgentRequest,
     messages: LocalAgentMessage[],
@@ -472,27 +493,7 @@ async function requestChatCompletion(
             return;
         }
 
-        const rawUsage = json?.usage;
-        if (rawUsage) {
-            // Cache-hit accounting differs per provider: OpenAI nests it under
-            // prompt_tokens_details, Anthropic-style gateways use
-            // cache_read_input_tokens, DeepSeek uses prompt_cache_hit_tokens.
-            const cachedRaw = rawUsage.prompt_tokens_details?.cached_tokens
-                ?? rawUsage.cache_read_input_tokens
-                ?? rawUsage.prompt_cache_hit_tokens;
-            // Cache-WRITE tokens are reported separately (OpenAI
-            // `cache_write_tokens`, Anthropic-style `cache_creation_input_tokens`)
-            // and are billed at 1.25x input, so they must reach cost accounting.
-            const writeRaw = rawUsage.prompt_tokens_details?.cache_write_tokens
-                ?? rawUsage.cache_creation_input_tokens;
-            usage = {
-                promptTokens: Number.isFinite(rawUsage.prompt_tokens) ? rawUsage.prompt_tokens : null,
-                completionTokens: Number.isFinite(rawUsage.completion_tokens) ? rawUsage.completion_tokens : null,
-                totalTokens: Number.isFinite(rawUsage.total_tokens) ? rawUsage.total_tokens : null,
-                cachedTokens: Number.isFinite(cachedRaw) ? cachedRaw : null,
-                cacheWriteTokens: Number.isFinite(writeRaw) ? writeRaw : null,
-            };
-        }
+        if (json?.usage) usage = chatUsage(json.usage);
 
         const delta = json?.choices?.[0]?.delta;
         if (!delta) return;
@@ -1746,4 +1747,13 @@ function finalizeCompletion(
         });
     }
     return { text, toolCalls, usage };
+}
+
+/** Normalize non-streaming completion usage through the same wire rules. */
+export function completionUsage(style: NonNullable<LocalAgentRequest['apiStyle']>, data: any): LocalUsage | null {
+    if (style === 'google') return data?.usageMetadata ? googleUsage(data.usageMetadata) : null;
+    if (!data?.usage) return null;
+    if (style === 'messages') return mergeMessagesUsage(data.usage, null);
+    if (style === 'responses') return responsesUsage(data.usage);
+    return chatUsage(data.usage);
 }

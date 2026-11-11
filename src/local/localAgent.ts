@@ -47,6 +47,7 @@ import type {
     LocalToolCall,
     LocalToolDefinition,
     LocalToolExecutor,
+    LocalUsage,
 } from './localTypes';
 import {
     CONTEXT_OVERFLOW_RE,
@@ -268,7 +269,12 @@ export async function* runLocalAgent(
     approvalGate: LocalApprovalGate,
     steerFeed?: LocalSteerFeed,
 ): AsyncGenerator<LocalAgentEvent> {
-    request = { ...request, promptCacheState: {} };
+    const compactionUsage: LocalUsage[] = [];
+    const onCompactionUsage = request.onCompactionUsage;
+    request = { ...request, promptCacheState: {}, onCompactionUsage: usage => {
+        compactionUsage.push(usage);
+        onCompactionUsage?.(usage);
+    } };
     const rounds = resolveAgentRounds(request.maxRounds);
     const windowTokens = request.contextWindow;
     // Threshold for this run: the host's setting, else the default. Used by the
@@ -380,6 +386,7 @@ export async function* runLocalAgent(
         messages, request, windowTokens, undefined, sessionSummary, toolTokens, turnStartIndex(),
         Math.min(request.autoCompactRatio ?? AUTO_COMPACT_RATIO, HISTORY_BOUND_RATIO),
     );
+    for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
     request.signal?.throwIfAborted();
     if (preSummary) {
         sessionSummary = preSummary;
@@ -721,6 +728,7 @@ export async function* runLocalAgent(
                     // the steering-safe boundary.
                     messages, request, windowTokens, used, sessionSummary, 0, turnStartIndex(),
                 );
+                for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
                 if (summary) {
                     sessionSummary = summary;
                     yield { type: 'compactionSummary', value: summary, droppedUserTurns: compactedUserTurns() };

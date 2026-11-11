@@ -1369,14 +1369,17 @@ async function testMessagesApiToolUse() {
 
 async function testResponsesApiTextToolAndUsage() {
     const calls: Array<{ url: string; body: any }> = [];
+    const reasoning = { id: 'rs_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'weighing' }], encrypted_content: 'enc-1' };
+    const functionCall = { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' };
     const responses = [
         sse([
             `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [] } })}\n\n`,
-            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'weighing' }], encrypted_content: 'enc-1' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: reasoning })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '' } })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"path":"' })}\n\n`,
             `data: ${JSON.stringify({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: 'a.txt"}' })}\n\n`,
-            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 1, item: { id: 'fc_1', type: 'function_call', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' } })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 1, item: functionCall })}\n\n`,
+            `data: ${JSON.stringify({ type: 'response.completed', response: { output: [reasoning, functionCall] } })}\n\n`,
         ]),
         sse([
             `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'done' })}\n\n`,

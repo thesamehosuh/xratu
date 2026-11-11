@@ -17,7 +17,7 @@ import {
 } from './contextWindow';
 import type { LocalAgentMessage, LocalAgentRequest } from './localTypes';
 import { isChatGptSubscriptionHost } from '../providerIdentity';
-import { requestStreamingCompletion } from './wireAdapters';
+import { completionUsage, requestStreamingCompletion } from './wireAdapters';
 import {
     endpointUrl,
     makeGoogleHeaders,
@@ -194,6 +194,7 @@ async function requestSummaryCompletion(
             maxTokens: undefined, maxOutputLimit: undefined, toolChoice: undefined,
             subscription: true,
         }, [{ role: 'user', content: prompt }], '', () => {});
+        if (result.usage) { try { request.onCompactionUsage?.(result.usage); } catch { /* Accounting cannot invalidate a completed summary. */ } }
         return result.text.trim() || null;
     }
     const endpoint = style === 'messages' ? 'messages'
@@ -258,6 +259,8 @@ async function requestSummaryCompletion(
     }
     if (!resp.ok) return null;
     const data = await resp.json() as any;
+    const usage = completionUsage(style, data);
+    if (usage) { try { request.onCompactionUsage?.(usage); } catch { /* Accounting cannot invalidate a completed summary. */ } }
     const text = extractSummaryText(style, data);
     return text && text.trim() ? text.trim() : null;
 }

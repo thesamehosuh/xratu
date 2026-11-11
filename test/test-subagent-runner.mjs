@@ -139,10 +139,12 @@ const GENERAL = DEFS.find((d) => d.name === 'general');
 
 function childContext(extra = {}) {
     const usageEvents = [];
+    const usageModels = [];
     let requestCount = 0;
     let lastDef = null;
     return {
         usageEvents,
+        usageModels,
         requestCount: () => requestCount,
         /** The profile handed to the base-request factory on the last call. */
         lastDef: () => lastDef,
@@ -176,7 +178,7 @@ function childContext(extra = {}) {
                 },
             }),
             approvalGate: { requestApproval: async () => ({}) },
-            onUsage: (usage) => usageEvents.push(usage),
+            onUsage: (usage, model) => { usageEvents.push(usage); usageModels.push(model); },
         },
     };
 }
@@ -221,7 +223,7 @@ function childContext(extra = {}) {
 // 3. Happy path: nested loop returns only the final report.
 // ---------------------------------------------------------------------------
 {
-    const { ctx, usageEvents } = childContext();
+    const { ctx, usageEvents, usageModels } = childContext();
     const trace = [];
     const observations = [];
     ctx.onObservation = (id, trace) => observations.push({id,trace});
@@ -253,6 +255,7 @@ function childContext(extra = {}) {
         trace.join('').includes('↳ read_file src/x.ts'), trace.join(''));
     ok('trace shows the tool result line', trace.join('').includes('✓ contents of src/x.ts'));
     check('child usage forwarded once per round', usageEvents.length, 2);
+    check('child usage includes its actual model identity', usageModels.every(model => model === 'test-model'), true);
     const firstTools = seen[0].body.tools.map((t) => t.function?.name ?? t.name);
     ok('child toolset excludes task', !firstTools.includes(SUBAGENT_TOOL_NAME), JSON.stringify(firstTools));
     ok('child toolset excludes parent session-control tools',

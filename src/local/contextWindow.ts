@@ -292,6 +292,10 @@ export function compactMessages(
         let end = start + 1;
         while (end < turnStart && messages[end].role !== 'user') end++;
         const groupCost = estimateRunTokens(messages.slice(start, end));
+        // Make progress even when the first old turn crosses the soft target.
+        // After that, retain a recent complete turn if there is already safe
+        // headroom; an overflowing request must still be allowed to cross it.
+        if (!force && start > 1 && total - groupCost < target && total < windowTokens * AUTO_COMPACT_RATIO) break;
         total -= groupCost;
         start = end;
     }

@@ -881,6 +881,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _runCostCurrency: 'USD' | 'IRT' = 'USD';
     /** Base URL of the current run/provider, used to resolve its pricing. */
     private _runBaseUrl: string | null = null;
+    private _runModel: string | null = null;
     private _runNativeProvider: string | null = null;
     private _runSubscription = false;
     _history: HistoryMessage[] = [];
@@ -1063,6 +1064,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Sum of every non-estimated round's usage across the CURRENT turn (a
      *  tool-calling turn makes several requests) - the basis for turn cost. */
     private _localTurnUsage: LocalUsage | null = null;
+    private _localTurnCost = { USD: 0, IRT: 0 };
+    private _localTurnCostKnown = true;
     /** Cumulative spend for the session, PER CURRENCY (persisted). Monotonic:
      *  a rewind or checkpoint restore does not refund already-spent tokens,
      *  and currencies are never converted into one another. */
@@ -2467,14 +2470,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Cost of one usage record for the CURRENT run's provider, in the
      *  currency the price is quoted in (never converted). */
-    private _costFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
+    private _costFor(usage: LocalUsage | null, model = (this._localRunActive ? this._runModel : null) ?? this._selectedModel): { amount: number; currency: 'USD' | 'IRT' } | null {
         if (!usage || this._runSubscription) return null;
         if (usage.costUsd !== undefined) return { amount: usage.costUsd, currency: 'USD' };
         if (this._runNativeProvider) return null;
         const price = priceForModel(
-            this._selectedModel ?? '',
+            model ?? '',
             this._modelPriceOverrides(),
-            this._priceLookupFor(this._runBaseUrl ?? ''),
+            this._priceLookupFor(this._runBaseUrl ?? '', model ?? undefined),
         );
         if (!price) return null;
         const est = costForUsage(price, usage);
@@ -2485,14 +2488,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  run starts AND when the active provider is resolved (model fetch), so a
      *  reopened Iranian session is not shown in USD after an extension
      *  reload. */
-    private _setCostCurrencyFor(baseUrl: string): void {
+    private _setCostCurrencyFor(baseUrl: string, model = this._selectedModel, forRun = false): void {
+        if (this._localRunActive && !forRun) return;
         this._runBaseUrl = baseUrl;
         this._runNativeProvider = null;
-        const lookup = this._priceLookupFor(baseUrl);
+        const lookup = this._priceLookupFor(baseUrl, model ?? undefined);
         // A resolved price knows its own currency - an explicit USD per-model
         // override on an Iranian provider must bill in USD, so it wins over the
         // provider's default ledger.
-        const price = priceForModel(this._selectedModel ?? '', this._modelPriceOverrides(), lookup);
+        const price = priceForModel(model ?? '', this._modelPriceOverrides(), lookup);
         if (price?.currency) {
             this._runCostCurrency = price.currency;
             return;
@@ -2516,6 +2520,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Estimated cost of one usage record, or null when the model's price is
      *  unknown (the UI then shows nothing rather than a wrong number). */
     private _localCostFor(usage: LocalUsage | null): { amount: number; currency: 'USD' | 'IRT' } | null {
+        if (usage && usage === this._localTurnUsage) {
+            if (!this._localTurnCostKnown) return null;
+            if (this._localTurnCost.USD > 0 && this._localTurnCost.IRT > 0) return null;
+            const primary = this._runCostCurrency;
+            const other = primary === 'USD' ? 'IRT' : 'USD';
+            const currency = this._localTurnCost[primary] > 0 || this._localTurnCost[other] === 0 ? primary : other;
+            return { amount: this._localTurnCost[currency], currency };
+        }
         return this._costFor(usage);
     }
 
@@ -3823,7 +3835,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // large (or aggregate-over-budget) carrier is DROPPED instead, via
         // `serializedWithinCap` here and `boundCarriers` in `_trimLocalHistory`,
         // so the in-memory ledger and the on-disk snapshot agree.
-        const cap = contentCapForWindow(this._contextWindowHint());
+        const cap = contentCapForWindow(this._contextWindowHint(this._sessionConnectionModel));
         const { providerBlocks, reasoningContent, ...rest } = row;
         this._localHistory.push({
             ...rest,
@@ -4594,6 +4606,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [], noRun: true };
         }
         const { active, model, auth } = connection;
+        this._runModel = model;
 
         this._bindRunConnection(active.id, model);
 
@@ -4620,6 +4633,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._localThinkingBlockRaw = null;
         this._localCurrentUsage = null;
         this._localTurnUsage = null;
+        this._localTurnCost = { USD: 0, IRT: 0 }; this._localTurnCostKnown = true;
         // `events` is held by reference and grows as the run streams - the
         // throttled snapshot below always captures the current tail.
         this._localPendingTurn = {
@@ -4792,11 +4806,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._view?.webview.postMessage({ type: 'subagentState', callId, trace: ['running', 'waiting'].includes(trace.status) ? trace : this._subagentDisplayTrace(trace) });
                     this._scheduleLocalPartialPersist();
                 },
-                onUsage: (usage) => {
+                onUsage: (usage, usageModel) => {
                     // Delegated rounds are real spend on the same account:
                     // fold them into the turn/session/global ledgers exactly
                     // like parent rounds.
-                    this._handleLocalAgentEvent({ type: 'usage', usage, estimated: false }, outcome);
+                    this._handleLocalAgentEvent({ type: 'usage', usage, model: usageModel, source: 'subagent', estimated: false }, outcome);
                 },
                 onControl: (callId, stop) => {
                     if (!callId) return;
@@ -4865,7 +4879,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         // Cost display for this run: Toman only for Iranian providers AND only
         // when the user set a rate (never guess an exchange rate).
-        this._setCostCurrencyFor(active.baseUrl);
+        this._setCostCurrencyFor(active.baseUrl, model, true);
         this._runSubscription = auth.subscription === true;
 
         try {
@@ -4934,7 +4948,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     onCompactionState: (active) => {
                         if (!controller.signal.aborted) this._view?.webview.postMessage({ type: 'compactionState', active });
                     },
-                    contextWindow: this._contextWindowHint() ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
+                    contextWindow: this._contextWindowHint(model) ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
                     maxOutputLimit: this._maxOutputLimitFor(model, active.baseUrl),
                     reasoningEffort: this._reasoningEffortFor(model, active.baseUrl),
                     // Route model traffic through the configured proxy. The
@@ -5020,6 +5034,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private async _runOpenCodeAgent(prompt: string, attachments?: ComposerAttachment[], existingController?: AbortController, planMode?: boolean, hiddenPrompt?: boolean, onAccepted?: () => void, checkpoint?: string): Promise<StreamOutcome> {
         const epoch = this._sessionEpoch;
+        const model = this._selectedModel;
+        this._runModel = model;
         const controller = existingController ?? new AbortController();
         const outcome: StreamOutcome = { resultEvent: null, needsApprovalId: null, errorEvent: null, events: [] };
         this._abortControllers.set('chat', controller);
@@ -5030,23 +5046,26 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._localThinkingBlockRaw = null;
         this._localCurrentUsage = null;
         this._localTurnUsage = null;
+        this._localTurnCost = { USD: 0, IRT: 0 }; this._localTurnCostKnown = true;
         this._runBaseUrl = null;
-        this._runNativeProvider = `opencode/${this._selectedModel?.split('/')[0] ?? 'unknown'}`;
+        this._runNativeProvider = `opencode/${model?.split('/')[0] ?? 'unknown'}`;
         this._runSubscription = false;
         this._runCostCurrency = 'USD';
         this._localPendingTurn = { prompt, events: outcome.events, hidden: hiddenPrompt, cp: checkpoint,
             attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
         this._postEngineState();
         try {
+            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!workspace) throw new EngineError('engineWorkspaceRequired');
+            if (!model) throw new EngineError('engineModelMissing');
+            const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
+            controller.signal.throwIfAborted();
+            this._sessionConnectionModel = model;
             if (onAccepted) {
                 await this._persistLocalSession();
                 if (!this._sessionId) throw new EngineError('sessionSaveFailed');
                 onAccepted();
             }
-            const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-            if (!workspace) throw new EngineError('engineWorkspaceRequired');
-            if (!this._selectedModel) throw new EngineError('engineModelMissing');
-            const engine = await this._getOpenCodeEngine(this._engineSession?.binaryPath);
             const runPlanMode = planMode ?? this._planMode;
             const executor = this._nativeServiceExecutor(workspace, controller.signal, runPlanMode);
             // Same catalog the bridge registers for this session, so the prompt
@@ -5055,7 +5074,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
             researchSession(this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`), this._researchConversationId);
-            const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model: this._selectedModel, variant: this._nativeVariants()[this._selectedModel], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
+            const agent = engine.runTurn({ prompt, context: [buildNativeSystemContext(runPlanMode, this._resolveReplyLanguage(), { toolCatalog: bridgedTools.map(tool => tool.name) }), taskListReminderLine(this._currentTaskList() ?? [])].filter(Boolean).join('\n\n'), model, variant: this._nativeVariants()[model], workspace, signal: controller.signal, plan: runPlanMode, yolo: this._yoloMode, session: this._engineSession, attachments }, {
                 isYolo: () => this._yoloMode,
                 approvals: { requestApproval: (id, calls, source, signal) => this._requestLocalApproval(id, calls.map((call) => ({ tool_call_id: call.id, tool_name: call.name, args: call.arguments })), source, signal) },
                 questions: { ask: (question, signal) => this._requestLocalDecision(question, signal) },
@@ -5236,13 +5255,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // meter; the turn's recorded usage stays on the real
                 // round-end event (server-reported).
                 if (!event.estimated) {
-                    this._localCurrentUsage = event.usage;
+                    if (!event.source) this._localCurrentUsage = event.usage;
                     // A turn can span several model rounds (tool calls); the
                     // turn's COST is the sum across rounds, not just the last.
                     this._localTurnUsage = this._addUsage(this._localTurnUsage, event.usage);
                     // Session spend accumulates per round and is never reduced
                     // by a rewind/checkpoint restore.
-                    const roundCost = this._costFor(event.usage);
+                    const roundCost = this._costFor(event.usage, event.model ?? this._runModel ?? this._selectedModel);
+                    if (roundCost) this._localTurnCost[roundCost.currency] += roundCost.amount;
+                    else this._localTurnCostKnown = false;
                     if (roundCost != null && roundCost.amount > 0) {
                         this._sessionCost[roundCost.currency] += roundCost.amount;
                         this._postSessionCost();
@@ -5261,7 +5282,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         host: this._runNativeProvider ?? baseUrlHost(this._runBaseUrl ?? '') ?? '',
                         engine: this._runNativeProvider ? 'opencode' : 'xratu',
                         ...(this._runNativeProvider ? { costSource: event.usage.costUsd === undefined ? 'unknown' as const : 'reported' as const } : {}),
-                        model: this._selectedModel ?? '',
+                        model: event.model ?? this._runModel ?? this._selectedModel ?? '',
                         ...(this._runSubscription ? { billing: 'chatgpt-plan' as const } : {}),
                         input: event.usage.promptTokens ?? 0,
                         output: event.usage.completionTokens ?? 0,
@@ -5271,6 +5292,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         currency: roundCost ? roundCost.currency : null,
                     });
                 }
+                if (event.source) break;
                 // Mirror cloud behavior: the webview's context meter tracks
                 // each round's cumulative usage while the turn streams.
                 this._view?.webview.postMessage({
@@ -5341,7 +5363,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             cached_tokens: this._localCurrentUsage.cachedTokens ?? null,
                             cost: this._localCostFor(this._localTurnUsage),
                         } : null,
-                        context_window: this._contextWindowHint() ?? null,
+                        context_window: this._contextWindowHint(this._runModel) ?? null,
                     };
                 }
                 break;
@@ -7040,7 +7062,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 researchConversationId: this._researchConversationId,
                 engineSession: this._engineSession ?? { engineId: this._activeEngine },
                 connectionId: this._activeEngine === 'xratu' ? this._sessionConnectionId ?? undefined : undefined,
-                model: this._activeEngine === 'xratu' && this._sessionConnectionId ? this._sessionConnectionModel : this._selectedModel,
+                model: this._activeEngine === 'opencode' ? this._sessionConnectionModel ?? this._selectedModel
+                    : this._sessionConnectionId ? this._sessionConnectionModel : this._selectedModel,
                 summary: this._sessionSummary,
                 localHistory: this._localHistory,
                 replayUserTurns: this._localReplayUserTurns,
@@ -7067,7 +7090,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Persist at the SAME window-relative cap the run keeps in memory,
             // so a reload restores what memory held instead of a silently
             // shortened copy of it (the reload-loss sawtooth).
-            contentCapForWindow(this._contextWindowHint())
+            contentCapForWindow(this._contextWindowHint(this._sessionConnectionModel))
         );
         if (!saved) throw new EngineError('sessionSaveFailed');
         // The store derives the title from the first user message when the

@@ -323,6 +323,7 @@
     "test:send-receipts": "node test/test-send-receipts.mjs",
     "test:steer-admission": "node test/test-steer-admission.mjs",
     "test:wire-protocols": "node test/test-wire-protocols.mjs",
+    "test:usage-provenance": "node test/test-usage-provenance.mjs",
     "test:session-connection": "node test/test-session-connection.mjs",
     "test:tool-admission": "node test/test-tool-admission.mjs",
     "test:attachment-session": "node test/test-attachment-session.mjs",

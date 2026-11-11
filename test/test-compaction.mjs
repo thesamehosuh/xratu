@@ -125,6 +125,12 @@ check('system message untouched at index 0', msgs[0].role === 'system', true);
 const largeTurn = [{ role: 'system', content: 'S' }, { role: 'user', content: 'u'.repeat(18000) }, { role: 'assistant', content: 'a'.repeat(9000) }, { role: 'user', content: 'Current task' }];
 check('a large old turn may cross below the soft target', compactMessages(largeTurn, 8192).length, 2);
 checkTrue('large-turn compaction actually clears the window', estimateRunTokens(largeTurn) < 8192 * 0.6);
+const stillOverflowing = [{ role: 'system', content: 'S'.repeat(2000) },
+    { role: 'user', content: 'u'.repeat(3000) }, { role: 'assistant', content: 'a'.repeat(3000) },
+    { role: 'user', content: 'u'.repeat(18000) }, { role: 'assistant', content: 'a'.repeat(9000) },
+    { role: 'user', content: 'Current task' }];
+compactMessages(stillOverflowing, 8192);
+checkTrue('crossing a second large group remains allowed when still overflowing', estimateRunTokens(stillOverflowing) < 8192);
 
 // Tool-pair integrity: every kept assistant tool_calls message must be
 // followed (before the next user message) by its matching tool results -

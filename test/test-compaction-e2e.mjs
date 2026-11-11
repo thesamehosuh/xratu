@@ -81,8 +81,8 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
             if (summarizerMode === 'fail' || (summarizerMode === 'fail-first' && summaryCalls === 1)) {
                 return { ok: false, status: 500, json: async () => ({}), text: async () => 'upstream failed' };
             }
-            if (summarizerMode === 'empty') {
-                return jsonResponse({ choices: [{ message: { content: '   ' } }] });
+            if (summarizerMode === 'empty' || summarizerMode === 'empty-usage') {
+                return jsonResponse({ choices: [{ message: { content: '   ' } }], ...(summarizerMode === 'empty-usage' ? { usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } : {}) });
             }
             if (summarizerMode === 'temperature-400' && body.temperature !== undefined) {
                 return {
@@ -105,7 +105,7 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
             if (url.includes(':generateContent')) {
                 return jsonResponse({ candidates: [{ content: { parts: [{ text: SUMMARY_TEXT }] } }] });
             }
-            return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }] });
+            return jsonResponse({ choices: [{ message: { content: SUMMARY_TEXT } }], ...(summarizerMode === 'usage' ? { usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } : {}) });
         }
         // Main request: answer in the shape of the endpoint it hit.
         if (url.endsWith('/responses')) {
@@ -173,6 +173,11 @@ ok('it reports a positive cumulative dropped count',
 ok('the summary is non-empty', !!compaction && compaction.value.includes('probe goal'));
 
 const summarizerCalls = turn1.requests.filter((r) => r.stream === false);
+for (const mode of ['usage', 'empty-usage']) {
+    const r = await drive(makeHistory(), null, { summarizerMode: mode });
+    const billed = r.events.filter(event => event.type === 'usage' && event.source === 'compaction');
+    ok('reported summarizer spend is accounted even when the summary is empty', billed.length === 1 && billed[0].usage.promptTokens === 100 && billed[0].usage.completionTokens === 20 && billed[0].model === 'test-model');
+}
 ok('compaction lifecycle starts and settles around the summarizer', JSON.stringify(turn1.compactionStates) === '[true,false]');
 ok('exactly one summarizer call', summarizerCalls.length === 1, `got ${summarizerCalls.length}`);
 const throwingDisplay = await drive(makeHistory(), null, { onCompactionState: () => { throw new Error('display unavailable'); } });

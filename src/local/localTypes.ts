@@ -214,7 +214,7 @@ export type LocalAgentEvent =
     // `estimated` marks the mid-stream usage estimates emitted WHILE a
     // response streams - the host must never record them as the turn's
     // real usage (the round-end event carries the authoritative copy).
-    | { type: 'usage'; usage: LocalUsage; estimated?: boolean }
+    | { type: 'usage'; usage: LocalUsage; estimated?: boolean; model?: string; source?: 'compaction' | 'subagent' }
     /** `droppedUserTurns` is the CUMULATIVE number of user turns the run has
      *  folded into the rolling summary (relative to the history it was given).
      *  The host advances its replay boundary by this so the next turn does not
@@ -264,6 +264,8 @@ export interface LocalAgentMessage {
 export interface LocalAgentRequest {
     /** Display-only lifecycle, emitted only while the summarizer runs. */
     onCompactionState?: (active: boolean) => void;
+    /** Actual summarizer spend, distinct from the main request's context. */
+    onCompactionUsage?: (usage: LocalUsage) => void;
     /** OAuth permission to use a ChatGPT plan via the public Responses API. */
     subscription?: boolean;
     baseUrl: string;

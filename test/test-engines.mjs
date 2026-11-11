@@ -800,7 +800,10 @@ try {
             _getOpenCodeEngine: async () => { throw new Error('getaddrinfo ENOTFOUND provider.example'); },
             _postEngineState: () => {}, _globalState: { get: () => explanations },
         });
-        const outcome = await errorHost._runOpenCodeAgent('Check the connection');
+        let accepted = false;
+        errorHost._persistLocalSession = async () => { throw Error('native setup failure must precede draft persistence'); };
+        const outcome = await errorHost._runOpenCodeAgent('Check the connection', undefined, undefined, undefined, undefined, () => { accepted = true; });
+        assert.equal(accepted, false, 'native initialization errors must not accept a composer submission');
         assert.equal(outcome.errorEvent.error, 'getaddrinfo ENOTFOUND provider.example', 'keep the original native error for history');
         assert.equal(messages.at(-1)[explanations ? 'valueKey' : 'value'], explanations ? 'errDns' : 'getaddrinfo ENOTFOUND provider.example');
         assert.equal(errorHost._nativeToolContext, undefined);
