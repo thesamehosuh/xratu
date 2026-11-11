@@ -66,14 +66,18 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 
 const PNG = '${PNG_1x1}';
 const server = new Server({ name: 'shot', version: '1.0.0' }, { capabilities: { tools: {} } });
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
+const tools = [
     { name: 'browser_take_screenshot', description: 'Take a screenshot', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
+    { name: 'browser_schema', inputSchema: { type: 'object', properties: {} }, outputSchema: { type: 'object', properties: { value: { type: 'number' } }, required: ['value'] } },
     { name: 'browser_navigate', description: 'Navigate', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     { name: 'browser_explode', description: 'Malformed error payload', inputSchema: { type: 'object', properties: {} } },
     { name: 'browser_slow', description: 'Wait for cancellation', inputSchema: { type: 'object', properties: {} } },
-] }));
+];
+server.setRequestHandler(ListToolsRequestSchema, async req => req.params?.cursor === 'page-two'
+    ? { tools: tools.slice(2) } : { tools: tools.slice(0, 2), nextCursor: 'page-two' });
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (req.params.name === 'browser_slow') return new Promise(() => {});
+    if (req.params.name === 'browser_schema') return { content: [{ type: 'text', text: 'wrong output' }], structuredContent: { value: 'wrong type' } };
     if (req.params.name === 'browser_take_screenshot') {
         // The exact block shape Playwright MCP / chrome-devtools MCP return.
         return { content: [
@@ -123,6 +127,7 @@ try {
     const shot = tools.find((t) => t.name === 'mcp__shot__browser_take_screenshot');
     eq_ok('the discovered tool keeps its namespaced name', shot?.name, 'mcp__shot__browser_take_screenshot');
     ok('the discovered tool is NOT auto-approved by default', shot?.autoApprove === false, String(shot?.autoApprove));
+    ok('a real MCP server is discovered across both pages', tools.length === 5 && tools.some(tool => tool.originalName === 'browser_slow'));
 
     // The regression itself: a screenshot must come back as an image.
     // Normalized so the OLD string-returning signature fails as clean FAIL
@@ -137,6 +142,8 @@ try {
     eq_ok('an image came through (THE REGRESSION)', result.images.length, 1);
     eq_ok('the image kept its mime type', result.images[0]?.mimeType, 'image/png');
     eq_ok('the image payload is byte-identical', result.images[0]?.dataBase64, PNG_1x1);
+    const invalid = await call('mcp__shot__browser_schema', {});
+    ok('first-page output validation survives the second SDK list page', invalid.isError === true && /does not match its schema/.test(invalid.text), invalid.text);
 
     // A text-only tool on the SAME server must be unaffected.
     const textOnly = await call('mcp__shot__browser_navigate', { url: 'https://example.com' });

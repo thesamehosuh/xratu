@@ -495,11 +495,6 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     eq('the image survives the wire round-trip', wire[0].content[1].image_url.url.length, content[1].image_url.url.length);
 }
 
-// --- summary -------------------------------------------------------------
-console.log(failed === 0
-    ? '\nall external-MCP image passthrough tests passed'
-    : `\n${failed} FAILURE(S)`);
-process.exit(failed === 0 ? 0 : 1);
 // Tool discovery runs independent connections together but retains config order.
 {
     const config = { servers: { first: {}, second: {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
@@ -536,3 +531,78 @@ process.exit(failed === 0 ? 0 : 1);
     await retrying.getState('first', {}, 'global');
     assert.equal(attempts, 3, 'config reload bypasses cooldown');
 }
+
+// MCP v1 pages are opaque cursors, including an empty-string cursor.
+{
+    const config = { servers: { pages: {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
+    const manager = new ExternalMcpManager(async () => config);
+    const cursors = [];
+    let calls = 0;
+    const state = { name: 'pages', client: {
+        listTools: async params => {
+            cursors.push(params?.cursor);
+            return params?.cursor === undefined ? { tools: [{ name: 'first', inputSchema: {}, outputSchema: { type: 'object', properties: { value: { type: 'number' } }, required: ['value'] } }, { name: 'task_only', inputSchema: {}, execution: { taskSupport: 'required' } }], nextCursor: '' }
+                : { tools: [{ name: 'last', inputSchema: {} }] };
+        },
+        callTool: async () => { calls++; return { structuredContent: { wrong: true }, content: [{ type: 'text', text: 'invalid output' }] }; },
+    } };
+    manager.getState = async () => state;
+    assert.deepEqual((await manager.listTools()).map(tool => tool.originalName), ['first', 'task_only', 'last']);
+    assert.deepEqual(cursors, [undefined, ''], 'empty opaque cursors are passed back verbatim');
+    const invalid = await manager.callTool('mcp__pages__first', {});
+    assert.equal(invalid.isError, true);
+    assert.match(invalid.text, /does not match its schema/);
+    const unsupported = await manager.callTool('mcp__pages__task_only', {});
+    assert.equal(unsupported.isError, true);
+    assert.match(unsupported.text, /requires task-based execution/);
+    assert.equal(calls, 1, 'unsupported task-only tools must never be dispatched');
+    for (const mode of ['repeated', 'endless', 'duplicates']) {
+        let pages = 0;
+        const broken = new ExternalMcpManager(async () => config);
+        broken.getState = async () => ({ name: 'pages', client: { listTools: async () => {
+            pages++;
+            return { tools: [{ name: mode === 'duplicates' ? 'same' : `tool_${pages}`, inputSchema: {} }], nextCursor: mode === 'endless' ? String(pages) : 'same' };
+        } } });
+        assert.deepEqual(await broken.listTools(), [], `${mode}: partial catalogs are not cached as complete`);
+        assert.equal(pages, mode === 'endless' ? 64 : 2);
+        const status = (await broken.getServerStatuses())[0];
+        assert.equal(status.state, 'error');
+        assert.match(status.lastError, /limit|duplicate|repeated/);
+    }
+}
+
+// A separator in a configured server name must never redirect its mutation
+// to the shorter server prefix; an ambiguous alias is refused before dispatch.
+{
+    const config = { servers: { 'alpha__beta': {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
+    const manager = new ExternalMcpManager(async () => config);
+    const calls = [];
+    manager.getState = async name => ({ name, client: { callTool: async call => { calls.push([name, call.name]); return { content: [{ type: 'text', text: 'ok' }] }; } } });
+    assert.equal((await manager.callTool('mcp__alpha__beta__mutate', {})).text, 'ok');
+    assert.deepEqual(calls, [['alpha__beta', 'mutate']]);
+    config.servers.alpha = {};
+    const ambiguous = await manager.callTool('mcp__alpha__beta__mutate', {});
+    assert.equal(ambiguous.isError, true);
+    assert.match(ambiguous.text, /ambiguous MCP tool namespace/);
+    assert.equal(calls.length, 1);
+}
+
+// --- summary -------------------------------------------------------------
+{
+    const config = { servers: { old: {} }, sources: {}, globalPath: '', workspacePath: null, legacyInUse: false, shadowedGlobalEntries: {} };
+    const manager = new ExternalMcpManager(async () => config);
+    let rejectOld;
+    const page = new Promise((_, reject) => { rejectOld = reject; });
+    manager.getState = async () => ({ name: 'old', client: { listTools: () => page } });
+    const listing = manager.listTools();
+    await new Promise(resolve => setImmediate(resolve));
+    await manager.reload();
+    rejectOld(new Error('late failure from the old configuration'));
+    assert.deepEqual(await listing, []);
+    assert.equal((await manager.getServerStatuses())[0].state, 'unconfigured', 'stale discovery cannot overwrite a reloaded configuration with an old error');
+}
+
+console.log(failed === 0
+    ? '\nall external-MCP image passthrough tests passed'
+    : `\n${failed} FAILURE(S)`);
+process.exit(failed === 0 ? 0 : 1);
