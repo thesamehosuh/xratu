@@ -56,6 +56,7 @@ reference keep the current provider's model and do not overwrite its model memor
 Unsent text stays with its conversation and workspace when switching chats or
 reloading the webview. A new chat keeps its draft when its first message assigns
 it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
+Only the first 200,000 UTF-16 code units of each draft survive a composer reload.
 VS Code state retains up to 32 recent text drafts within 200,000 characters total;
 older drafts are evicted. Attachments are kept in memory only and must be
 attached again after reload, including session switches that reload the page. Normal sends stay in the composer until the host saves and acknowledges the
@@ -458,7 +459,7 @@ files written for other tools spell them `Read`, `Grep`, `Bash`. Run
 **Xratu: Agent Files** (or look in the **Xratu** output channel) to see
 these.
 
-A subagent keeps its own context, cannot delegate further, cannot ask you
+A built-in subagent keeps its own context, cannot delegate further, cannot ask you
 anything mid-run, and its own edits and commands go through the same
 approval gate as yours. Its run is reported back with a `task_id`: pass that
 id back in a later `task` call to continue the same subagent with its

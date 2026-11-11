@@ -196,7 +196,13 @@ async function requestSummaryCompletion(
         return await requestSummaryAttempt(request, prompt, maxTokens, signal);
     } catch (error) {
         if (signal.aborted || !request.onUnauthorized || providerHttpStatus(error)?.status !== 401) throw error;
-        const fresh = await request.onUnauthorized();
+        const fresh = await new Promise<string | null | undefined>((resolve, reject) => {
+            const aborted = () => reject(signal.reason ?? new Error('Summary cancelled'));
+            signal.addEventListener('abort', aborted, { once: true });
+            if (signal.aborted) { aborted(); return; }
+            Promise.resolve().then(() => request.onUnauthorized!()).then(resolve, reject)
+                .finally(() => signal.removeEventListener('abort', aborted));
+        });
         if (!fresh || signal.aborted) throw error;
         request.apiKey = fresh;
         return requestSummaryAttempt(request, prompt, maxTokens, signal);

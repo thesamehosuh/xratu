@@ -96,6 +96,15 @@ async function restore(f) {
 }
 
 try {
+    await test('a changed partial cannot persist inconsistent publication metadata', async () => {
+        let saves = 0;
+        const record = { received: 10 };
+        const host = { emit() {}, save: async () => { saves++; } };
+        const file = { sync: async () => {}, stat: async () => ({ size: 9 }) };
+        await assert.rejects(DownloadManager.prototype.finalize.call(host, record, file, new AbortController().signal));
+        assert.equal(saves, 0);
+        assert.equal(record.publication, undefined);
+    });
     await test('downloads belong to their chat across save, switch and host restart', async () => {
         const snapshots = [];
         const f = await fixture({ changed: downloads => snapshots.push(downloads) });

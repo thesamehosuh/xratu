@@ -476,6 +476,28 @@ for (const style of ['chat', 'messages', 'responses', 'google', 'subscription'])
     }
 }
 
+
+{
+    const original = globalThis.fetch;
+    const controller = new AbortController();
+    let entered;
+    const refreshing = new Promise(resolve => { entered = resolve; });
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return { ok: false, status: 401, text: async () => 'expired' }; };
+    try {
+        const request = { baseUrl: 'https://example.invalid/v1', apiKey: 'expired', model: 'test-model', tools: [],
+            systemPrompt: SYSTEM_PROMPT, userText: 'Continue', signal: controller.signal,
+            onUnauthorized: () => { entered(); return new Promise(() => {}); } };
+        const result = compactWithSummary([{ role: 'system', content: SYSTEM_PROMPT }, ...makeHistory(), { role: 'user', content: 'Continue' }], request, WINDOW, WINDOW, null);
+        await refreshing;
+        controller.abort();
+        let timer;
+        const settled = await Promise.race([result.then(() => true, () => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })]);
+        clearTimeout(timer);
+        ok('Stop releases a pending OAuth summary refresh without retrying', settled && calls === 1);
+    } finally { globalThis.fetch = original; }
+}
+
 if (failed) {
     console.error(`\n${failed} check(s) failed`);
     process.exit(1);

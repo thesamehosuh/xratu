@@ -161,7 +161,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
 
         case 'startResponse': {
             const { state: s } = ensureStreaming(state);
-            return { ...s, busy: true };
+            return { ...s, messages: s.messages.map(m => m.id === s.streamingId ? { ...m, requestId: msg.requestId } : m), busy: true };
         }
 
         case 'compactionState':
@@ -728,13 +728,17 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             // the empty streaming bubble is dropped. Non-silent rejections
             // turn it into the error bubble (same as 'error' did), and any
             // streamed content is closed out rather than dropped.
+            const active = state.streamingId ? state.messages.find(m => m.id === state.streamingId) : undefined;
+            if (msg.requestId && active?.requestId !== msg.requestId) {
+                return { ...state, messages: state.messages.filter(m => m.requestId !== msg.requestId) };
+            }
             const id = state.streamingId;
-            const streaming = id ? state.messages.find((m) => m.id === id) : undefined;
+            const streaming = active;
             const value = msg.silent
                 ? ''
                 : (msg.valueKey ? tf(msg.valueKey, msg.params) : tOrRaw(msg.value ?? ''));
             let messages = msg.requestId
-                ? state.messages.filter(message => message.requestId !== msg.requestId)
+                ? state.messages.filter(message => message.role !== 'user' || message.requestId !== msg.requestId)
                 : state.messages;
             if (id && streaming) {
                 if (!streaming.text && streaming.steps.length === 0 && !streaming.renderedHtml) {

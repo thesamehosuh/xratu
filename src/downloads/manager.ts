@@ -536,6 +536,7 @@ export class DownloadManager {
         }
         signal.throwIfAborted();
         const expected = await file.stat();
+        if (expected.size !== r.received) throw new DownloadFailure('downloadFileError');
         try { await this.deps.prepareDestination?.(r.path, r.received); }
         catch (error) { this.deps.diagnostic(error); }
         r.publication = { dev: expected.dev, ino: expected.ino, size: expected.size, mtimeMs: expected.mtimeMs };

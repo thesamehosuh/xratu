@@ -37,8 +37,8 @@ assert.equal(host._localCostFor(host._localTurnUsage), null, 'unknown child pric
 host._runNativeProvider = 'opencode';
 host._runModel = 'opencode/parent';
 host._handleLocalAgentEvent({ type: 'usage', usage: { ...usage(20, 10), costUsd: 0.02 }, model: 'other-provider/child', source: 'subagent' }, {});
-assert.equal(records.at(-1).host, 'other-provider', 'native child spend belongs to the actual provider');
+assert.equal(records.at(-1).host, 'opencode/other-provider', 'native child spend belongs to the actual provider');
 assert.equal(records.at(-1).model, 'other-provider/child');
-assert.equal(host._sessionUsageByHost['other-provider'].input, 20);
+assert.equal(host._sessionUsageByHost['opencode/other-provider'].input, 20);
 assert.equal(host._localCurrentUsage, parent, 'native child usage cannot overwrite the parent context meter');
 console.log('usage-provenance: captured model, per-child rates, summary spend, context isolation and unknown pricing passed');

@@ -220,7 +220,7 @@ export class ExternalMcpManager {
      *  the MCP page's status reflects the retry immediately. */
     async restart(name: string): Promise<void> {
         this._generation++; this._listing = undefined; this._inventoryAt = 0;
-        this._inventory = this._inventory.filter(tool => tool.serverName !== name);
+        this._inventory = [];
         this._retryAfter.delete(name);
         const pending = this._states.get(name);
         this._states.delete(name);

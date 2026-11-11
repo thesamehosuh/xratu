@@ -140,6 +140,18 @@ try {
         let excludedError;
         try { await store.restoreCheckpoint(transactional, baseline); } catch (error) { excludedError = error; }
         ok('restore refuses to overwrite an excluded file absent from its safety checkpoint', !!excludedError && readFileSync(join(transactional, 'same.txt'), 'utf8') === 'ignored content absent from safety backup\n');
+        rmSync(join(transactional, 'same.txt'));
+        mkdirSync(join(transactional, 'same.txt'));
+        writeFileSync(join(transactional, 'same.txt', 'secret'), 'excluded descendant');
+        let directoryError;
+        try { await store.restoreCheckpoint(transactional, baseline); } catch (error) { directoryError = error; }
+        ok('restore preserves excluded descendants under a replaced directory', !!directoryError && readFileSync(join(transactional, 'same.txt', 'secret'), 'utf8') === 'excluded descendant');
+        writeFileSync(join(transactional, '.gitignore'), '');
+        await store.createCheckpoint(transactional, 'recoverable directory replacement');
+        await store.restoreCheckpoint(transactional, baseline);
+        ok('restore replaces a fully recoverable directory with its original file', !existsSync(join(transactional, 'same.txt', 'secret')) && !!readFileSync(join(transactional, 'same.txt'), 'utf8'));
+
+
     } finally { rmSync(transactional, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 
     // --- baseline checkpoint: one tracked file ---

@@ -3289,13 +3289,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     await this._globalState.update('xratu.oauthRegistrations', registrations);
                 }
                 await this._persistSavedCredentials([...credentials.filter((c) => c.id !== record.id), record]);
-                if (!this._runtimeSetup) {
+                if (!this._runtimeSetup && epoch === this._sessionEpoch) {
                     await this._globalState.update('xratu.activeLlmCredentialId', record.id);
                     if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
                     await this._secrets.store('xratu.llmBaseUrl', record.baseUrl);
                 }
             }, flow.controller.signal);
         }, flow.controller.signal);
+        if (epoch !== this._sessionEpoch) return;
         if (!this._runtimeSetup) await this._fetchModels();
         await this._sendSavedCredentials();
         this._view?.webview.postMessage({ type: 'credentialsSaved', credentialId: record.id });
@@ -3420,12 +3421,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         const onboarding = !!this._runtimeSetup;
         await this._persistSavedCredentials(next);
+        if (epoch !== this._sessionEpoch) return;
         if (!onboarding) {
             await this._globalState.update('xratu.activeLlmCredentialId', id);
             if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
         }
 
         // Keep legacy slots synchronized for older Xratu code/data.
+        if (epoch !== this._sessionEpoch) return;
         if (!onboarding) {
             await this._secrets.store('xratu.llmBaseUrl', cleanUrl);
             await this._secrets.store('xratu.llmApiKey', api_key);
@@ -3444,6 +3447,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     async _selectLlmCredential(id: string): Promise<void> {
         const epoch = this._sessionEpoch;
         const credentials = await this._getSavedCredentials();
+        if (epoch !== this._sessionEpoch) return;
         if (!credentials.some((c) => c.id === id)) return;
         const currentId = this._globalState.get<string>('xratu.activeLlmCredentialId');
         if (currentId === id && this._sessionConnectionConfirmed !== false) {
@@ -3460,7 +3464,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         this._selectedModel = null;
         await this._globalState.update('xratu.activeLlmCredentialId', id);
-        if (epoch === this._sessionEpoch) this._sessionConnectionConfirmed = true;
+        if (epoch !== this._sessionEpoch) return;
+        this._sessionConnectionConfirmed = true;
         await this._fetchModels();
         await this._sendSavedCredentials();
         await this._sendOAuthState();
@@ -5284,7 +5289,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // round-end event (server-reported).
                 if (!event.estimated) {
                     const nativeProvider = this._runNativeProvider && event.model?.includes('/')
-                        ? event.model.slice(0, event.model.indexOf('/')) : this._runNativeProvider;
+                        ? `opencode/${event.model.slice(0, event.model.indexOf('/'))}` : this._runNativeProvider;
                     if (!event.source) this._localCurrentUsage = event.usage;
                     // A turn can span several model rounds (tool calls); the
                     // turn's COST is the sum across rounds, not just the last.
@@ -7481,7 +7486,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._composerReceipts.set(key, 'accepted');
                 reply('accepted');
             };
-            if (editIndex === undefined) await this._handleChatRequest(prompt, attachments, { onAccepted });
+            if (editIndex === undefined) await this._handleChatRequest(prompt, attachments, { onAccepted, requestId });
             else await this._rewindAndResend(editIndex, prompt, attachments, onAccepted);
         } catch (error) {
             if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : String(error) });
@@ -7495,7 +7500,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: {
-        baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void;
+        requestId?: string; baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void;
         prepared?: { connection: NonNullable<Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>>; attachments: ComposerAttachment[]; rulesContext: string };
     }): Promise<void> {
         if (!this._view) { return; }
@@ -7612,7 +7617,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 ? attachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path }))
                 : undefined;
 
-            this._view.webview.postMessage({ type: 'startResponse' });
+            this._view.webview.postMessage({ type: 'startResponse', requestId: opts?.requestId });
             // Fresh turn: the streamed-text segment timeline starts empty.
             this._resetLiveSegments();
             // Register the cancel controller IMMEDIATELY after startResponse: the

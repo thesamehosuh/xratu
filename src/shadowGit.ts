@@ -457,9 +457,23 @@ export class ShadowCheckpointStore {
             const parent = sanitizePath(path.dirname(rel), workspaceRoot);
             const abs = path.join(parent, path.basename(rel));
             try {
-                if (!fs.lstatSync(abs).isDirectory()) throw new Error(`Restore would overwrite an excluded file absent from its safety checkpoint: ${rel}`);
+                const stat = fs.lstatSync(abs);
+                const unsafe = () => new Error(`Restore would overwrite an excluded path absent from its safety checkpoint: ${rel}`);
+                if (!stat.isDirectory()) throw unsafe();
+                const saved = await this.gitAsync([...this.repoConfigArgs(), 'ls-tree', '-r', '--name-only', '-z', safety], workspaceRoot);
+                if (saved.code !== 0) throw unsafe();
+                const recoverable = new Set(saved.stdout.split('\0'));
+                const check = (dir: string, prefix: string): void => {
+                    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                        const child = path.join(dir, entry.name);
+                        const key = `${prefix}/${entry.name}`;
+                        if (entry.isDirectory()) check(child, key);
+                        else if (!recoverable.has(key)) throw unsafe();
+                    }
+                };
+                check(abs, rel);
             } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
             }
         }
 
@@ -521,7 +535,7 @@ export class ShadowCheckpointStore {
                 try {
                     if (!fs.lstatSync(abs).isDirectory()) fs.rmSync(abs, { force: true });
                 } catch (error) {
-                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
                 }
             }
         }

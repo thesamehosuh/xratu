@@ -141,6 +141,12 @@ try {
 
     // 4. Explicit rename locks the title (renamed flag) across later saves.
     await store.rename(meta.id, 'my custom name');
+    const renamedSnapshot = JSON.parse(readFileSync(join(root, 'sessions', meta.id, 'snapshot.json'), 'utf8'));
+    const renamedMeta = (await store.list(ws)).find(item => item.id === meta.id);
+    check('rename snapshot and picker timestamps agree', renamedSnapshot.updatedAt, renamedMeta.updatedAt);
+    await store.reconcile(ws);
+    check('reconciliation preserves rename timestamp', (await store.list(ws)).find(item => item.id === meta.id).updatedAt, renamedMeta.updatedAt);
+
     await store.save(meta.id, {
         workspace: ws,
         model: null,

@@ -28,6 +28,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const require = createRequire(import.meta.url);
+const { killTree } = require('../out/tooling/processTree.js');
 const {
     adoptDetachedJob,
     adoptableJobRecords,
@@ -291,7 +292,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
         writeFileSync(join(dir, 'background-jobs.json'), JSON.stringify({ version: 1, jobs: [...afterFinish.jobs, dead, unknown] }));
         const restarted = new BackgroundJobStore(dir);
         const recovered = await restarted.load();
-        ok('startup rejects dead and unverifiable process identities', recovered.dropped.includes(dead.id) && recovered.dropped.includes(unknown.id));
+        ok('startup rejects dead identities and retains uncertain live jobs for revalidation', recovered.dropped.includes(dead.id) && recovered.alive.some(job => job.id === unknown.id));
         await restarted.save([]);
         const cleaned = JSON.parse(readFileSync(join(dir, 'background-jobs.json'), 'utf8'));
         ok('the next checkpoint prunes dead records and preserves other live jobs',
@@ -464,7 +465,8 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
         ok('an uncertain kill is refused without signalling or reporting completion', stopped === false && adopted.status === 'running' && adopted.killReason === null && alive(child.pid));
     } finally {
         identities.isOurProcess = originalCheck; identities.processIdentityStatus = originalStatus;
-        child.kill(); await new Promise(resolve => child.once('exit', resolve));
+        const exited = new Promise(resolve => child.once('exit', resolve));
+        await killTree(child.pid); await exited;
     }
     const now = Date.now;
     try { Date.now = () => now() + 11_000; ok('a later successful probe can settle the genuinely exited job', adopted.status === 'exited'); }

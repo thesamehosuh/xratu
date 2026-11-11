@@ -568,5 +568,12 @@ s = reduceChat(s, M('sendFailed', { value: '', prompt: 'same', requestId: 'old',
 ok(s.messages.some(message => message.requestId === 'new'), 'rejection keeps the newer identical prompt');
 ok(!s.messages.some(message => message.requestId === 'old'), 'rejection removes only its own optimistic user');
 
+s = reduceChat(createInitialChatState(), M('startResponse', { requestId: 'carry' }));
+s = reduceChat(s, M('restoreUser', { value: 'rejected', requestId: 'other' }));
+s = reduceChat(s, M('sendFailed', { requestId: 'other', silent: true }));
+ok(s.busy && !!s.streamingId, 'a rejected request preserves another stream and its stop control');
+s = reduceChat(s, M('sendFailed', { requestId: 'carry', silent: true }));
+ok(!s.busy && !s.streamingId, 'failure still settles its own stream');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

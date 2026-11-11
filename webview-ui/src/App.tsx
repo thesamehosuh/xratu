@@ -197,8 +197,8 @@ export function App() {
     /** Host rejected the last send - restore value + attachments so the
      *  user can retry without re-attaching everything. */
     const [composerRestore, setComposerRestore] = useState<Array<{ id: string; value: string; attachments: ComposerAttachment[] }>>([]);
-    const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; errorReported: boolean; edit?: boolean } | null>(null);
-    const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number; edit?: boolean } | null>(null);
+    const pendingSend = useRef<{ requestId: string; revision: number; mount: string; sessionKey?: string; prompt: string; attachments?: ComposerAttachment[]; errorReported: boolean; edit?: boolean } | null>(null);
+    const [acceptedSend, setAcceptedSend] = useState<{ requestId: string; revision: number; edit?: boolean; attachments?: ComposerAttachment[] } | null>(null);
     /** Message being edited in the composer card (pencil → composer flow):
      *  the composer prefills its text, sending performs the rewind-resend. */
     const [editDraft, setEditDraft] = useState<{ userIndex: number; value: string } | null>(null);
@@ -907,7 +907,7 @@ export function App() {
                     if (!pending || pending.requestId !== msg.requestId || pending.mount !== draftIdentity.current.mount ||
                         (pending.sessionKey && pending.sessionKey !== msg.sessionKey)) break;
                     pendingSend.current = null;
-                    if (msg.status === 'accepted') setAcceptedSend({ requestId: msg.requestId, revision: pending.revision, edit: pending.edit });
+                    if (msg.status === 'accepted') setAcceptedSend({ requestId: msg.requestId, revision: pending.revision, edit: pending.edit, attachments: pending.attachments });
                     else {
                         if (!pending.edit) dispatch({ type: 'sendFailed', requestId: msg.requestId, value: '', prompt: pending.prompt, silent: true });
                         if (!pending.errorReported) setComposerError(previous => ({ id: (previous?.id ?? 0) + 1, value: '', valueKey: msg.valueKey ?? 'composerSendRejected' }));
@@ -927,6 +927,7 @@ export function App() {
                     setComposerRestore(previous => [...previous, { id: msg.requestId ?? `restore-${Date.now()}-${steerSeq.current++}`, value: msg.prompt, attachments: msg.attachments ?? [] }]);
                     dispatch({
                         type: 'sendFailed',
+                        requestId: msg.requestId,
                         value: msg.valueKey ? '' : msg.value,
                         valueKey: msg.valueKey,
                         params: msg.params,
@@ -1093,7 +1094,7 @@ export function App() {
             if (editDraft) {
                 const requestId = `edit-${Date.now()}-${steerSeq.current++}`;
                 const sessionKey = draftIdentity.current.live ?? undefined;
-                pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, errorReported: false, edit: true };
+                pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, attachments, errorReported: false, edit: true };
                 send({ type: 'editMessage', requestId, sessionKey, userIndex: editDraft.userIndex, value, attachments });
                 return false;
             }
@@ -1114,7 +1115,7 @@ export function App() {
             }
             const requestId = `send-${Date.now()}-${steerSeq.current++}`;
             const sessionKey = draftIdentity.current.live ?? undefined;
-            pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, errorReported: false };
+            pendingSend.current = { requestId, revision, mount: draftIdentity.current.mount, sessionKey, prompt: value, attachments, errorReported: false };
             dispatch({
                 type: 'restoreUser', requestId,
                 value,

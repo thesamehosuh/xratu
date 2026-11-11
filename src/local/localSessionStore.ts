@@ -749,6 +749,7 @@ export class LocalSessionStore {
             const raw = await fs.readFile(path.join(dir, 'snapshot.json'), 'utf8');
             const parsed = JSON.parse(raw);
             parsed.title = meta.title;
+            parsed.updatedAt = meta.updatedAt;
             parsed.renamed = true;
             const temp = path.join(dir, 'snapshot.json.tmp');
             await fs.writeFile(temp, JSON.stringify(parsed), 'utf8');

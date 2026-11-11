@@ -74,3 +74,15 @@ try {
     assert.equal((await store.load(session.id)).pendingTurn.cp, 'a'.repeat(40), 'the interrupted turn retains its file-restore boundary');
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log('session-connection: matching, mismatching, legacy, explicit choice and persistence passed');
+
+const stale = host('B');
+let releaseCredentials;
+stale.h._getSavedCredentials = () => new Promise(resolve => { releaseCredentials = resolve; });
+const selecting = stale.h._selectLlmCredential('A');
+stale.h._sessionEpoch++;
+stale.h._sessionConnectionConfirmed = true;
+releaseCredentials([{ id: 'A' }, { id: 'B' }]);
+await selecting;
+assert.equal(stale.state.get('xratu.activeLlmCredentialId'), 'B', 'stale selection cannot retarget a new session');
+assert.equal(stale.h._selectedModel, 'current-model');
+assert.deepEqual(stale.writes, []);

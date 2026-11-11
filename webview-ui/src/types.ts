@@ -437,7 +437,7 @@ export type FromExtensionMessage =
      *  bubble without rendering (session switched out from under it). */
     | { type: 'steerApplied'; steerId: string; mode?: 'steer' | 'turn' | 'drop' }
     | { type: 'sendReceipt'; requestId: string; sessionKey: string; status: 'accepted' | 'rejected'; valueKey?: string }
-    | { type: 'startResponse' }
+    | { type: 'startResponse'; requestId?: string }
     | { type: 'chunk'; value: string }
     // Throttled LIVE markdown render of the CURRENT text segment (host-side,
     // same sanitize pipeline as fullResponse - shiki runs only on the final
