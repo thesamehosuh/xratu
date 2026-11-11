@@ -60,6 +60,7 @@ Object.assign(persisted.host, {
 await persisted.host._persistLocalSession();
 assert.equal(persisted.messages[0].id, 'disk-id', 'the first disk identity is echoed even if the title was seeded earlier');
 persisted.host._sessionWorkspaceIdentity = () => '/Physical/Root';
+sandbox.process.platform = 'linux';
 assert.equal(persisted.host._draftWorkspaceIdentity(), '/Physical/Root');
 sandbox.process.platform = 'win32';
 assert.equal(persisted.host._draftWorkspaceIdentity(), '/physical/root');

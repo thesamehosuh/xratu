@@ -980,6 +980,7 @@ for (const locale of ['en', 'fa']) {
             await post(page, { type: 'locale', locale });
             await post(page, { type: 'gitStatusState', root: 'workspace', status: { isRepo: true, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
             await post(page, { type: 'sessionState', id: 'A', title: 'Current conversation' });
+            await expect(page.locator('.session-btn-title')).toHaveText('Current conversation');
             await page.locator('.composer-input').fill('Keep this draft');
             await page.locator('.git-status').click();
             await post(page, { type: 'gitBranchesState', branches: ['main', 'next'], current: 'main' });

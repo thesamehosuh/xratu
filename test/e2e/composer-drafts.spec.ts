@@ -104,6 +104,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1100]) {
         await input.fill('newer draft');
         await post(page, { type: 'composerError', valueKey: 'engineSteerCancelled', steerId: steer.steerId });
         await expect(input).toHaveValue('newer draft');
+        await page.screenshot({ path: testInfo.outputPath('recovery-action.png') });
         await page.getByRole('button', { name: locale === 'en' ? 'Recover draft' : 'بازیابی پیش نویس', exact: true }).click();
         await expect(input).toHaveValue('newer draft\n\nrejected correction');
         await page.screenshot({ path: testInfo.outputPath('receipts.png') });
@@ -133,6 +134,7 @@ for (const locale of ['en', 'fa']) {
         const latest = () => page.evaluate(() => (window as unknown as { draftMessages: Array<Record<string, unknown>> }).draftMessages.filter(message => message.type === 'editMessage').at(-1)!);
         const rejected = await latest();
         await post(page, { type: 'sendReceipt', requestId: rejected.requestId, sessionKey: 'A', status: 'rejected' });
+        await expect(page.locator('.attach-error')).toBeVisible();
         await expect(input).toHaveValue('Edited request');
         await expect(page.locator('article.msg.user')).toContainText('Previous request');
         await input.press('Enter');
@@ -143,6 +145,7 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'restoreUser', value: 'Edited request' });
         await post(page, { type: 'sendReceipt', requestId: accepted.requestId, sessionKey: 'A', status: 'accepted' });
         await expect(input).toHaveValue('Ordinary draft');
+        await page.screenshot({ path: testInfo.outputPath('newer-edit-recovery.png') });
         await page.getByRole('button', { name: locale === 'en' ? 'Recover draft' : 'بازیابی پیش نویس', exact: true }).click();
         await expect(input).toHaveValue('Ordinary draft\n\nNewer edit draft');
         await page.screenshot({ path: testInfo.outputPath('edit-receipts.png') });

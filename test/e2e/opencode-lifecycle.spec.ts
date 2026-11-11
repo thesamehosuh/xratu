@@ -8,6 +8,7 @@ async function acceptSend(page: Page) {
     const request = (await sent(page)).findLast(message => message.type === 'askQuestion')!;
     await post(page, { type: 'sendReceipt', requestId: request.requestId, status: 'accepted' });
     await expect(page.locator('.composer-input')).toHaveValue('');
+    await expect(page.locator('.attach-chip')).toHaveCount(0);
 }
 
 test.beforeEach(async ({ page }) => {
