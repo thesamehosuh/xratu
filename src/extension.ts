@@ -4454,7 +4454,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._postBackgroundJobs();
             return;
         }
-        job.kill('stopped from the chat panel');
+        if (job.kill('stopped from the chat panel') === false) {
+            this.notifyBanner('warning', 'backgroundJobIdentityUnknown');
+            this._postBackgroundJobs();
+            return;
+        }
         await job.finished;
         this._view?.webview.postMessage({ type: 'backgroundJobStopped', jobId });
         this._postBackgroundJobs();

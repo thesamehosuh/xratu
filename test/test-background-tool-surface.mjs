@@ -37,7 +37,7 @@ Module._load = function (request, parent, isMain) {
 };
 
 const require = createRequire(import.meta.url);
-const { getLocalToolDefinitions } = require('../out/mcp.js');
+const { getLocalToolDefinitions, executeLocalTool } = require('../out/mcp.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -122,6 +122,17 @@ ok('the background flag description warns that nothing stops it',
     terminal.inputSchema.properties.background.description);
 ok('the background flag description makes killing it the caller\'s job',
     /your job to/.test(terminal.inputSchema.properties.background.description));
+
+const jobs = require('../out/tooling/backgroundJobs.js'), getJob = jobs.getTerminalJob;
+let timer;
+try {
+    jobs.getTerminalJob = () => ({ id: 'uncertain', status: 'running', kill: () => false, finished: new Promise(() => {}) });
+    const result = await Promise.race([
+        executeLocalTool(process.cwd(), 'process', { action: 'kill', jobId: 'uncertain' }, async () => {}),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); }),
+    ]);
+    ok('an unverifiable process kill returns an actionable error without waiting forever', result?.isError === true && /identity could not be verified/.test(result.output));
+} finally { jobs.getTerminalJob = getJob; clearTimeout(timer); }
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

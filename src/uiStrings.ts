@@ -78,6 +78,7 @@ const STRINGS: Record<string, { fa: string; en: string }> = {
     gitCheckoutBusy: { fa: 'صبر کن تا اجرای فعلی یا کار گفتگو تموم بشه؛ بعد branch رو عوض کن.', en: 'Wait for the current run or session action to finish before switching branches.' },
     sessionCreateFailed: { fa: 'گفتگوی جدید ساخته نشد. دوباره امتحان کن.', en: 'Could not create a new conversation. Try again.' },
     sessionRenameFailed: { fa: 'نام گفتگو تغییر نکرد. دوباره امتحان کن.', en: 'Could not rename this conversation. Try again.' },
+    backgroundJobIdentityUnknown: { fa: 'هویت فرایند تایید نشد. متوقف نشد؛ دوباره امتحان کن.', en: 'Could not verify the process identity. It was not stopped; try again.' },
     sessionSaveFailed: { fa: 'تغییر گفتگو انجام شد، ولی ذخیره سازی کامل نشد. قبل از بستن پنجره دوباره امتحان کن.', en: 'The session changed, but saving did not finish. Try again before closing the window.' },
     sessionWorkspaceReadOnly: { fa: 'تاریخچه این گفتگو قابل دیدنه، ولی پوشه اصلیش تایید نشده. پوشه اصلی رو باز کن یا توی پروژه فعلی گفتگوی تازه بساز.', en: 'This history is readable, but its original workspace is not verified. Open its original folder or start a new chat in this workspace.' },
     attachVirtualFile: { fa: 'برای پیوست کردن این فایل مجازی، اول یه نسخه محلی ذخیره کن: {name}', en: 'Save a local copy of this virtual file before attaching it: {name}' },

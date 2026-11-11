@@ -12,6 +12,7 @@ const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest,
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
 const names = ['_sessionWorkspaceMatches', '_restoreSessionConnection', '_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
 names.push('_renameSession');
+names.push('_killBackgroundJob');
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
@@ -447,3 +448,20 @@ for (const result of [true, false, 'disk-failure']) {
     assert.equal(renamed.notices.some(notice => notice[1] === 'sessionRenameFailed'), result !== true);
 }
 console.log('ok failed renames preserve the active title and show a localized retry error');
+
+{
+    const stopped = harness(); let refreshed = 0, timer;
+    sandbox.getTerminalJob = () => ({ status: 'running', kill: () => false, finished: new Promise(() => {}) });
+    stopped.host._postBackgroundJobs = () => { refreshed++; };
+    try {
+        const result = await Promise.race([
+            stopped.host._killBackgroundJob('uncertain-process').then(() => 'settled'),
+            new Promise(resolve => { timer = setTimeout(() => resolve('hung'), 1000); }),
+        ]);
+        assert.equal(result, 'settled', 'an unknown identity cannot hang the UI stop action');
+        assert.equal(stopped.notices.at(-1)[1], 'backgroundJobIdentityUnknown');
+        assert.equal(refreshed, 1);
+        assert.equal(stopped.messages.some(message => message.type === 'backgroundJobStopped'), false);
+    } finally { clearTimeout(timer); }
+}
+console.log('ok unverifiable background stops keep their controls and report a localized error');

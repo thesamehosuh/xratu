@@ -699,7 +699,7 @@ async function dispatchProcessTool(args: any): Promise<{
     if (job.status !== 'running') {
         return text(`${job.id} already ${job.status === 'killed' ? 'killed' : `finished (${describeTerminalJob(job)})`}. Nothing to stop.`);
     }
-    job.kill('killed by the agent');
+    if (job.kill('killed by the agent') === false) return text('Error: process identity could not be verified. Nothing was stopped; retry after the identity probe is available.', true);
     await job.finished;
     // The kill path hands back the full finished report, so the notice would
     // be a duplicate.

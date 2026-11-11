@@ -1102,6 +1102,55 @@ try {
         assert.equal(monitor.views()[0].status, 'killed');
     } finally { monitor.dispose(); }
     console.log('ok native background output, exit codes, ownership and stop');
+    {
+        let missing = false, reads = 0;
+        const shellInfo = id => ({ ...info(), id, status: 'running', metadata: { sessionID: 'native-1' } });
+        const resilient = new NativeShellMonitor(async () => ({ message: { list: async () => ({ data: [] }) }, shell: {
+            get: async ({ id }) => { if (missing && id === 'removed-shell') throw { _tag: 'ShellNotFoundError', id, message: 'Shell no longer exists' }; return { data: shellInfo(id) }; },
+            list: async () => ({ data: [] }),
+            output: async ({ id }) => ({ data: { output: `${id} output ${++reads}\n`, cursor: reads, truncated: false } }),
+            remove: async ({ id }) => { throw { _tag: 'ShellNotFoundError', id, message: 'Shell no longer exists' }; },
+        } }), () => {});
+        try {
+            resilient.watch('native-1', root); await new Promise(resolve => setImmediate(resolve));
+            await resilient.track('removed-shell', 'native-1', 'removed-call', true);
+            await resilient.track('healthy-shell', 'native-1', 'healthy-call', true);
+            await resilient.refresh();
+            const previousOutput = resilient.views().find(job => job.jobId === 'opencode:healthy-shell').output;
+            missing = true;
+            await resilient.refresh();
+            const removedJob = resilient.views().find(job => job.jobId === 'opencode:removed-shell');
+            assert.equal(removedJob.running, false); assert.equal(removedJob.status, 'failed'); assert.equal(removedJob.exitCode, null, 'a missing runtime handle is not a fabricated successful exit');
+            assert.notEqual(resilient.views().find(job => job.jobId === 'opencode:healthy-shell').output, previousOutput, 'one vanished shell cannot freeze another shell output');
+            assert.equal(resilient.hasRunningCall('removed-call'), false);
+            assert.equal(await resilient.stop('opencode:healthy-shell'), false, 'an already vanished shell cannot report a successful stop');
+        } finally { resilient.dispose(); }
+        let release, started;
+        const gate = new Promise(resolve => { release = resolve; }), ready = new Promise(resolve => { started = resolve; });
+        const stale = new NativeShellMonitor(async () => ({ message: { list: async () => ({ data: [] }) }, shell: {
+            list: async () => ({ data: [] }), get: async () => { started(); await gate; return { data: shellInfo('late-shell') }; },
+        } }), () => {});
+        try {
+            stale.watch('native-1', root); await new Promise(resolve => setImmediate(resolve));
+            const tracking = stale.track('late-shell', 'native-1', 'late-call', true);
+            await ready; stale.unwatch('native-1'); stale.watch('native-1', root); release(); await tracking;
+            assert.equal(stale.views().length, 0, 'late shell discovery cannot reattach a previous child execution even after rewatch');
+        } finally { stale.dispose(); }
+        let releaseHistory, historyStarted, historyReads = 0;
+        const historyGate = new Promise(resolve => { releaseHistory = resolve; }), historyReady = new Promise(resolve => { historyStarted = resolve; });
+        const staleHistory = new NativeShellMonitor(async () => ({ message: { list: async () => {
+            if (++historyReads > 1) return { data: [] };
+            historyStarted(); await historyGate;
+            return { data: [{ type: 'assistant', content: [{ type: 'tool', name: 'shell', id: 'old-call', state: { status: 'completed', metadata: { shellID: 'old-shell', status: 'running' }, input: { background: true } } }] }] };
+        } }, shell: { list: async () => ({ data: [] }), get: async () => ({ data: shellInfo('old-shell') }) } }), () => {});
+        try {
+            staleHistory.watch('native-1', root); await historyReady;
+            staleHistory.unwatch('native-1'); staleHistory.watch('native-1', root); releaseHistory();
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(staleHistory.views().length, 0, 'late history discovery cannot adopt shells for a replacement watcher');
+        } finally { staleHistory.dispose(); }
+    }
+    console.log('ok vanished native shells cannot poison other jobs or reattach after unwatch');
     let foregroundCursor = 0;
     const foregroundUpdates = [];
     const foreground = new NativeShellMonitor(async () => ({ message: { list: async () => ({ data: [] }) }, shell: {

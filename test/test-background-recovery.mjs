@@ -450,6 +450,28 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
 }
 
 {
+    const child = spawnSleeper(), identity = captureIdentity(child.pid);
+    const identities = require('../out/tooling/processIdentity.js');
+    const originalCheck = identities.isOurProcess, originalStatus = identities.processIdentityStatus;
+    const adopted = adoptDetachedJob({ id: 'job-temporary-probe-failure', command: 'dev server', cwd: tmp, identity,
+        startedAt: Date.now(), uptimeSeconds: 0, backgroundedByUser: true, status: 'running', exitCode: null });
+    try {
+        identities.isOurProcess = () => false;
+        identities.processIdentityStatus = () => 'unknown';
+        ok('a temporary identity probe failure does not declare a recovered job exited', adopted.status === 'running');
+        ok('an uncertain live job keeps its durable recovery record', adoptableJobRecords().some(record => record.id === adopted.id));
+        const stopped = adopted.kill('identity temporarily unavailable');
+        ok('an uncertain kill is refused without signalling or reporting completion', stopped === false && adopted.status === 'running' && adopted.killReason === null && alive(child.pid));
+    } finally {
+        identities.isOurProcess = originalCheck; identities.processIdentityStatus = originalStatus;
+        child.kill(); await new Promise(resolve => child.once('exit', resolve));
+    }
+    const now = Date.now;
+    try { Date.now = () => now() + 11_000; ok('a later successful probe can settle the genuinely exited job', adopted.status === 'exited'); }
+    finally { Date.now = now; }
+}
+
+{
     const running = listTerminalJobs().filter((j) => j.status === 'running');
     for (const j of running) j.kill('test cleanup');
     await Promise.all(running.map((j) => Promise.race([j.finished, sleep(3000)])));

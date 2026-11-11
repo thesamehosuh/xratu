@@ -30,7 +30,7 @@
 import * as cp from 'child_process';
 import { randomUUID } from 'crypto';
 import { killPids, killTree, snapshotTree } from './processTree';
-import { captureIdentity, captureIdentityAsync, isOurProcess, type ProcessIdentity } from './processIdentity';
+import { captureIdentity, captureIdentityAsync, processIdentityStatus, type ProcessIdentity } from './processIdentity';
 import { terminalSpawn, terminalFailureHint, appendHintToResult } from './shellPlatform';
 
 /**
@@ -119,8 +119,9 @@ export interface TerminalJob {
     /** Pid + kernel start token captured at spawn. Needed to write a
      *  checkpoint that is safe to act on after a restart. */
     readonly identity?: ProcessIdentity;
-    /** Request a tree kill. Idempotent; never throws. */
-    kill(why: string): void;
+    /** Request a tree kill. False means identity is temporarily unverifiable:
+     * nothing was signalled and the live recovery record must be retained. */
+    kill(why: string): void | false;
     /** Resolves when the process exits, is killed, or fails to start. */
     readonly finished: Promise<void>;
     /**
@@ -280,7 +281,8 @@ export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
         const now = Date.now();
         if (now - lastChecked < ADOPTED_REVALIDATE_MS) return;
         lastChecked = now;
-        if (isOurProcess(identity)) return;
+        const identityStatus = processIdentityStatus(identity);
+        if (identityStatus === 'same' || identityStatus === 'unknown') return;
         // The process is gone (or was never ours after all). Latch the time so
         // `uptimeSeconds` freezes and `pruneFinished` can eventually drop it.
         finishedAt = now;
@@ -315,7 +317,9 @@ export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
             // terminates an unrelated session - the exact hazard this module
             // exists to prevent. Fail closed: if it cannot be proven ours,
             // nothing is signalled.
-            if (!isOurProcess(identity)) {
+            const identityStatus = processIdentityStatus(identity);
+            if (identityStatus === 'unknown') return false;
+            if (identityStatus !== 'same') {
                 finishedAt = Date.now();
                 onJobsChanged?.();
                 resolveFinished?.();
