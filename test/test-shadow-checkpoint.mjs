@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync,
-    renameSync, utimesSync, chmodSync } from 'fs';
+    renameSync, utimesSync, chmodSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 
@@ -113,11 +113,19 @@ try {
         ok('failed restore preserves current created files', readFileSync(join(transactional, 'new.txt'), 'utf8') === 'current new file\n');
         writeFileSync(join(transactional, 'gone-first.txt'), 'must recover after a later cleanup error\n');
         const removals = require('fs'), remove = removals.rmSync;
-        removals.rmSync = (file, ...args) => { if (file === join(transactional, 'new.txt')) throw Object.assign(Error('injected removal denied'), { code: 'EACCES' }); return remove(file, ...args); };
+        // sanitizePath resolves macOS /var -> /private/var (and other temp
+        // aliases). Match the physical path used by restore, not its spelling.
+        const deniedRemoval = join(realpathSync(transactional), 'new.txt');
+        let removalInjected = false;
+        removals.rmSync = (file, ...args) => {
+            if (file === deniedRemoval) { removalInjected = true; throw Object.assign(Error('injected removal denied'), { code: 'EACCES' }); }
+            return remove(file, ...args);
+        };
         let removalError;
         try { await store.restoreCheckpoint(transactional, baseline); }
         catch (error) { removalError = error; }
         finally { removals.rmSync = remove; }
+        ok('cleanup fault injection reaches canonical workspace paths', removalInjected);
         ok('failed cleanup never announces a successful restore', !!removalError);
         ok('failed cleanup rolls overwritten files back', readFileSync(join(transactional, 'same.txt'), 'utf8') === 'current content\n');
         ok('failed cleanup restores files it already deleted', existsSync(join(transactional, 'gone-first.txt')) && readFileSync(join(transactional, 'gone-first.txt'), 'utf8') === 'must recover after a later cleanup error\n');

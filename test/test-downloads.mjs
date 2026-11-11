@@ -130,6 +130,74 @@ try {
         assert.deepEqual(await fs.readFile(path.join(f.root, a.path)), payload);
     });
 
+    await test('a completion metadata failure never retries an already published download', async () => {
+        const f = await fixture();
+        const save = f.manager.save.bind(f.manager);
+        let injected = false;
+        f.manager.save = async () => {
+            if (!injected && f.manager.views().some(r => r.status === 'completed')) {
+                injected = true;
+                throw Object.assign(new Error('completion metadata unavailable'), { code: 'EIO' });
+            }
+            return save();
+        };
+        const before = counts.get('/file') ?? 0;
+        const r = await f.start('/file', { path: 'published.bin' });
+        await until(() => f.manager.active.size === 0, 'published transfer settles');
+        assert(injected);
+        assert.equal(f.state(r.id).status, 'completed');
+        assert.equal(f.state(r.id).attempts, 1);
+        assert.equal(counts.get('/file'), before + 1);
+        assert.deepEqual(await fs.readFile(path.join(f.root, r.path)), payload);
+        assert(f.diagnostics.some(error => error.message === 'completion metadata unavailable'));
+    });
+
+    for (const recovery of ['published', 'linked-partial', 'replaced', 'modified', 'absent', 'symlink']) {
+        await test(`publication recovery distinguishes ${recovery} destinations without network work`, async () => {
+            if (recovery === 'symlink' && process.platform === 'win32') return;
+            const f = await fixture();
+            const save = f.manager.save.bind(f.manager);
+            let beforePublication;
+            f.manager.save = async () => {
+                await save();
+                if (f.manager.views().some(r => r.status === 'verifying')) {
+                    beforePublication = await fs.readFile(path.join(await metadataDirectory(f), 'manifest.json'));
+                }
+            };
+            const r = await f.start('/file', { path: 'recovered.bin' });
+            await until(() => f.manager.active.size === 0, 'publication settles');
+            assert.equal(f.state(r.id).status, 'completed');
+            const target = path.join(f.root, r.path);
+            const partial = path.join(f.root, `.xratu-download-${r.id}.part`);
+            assert(beforePublication);
+            const saved = JSON.parse(beforePublication)[0];
+            assert(saved.publication.ino, 'filesystem exposes an identity for publication recovery');
+            await f.manager.dispose();
+            if (recovery === 'linked-partial') await fs.link(target, partial);
+            if (recovery === 'replaced' || recovery === 'symlink') {
+                // Keep the original inode alive so the replacement cannot reuse it.
+                const original = path.join(f.root, 'original.bin');
+                await fs.rename(target, original);
+                if (recovery === 'replaced') await fs.writeFile(target, payload);
+                else await fs.symlink(original, target);
+            }
+            if (recovery === 'modified') {
+                await fs.writeFile(target, Buffer.alloc(payload.length, 'x'));
+                const later = new Date(saved.publication.mtimeMs + 10_000);
+                await fs.utimes(target, later, later);
+            }
+            if (recovery === 'absent') await fs.unlink(target);
+            // Model a crash after link()/unlink() but before the completion save.
+            await fs.writeFile(path.join(await metadataDirectory(f), 'manifest.json'), beforePublication);
+            const beforeRequests = requests.length;
+            const recovered = await restore(f);
+            assert.equal(recovered.views()[0].status, ['published', 'linked-partial'].includes(recovery) ? 'completed' : 'interrupted');
+            assert.equal(requests.length, beforeRequests);
+            if (recovery === 'linked-partial') await assert.rejects(fs.stat(partial), { code: 'ENOENT' });
+            if (recovery === 'replaced') assert.deepEqual(await fs.readFile(target), payload);
+        });
+    }
+
     await test('user controls continue, retry and cancel safely', async () => {
         const f = await fixture();
         const session = 'controls';

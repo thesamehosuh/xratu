@@ -36,6 +36,8 @@ export interface DownloadRecord extends DownloadView {
     sha256?: string;
     etag?: string;
     lastModified?: string;
+    /** Saved before exclusive publication, so a crash after link() is recoverable. */
+    publication?: { dev: number; ino: number; size: number; mtimeMs: number };
 }
 
 export interface DownloadSecrets {
