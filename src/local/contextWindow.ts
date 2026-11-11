@@ -292,7 +292,6 @@ export function compactMessages(
         let end = start + 1;
         while (end < turnStart && messages[end].role !== 'user') end++;
         const groupCost = estimateRunTokens(messages.slice(start, end));
-        if (!force && total - groupCost < target) break;
         total -= groupCost;
         start = end;
     }

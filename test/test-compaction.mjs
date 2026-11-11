@@ -42,6 +42,7 @@ const {
     carryCompactionSummary,
     extractSummaryText,
 } = require('../out/local/localAgent.js');
+const { compactWithSummary } = require('../out/local/compaction.js');
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -51,6 +52,27 @@ const check = (name, actual, expected) => {
 };
 const checkTrue = (name, actual) => check(name, !!actual, true);
 const checkFalse = (name, actual) => check(name, !!actual, false);
+
+{
+    const messages = [{ role: 'system', content: 'Stable instructions' }];
+    for (let i = 0; i < 16; i++) messages.push(
+        { role: 'user', content: `request ${i}` },
+        { role: 'assistant', content: '', tool_calls: [{ id: `cheap-${i}`, type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: `cheap-${i}`, content: 't'.repeat(900) },
+    );
+    messages.push({ role: 'user', content: 'Current request' });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; throw new Error('cheap elision must not call a model'); };
+    try {
+        const summary = await compactWithSummary(messages, { baseUrl: 'http://localhost:1/v1', model: 'fixture', tools: [], systemPrompt: 'S', userText: 'U' }, 4096, undefined, null);
+        check('cheap-only compaction needs no summary', summary, null);
+        check('cheap-only compaction makes no provider request', calls, 0);
+        check('cheap-only replacements reach the live messages', messages.filter(message => message.content === TOOL_RESULT_ELISION_MARKER).length, 11);
+        check('cheap-only compaction retains every user turn', messages.filter(message => message.role === 'user').length, 17);
+        checkTrue('cheap-only result fits the target window', estimateRunTokens(messages) < 4096 * 0.6);
+    } finally { globalThis.fetch = originalFetch; }
+}
 
 // --- CONTEXT_OVERFLOW_RE: real provider wording (regression: any of these
 // used to hard-fail the whole turn with no retry) ---
@@ -100,6 +122,9 @@ const dropped = compactMessages(msgs, window8192, undefined, 0);
 check('compaction dropped something', dropped.length > 0, true);
 check('truncation marker inserted at index 1', msgs[1].role === 'user' && msgs[1].content === HISTORY_TRUNCATION_MARKER, true);
 check('system message untouched at index 0', msgs[0].role === 'system', true);
+const largeTurn = [{ role: 'system', content: 'S' }, { role: 'user', content: 'u'.repeat(18000) }, { role: 'assistant', content: 'a'.repeat(9000) }, { role: 'user', content: 'Current task' }];
+check('a large old turn may cross below the soft target', compactMessages(largeTurn, 8192).length, 2);
+checkTrue('large-turn compaction actually clears the window', estimateRunTokens(largeTurn) < 8192 * 0.6);
 
 // Tool-pair integrity: every kept assistant tool_calls message must be
 // followed (before the next user message) by its matching tool results -
@@ -161,15 +186,16 @@ check('forced 2k window compacts', compactMessages(overflowMessages(), 2048, und
 // compaction declines to over-drop past the target (unchanged), but forced
 // recovery still removes at least one complete turn.
 // Fixture: ~7042 message tokens + 600 schema tokens ≈ 7642 ≥ 7372 (90% of
-// 8192), while the first old turn (~4042) alone would land at ~3600 < 4915
-// (target) - so the proactive loop breaks before removing anything.
+// 8192), while the first old turn (~4042) alone lands at ~3600 < 4915
+// (target). The target is soft: summarize that complete turn proactively
+// rather than waiting for overflow recovery to discard it unsummarized.
 const oversizedFirst = [
     { role: 'system', content: 'sys' },
     ...pairTurn('t1', 6000),
     { role: 'user', content: BIG },
 ];
 checkTrue('oversized-first fixture triggers proactive gate', estimateRunTokens(oversizedFirst) + 600 >= 8192 * 0.9);
-check('proactive compaction does not over-drop past target', compactMessages(structuredClone(oversizedFirst), 8192, undefined, 600).length, 0);
+check('proactive compaction can cross the soft target', compactMessages(structuredClone(oversizedFirst), 8192, undefined, 600).length, 3);
 const oversizedForcedMsgs = structuredClone(oversizedFirst);
 const oversizedForcedDropped = compactMessages(oversizedForcedMsgs, 8192, undefined, 600, true);
 check('forced recovery removes oversized first group', oversizedForcedDropped.length, 3);
@@ -740,6 +766,7 @@ check('responses: message item output_text',
     }), 'the summary');
 check('google: candidates[0].content.parts[].text',
     extractSummaryText('google', { candidates: [{ content: { parts: [{ text: 'g1' }, { inlineData: {} }, { text: 'g2' }] } }] }), 'g1g2');
+check('google summary excludes thought summaries', extractSummaryText('google', { candidates: [{ content: { parts: [{ thought: true, text: 'internal deliberation' }, { text: 'Final compacted state' }] } }] }), 'Final compacted state');
 check('unknown shape yields null', extractSummaryText('chat', { choices: [] }), null);
 check('empty text yields null', extractSummaryText('chat', { choices: [{ message: { content: '' } }] }), null);
 check('missing body yields null', extractSummaryText('responses', {}), null);

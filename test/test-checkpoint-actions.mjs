@@ -11,7 +11,7 @@ const root = mkdtempSync(path.join(tmpdir(), 'xratu-restore-actions-'));
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-const names = ['_gitCheckout', '_rewindAndResend', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
+const names = ['_gitCheckout', '_rewindAndResend', '_bindRunConnection', '_truncateLocalHistoryAt', '_findLocalUserEntry', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
 const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
@@ -38,11 +38,20 @@ function harness() {
     host._persistLocalSession = async () => {};
     host._prepareLocalRun = async () => ({ active: { id: 'fixture' }, model: 'fixture', auth: { apiKey: null } });
     host._localRulesContext = async () => '';
+    host._localHistory = [];
     const confirm = deferred(), shown = deferred();
     host.confirmBanner = (...args) => { shown.resolve(args); return confirm.promise; };
     return { host, notices, messages, restores, truncations, confirm, shown };
 }
 try {
+    for (const evicted of [0, 3]) {
+        const t = harness();
+        Object.assign(t.host, { _sessionSummary: 'Future work already done; do not repeat it', _localEvictedUserTurns: evicted,
+            _localReplayUserTurns: 1, _localHistory: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'earlier answer' }, { role: 'user', content: 'future work' }] });
+        sandbox.Host.prototype._truncateLocalHistoryAt.call(t.host, 1);
+        assert.equal(t.host._sessionSummary, null, 'rewinding cannot carry instructions from the discarded future');
+        assert.equal(t.host._localHistory.some(row => row.content === 'future work'), false);
+    }
     const h = harness();
     const pending = h.host._restoreCheckpointAt(0, sha.slice(0, 12));
     await h.shown.promise;

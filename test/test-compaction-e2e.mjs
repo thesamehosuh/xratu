@@ -75,7 +75,7 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
         const url = String(input);
         const body = JSON.parse(String(init.body));
         requests.push({ url, ...body });
-        const budget = body.max_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
+        const budget = body.max_tokens ?? body.max_completion_tokens ?? body.max_output_tokens ?? body.generationConfig?.maxOutputTokens;
         if (budget === summaryMaxTokens(WINDOW)) {
             summaryCalls++;
             if (summarizerMode === 'fail' || (summarizerMode === 'fail-first' && summaryCalls === 1)) {
@@ -91,6 +91,9 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
                     json: async () => ({}),
                     text: async () => "Unsupported parameter: 'temperature' is not supported with this model.",
                 };
+            }
+            if (summarizerMode === 'cap-spelling-400' && body.max_tokens != null) {
+                return { ok: false, status: 400, text: async () => 'Unsupported parameter max_tokens; use max_completion_tokens' };
             }
             // Summarizer: answer in the shape of the endpoint it hit.
             if (url.endsWith('/messages')) {
@@ -124,7 +127,7 @@ function mockFetch(requests, summarizerMode = 'ok', mainUsage = null) {
     };
 }
 
-async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', summarizerMode = 'ok', mainUsage = null, onCompactionState } = {}) {
+async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYSTEM_PROMPT, apiStyle = 'chat', baseUrl = 'https://example.invalid/v1', summarizerMode = 'ok', mainUsage = null, onCompactionState } = {}) {
     const requests = [];
     const original = globalThis.fetch;
     globalThis.fetch = mockFetch(requests, summarizerMode, mainUsage);
@@ -133,7 +136,7 @@ async function drive(history, sessionSummary, { ratio = 0.9, systemPrompt = SYST
     try {
         for await (const event of runLocalAgent(
             {
-                baseUrl: 'https://example.invalid/v1',
+                baseUrl,
                 apiKey: 'k',
                 model: 'test-model',
                 onCompactionState: active => { compactionStates.push(active); onCompactionState?.(active); },
@@ -317,6 +320,24 @@ for (const mode of ['fail', 'empty']) {
     ok('temperature-400: retried once', summarizers.length === 2, `calls=${summarizers.length}`);
     ok('temperature-400: the retry dropped temperature', summarizers[1] && summarizers[1].temperature === undefined);
     ok('temperature-400: summary extracted after the retry', !!comp && comp.value.includes('probe goal'));
+}
+
+for (const [baseUrl, mode] of [['https://api.openai.com/v1', 'ok'], ['https://example.invalid/v1', 'cap-spelling-400']]) {
+    const r = await drive(makeHistory(), null, { baseUrl, summarizerMode: mode });
+    const summaries = r.requests.filter(q => (q.max_tokens ?? q.max_completion_tokens) === summaryMaxTokens(WINDOW));
+    ok('chat compaction preserves its budget on the modern cap field', summaries.at(-1)?.max_completion_tokens === summaryMaxTokens(WINDOW));
+    ok('chat cap negotiation retains a real summary', r.events.some(event => event.type === 'compactionSummary'));
+}
+
+{
+    const history = makeHistory(16).map((row, index) => row.role === 'tool' ? { ...row, content: `UNIQUE_RESULT_${Math.floor(index / 3)} ${'R'.repeat(900)}` } : row);
+    const r = await drive(history, null, { systemPrompt: 'S'.repeat(24000) });
+    const summary = r.requests.find(q => (q.max_tokens ?? q.max_completion_tokens) === summaryMaxTokens(WINDOW));
+    ok('full summary reads original findings rather than cheap-elision markers', summary?.messages?.[0]?.content.includes('UNIQUE_RESULT_0'));
+}
+{
+    const r = await drive([{ role: 'user', content: 'Large earlier task ' + 'U'.repeat(18000) }, { role: 'assistant', content: 'Earlier findings ' + 'A'.repeat(9000) }], null);
+    ok('an oversized old turn is summarized before the main request', r.events.some(event => event.type === 'compactionSummary'));
 }
 
 // Cancelling while summarization is pending must reach the request signal,

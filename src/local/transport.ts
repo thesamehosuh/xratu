@@ -7,6 +7,7 @@
 
 import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 import { normalizeBaseUrl } from './baseUrl';
+import { isOpenCodeHost, supportsPromptCacheKey } from './apiStyle';
 import type { LocalAgentRequest } from './localTypes';
 
 /** Server errors that indicate the prompt exceeded the model's context
@@ -76,6 +77,23 @@ export const FIRST_BYTE_TIMEOUT_MS = 300_000;
 /** A 400 that rejects the output cap. Gateways differ on the field name and on
  *  whether they accept a cap at all; retry once without it. */
 export const MAX_TOKENS_REJECT_RE = /max_tokens|max_completion_tokens|max_output_tokens|maxOutputTokens/i;
+
+/** Direct OpenAI chat accepts the current cap name, including o-series
+ * reasoning models. Compatible gateways retain their existing default. */
+export function chatOutputTokenField(baseUrl: string): 'max_tokens' | 'max_completion_tokens' {
+    return supportsPromptCacheKey(baseUrl) && !isOpenCodeHost(baseUrl) ? 'max_completion_tokens' : 'max_tokens';
+}
+
+/** Negotiate the other chat spelling without dropping the caller's cap. */
+export function swapChatOutputTokenField(body: Record<string, unknown>): void {
+    if (body.max_tokens != null) {
+        body.max_completion_tokens = body.max_tokens;
+        delete body.max_tokens;
+    } else if (body.max_completion_tokens != null) {
+        body.max_tokens = body.max_completion_tokens;
+        delete body.max_completion_tokens;
+    }
+}
 
 /** A 400 that rejects the reasoning/thinking parameter. The field name differs
  *  per API style (`reasoning_effort`, `thinking`, `thinkingConfig`), and many

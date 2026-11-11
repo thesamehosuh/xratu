@@ -2172,6 +2172,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  eviction offset is re-anchored to the new visible baseline (the display
      *  ledger still shows those turns, but the model no longer has them). */
     private _truncateLocalHistoryAt(userIndex: number): void {
+        // The summary can contain work and instructions AFTER the selected
+        // checkpoint. It is not a historical snapshot and cannot be rewound.
+        this._sessionSummary = null;
         const localIdx = this._findLocalUserEntry(userIndex);
         if (localIdx === -2) {
             this._localHistory = [];
@@ -2181,10 +2184,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         if (localIdx >= 0) {
             this._localHistory = this._localHistory.slice(0, localIdx);
-            // The user is deliberately going back: replay the retained turns so
-            // the model sees what they are editing, even if the rolling summary
-            // still covers some of them (a harmless duplicate beats a silent
-            // omission).
+            // Replay the retained turns from their real boundary.
             this._localReplayUserTurns = null;
         }
     }
@@ -2280,7 +2280,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const previous = { history: this._history, localHistory: this._localHistory,
                 evicted: this._localEvictedUserTurns, replay: this._localReplayUserTurns,
                 connectionId: this._sessionConnectionId, connectionModel: this._sessionConnectionModel,
-                text: this._localAccumulatedText, thinking: this._localAccumulatedThinking };
+                text: this._localAccumulatedText, thinking: this._localAccumulatedThinking, summary: this._sessionSummary };
             let saved = false;
             let safety = '';
             try {
@@ -2301,8 +2301,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._approvalCloseItems = {};
                 this._history = this._history.slice(0, targetIdx);
                 this._truncateLocalHistoryAt(userIndex);
-                this._sessionConnectionId = connection.active.id;
-                this._sessionConnectionModel = connection.model;
+                this._bindRunConnection(connection.active.id, connection.model);
                 this._localAccumulatedText = ''; this._localAccumulatedThinking = '';
                 this._localPendingTurn = { prompt: text, cp: context.root ? baseSha : undefined, events: [], attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
                 await this._persistLocalSession();
@@ -2323,6 +2322,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._localEvictedUserTurns = previous.evicted; this._localReplayUserTurns = previous.replay;
                     this._sessionConnectionId = previous.connectionId; this._sessionConnectionModel = previous.connectionModel;
                     this._localAccumulatedText = previous.text; this._localAccumulatedThinking = previous.thinking;
+                    this._sessionSummary = previous.summary;
                     this._localPendingTurn = null;
                     if (context.root && safety) {
                         try { await this._checkpoints.restoreCheckpoint(context.root, safety); }
@@ -4512,6 +4512,21 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         else this._localSteerQueue.splice(fromIndex);
     }
 
+    /** Bind opaque replay state to the connection/model that produced it. */
+    private _bindRunConnection(connectionId: string, model: string): void {
+        if (connectionId !== this._sessionConnectionId || model !== this._sessionConnectionModel) {
+            // Signatures, encrypted reasoning and provider item IDs belong to
+            // their original connection/model. Keep ordinary conversation and
+            // tool rows when switching, but never replay another model's state.
+            this._localHistory = this._localHistory.map(row => {
+                const { providerBlocks: _blocks, reasoningContent: _reasoning, ...rest } = row;
+                return rest;
+            });
+        }
+        this._sessionConnectionId = connectionId;
+        this._sessionConnectionModel = model;
+    }
+
     /** Resolve once before an ordinary run or any destructive edit rewind. */
     private async _prepareLocalRun(controller: AbortController) {
         const activeId = this._globalState.get<string>('xratu.activeLlmCredentialId');
@@ -4580,8 +4595,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         const { active, model, auth } = connection;
 
-        this._sessionConnectionId = active.id;
-        this._sessionConnectionModel = model;
+        this._bindRunConnection(active.id, model);
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : '';

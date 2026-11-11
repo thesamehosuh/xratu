@@ -24,6 +24,9 @@ import {
     makeHeaders,
     makeMessagesHeaders,
     withDispatcher,
+    chatOutputTokenField,
+    swapChatOutputTokenField,
+    MAX_TOKENS_REJECT_RE,
 } from './transport';
 
 // --- AI compaction for the local loop ---
@@ -223,7 +226,7 @@ async function requestSummaryCompletion(
         body = {
             model: request.model,
             messages: [{ role: 'user', content: prompt }],
-            max_tokens: maxTokens,
+            [chatOutputTokenField(request.baseUrl)]: maxTokens,
             temperature: 0.2,
             stream: false,
         };
@@ -240,12 +243,18 @@ async function requestSummaryCompletion(
     // family: "Unsupported parameter: 'temperature' is not supported with this
     // model"). Drop it and retry once rather than letting compaction degrade to
     // a bare marker - the temperature is a nicety, the summary is not.
-    if (!resp.ok && resp.status === 400) {
+    let capSpellingRetried = false;
+    for (let attempt = 0; attempt < 3 && !resp.ok && resp.status === 400; attempt++) {
         const text = await resp.text().catch(() => '');
-        if (/temperature/i.test(text) && 'temperature' in body) {
+        if (style === 'chat' && !capSpellingRetried && MAX_TOKENS_REJECT_RE.test(text)) {
+            swapChatOutputTokenField(body);
+            capSpellingRetried = true;
+        } else if (/temperature/i.test(text) && 'temperature' in body) {
             delete body.temperature;
-            resp = await send();
-        }
+        } else if (/temperature/i.test(text) && style === 'google' && (body.generationConfig as Record<string, unknown>).temperature != null) {
+            delete (body.generationConfig as Record<string, unknown>).temperature;
+        } else return null;
+        resp = await send();
     }
     if (!resp.ok) return null;
     const data = await resp.json() as any;
@@ -277,7 +286,7 @@ export function extractSummaryText(style: string, data: any): string | null {
         const parts = data?.candidates?.[0]?.content?.parts;
         if (!Array.isArray(parts)) return null;
         return parts
-            .filter((part: any) => typeof part?.text === 'string')
+            .filter((part: any) => typeof part?.text === 'string' && part.thought !== true)
             .map((part: any) => part.text)
             .join('') || null;
     }
@@ -436,11 +445,22 @@ export async function compactWithSummary(
         gateRatio ?? request.autoCompactRatio ?? AUTO_COMPACT_RATIO,
         protectFromIndex,
     );
-    if (!dropped.length) return null;
+    if (!dropped.length) {
+        // The cheap tier can reclaim enough by replacing old tool results
+        // alone. No summarizer is needed, but those safe replacements still
+        // have to reach the live history instead of being discarded with the copy.
+        if (working.some((message, index) => message !== messages[index])) {
+            messages.splice(0, messages.length, ...working);
+        }
+        return null;
+    }
     // The marker carries the rolling summary and the caller passes that same
     // summary as `existingSummary`, so strip the marker from what the
     // summarizer reads (see `summarizableDroppedTurns`).
-    const droppedTurns = summarizableDroppedTurns(dropped);
+    // The cheap tier may have replaced old tool outputs on the working copy.
+    // Summarize their originals, or their actual findings would disappear
+    // precisely when a full compaction is needed.
+    const droppedTurns = summarizableDroppedTurns(messages.slice(1, dropped.length + 1));
     const summary = await summarizeDroppedTurns(request, droppedTurns, existingSummary, windowTokens);
     if (!summary || request.signal?.aborted) {
         // Nothing to carry: leave `messages` untouched so forced recovery

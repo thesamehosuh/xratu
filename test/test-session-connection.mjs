@@ -9,7 +9,7 @@ const { LocalSessionStore } = require('../out/local/localSessionStore.js');
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const provider = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-const names = ['_restoreSessionConnection', '_rememberModelForActiveCredential', '_selectLlmCredential', '_handleChatRequest'];
+const names = ['_restoreSessionConnection', '_rememberModelForActiveCredential', '_selectLlmCredential', '_handleChatRequest', '_bindRunConnection'];
 const methods = provider.members.filter(node => names.includes(node.name?.getText(file)));
 const sandbox = {};
 vm.runInNewContext(ts.transpileModule(`class Host { ${methods.map(node => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
@@ -50,6 +50,21 @@ legacy.h._restoreSessionConnection({ model: 'unbound-model' });
 assert.equal(legacy.h._selectedModel, 'current-model');
 assert.equal(legacy.h._sessionConnectionConfirmed, true);
 assert.deepEqual(legacy.writes, []);
+const replay = host('A');
+replay.h._sessionConnectionId = 'A'; replay.h._sessionConnectionModel = 'original';
+const rows = [{ role: 'assistant', content: 'portable answer', tool_calls: [{ id: 'call' }], providerBlocks: [{ type: 'reasoning', encrypted_content: 'opaque' }], reasoningContent: 'provider reasoning', contextNote: 'retained note' }];
+replay.h._localHistory = rows;
+replay.h._bindRunConnection('A', 'original');
+assert.equal(replay.h._localHistory, rows, 'same-model continuation preserves exact replay carriers for caching');
+for (const [connection, model] of [['A', 'replacement'], ['B', 'replacement']]) {
+    replay.h._localHistory = rows;
+    replay.h._bindRunConnection(connection, model);
+    assert.equal(replay.h._localHistory[0].providerBlocks, undefined);
+    assert.equal(replay.h._localHistory[0].reasoningContent, undefined);
+    assert.equal(replay.h._localHistory[0].content, 'portable answer');
+    assert.equal(replay.h._localHistory[0].contextNote, 'retained note');
+    assert.equal(replay.h._localHistory[0].tool_calls, rows[0].tool_calls);
+}
 const root = mkdtempSync(path.join(tmpdir(), 'xratu-connection-'));
 try {
     const store = new LocalSessionStore(root), session = await store.create('default');
