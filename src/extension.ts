@@ -2037,32 +2037,54 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 return;
             }
             this._checkpointRestoreActive = true;
+            const previous = { history: this._history, localHistory: this._localHistory,
+                evicted: this._localEvictedUserTurns, replay: this._localReplayUserTurns,
+                summary: this._sessionSummary, approvals: this._approvalCloseItems };
+            let safety = '';
+            let committed = false;
             try {
                 // Resolve again: a checkpoint may have disappeared while the
                 // confirmation was open. Neither resolution writes to the tree.
                 const resolved = await this._checkpoints.resolveCheckpoint(context.root, sha);
                 if (!this._checkpointActionCurrent(context, userIndex)) return;
                 let emptySeed = false;
+                let restored: { changed: boolean; sha: string; safety: string } | undefined;
                 try {
-                    const result = await this._checkpoints.restoreCheckpoint(context.root, resolved);
-                    this._view?.webview.postMessage({ type: 'checkpointRestored', sessionId: this._sessionId });
-                    if (result.changed) this.notifyBanner('info', 'notifRestored', { sha: result.sha, safety: result.safety });
+                    restored = await this._checkpoints.restoreCheckpoint(context.root, resolved);
+                    safety = restored.safety;
                 } catch (e) {
                     if (e instanceof EmptySeedError) emptySeed = true;
                     else throw e;
                 }
-                if (!rewindChat) {
-                    if (emptySeed) this.notifyBanner('info', 'checkpointEmptySeed');
-                    return;
+                if (rewindChat) {
+                    const targetIdx = this._findUserEntry(userIndex!);
+                    this._approvalCloseItems = {};
+                    this._history = this._history.slice(0, targetIdx);
+                    this._truncateLocalHistoryAt(userIndex!);
+                    await this._persistLocalSession();
+                    committed = true;
+                    this._dropOrphanedTaskListEdit();
+                    this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
+                } else if (emptySeed) {
+                    this.notifyBanner('info', 'checkpointEmptySeed');
                 }
-                const targetIdx = this._findUserEntry(userIndex!);
-                this._approvalCloseItems = {};
-                this._history = this._history.slice(0, targetIdx);
-                this._truncateLocalHistoryAt(userIndex!);
-                this._dropOrphanedTaskListEdit();
-                this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
-                await this._persistLocalSession();
+                // Child transcripts are not historical snapshots. They may
+                // describe effects removed by this restore, even with chat kept.
+                if (rewindChat || restored?.changed) this._forgetSubagentRuns();
+                if (restored) {
+                    this._view?.webview.postMessage({ type: 'checkpointRestored', sessionId: this._sessionId });
+                    if (restored.changed) this.notifyBanner('info', 'notifRestored', { sha: restored.sha, safety: restored.safety });
+                }
             } catch (e) {
+                if (rewindChat && !committed) {
+                    this._history = previous.history; this._localHistory = previous.localHistory;
+                    this._localEvictedUserTurns = previous.evicted; this._localReplayUserTurns = previous.replay;
+                    this._sessionSummary = previous.summary; this._approvalCloseItems = previous.approvals;
+                    if (safety) {
+                        try { await this._checkpoints.restoreCheckpoint(context.root, safety); }
+                        catch (rollbackError) { this.notifyBanner('error', 'notifCpRestoreFailed', { error: String(rollbackError) }); }
+                    }
+                }
                 this.notifyBanner('error', 'notifCpRestoreFailed', { error: e instanceof Error ? e.message : String(e) });
             } finally {
                 this._checkpointRestoreActive = false;
@@ -2309,6 +2331,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._localPendingTurn = { prompt: text, cp: context.root ? baseSha : undefined, events: [], attachments: attachments?.map(a => ({ name: a.name, mime_type: a.mimeType, size: a.size, path: a.path })) };
                 await this._persistLocalSession();
                 saved = true;
+                this._forgetSubagentRuns();
                 this._dropOrphanedTaskListEdit();
                 this._view?.webview.postMessage({ type: 'truncateFromUser', userIndex });
                 this._view?.webview.postMessage({ type: 'restoreUser', value: text });

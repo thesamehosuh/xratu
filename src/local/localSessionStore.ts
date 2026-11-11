@@ -524,7 +524,6 @@ export class LocalSessionStore {
         const entries = await fs.readdir(this.rootDir, { withFileTypes: true });
         for (const entry of entries) {
             if (!entry.isDirectory() || !/^[a-f0-9-]{16,64}$/i.test(entry.name)) continue;
-            if (index[entry.name]) continue;
             try {
                 const raw = await fs.readFile(path.join(this.rootDir, entry.name, 'snapshot.json'), 'utf8');
                 const parsed = JSON.parse(raw);
@@ -700,7 +699,11 @@ export class LocalSessionStore {
         await renameWithRetry(temp, path.join(dir, 'snapshot.json'));
         const index = await this.readIndex();
         index[meta.id] = meta;
-        await this.writeIndex(index);
+        // snapshot.json is the durable ownership boundary. The picker index
+        // is derived data; failure after the snapshot rename must not reject
+        // an already-owned send or make a rewind roll back only its files.
+        try { await this.writeIndex(index); }
+        catch (error) { console.error('xratu: session saved; picker index update failed (reconciled on startup):', error); }
     }
 
     /** Persist the transcript snapshot. The title tracks the first user

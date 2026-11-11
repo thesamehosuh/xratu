@@ -48,6 +48,20 @@ try {
     }
 
     const store = new LocalSessionStore(root);
+    const indexFailure = await store.create(ws);
+    const writeIndex = store.writeIndex;
+    store.writeIndex = async () => { throw Error('picker index is temporarily unwritable'); };
+    let durableSave;
+    try {
+        durableSave = await store.save(indexFailure.id, { workspace: ws, model: null, summary: null,
+            localHistory: [{ role: 'user', content: 'Durably owned prompt' }], uiHistory: [{ role: 'user', content: 'Durably owned prompt' }] });
+    } finally { store.writeIndex = writeIndex; }
+    checkTrue('auxiliary index failure cannot reject a durable prompt', !!durableSave);
+    check('snapshot remains readable after picker index failure', (await store.load(indexFailure.id)).uiHistory[0].content, 'Durably owned prompt');
+    const restarted = new LocalSessionStore(root);
+    await restarted.reconcile();
+    check('startup repairs stale existing index metadata from the authoritative snapshot', (await restarted.list(ws)).find(meta => meta.id === indexFailure.id)?.title, 'Durably owned prompt');
+    await store.delete(indexFailure.id);
     const corrupt = await store.create(ws);
     for (const value of [null, [], 7, 'not a snapshot']) {
         writeFileSync(join(root, 'sessions', corrupt.id, 'snapshot.json'), JSON.stringify(value));

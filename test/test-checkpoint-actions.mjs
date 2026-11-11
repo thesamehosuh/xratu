@@ -11,7 +11,7 @@ const root = mkdtempSync(path.join(tmpdir(), 'xratu-restore-actions-'));
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-const names = ['_gitCheckout', '_rewindAndResend', '_bindRunConnection', '_truncateLocalHistoryAt', '_findLocalUserEntry', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
+const names = ['_gitCheckout', '_forgetSubagentRuns', '_rewindAndResend', '_bindRunConnection', '_truncateLocalHistoryAt', '_findLocalUserEntry', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
 const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
@@ -39,6 +39,7 @@ function harness() {
     host._prepareLocalRun = async () => ({ active: { id: 'fixture' }, model: 'fixture', auth: { apiKey: null } });
     host._localRulesContext = async () => '';
     host._localHistory = [];
+    host._subagentRunsByChat = new Map([['A', new Map([['future-child', { rows: [{ role: 'assistant', content: 'future work completed' }] }]])]]);
     const confirm = deferred(), shown = deferred();
     host.confirmBanner = (...args) => { shown.resolve(args); return confirm.promise; };
     return { host, notices, messages, restores, truncations, confirm, shown };
@@ -116,6 +117,7 @@ try {
             assert.equal(t.restores.length, choice === 'notifCancel' ? 0 : 1);
             assert.equal(t.truncations.length, choice === 'checkpointScopeFilesAndChat' ? 1 : 0);
             assert.equal(t.host._history.length, choice === 'checkpointScopeFilesAndChat' ? 0 : 1);
+            assert.equal(t.host._subagentRunsByChat.has('A'), choice === 'notifCancel' || empty && choice === 'checkpointScopeFiles', 'successful restore invalidates child context from the discarded future');
             if (!empty && choice !== 'notifCancel') {
                 assert.equal(t.restores[0][1], sha, 'restore uses the resolved full SHA');
                 assert.equal(t.notices.find(n => n[1] === 'notifRestored')[2].safety, 'safe');
@@ -291,6 +293,7 @@ try {
         assert.equal(accepted, false);
         assert.equal(sends, 0);
         assert.equal(t.host._history, original, `${mode} must retain the original transcript`);
+        assert.equal(t.host._subagentRunsByChat.has('A'), true, `${mode}: rejected edits retain resumable children`);
         assert.ok(!t.messages.some(message => message.type === 'truncateFromUser'));
         assert.equal(t.restores.length, ['save-failure', 'rules-failure'].includes(mode) ? 2 : 0, `${mode} must either avoid writes or roll back to its safety snapshot`);
         assert.equal(t.host._abortControllers.size, 0);
@@ -305,10 +308,31 @@ try {
         assert.equal(durable.host._localAccumulatedText, '', 'an edited pending turn cannot inherit the previous answer');
         assert.equal(durable.host._localAccumulatedThinking, '');
     };
-    durable.host._handleChatRequest = async () => { assert.ok(acknowledged); };
+    durable.host._handleChatRequest = async () => { assert.ok(acknowledged); assert.equal(durable.host._subagentRunsByChat.has('A'), false, 'resend cannot reuse a future child'); };
     await durable.host._rewindAndResend(0, 'Durable edit', [], () => { assert.equal(snapshot, 'Durable edit'); acknowledged = true; });
     assert.ok(acknowledged);
     console.log('ok edit preflight failures retain history; storage/rules failures restore files; acceptance follows durable revised text');
+
+    const rejectedRestore = harness();
+    const originalRestoreHistory = rejectedRestore.host._history;
+    const localRestoreHistory = [{ role: 'user', content: 'original context' }];
+    rejectedRestore.host._localHistory = localRestoreHistory;
+    rejectedRestore.host._localEvictedUserTurns = 0;
+    rejectedRestore.host._localReplayUserTurns = 1;
+    delete rejectedRestore.host._truncateLocalHistoryAt;
+    rejectedRestore.host._sessionSummary = 'Original rolling summary';
+    rejectedRestore.host._persistLocalSession = async () => { throw Error('disk full'); };
+    const restore = rejectedRestore.host._restoreCheckpointAt(0, sha.slice(0, 12));
+    await rejectedRestore.shown.promise;
+    rejectedRestore.confirm.resolve('checkpointScopeFilesAndChat');
+    await restore;
+    assert.equal(rejectedRestore.host._history, originalRestoreHistory);
+    assert.equal(rejectedRestore.host._localHistory, localRestoreHistory);
+    assert.equal(rejectedRestore.host._sessionSummary, 'Original rolling summary');
+    assert.equal(rejectedRestore.restores.length, 2, 'failed durable restore rolls files back through its safety checkpoint');
+    assert.equal(rejectedRestore.restores[1][1], 'safe');
+    assert.equal(rejectedRestore.host._subagentRunsByChat.has('A'), true);
+    assert.equal(rejectedRestore.messages.some(message => ['truncateFromUser', 'checkpointRestored'].includes(message.type)), false, 'failed restore must not announce success or discard the visible transcript');
 
     const storage = mkdtempSync(path.join(tmpdir(), 'xratu-action-storage-'));
     try {
