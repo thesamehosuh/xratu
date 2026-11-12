@@ -279,7 +279,6 @@ body {
 }
 
 button {
-    display: inline-flex;
     align-items: center;
     gap: 6px;
     font-family: inherit;
@@ -5025,7 +5024,6 @@ pre.tool-cmd {
 
 .primary-btn,
 .secondary-btn {
-    justify-content: center;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5033,7 +5031,6 @@ pre.tool-cmd {
 }
 
 .primary-btn {
-    justify-content: center;
     width: 100%;
     min-height: 34px;
     padding: 8px 10px;

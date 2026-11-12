@@ -104,3 +104,39 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1854]) {
         }
     });
 }
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
+    test(`text choices keep horizontal centering (${locale}, ${width})`, async ({ page }, info) => {
+        await installVscodeTheme(page);
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.setViewportSize({ width, height: 900 });
+        await page.addInitScript(() => {
+            Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: () => {}, getState: () => undefined, setState: (value: unknown) => value }) });
+        });
+        await page.goto('/');
+        await page.evaluate(locale => {
+            window.postMessage({ type: 'locale', locale }, '*');
+            window.postMessage({ type: 'showChat' }, '*');
+            window.postMessage({ type: 'modelInfo', defaultModel: 'reasoner', selectedModel: 'reasoner', models: ['reasoner'], capabilities: { reasoner: { reasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } } }, '*');
+        }, locale);
+        const assertCentered = async (selector: string) => {
+            const offsets = await page.locator(selector).evaluateAll(buttons => buttons.map(button => {
+                const range = document.createRange();
+                range.selectNodeContents(button);
+                const text = range.getBoundingClientRect();
+                const box = button.getBoundingClientRect();
+                return { label: button.textContent, offset: text.x + text.width / 2 - box.x - box.width / 2 };
+            }));
+            expect(offsets.length).toBeGreaterThan(0);
+            for (const { label, offset } of offsets) expect(Math.abs(offset), `${label}: horizontal offset ${offset}px`).toBeLessThanOrEqual(1);
+        };
+        await page.locator('.picker-chip').click();
+        await expect(page.locator('.thinking-seg-opt')).toHaveCount(7);
+        await page.evaluate(() => document.fonts.ready);
+        await page.screenshot({ path: info.outputPath('thinking.png') });
+        await assertCentered('.thinking-seg-opt');
+        await page.evaluate(() => window.postMessage({ type: 'openSettings' }, '*'));
+        await expect(page.locator('.preferences-page')).toBeVisible();
+        await assertCentered('.preferences-page .lang-chip');
+    });
+}
