@@ -16,6 +16,7 @@ import { promisify } from 'util';
 import { isOfflineMode, setOfflineMode, isLoopbackUrl } from './networkPolicy';
 import { manageOllamaModel } from './local/ollamaManagement';
 import { requestStreamingCompletion } from './local/wireAdapters';
+import { modelStreamErrorMessage } from './local/streamValidation';
 import { getLocalToolDefinitions, createLocalToolExecutor, getOutsideWorkspacePaths } from './mcp';
 import { BrowserController } from './browserController';
 import { PullRequestController, type PullRequestAction } from './pullRequests/controller';
@@ -5039,12 +5040,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // unknown failures keep passing through raw.
                 const http = providerHttpStatus(err);
                 const explained = this._globalState.get<boolean>('xratu.errorExplanations') === false ? null : explainError(http ? `${msg} ${http.body}` : msg, http?.status);
-                if (explained) {
+                const internalError = modelStreamErrorMessage(err);
+                if (internalError) {
+                    this._view?.webview.postMessage(internalError);
+                } else if (explained) {
                     this._view?.webview.postMessage({ type: 'error', valueKey: explained.valueKey, params: explained.params });
                 } else {
                     this._view?.webview.postMessage({ type: 'error', value: msg });
                 }
-                outcome.errorEvent = { error: msg };
+                outcome.errorEvent = internalError ? { error_key: internalError.valueKey } : { error: msg };
                 void this._maybeOfferIranianFallback(err);
             }
         } finally {
@@ -5138,10 +5142,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             }
             else {
                 const detail = error instanceof Error ? error.message : String(error);
-                outcome.errorEvent = error instanceof EngineError ? { error_key: error.valueKey } : { error: detail };
+                const errorKey = error instanceof EngineError ? error.valueKey : modelStreamErrorMessage(error)?.valueKey;
+                outcome.errorEvent = errorKey ? { error_key: errorKey } : { error: detail };
                 const http = providerHttpStatus(error);
                 const explained = this._globalState.get<boolean>('xratu.errorExplanations') === false ? null : explainError(http ? `${detail} ${http.body}` : detail, http?.status);
-                this._view?.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : explained ? { type: 'error', valueKey: explained.valueKey, params: explained.params } : { type: 'error', value: detail });
+                this._view?.webview.postMessage(errorKey ? { type: 'error', valueKey: errorKey } : explained ? { type: 'error', valueKey: explained.valueKey, params: explained.params } : { type: 'error', value: detail });
             }
         } finally {
             this._nativeToolContext = undefined;

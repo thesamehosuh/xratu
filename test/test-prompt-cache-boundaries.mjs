@@ -21,8 +21,11 @@ const response = (style, extra = {}) => {
     ] : style === 'messages' ? [
         frame({ type: 'message_start', message: { usage: { input_tokens: 3_000,
             cache_read_input_tokens: 8_000, cache_creation_input_tokens: 1_000 } } }),
+        frame({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
         frame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } }),
+        frame({ type: 'content_block_stop', index: 0 }),
         frame({ type: 'message_delta', usage: { output_tokens: 2 } }),
+        frame({ type: 'message_stop' }),
     ] : style === 'google' ? [frame({ candidates: [{ content: { parts: [{ text: 'OK' }] } }],
         usageMetadata: { promptTokenCount: 12_000, candidatesTokenCount: 2, cachedContentTokenCount: 8_000 } })]
         : [frame({ choices: [{ delta: { content: 'OK' } }], usage: { prompt_tokens: 12_000,

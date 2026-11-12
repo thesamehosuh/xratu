@@ -9,6 +9,7 @@ import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 import { normalizeBaseUrl } from './baseUrl';
 import { isOpenCodeHost, supportsPromptCacheKey } from './apiStyle';
 import type { LocalAgentRequest } from './localTypes';
+import { ModelStreamError } from './streamValidation';
 
 /** Server errors that indicate the prompt exceeded the model's context
  *  window. Local runtimes word it very differently: Ollama "input length
@@ -22,26 +23,94 @@ export const CONTEXT_OVERFLOW_RE = /context length|context window|exceeds the av
  *  strict OpenAI-compatible servers do this; retry once without it. */
 export const STREAM_OPTIONS_REJECT_RE = /stream_options|include_usage|unrecognized|unknown (field|parameter|argument)|extra fields|not permitted|unsupported (field|parameter)/i;
 
-export function extractSseData(buffer: string): { events: string[]; remainder: string } {
-    const events: string[] = [];
-    let remainder = buffer;
+export const MAX_SSE_EVENT_CHARS = 8 * 1024 * 1024;
+export const MAX_SSE_RESPONSE_BYTES = 64 * 1024 * 1024;
 
-    while (true) {
-        const match = remainder.match(/\r?\n\r?\n/);
-        if (!match || match.index === undefined) break;
-        const block = remainder.slice(0, match.index);
-        remainder = remainder.slice(match.index + match[0].length);
+/** Incremental WHATWG SSE framing. CRLF may cross a network-chunk boundary;
+ *  a bare CR is also a line ending. Remove exactly one field-value space,
+ *  preserving multiline JSON indentation and string contents. */
+export class SseDecoder {
+    private line = '';
+    private data: string[] = [];
+    private skipLF = false;
+    private started = false;
+    private frameChars = 0;
+    private hasFields = false;
 
-        const data = block
-            .split(/\r?\n/)
-            .filter((line) => line.startsWith('data:'))
-            .map((line) => line.slice(5).trimStart())
-            .join('\n');
-
-        if (data) events.push(data);
+    finish(): void {
+        if (this.hasFields || (this.line && !this.line.startsWith(':'))) {
+            throw new ModelStreamError('Model stream ended with an incomplete SSE event.', 'modelStreamIncomplete');
+        }
     }
 
-    return { events, remainder };
+    push(chunk: string): string[] {
+        if (!this.started && chunk) {
+            this.started = true;
+            if (chunk[0] === '\uFEFF') chunk = chunk.slice(1);
+        }
+        const events: string[] = [];
+        let start = 0;
+        const append = (end: number) => {
+            this.frameChars += end - start;
+            if (this.frameChars > MAX_SSE_EVENT_CHARS) throw new ModelStreamError('Model stream event exceeds the size limit.', 'modelStreamTooLarge');
+            this.line += chunk.slice(start, end);
+        };
+        for (let index = 0; index < chunk.length; index++) {
+            const char = chunk[index];
+            if (this.skipLF) {
+                this.skipLF = false;
+                if (char === '\n') { start = index + 1; continue; }
+            }
+            if (char !== '\n' && char !== '\r') continue;
+            append(index);
+            if (!this.line) {
+                if (this.data.length) events.push(this.data.join('\n'));
+                this.data = [];
+                this.frameChars = 0;
+                this.hasFields = false;
+            } else {
+                if (++this.frameChars > MAX_SSE_EVENT_CHARS) throw new ModelStreamError('Model stream event exceeds the size limit.', 'modelStreamTooLarge');
+                if (!this.line.startsWith(':')) this.hasFields = true;
+                const colon = this.line.indexOf(':');
+                const field = colon < 0 ? this.line : this.line.slice(0, colon);
+                let value = colon < 0 ? '' : this.line.slice(colon + 1);
+                if (value.startsWith(' ')) value = value.slice(1);
+                if (field === 'data') this.data.push(value);
+            }
+            this.line = '';
+            this.skipLF = char === '\r';
+            start = index + 1;
+        }
+        append(chunk.length);
+        return events;
+    }
+}
+
+/** Own the reader through parsing too: a malformed event or rejected tool
+ *  batch must cancel the response, not leave paid generation/network work
+ *  running. Bounds include comments, incomplete frames and cumulative deltas. */
+export async function* readSseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    const sse = new SseDecoder();
+    let bytes = 0;
+    let ended = false;
+    try {
+        for (;;) {
+            const { value, done } = await readStreamChunk(reader);
+            bytes += value?.byteLength ?? 0;
+            if (bytes > MAX_SSE_RESPONSE_BYTES) throw new ModelStreamError('Model stream response exceeds the size limit.', 'modelStreamTooLarge');
+            let decoded: string;
+            try { decoded = decoder.decode(value, { stream: !done }); }
+            catch { throw new ModelStreamError('Model stream has invalid UTF-8 encoding.'); }
+            for (const event of sse.push(decoded)) if (event) yield event;
+            if (done) { sse.finish(); ended = true; return; }
+        }
+    } finally {
+        // Do not await a remote source's potentially unbounded cancel hook.
+        if (!ended) void reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+    }
 }
 
 export function makeHeaders(

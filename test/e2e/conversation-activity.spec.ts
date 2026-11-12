@@ -159,9 +159,8 @@ test('minimal keeps actionable failures, approvals and background controls visib
     await tool(page, 'cmd', 'run_terminal_command', '', false);
     await post(page, { type: 'toolResult', tool: 'run_terminal_command', callId: 'cmd', output: 'STDOUT:\nTest failed\nExit code: 1' });
     const group = page.locator('.transcript-pane .conversation-work-group').last();
-    await expect(group).not.toHaveAttribute('open');
-    await expect(page.locator('.transcript-pane details.step.fail')).toHaveCount(0);
-    await group.locator(':scope > summary').click();
+    await expect(group).toHaveAttribute('open', '');
+    await expect(group.locator(':scope > summary')).toContainText('1 failed');
     await expect(group.locator('details.step.fail')).toContainText('Test failed');
     await tool(page, 'bg', 'run_terminal_command', '', false);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'Run in background' })).toBeVisible();

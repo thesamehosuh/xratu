@@ -67,7 +67,11 @@ try {
         ],
     };
     for (const [style, frames] of Object.entries(progressFrames)) {
-        for (const frame of frames) await exercise(style, `data: ${JSON.stringify(frame)}\n\n`, true);
+        for (const frame of frames) {
+            const start = style === 'messages' && frame.type === 'content_block_delta'
+                ? `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: frame.delta.type === 'text_delta' ? 'text' : 'thinking' } })}\n\n` : '';
+            await exercise(style, start + `data: ${JSON.stringify(frame)}\n\n`, true);
+        }
     }
     console.log('first-token-timeout: heartbeat, cancellation, text, reasoning and tools passed');
 } finally {

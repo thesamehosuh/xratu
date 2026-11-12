@@ -118,11 +118,13 @@ function conversationRows(rows: Row[], options: TranscriptOptions): Conversation
                 : family === 'edit' ? 'edit'
                 : family === 'git' ? 'git'
                 : family === 'terminal' && calls.every(toolRowDone) ? 'terminal'
-                : options.detail === 'minimal' && calls.length && calls.every(toolRowDone) ? 'work' : undefined;
+                : calls.length && family !== 'terminal' ? 'work' : undefined;
             if (category) {
                 const key = options.detail === 'minimal' ? 'work' : category;
                 if (!group) {
-                    group = { kind: 'workGroup', key: row.key, category: key, rows: [] };
+                    const thinking: Row[] = [];
+                    while (result.at(-1)?.kind === 'thinking') thinking.unshift(result.pop() as Row);
+                    group = { kind: 'workGroup', key: thinking[0]?.key ?? row.key, category: key, rows: thinking };
                     result.push(group);
                 }
                 if (group.category !== key) group.category = 'work';
@@ -142,10 +144,16 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
     const calls = group.rows.flatMap(rowCalls);
     const running = calls.some(call => !toolRowDone(call));
     const edits = calls.filter(call => toolFamily(call.call.tool) === 'edit');
+    const failures = calls.filter(call => toolRowFailed(call.call, call.result));
     const hasThinking = group.rows.some(row => row.kind === 'thinking');
     const currentCall = [...calls].reverse().find(call => !toolRowDone(call)) ?? calls.at(-1);
     const Icon = currentCall ? toolIcon(currentCall.call.tool) : Brain;
-    const [open, setOpen] = useAutoOpen((calls.some(call => toolFamily(call.call.tool) === 'edit') && prefOn(prefs, 'edit')) || (calls.some(call => toolFamily(call.call.tool) === 'terminal') && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
+    const commandError = failures.some(call => toolFamily(call.call.tool) === 'terminal') && transcriptOptions(prefs).commands === 'errors';
+    const [open, setOpen] = useAutoOpen(commandError || calls.some(call => prefOn(prefs, toolFamily(call.call.tool))) || (hasThinking && prefOn(prefs, 'thinking')));
+    const args = currentCall ? toolArgs(currentCall.call.text) : null;
+    const hintKeys = toolFamily(currentCall?.call.tool) === 'terminal'
+        ? ['command', 'description'] : ['path', 'file_path', 'filePath', 'query', 'pattern', 'url', 'description', 'name', 'action'];
+    const hint = hintKeys.map(key => args?.[key]).find((value): value is string => typeof value === 'string' && !!value.trim());
     const label = group.category === 'explore' ? t(running ? 'txExploring' : 'txExplored')
         : group.category === 'edit' ? t(running ? 'txEditing' : 'txEdited')
         : group.category === 'terminal' ? t('txCommandsRan')
@@ -176,6 +184,7 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
                     <Icon size={13} className="step-icon" />
                     <span className="step-label">{label}</span>
                     <span className="conversation-work-summary">{summary.map(part => <span key={part} dir="auto">{part}</span>)}</span>
+                    {failures.length > 0 && <span className="conversation-work-failures">{tf('txFailureCount', { count: String(failures.length) })}</span>}
                     {running && <span className="step-status spinner" aria-hidden="true" />}
                     {edits.length > 0 && onOpenDiff && <button
                         type="button" className="icon-btn-mini" title={t('openDiff')} aria-label={t('openDiff')}
@@ -186,6 +195,10 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
                     ><ExternalLink size={12} /></button>}
                     <ChevronDown size={13} className="step-chev" />
                 </span>
+                {currentCall && hint && <span className="conversation-work-current">
+                    <span dir="auto">{toolLabel(currentCall.call.tool).fa}</span>
+                    <code dir="auto" title={hint}>{hint.replace(/\s+/g, ' ').slice(0, 180)}</code>
+                </span>}
             </summary>
             {/* Lazy body: nested pills mount their context (diffs, outputs,
                 highlights) only once the group is expanded - mounting them
@@ -421,8 +434,7 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
             if (s.tool === TASK_LIST_TOOL || s.tool === USER_QUESTION_TOOL) continue;
             pushToolRow(rows, {
                 key: s.id,
-                call: { ...s, text: '' },
-                result: { ...s, kind: 'toolCall', text: '' },
+                call: { ...s, kind: 'toolCall', text: '', result: s.text },
             });
         }
     }

@@ -87,7 +87,37 @@ assert.match(commandActivity, /lint result/);
 assert.match(commandActivity, /build result/);
 const exceptional = render({ transcriptPrefs: { expand: {}, options: { detail: 'minimal' } } }, { ...message, steps: [steps[0], failed, call('background', 'run_terminal_command', { background: { jobId: 'job', byUser: true } }), call('child', 'task'), call('interrupted', 'read_file', { interrupted: true })] });
 assert.equal(groups(exceptional), 1, 'processes, children and interrupted calls stay outside groups');
-assert.doesNotMatch(exceptional, /class="step fail"/);
+assert.match(exceptional, /class="step fail"/, 'command error expansion remains visible inside a group');
+assert.match(exceptional, /conversation-work-failures/);
+
+const allFamilies = ['read_file', 'web_search', 'fetch_url', 'mcp__docs__lookup', 'get_diagnostics', 'process', 'start_download', 'inspect_archive', 'custom_tool'];
+const mixedFamilies = render({}, { ...message, steps: allFamilies.map((tool, i) => call(`family-${i}`, tool)) });
+assert.equal(groups(mixedFamilies), 1, 'web, MCP, process, download and unknown calls share adjacent work grouping');
+assert.match(mixedFamilies, /9 actions/);
+assert.doesNotMatch(mixedFamilies, /family-0 result/, 'a closed group stays thin');
+for (const [family, tool] of [['web', 'web_search'], ['mcp', 'mcp__docs__lookup'], ['ops', 'get_diagnostics'], ['read', 'read_file'], ['search', 'grep_search'], ['git', 'git_status'], ['generic', 'custom_tool']]) {
+    const familyMessage = { ...message, steps: [call(`preference-${family}`, tool)] };
+    const expanded = render({ transcriptPrefs: { expand: { [family]: true } } }, familyMessage);
+    assert.match(expanded, /<details class="step conversation-work-group" open="">/, `${family} preference opens its containing group`);
+    assert.match(expanded, new RegExp(`preference-${family} result`), `${family} output remains reachable through its preference`);
+    const collapsed = render({ transcriptPrefs: { expand: { [family]: false } } }, familyMessage);
+    assert.doesNotMatch(collapsed, /conversation-work-group" open=""/, `${family} explicit collapse is honored`);
+    const thin = render({ transcriptPrefs: { expand: { [family]: true } } }, { ...familyMessage, status: 'done' });
+    assert.match(thin, /class="completed-steps"/);
+    assert.doesNotMatch(thin, /class="completed-steps"[^>]*open=/, 'family expansion leaves the intentionally thin completed turn closed');
+}
+assert.equal(groups(render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } }, { ...message, steps: allFamilies.map((tool, i) => call(`detail-${i}`, tool)) })), 0);
+const leadingThinking = render({ transcriptPrefs: { expand: {}, options: { reasoning: 'expanded' } } }, { ...message, steps: [thought, call('first', 'web_search')] });
+assert.equal(groups(leadingThinking), 1);
+assert.match(leadingThinking, /private-reasoning-marker/, 'leading thinking belongs to the adjacent work group');
+const orphan: Step = { id: 'orphan', kind: 'toolResult', tool: 'mcp__docs__lookup', text: 'Error: retained orphan output', isError: true };
+const orphanTrace = renderToString(createElement(ActivityTimeline, { messages: [{ ...message, steps: [orphan] }], transcriptPrefs: { expand: { mcp: true } } }));
+assert.match(orphanTrace, /retained orphan output/, 'standalone restored results retain their output');
+assert.match(orphanTrace, /class="step fail"/);
+assert.match(render({}, { ...message, steps: [orphan] }), /1 failed/, 'orphan errors contribute to the group failure count');
+const closedFailures = render({ transcriptPrefs: { expand: {}, options: { commands: 'collapsed' } } }, { ...message, steps: [failed] });
+assert.match(closedFailures, /1 failed/);
+assert.doesNotMatch(closedFailures, /conversation-work-group" open=""/, 'explicit command collapse keeps errors summarized');
 
 const completed = { ...message, status: 'done' as const, steps: [...steps, text('final-answer')] };
 assert.match(render({}, completed), /class="completed-steps"/);

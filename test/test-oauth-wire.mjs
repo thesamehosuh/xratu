@@ -64,10 +64,16 @@ async function capture(request) {
     const original = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
         captured.push({ url: String(input), init, body: JSON.parse(String(init.body)) });
-        return sse([
+        const frames = request.apiStyle === 'chat' ? [frame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })]
+            : request.apiStyle === 'google' ? [frame({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] })]
+            : request.apiStyle === 'messages' ? [
+                frame({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'ok' } }),
+                frame({ type: 'content_block_stop', index: 0 }), frame({ type: 'message_stop' }),
+            ] : [
             frame({ type: 'response.output_text.delta', delta: 'ok' }),
             frame({ type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 1 }, output: [] } }),
-        ]);
+        ];
+        return sse(frames);
     };
     try {
         await requestStreamingCompletion(request, [user], '', () => {});

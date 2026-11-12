@@ -1,6 +1,8 @@
 
 import assert from 'node:assert/strict';
 import { runLocalAgent, type LocalAgentRequest, type LocalAgentMessage } from '../src/localAgent';
+import { ModelStreamError, modelStreamErrorMessage, type ModelStreamErrorKey } from '../../src/local/streamValidation';
+import { getLocale, setLocale, t } from '../src/i18n';
 
 type MockResponse = {
     ok: boolean;
@@ -990,7 +992,7 @@ async function testWrapupToolCallIsIgnored() {
         }
         // The wrap-up round hallucinates a tool call alongside its text.
         return sse([
-            ...toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2'),
+            ...toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2').slice(0, -1),
             ...textSse(['final answer']),
         ]);
     }) as typeof fetch;
@@ -2324,6 +2326,21 @@ async function testWrapupFallsBackWhenToolChoiceRejected() {
 }
 
 async function main() {
+    const locale = getLocale();
+    for (const selected of ['en', 'fa'] as const) {
+        setLocale(selected);
+        for (const key of ['modelStreamInvalid', 'modelStreamIncomplete', 'modelStreamTooLarge'] as ModelStreamErrorKey[]) {
+            const envelope = modelStreamErrorMessage(new ModelStreamError('Internal diagnostic detail', key));
+            assert.equal(envelope?.valueKey, key);
+            const message = t(envelope!.valueKey);
+            assert.notEqual(message, key);
+            assert.ok(message.length > 20);
+            assert.equal(/[\u0600-\u06ff]/.test(message), selected === 'fa');
+            assert.ok(!message.includes('Internal diagnostic detail'));
+        }
+    }
+    setLocale(locale);
+    assert.equal(modelStreamErrorMessage(new Error('Raw provider error')), undefined);
     await testMessagesApiTextThinkingAndUsage();
     await testMessagesApiToolUse();
     await testResponsesApiTextToolAndUsage();

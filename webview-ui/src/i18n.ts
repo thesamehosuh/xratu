@@ -1369,6 +1369,9 @@ const fa = {
     errRateLimited: 'محدودیت نرخ یا حجم مصرفی (429). کمی بعد دوباره امتحان کن یا اعتبار حساب رو بررسی کن. جزئیات: {detail}.',
     errServer: 'سرویس دهنده خطای داخلی داد (5xx). معمولا موقته، دوباره امتحان کن. جزئیات: {detail}.',
     errStream: 'پاسخ سرویس دهنده ناقص یا خراب بود. دوباره امتحان کن. جزئیات: {detail}.',
+    modelStreamInvalid: 'ساختار پاسخ ارائه دهنده نامعتبر بود. ابزار های این مرحله اجرا نشدن. دوباره امتحان کن.',
+    modelStreamIncomplete: 'پاسخ ارائه دهنده قبل از تکمیل قطع شد. ابزار های این مرحله اجرا نشدن. دوباره امتحان کن.',
+    modelStreamTooLarge: 'اندازه پاسخ ارائه دهنده از حد مجاز بیشتر بود. ابزار های این مرحله اجرا نشدن. دوباره امتحان کن.',
     // Stream errors (the host emits the KEY; the provider's own message
     // rides as the {detail} param)
     attachIsFolder: '«{name}» یه پوشه هست؛ فقط فایل قابل پیوسته',
@@ -2719,6 +2722,9 @@ const en: Record<keyof typeof fa, string> = {
     errRateLimited: 'Rate limited or out of quota (429). Try again later or check your plan balance. Details: {detail}.',
     errServer: 'The provider returned a server error (5xx). Usually temporary - try again. Details: {detail}.',
     errStream: 'The provider response was truncated or malformed. Try again. Details: {detail}.',
+    modelStreamInvalid: 'The provider response was malformed. This tool batch was not executed. Try again.',
+    modelStreamIncomplete: 'The provider response ended before completion. This tool batch was not executed. Try again.',
+    modelStreamTooLarge: 'The provider response exceeded the size limit. This tool batch was not executed. Try again.',
     // Stream errors (the host emits the KEY; the provider's own message
     // rides as the {detail} param)
     attachIsFolder: '"{name}" is a folder; only files can be attached',

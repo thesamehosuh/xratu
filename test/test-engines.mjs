@@ -555,7 +555,7 @@ try {
         sharedExecutorModule = require('../out/mcp.js');
     } finally { Module._load = moduleLoad; }
     const skillModule = require('../out/skills.js');
-    const sandbox = { OutsideWorkspacePathError: require('../out/paths.js').OutsideWorkspacePathError, isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, sessionApprovalKind: require('../out/sessionApproval.js').sessionApprovalKind, sanitizePath: require('../out/paths.js').sanitizePath, resolveEditMode: require('../out/tooling/editFileArgs.js').resolveEditMode, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', researchSession: () => {}, vscode: { workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }), workspaceFolders: [{ uri: { fsPath: root } }] } } };
+    const sandbox = { OutsideWorkspacePathError: require('../out/paths.js').OutsideWorkspacePathError, isSessionApproved: require('../out/sessionApproval.js').isSessionApproved, sessionApprovalKind: require('../out/sessionApproval.js').sessionApprovalKind, sanitizePath: require('../out/paths.js').sanitizePath, resolveEditMode: require('../out/tooling/editFileArgs.js').resolveEditMode, externalMcpInstance: undefined, nativeServiceTools, createLocalToolExecutor: sharedExecutorModule.createLocalToolExecutor, getLocalToolDefinitions: sharedExecutorModule.getLocalToolDefinitions, resolveSkillForRun: skillModule.resolveSkillForRun, crypto: require('node:crypto'), isNativePlanTool, isNativeServiceTool, taskListReminderLine: require('../out/taskList.js').taskListReminderLine, providerHttpStatus: require('../out/providerErrors.js').providerHttpStatus, explainError: require('../out/local/errorExplain.js').explainError, modelStreamErrorMessage: require('../out/local/streamValidation.js').modelStreamErrorMessage, buildNativeSystemContext: require('../out/systemPrompt.js').buildNativeSystemContext, OpenCodeEngine, openCodeEnvironment, openCodeUpdateAvailable, isOfflineMode: () => false, getProxyResolution: () => ({mode: 'off', url: null, noProxy: ''}), getProxyDispatcher: () => undefined, process, PULL_REQUEST_TOOLS: require('../out/pullRequests/tools.js').PULL_REQUEST_TOOLS, PULL_REQUEST_AGENT_INSTRUCTIONS: require('../out/pullRequests/tools.js').PULL_REQUEST_AGENT_INSTRUCTIONS, trimDisplayEvent, Error, AbortController, AbortSignal, EngineError, isFreeModel, clearTimeout, buildLocalUserText: (text) => text, isImageAttachment: (mime) => mime.startsWith('image/'), path: require('node:path'), checkOpenCode: async () => '2.0.26', classifyWorkspace: () => 'code', researchSession: () => {}, vscode: { workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }), workspaceFolders: [{ uri: { fsPath: root } }] } } };
     vm.runInNewContext(ts.transpileModule(`class Host { ${members.map((node) => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
     const nativeDefinitionsMethod = sandbox.Host.prototype._nativeServiceDefinitions;
     const nativeExecutorMethod = sandbox.Host.prototype._nativeServiceExecutor;
@@ -810,6 +810,20 @@ try {
         assert.equal(errorHost._nativeToolContext, undefined);
     }
     console.log('ok native error explanations respect the shared preference and preserve provider detail');
+    for (const explanations of [true, false]) {
+        const { ModelStreamError } = require('../out/local/streamValidation.js');
+        const errorHost = new sandbox.Host(), messages = [];
+        Object.assign(errorHost, {
+            _sessionEpoch: 1, _selectedModel: baseTurn.model, _abortControllers: new Map(),
+            _view: { webview: { postMessage: message => messages.push(message) } },
+            _getOpenCodeEngine: async () => { throw new ModelStreamError('Internal stream validation detail'); },
+            _postEngineState: () => {}, _globalState: { get: () => explanations },
+        });
+        const outcome = await errorHost._runOpenCodeAgent('Validate the response');
+        assert.equal(outcome.errorEvent.error_key, 'modelStreamInvalid');
+        assert.equal(messages.at(-1).valueKey, 'modelStreamInvalid', 'own errors stay localized when optional provider explanations are disabled');
+        assert.equal(messages.at(-1).value, undefined, 'internal English detail is not sent as raw UI copy');
+    }
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;
