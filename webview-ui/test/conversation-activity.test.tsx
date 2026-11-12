@@ -95,6 +95,17 @@ const mixedFamilies = render({}, { ...message, steps: allFamilies.map((tool, i) 
 assert.equal(groups(mixedFamilies), 1, 'web, MCP, process, download and unknown calls share adjacent work grouping');
 assert.match(mixedFamilies, /9 actions/);
 assert.doesNotMatch(mixedFamilies, /family-0 result/, 'a closed group stays thin');
+for (const [family, tool] of [['web', 'web_search'], ['mcp', 'mcp__docs__lookup'], ['ops', 'get_diagnostics'], ['read', 'read_file'], ['search', 'grep_search'], ['git', 'git_status'], ['generic', 'custom_tool']]) {
+    const familyMessage = { ...message, steps: [call(`preference-${family}`, tool)] };
+    const expanded = render({ transcriptPrefs: { expand: { [family]: true } } }, familyMessage);
+    assert.match(expanded, /<details class="step conversation-work-group" open="">/, `${family} preference opens its containing group`);
+    assert.match(expanded, new RegExp(`preference-${family} result`), `${family} output remains reachable through its preference`);
+    const collapsed = render({ transcriptPrefs: { expand: { [family]: false } } }, familyMessage);
+    assert.doesNotMatch(collapsed, /conversation-work-group" open=""/, `${family} explicit collapse is honored`);
+    const thin = render({ transcriptPrefs: { expand: { [family]: true } } }, { ...familyMessage, status: 'done' });
+    assert.match(thin, /class="completed-steps"/);
+    assert.doesNotMatch(thin, /class="completed-steps"[^>]*open=/, 'family expansion leaves the intentionally thin completed turn closed');
+}
 assert.equal(groups(render({ transcriptPrefs: { expand: {}, options: { detail: 'detailed' } } }, { ...message, steps: allFamilies.map((tool, i) => call(`detail-${i}`, tool)) })), 0);
 const leadingThinking = render({ transcriptPrefs: { expand: {}, options: { reasoning: 'expanded' } } }, { ...message, steps: [thought, call('first', 'web_search')] });
 assert.equal(groups(leadingThinking), 1);

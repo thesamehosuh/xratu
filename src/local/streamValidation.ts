@@ -152,6 +152,7 @@ export function validateStreamEvent(style: 'chat' | 'messages' | 'responses' | '
                 const part = object(rawPart, 'candidate part');
                 if (part.text !== undefined) text(part.text, 'part text');
                 if (part.thought !== undefined && typeof part.thought !== 'boolean') invalid('thought flag');
+                if (part.text && part.functionCall !== undefined) invalid('conflicting Google part fields');
                 if (part.functionCall !== undefined) {
                     const call = object(part.functionCall, 'function call');
                     text(call.name, 'tool name', true);

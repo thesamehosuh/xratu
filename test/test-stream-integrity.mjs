@@ -40,11 +40,66 @@ async function read(style, chunks, options = {}) {
         return new Response(stream);
     };
     const result = requestStreamingCompletion({ baseUrl: 'https://fixture.invalid/v1', model: 'fixture', apiStyle: style, systemPrompt: '', tools: [] },
-        [{ role: 'user', content: 'Read' }], '', () => {});
+        [{ role: 'user', content: 'Read' }], '', options.onDelta ?? (() => {}), options.onThinking);
     return { result, get cancelled() { return cancelled; }, get locked() { return stream?.locked; } };
 }
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
+for (const thought of [false, true]) test(`Google rejects mixed text/tool parts (thought=${thought}) before dropping a call`, async () => {
+    const emitted = [];
+    const part = fixtures.google[0].candidates[0].content.parts[0];
+    const parts = [{ ...part, text: 'This would hide a call', thought }, { functionCall: { ...part.functionCall, id: 'call-b' } }];
+    const run = await read('google', [event({ candidates: [{ content: { parts }, finishReason: 'STOP' }] })], {
+        onDelta: value => emitted.push(value), onThinking: value => emitted.push(value),
+    });
+    await assert.rejects(run.result, /invalid.*(part|field)/i);
+    assert.deepEqual(emitted, [], 'reject the whole event before emitting its conflicting content');
+});
+test('Google keeps separate text/tool parts and empty text beside a call compatible', async () => {
+    for (const extra of [{}, { text: '' }]) {
+        const parts = [{ text: 'Reading now.' }, { ...fixtures.google[0].candidates[0].content.parts[0], ...extra }];
+        const run = await read('google', [event({ candidates: [{ content: { parts }, finishReason: 'STOP' }] })]);
+        const result = await run.result;
+        assert.equal(result.text, 'Reading now.');
+        assert.deepEqual(result.toolCalls.map(item => item.arguments), [{ path: 'a' }]);
+    }
+});
+test('Chat accepts padded DONE markers without changing tool argument bytes', async () => {
+    for (const marker of ['  [DONE] \t', '\t[DONE]\t']) {
+        const run = await read('chat', [event(fixtures.chat[0]), `data: ${marker}\n\n`]);
+        assert.deepEqual((await run.result).toolCalls.map(item => item.arguments), [{ path: 'a' }]);
+    }
+});
+test('Chat padded DONE markers cannot replace a cutoff reason', async () => {
+    const run = await read('chat', [event(fixtures.chat[0]), event({ choices: [{ delta: {}, finish_reason: 'length' }] }), 'data:  [DONE] \n\n']);
+    await assert.rejects(run.result, /incomplete tool-call batch/);
+});
+for (const type of ['response.output_text.delta', 'response.refusal.delta', 'response.reasoning_summary_text.delta', 'response.reasoning_text.delta']) {
+    for (const identity of [{ item_id: 'message-a' }, { output_index: 0 }, { item_id: 'message-a', output_index: 0 }]) {
+        test(`Responses rejects ${type} after its item closed (${Object.keys(identity).join('+')})`, async () => {
+            const emitted = [];
+            const run = await read('responses', [
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'message-a', content: [] } },
+                { type, ...identity, delta: 'Late content must not appear' },
+                ...fixtures.responses,
+            ].map(event), { onDelta: value => emitted.push(value), onThinking: value => emitted.push(value) });
+            await assert.rejects(run.result, /closed|finalized|finished/i);
+            assert.deepEqual(emitted, [], 'late content never reaches the UI callbacks');
+        });
+    }
+}
+test('Responses text from an active item still streams before it closes', async () => {
+    const emitted = [];
+    const item = { type: 'message', id: 'message-a', content: [] };
+    const run = await read('responses', [
+        { type: 'response.output_item.added', output_index: 0, item },
+        { type: 'response.output_text.delta', output_index: 0, item_id: item.id, delta: 'Reading now.' },
+        { type: 'response.output_item.done', output_index: 0, item: { ...item, content: [{ type: 'output_text', text: 'Reading now.' }] } },
+        ...fixtures.responses,
+    ].map(event), { onDelta: value => emitted.push(value) });
+    assert.equal((await run.result).toolCalls.length, 1);
+    assert.deepEqual(emitted, ['Reading now.']);
+});
 for (const [style, frames] of Object.entries(fixtures)) {
     test(`${style}: empty data keepalives do not fail a valid batch`, async () => {
         const run = await read(style, ['data:\n\n', ...frames.map(event), 'data:\n\n']);

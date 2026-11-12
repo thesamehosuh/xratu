@@ -149,7 +149,7 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
     const currentCall = [...calls].reverse().find(call => !toolRowDone(call)) ?? calls.at(-1);
     const Icon = currentCall ? toolIcon(currentCall.call.tool) : Brain;
     const commandError = failures.some(call => toolFamily(call.call.tool) === 'terminal') && transcriptOptions(prefs).commands === 'errors';
-    const [open, setOpen] = useAutoOpen(commandError || (edits.length > 0 && prefOn(prefs, 'edit')) || (calls.some(call => toolFamily(call.call.tool) === 'terminal') && prefOn(prefs, 'terminal')) || (hasThinking && prefOn(prefs, 'thinking')));
+    const [open, setOpen] = useAutoOpen(commandError || calls.some(call => prefOn(prefs, toolFamily(call.call.tool))) || (hasThinking && prefOn(prefs, 'thinking')));
     const args = currentCall ? toolArgs(currentCall.call.text) : null;
     const hintKeys = toolFamily(currentCall?.call.tool) === 'terminal'
         ? ['command', 'description'] : ['path', 'file_path', 'filePath', 'query', 'pattern', 'url', 'description', 'name', 'action'];

@@ -75,6 +75,30 @@ test('running commands, failures and completed output remain reachable', async (
     await expect(thin).toContainText('Test failed');
 });
 
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    for (const [family, tool] of [['web', 'web_search'], ['mcp', 'mcp__docs__lookup'], ['ops', 'get_diagnostics']]) {
+        test(`saved ${family} expansion survives grouping (${locale}, ${width})`, async ({ page }, info) => {
+            await page.setViewportSize({ width, height: 900 });
+            await post(page, { type: 'locale', locale });
+            await post(page, { type: 'transcriptPrefs', prefs: { expand: { [family]: true } } });
+            await post(page, { type: 'startResponse' });
+            await call(page, 'preferred', tool, { query: 'expiry', path: 'src/auth.ts' }, 'Preferred output is reachable');
+            const group = page.locator('.transcript-pane .conversation-work-group');
+            await expect(group).toHaveAttribute('open', '');
+            await expect(group).toContainText('Preferred output is reachable');
+            await page.screenshot({ path: info.outputPath('family-expanded.png') });
+            await group.locator(':scope > summary').click();
+            await call(page, 'later', tool, { query: 'rotation', path: 'src/auth.ts' });
+            await expect(group).not.toHaveAttribute('open');
+            await post(page, { type: 'fullResponse', persian: locale === 'fa' ? 'بررسی تمام شد.' : 'Investigation complete.' });
+            const thin = page.locator('.transcript-pane .completed-steps');
+            await expect(thin).toHaveCount(1);
+            await expect(thin).not.toHaveAttribute('open');
+            await page.screenshot({ path: info.outputPath('family-completed-thin.png') });
+        });
+    }
+}
+
 test('manual expansion survives mixed tools and streamed arguments', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await post(page, { type: 'locale', locale: 'en' });

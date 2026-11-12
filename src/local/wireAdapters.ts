@@ -484,7 +484,7 @@ async function requestChatCompletion(
     let finishReason: string | null = null;
 
     const consume = (payload: string) => {
-        if (payload === '[DONE]') { streamEnded = true; return; }
+        if (payload.trim() === '[DONE]') { streamEnded = true; return; }
         let json: any;
         try {
             json = JSON.parse(payload);
@@ -1343,6 +1343,12 @@ async function requestResponsesCompletion(
         validateStreamEvent('responses', json);
         if (completed && /^response\.(completed|output_|function_call_|reasoning_|refusal)/.test(json.type ?? '')) {
             throw new ModelStreamError('Model returned content after completion.');
+        }
+        if (['response.output_text.delta', 'response.refusal.delta', 'response.reasoning_summary_text.delta', 'response.reasoning_text.delta'].includes(json.type)) {
+            const index = itemIndexById.get(json.item_id);
+            if ((index !== undefined && closedItems.has(index)) || closedItems.has(json.output_index)) {
+                throw new ModelStreamError('Model returned content after its output item finished.');
+            }
         }
         switch (json?.type) {
             case 'response.output_text.delta':
