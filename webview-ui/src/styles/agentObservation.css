@@ -17,7 +17,7 @@
 .agent-run-status.done { color:var(--vscode-testing-iconPassed,#8bbaa6); }
 .agent-run-status:is(.error,.cancelled),.agent-state-text.error { color:var(--vscode-errorForeground); }
 .agent-status-dot { width:4px; height:4px; border-radius:50%; background:currentColor; }
-.agent-card-title { font-size:var(--xratu-fs-sm); line-height:1.6; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; min-height:35px; }
+.agent-card-title { font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; min-height:35px; }
 .agent-card-foot { display:flex; align-items:center; justify-content:space-between; gap:6px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-xs); }
 .agent-card-foot > span:last-child { display:inline-flex; align-items:center; gap:4px; }
 .agent-current-tool { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:transparent; padding:0; font-size:var(--xratu-fs-xs); color:var(--surface-accent); }
@@ -114,8 +114,8 @@
 .approval-source > strong { font-weight:550; }
 .approval-source > span { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .approval-source > button { background:transparent; border:0; color:var(--surface-accent); font-size:var(--xratu-fs-xs); padding:3px 0; }
-.decision-card > .approval-source { margin:0; padding:8px 12px; border-block-end:1px solid var(--vscode-panel-border); font-size:var(--xratu-fs-sm); line-height:1.5; }
-.decision-card > .approval-source > button { padding:3px 6px; flex-shrink:0; line-height:1.5; }
+.decision-card > .approval-source { margin:0; padding:8px 12px; border-block-end:1px solid var(--vscode-panel-border); font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); }
+.decision-card > .approval-source > button { padding:3px 6px; flex-shrink:0; line-height:var(--xratu-line-ui); }
 .detail-match-group + .detail-match-group { border-block-start:1px solid var(--page-line); }
 .detail-match-file { display:flex; align-items:center; gap:6px; padding:8px 10px; color:var(--vscode-descriptionForeground); }
 .detail-match-file > svg { color:var(--surface-accent); flex-shrink:0; }
