@@ -9,6 +9,7 @@ import { PROVIDER_HTTP_STATUS_CODE } from '../providerErrors';
 import { normalizeBaseUrl } from './baseUrl';
 import { isOpenCodeHost, supportsPromptCacheKey } from './apiStyle';
 import type { LocalAgentRequest } from './localTypes';
+import { ModelStreamError } from './streamValidation';
 
 /** Server errors that indicate the prompt exceeded the model's context
  *  window. Local runtimes word it very differently: Ollama "input length
@@ -34,6 +35,13 @@ export class SseDecoder {
     private skipLF = false;
     private started = false;
     private frameChars = 0;
+    private hasFields = false;
+
+    finish(): void {
+        if (this.hasFields || (this.line && !this.line.startsWith(':'))) {
+            throw new ModelStreamError('Model stream ended with an incomplete SSE event.', 'modelStreamIncomplete');
+        }
+    }
 
     push(chunk: string): string[] {
         if (!this.started && chunk) {
@@ -44,7 +52,7 @@ export class SseDecoder {
         let start = 0;
         const append = (end: number) => {
             this.frameChars += end - start;
-            if (this.frameChars > MAX_SSE_EVENT_CHARS) throw new Error('Model stream event exceeds the size limit.');
+            if (this.frameChars > MAX_SSE_EVENT_CHARS) throw new ModelStreamError('Model stream event exceeds the size limit.', 'modelStreamTooLarge');
             this.line += chunk.slice(start, end);
         };
         for (let index = 0; index < chunk.length; index++) {
@@ -59,8 +67,10 @@ export class SseDecoder {
                 if (this.data.length) events.push(this.data.join('\n'));
                 this.data = [];
                 this.frameChars = 0;
+                this.hasFields = false;
             } else {
-                if (++this.frameChars > MAX_SSE_EVENT_CHARS) throw new Error('Model stream event exceeds the size limit.');
+                if (++this.frameChars > MAX_SSE_EVENT_CHARS) throw new ModelStreamError('Model stream event exceeds the size limit.', 'modelStreamTooLarge');
+                if (!this.line.startsWith(':')) this.hasFields = true;
                 const colon = this.line.indexOf(':');
                 const field = colon < 0 ? this.line : this.line.slice(0, colon);
                 let value = colon < 0 ? '' : this.line.slice(colon + 1);
@@ -89,9 +99,12 @@ export async function* readSseData(body: ReadableStream<Uint8Array>): AsyncGener
         for (;;) {
             const { value, done } = await readStreamChunk(reader);
             bytes += value?.byteLength ?? 0;
-            if (bytes > MAX_SSE_RESPONSE_BYTES) throw new Error('Model stream response exceeds the size limit.');
-            for (const event of sse.push(decoder.decode(value, { stream: !done }))) yield event;
-            if (done) { ended = true; return; }
+            if (bytes > MAX_SSE_RESPONSE_BYTES) throw new ModelStreamError('Model stream response exceeds the size limit.', 'modelStreamTooLarge');
+            let decoded: string;
+            try { decoded = decoder.decode(value, { stream: !done }); }
+            catch { throw new ModelStreamError('Model stream has invalid UTF-8 encoding.'); }
+            for (const event of sse.push(decoded)) if (event) yield event;
+            if (done) { sse.finish(); ended = true; return; }
         }
     } finally {
         // Do not await a remote source's potentially unbounded cancel hook.

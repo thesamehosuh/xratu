@@ -4,6 +4,7 @@ const require = createRequire(import.meta.url);
 const { requestStreamingCompletion } = require('../out/local/wireAdapters.js');
 const { runLocalAgent } = require('../out/local/localAgent.js');
 const { SseDecoder, readSseData, MAX_SSE_EVENT_CHARS, MAX_SSE_RESPONSE_BYTES } = require('../out/local/transport.js');
+const { ModelStreamError, modelStreamErrorMessage } = require('../out/local/streamValidation.js');
 const originalFetch = globalThis.fetch;
 const encoder = new TextEncoder();
 const event = value => `data: ${JSON.stringify(value)}\n\n`;
@@ -45,6 +46,14 @@ async function read(style, chunks, options = {}) {
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 for (const [style, frames] of Object.entries(fixtures)) {
+    test(`${style}: empty data keepalives do not fail a valid batch`, async () => {
+        const run = await read(style, ['data:\n\n', ...frames.map(event), 'data:\n\n']);
+        assert.equal((await run.result).toolCalls.length, 1);
+    });
+    test(`${style}: a truncated trailing frame cannot authorize earlier calls`, async () => {
+        const run = await read(style, [...frames.map(event), 'data: {"unfinished":']);
+        await assert.rejects(run.result, /incomplete|unterminated/i);
+    });
     test(`${style}: malformed JSON cannot be skipped before authorizing calls`, async () => {
         const run = await read(style, ['data: {broken\n\n', ...frames.map(event)]);
         await assert.rejects(run.result, /malformed.*stream|invalid.*stream/i);
@@ -126,10 +135,95 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
     test(`${style}: an earlier terminal event cannot authorize later tool declarations`, async () => {
         const frames = fixtures[style];
         const terminal = frames[frames.length - 1];
-        const run = await read(style, [event(terminal), ...frames.map(event)]);
-        await assert.rejects(run.result, /after.*(complet|finish|terminat)|duplicate/i);
+        const lateFrames = style === 'google' ? [{ candidates: [{ content: { parts: [{ functionCall: { id: 'distinct-late-call', name: call.name, args: {} } }] } }] }] : frames;
+        const run = await read(style, [event(terminal), ...lateFrames.map(event)]);
+        await assert.rejects(run.result, /after.*(complet|finish|terminat)/i);
     });
 }
+const malformedEvents = {
+    chat: [{}, { choices: {} }, { choices: [{ delta: { tool_calls: {} } }] }, { choices: [{ delta: { content: 7 } }] }],
+    messages: [{}, { type: 'content_block_start', index: 2, content_block: null }, { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: 7 } }],
+    responses: [{}, { type: 'response.output_item.added', output_index: 2, item: null }, { type: 'response.function_call_arguments.delta', item_id: 'missing', delta: '{}' }],
+    google: [{}, { candidates: {} }, { candidates: [{ content: { parts: {} } }] }, { candidates: [{ content: { parts: [{ functionCall: { name: call.name, args: [] } }] } }] }],
+};
+for (const [style, events] of Object.entries(malformedEvents)) for (const [index, bad] of events.entries()) {
+    test(`${style}: malformed known event ${index} rejects the surviving batch`, async () => {
+        const run = await read(style, [event(bad), ...fixtures[style].map(event)]);
+        await assert.rejects(run.result, /invalid|malformed|unmatched/i);
+    });
+}
+const messageEnd = fixtures.messages.slice(3);
+test('Messages cannot use an unmatched stop as proof a later block closed', async () => {
+    const run = await read('messages', [{ type: 'content_block_stop', index: 0 }, fixtures.messages[0], ...messageEnd].map(event));
+    await assert.rejects(run.result, /block|stream/i);
+});
+test('Messages rejects argument deltas before the matching block starts', async () => {
+    const run = await read('messages', [fixtures.messages[1], fixtures.messages[0], ...fixtures.messages.slice(2)].map(event));
+    await assert.rejects(run.result, /block|stream/i);
+});
+test('Messages rejects malformed argument deltas instead of using stale initial input', async () => {
+    const start = { ...fixtures.messages[0], content_block: { ...fixtures.messages[0].content_block, input: { path: 'stale' } } };
+    const bad = { ...fixtures.messages[1], delta: { type: 'input_json_delta', partial_json: 42 } };
+    const run = await read('messages', [start, bad, ...fixtures.messages.slice(2)].map(event));
+    await assert.rejects(run.result, /invalid|malformed/i);
+});
+test('Messages stop_reason terminates further content before message_stop', async () => {
+    const run = await read('messages', [fixtures.messages[3], ...fixtures.messages].map(event));
+    await assert.rejects(run.result, /after.*completion/i);
+});
+test('Messages cannot authorize calls beside an unclosed reasoning block', async () => {
+    const run = await read('messages', [{ type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '', signature: '' } }, ...fixtures.messages].map(event));
+    await assert.rejects(run.result, /incomplete tool-call batch/);
+});
+test('Responses refuses reused finalized indices with a different call', async () => {
+    const item = { ...call, id: 'item-a', call_id: call.id, type: 'function_call' };
+    const run = await read('responses', [
+        { type: 'response.output_item.done', output_index: 0, item },
+        { type: 'response.output_item.done', output_index: 0, item: { ...item, id: 'item-b', call_id: 'call-b' } },
+        { type: 'response.completed', response: {} },
+    ].map(event));
+    await assert.rejects(run.result, /duplicate|identity/i);
+});
+for (const index of [-1, 0.5, '0', null]) test(`Responses refuses invalid output index ${JSON.stringify(index)}`, async () => {
+    const run = await read('responses', [
+        { type: 'response.output_item.done', output_index: index, item: { ...call, type: 'function_call', call_id: call.id } },
+        { type: 'response.completed', response: {} },
+    ].map(event));
+    await assert.rejects(run.result, /index|identity/i);
+});
+test('Responses execution uses the same valid output order as provider replay', async () => {
+    const items = [0, 1].map(index => ({ type: 'function_call', id: `item-${index}`, call_id: `call-${index}`, name: call.name, arguments: JSON.stringify({ path: String(index) }) }));
+    const run = await read('responses', [
+        { type: 'response.output_item.done', output_index: 1, item: items[1] },
+        { type: 'response.output_item.done', output_index: 0, item: items[0] },
+        { type: 'response.completed', response: {} },
+    ].map(event));
+    const result = await run.result;
+    assert.deepEqual(result.toolCalls.map(item => item.id), ['call-0', 'call-1']);
+    assert.deepEqual(result.providerBlocks.map(item => item.call_id), ['call-0', 'call-1']);
+});
+for (const [style, metadata] of Object.entries({
+    chat: { choices: [], vendor_extension: true },
+    messages: { type: 'future_metadata', vendor_extension: true },
+    responses: { type: 'response.future_metadata', vendor_extension: true },
+    google: { candidates: [{ content: { parts: [{ futurePart: { value: 1 } }] } }] },
+})) test(`${style}: unknown extensions and a trailing comment remain compatible`, async () => {
+    const run = await read(style, [event(metadata), ...fixtures[style].map(event), ': final heartbeat']);
+    assert.equal((await run.result).toolCalls.length, 1);
+});
+test('stream failures carry stable localized error envelopes through the transport', async () => {
+    const run = await read('chat', ['data: {broken\n\n']);
+    await assert.rejects(run.result, error => {
+        assert.ok(error instanceof ModelStreamError);
+        assert.deepEqual(modelStreamErrorMessage(error), { type: 'error', valueKey: 'modelStreamInvalid' });
+        return true;
+    });
+    const incomplete = await read('chat', [...fixtures.chat.map(event), 'event: next\n']);
+    await assert.rejects(incomplete.result, { valueKey: 'modelStreamIncomplete' });
+    assert.equal(modelStreamErrorMessage(new Error('Raw provider detail')), undefined);
+    const decoder = new SseDecoder();
+    assert.throws(() => decoder.push('x'.repeat(MAX_SSE_EVENT_CHARS + 1)), { valueKey: 'modelStreamTooLarge' });
+});
 test('SSE removes exactly one value space and joins data fields without trimming', () => {
     const decoder = new SseDecoder();
     assert.deepEqual(decoder.push(': ping\r\ndata:  first\r\ndata:\tsecond\r\ndata\r\n\r\n'), [' first\n\tsecond\n']);

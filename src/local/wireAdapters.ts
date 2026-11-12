@@ -1,3 +1,4 @@
+import { ModelStreamError, streamIndex, validateStreamEvent } from './streamValidation';
 /**
  * The four provider wire adapters (Chat Completions / Anthropic Messages /
  * OpenAI Responses / Google Generative Language) plus the projections they
@@ -472,7 +473,7 @@ async function requestChatCompletion(
     }
 
     if (!response.body) {
-        throw new Error('Model returned no response body.');
+        throw new ModelStreamError('Model returned no response body.', 'modelStreamIncomplete');
     }
 
     let text = '';
@@ -488,16 +489,16 @@ async function requestChatCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
+            throw new ModelStreamError('Model returned malformed JSON in its stream; the batch was not executed.');
         }
-        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
+        validateStreamEvent('chat', json);
 
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usage) usage = chatUsage(json.usage);
         const delta = json?.choices?.[0]?.delta;
-        if (streamEnded && delta && Object.keys(delta).length) throw new Error('Model returned content after completion.');
+        if (streamEnded && delta && Object.keys(delta).length) throw new ModelStreamError('Model returned content after completion.');
         const reason = json?.choices?.[0]?.finish_reason;
-        if (streamEnded && typeof reason === 'string' && reason !== finishReason) throw new Error('Model changed its terminal completion reason.');
+        if (streamEnded && typeof reason === 'string' && reason !== finishReason) throw new ModelStreamError('Model changed its terminal completion reason.');
         if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
         if (!delta) return;
 
@@ -525,7 +526,7 @@ async function requestChatCompletion(
         if (calls.length) onToolCall?.();
         for (const call of calls) {
             const index = Number(call.index ?? 0);
-            if (!Number.isSafeInteger(index) || index < 0) throw new Error('Model returned an invalid tool call identity.');
+            if (!Number.isSafeInteger(index) || index < 0) throw new ModelStreamError('Model returned an invalid tool call identity.');
             const current = toolDeltas.get(index) ?? {
                 id: '',
                 name: '',
@@ -533,7 +534,7 @@ async function requestChatCompletion(
             };
 
             if (call.id) {
-                if (current.id && current.id !== call.id) throw new Error('Model changed a tool call identity during streaming.');
+                if (current.id && current.id !== call.id) throw new ModelStreamError('Model changed a tool call identity during streaming.');
                 current.id = String(call.id);
             }
             if (call.function?.name) current.name += String(call.function.name);
@@ -555,7 +556,7 @@ async function requestChatCompletion(
     // Compatible servers may use [DONE] instead of finish_reason. Neither
     // clean TCP EOF nor a token/filter cutoff completes an actionable batch.
     if (toolDeltas.size && (!streamEnded || (finishReason != null && !['tool_calls', 'stop', 'function_call'].includes(finishReason)))) {
-        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+        throw new ModelStreamError('Model stream ended with an incomplete tool-call batch; no tools were executed.', 'modelStreamIncomplete');
     }
 
     // `reasoning` MUST ride along: it is the only carrier of the thinking state
@@ -856,7 +857,7 @@ async function requestMessagesCompletion(
         const text = await response.text().catch(() => '');
         throw providerHttpError(response.status, text);
     }
-    if (!response.body) throw new Error('Model returned no response body.');
+    if (!response.body) throw new ModelStreamError('Model returned no response body.', 'modelStreamIncomplete');
 
     let text = '';
     let reasoning = '';
@@ -876,19 +877,20 @@ async function requestMessagesCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
+            throw new ModelStreamError('Model returned malformed JSON in its stream; the batch was not executed.');
         }
-        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
-        if (streamEnded && json.type !== 'ping') throw new Error('Model returned content after completion.');
+        validateStreamEvent('messages', json);
+        if (streamEnded && json.type !== 'ping') throw new ModelStreamError('Model returned content after completion.');
+        if (stopReason && /^content_block_/.test(json.type)) throw new ModelStreamError('Model returned content after completion.');
         switch (json?.type) {
             case 'message_start':
                 if (json.message?.usage) usage = mergeMessagesUsage(json.message.usage, usage);
                 break;
             case 'content_block_start': {
                 const block = json.content_block;
-                const index = Number(json.index ?? 0);
-                if (!Number.isSafeInteger(index) || index < 0) throw new Error('Model returned an invalid content block identity.');
-                if (blocks.has(index)) throw new Error('Model returned a duplicate content block identity.');
+                const index = streamIndex(json.index);
+                if (!Number.isSafeInteger(index) || index < 0) throw new ModelStreamError('Model returned an invalid content block identity.');
+                if (blocks.has(index) || closedBlocks.has(index)) throw new ModelStreamError('Model returned a duplicate content block identity.');
                 if (block?.type === 'tool_use') {
                     onToolCall?.();
                     toolDeltas.set(index, { id: String(block.id ?? ''), name: String(block.name ?? ''), arguments: '' });
@@ -921,9 +923,15 @@ async function requestMessagesCompletion(
             }
             case 'content_block_delta': {
                 const delta = json.delta;
-                const index = Number(json.index ?? 0);
+                const index = streamIndex(json.index);
                 const block = blocks.get(index);
-                if (closedBlocks.has(index)) throw new Error('Model returned content after a block finished.');
+                if (!block) throw new ModelStreamError('Model returned an unmatched content block delta.');
+                if (closedBlocks.has(index)) throw new ModelStreamError('Model returned content after a block finished.');
+                if ((delta.type === 'input_json_delta' && block.type !== 'tool_use')
+                    || (delta.type === 'text_delta' && block.type !== 'text')
+                    || (['thinking_delta', 'signature_delta'].includes(delta.type) && block.type !== 'thinking')) {
+                    throw new ModelStreamError('Model returned an invalid content block delta type.');
+                }
                 if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
                     text += delta.text;
                     onDelta(delta.text);
@@ -943,8 +951,9 @@ async function requestMessagesCompletion(
                 break;
             }
             case 'content_block_stop': {
-                const index = Number(json.index ?? 0);
+                const index = streamIndex(json.index);
                 const block = blocks.get(index);
+                if (!block || closedBlocks.has(index)) throw new ModelStreamError('Model returned an unmatched or duplicate content block stop.');
                 closedBlocks.add(index);
                 if (block?.type === 'tool_use') {
                     const raw = partialJson.get(index) ?? '';
@@ -956,7 +965,7 @@ async function requestMessagesCompletion(
             case 'message_delta':
                 if (json.usage) usage = mergeMessagesUsage(json.usage, usage);
                 if (typeof json.delta?.stop_reason === 'string') {
-                    if (stopReason && stopReason !== json.delta.stop_reason) throw new Error('Model changed its terminal completion reason.');
+                    if (stopReason && stopReason !== json.delta.stop_reason) throw new ModelStreamError('Model changed its terminal completion reason.');
                     stopReason = json.delta.stop_reason;
                 }
                 break;
@@ -970,8 +979,8 @@ async function requestMessagesCompletion(
 
     for await (const payload of readSseData(response.body)) consume(payload);
     if (toolDeltas.size && (!streamEnded || (stopReason != null && !['tool_use', 'end_turn'].includes(stopReason))
-        || [...toolDeltas.keys()].some(index => !closedBlocks.has(Number(index))))) {
-        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+        || [...blocks.keys()].some(index => !closedBlocks.has(index)))) {
+        throw new ModelStreamError('Model stream ended with an incomplete tool-call batch; no tools were executed.', 'modelStreamIncomplete');
     }
     const providerBlocks = blockOrder.map((index) => blocks.get(index)).filter(Boolean);
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks };
@@ -1275,7 +1284,7 @@ async function requestResponsesCompletion(
         const text = await response.text().catch(() => '');
         throw providerHttpError(response.status, text);
     }
-    if (!response.body) throw new Error('Model returned no response body.');
+    if (!response.body) throw new ModelStreamError('Model returned no response body.', 'modelStreamIncomplete');
 
     let text = '';
     let reasoning = '';
@@ -1284,6 +1293,8 @@ async function requestResponsesCompletion(
     // Output items (reasoning, message, function_call) in order, so a reasoning
     // + tool-call turn can be replayed verbatim on the continuation request.
     const itemsByIndex = new Map<number, any>();
+    const itemIndexById = new Map<string, number>();
+    const closedItems = new Set<number>();
     let completedItems: any[] | null = null;
     let completed = false;
     let cacheDiagnostic: CompletionResult['cacheDiagnostic'];
@@ -1291,10 +1302,10 @@ async function requestResponsesCompletion(
     const rememberCall = (item: any) => {
         if (item?.type !== 'function_call') return;
         const key = String(item.id ?? item.call_id ?? '');
-        if (!key) throw new Error('Model returned an invalid tool call identity.');
+        if (!key) throw new ModelStreamError('Model returned an invalid tool call identity.');
         const previous = toolDeltas.get(key);
         if (previous && ((item.call_id && item.call_id !== previous.id) || (previous.name && item.name && item.name !== previous.name))) {
-            throw new Error('Model changed a tool call identity during streaming.');
+            throw new ModelStreamError('Model changed a tool call identity during streaming.');
         }
         if (!previous) onToolCall?.();
         toolDeltas.set(key, {
@@ -1304,16 +1315,34 @@ async function requestResponsesCompletion(
         });
     };
 
+    const rememberItem = (item: Record<string, unknown>, index: number, done: boolean) => {
+        const previous = itemsByIndex.get(index);
+        const identity = item.id ?? item.call_id;
+        if (closedItems.has(index) || (!done && previous)) throw new ModelStreamError('Model returned a duplicate output item identity.');
+        if (previous && (previous.type !== item.type || (previous.id ?? previous.call_id) !== identity
+            || (previous.call_id && previous.call_id !== item.call_id))) {
+            throw new ModelStreamError('Model changed an output item identity during streaming.');
+        }
+        if (typeof identity === 'string') {
+            const owner = itemIndexById.get(identity);
+            if (owner !== undefined && owner !== index) throw new ModelStreamError('Model returned a duplicate output item identity.');
+            itemIndexById.set(identity, index);
+        }
+        itemsByIndex.set(index, item);
+        if (done) closedItems.add(index);
+        rememberCall(item);
+    };
+
     const consume = (payload: string) => {
         let json: any;
         try {
             json = JSON.parse(payload);
         } catch {
-            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
+            throw new ModelStreamError('Model returned malformed JSON in its stream; the batch was not executed.');
         }
-        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
+        validateStreamEvent('responses', json);
         if (completed && /^response\.(completed|output_|function_call_|reasoning_|refusal)/.test(json.type ?? '')) {
-            throw new Error('Model returned content after completion.');
+            throw new ModelStreamError('Model returned content after completion.');
         }
         switch (json?.type) {
             case 'response.output_text.delta':
@@ -1331,30 +1360,28 @@ async function requestResponsesCompletion(
                 }
                 break;
             case 'response.output_item.added': {
-                const item = json.item;
-                if (itemsByIndex.has(Number(json.output_index ?? 0)) || (item?.id && toolDeltas.has(String(item.id)))) {
-                    throw new Error('Model returned a duplicate output item identity.');
-                }
-                if (item) itemsByIndex.set(Number(json.output_index ?? 0), item);
-                rememberCall(item);
+                rememberItem(json.item, streamIndex(json.output_index), false);
                 break;
             }
             case 'response.output_item.done': {
                 // The done event carries the COMPLETE item (with arguments and
                 // any reasoning payload) - the best thing to replay.
-                if (json.item) itemsByIndex.set(Number(json.output_index ?? 0), json.item);
-                rememberCall(json.item);
+                rememberItem(json.item, streamIndex(json.output_index), true);
                 break;
             }
             case 'response.function_call_arguments.delta': {
                 onToolCall?.();
                 const current = toolDeltas.get(String(json.item_id ?? ''));
-                if (current && typeof json.delta === 'string') current.arguments += json.delta;
+                const index = itemIndexById.get(json.item_id);
+                if (!current || index === undefined || closedItems.has(index)) throw new ModelStreamError('Model returned an unmatched or finalized argument item identity.');
+                current.arguments += json.delta;
                 break;
             }
             case 'response.function_call_arguments.done': {
                 const current = toolDeltas.get(String(json.item_id ?? ''));
-                if (current && typeof json.arguments === 'string') current.arguments = json.arguments;
+                const index = itemIndexById.get(json.item_id);
+                if (!current || index === undefined || closedItems.has(index)) throw new ModelStreamError('Model returned an unmatched or finalized argument item identity.');
+                current.arguments = json.arguments;
                 break;
             }
             case 'response.completed':
@@ -1384,7 +1411,7 @@ async function requestResponsesCompletion(
 
     for await (const payload of readSseData(response.body)) consume(payload);
     if (!completed && (request.subscription || toolDeltas.size > 0)) {
-        throw new Error('Model stream ended without response.completed');
+        throw new ModelStreamError('Model stream ended without response.completed', 'modelStreamIncomplete');
     }
     // If the stream omitted output_item.done / completed.output, the stored
     // function_call item still has empty arguments - backfill from the
@@ -1404,11 +1431,13 @@ async function requestResponsesCompletion(
         const itemIds = new Set<string>();
         for (const item of providerBlocks) {
             if (typeof item?.id !== 'string' || !item.id) continue;
-            if (itemIds.has(item.id)) throw new Error('Model returned duplicate output item identities; the batch was not executed.');
+            if (itemIds.has(item.id)) throw new ModelStreamError('Model returned duplicate output item identities; the batch was not executed.');
             itemIds.add(item.id);
         }
-        toolDeltas.clear();
     }
+    // Execution and replay share canonical output order even when the stream
+    // interleaves declarations and omits completed.output.
+    toolDeltas.clear();
     for (const item of providerBlocks) rememberCall(item);
     const finalText = providerBlocks.filter(item => item?.type === 'message')
         .flatMap(item => Array.isArray(item.content) ? item.content : [])
@@ -1702,7 +1731,7 @@ async function requestGoogleCompletion(
         const text = await response.text().catch(() => '');
         throw providerHttpError(response.status, text);
     }
-    if (!response.body) throw new Error('Model returned no response body.');
+    if (!response.body) throw new ModelStreamError('Model returned no response body.', 'modelStreamIncomplete');
 
     let text = '';
     let reasoning = '';
@@ -1716,14 +1745,14 @@ async function requestGoogleCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
+            throw new ModelStreamError('Model returned malformed JSON in its stream; the batch was not executed.');
         }
-        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
+        validateStreamEvent('google', json);
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
-        if (finishReason && json?.candidates?.[0]?.content?.parts?.length) throw new Error('Model returned content after completion.');
+        if (finishReason && json?.candidates?.[0]?.content?.parts?.length) throw new ModelStreamError('Model returned content after completion.');
         if (finishReason && typeof json?.candidates?.[0]?.finishReason === 'string' && finishReason !== json.candidates[0].finishReason) {
-            throw new Error('Model changed its terminal completion reason.');
+            throw new ModelStreamError('Model changed its terminal completion reason.');
         }
         if (typeof json?.candidates?.[0]?.finishReason === 'string') finishReason = json.candidates[0].finishReason;
         const parts = json?.candidates?.[0]?.content?.parts;
@@ -1757,7 +1786,7 @@ async function requestGoogleCompletion(
 
     for await (const payload of readSseData(response.body)) consume(payload);
     if (toolDeltas.size && finishReason !== 'STOP') {
-        throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+        throw new ModelStreamError('Model stream ended with an incomplete tool-call batch; no tools were executed.', 'modelStreamIncomplete');
     }
     // Reserve every provider ID before assigning IDs to older ID-less calls.
     // Declaration-order map keys retain duplicates for batch validation.
@@ -1782,11 +1811,11 @@ function finalizeCompletion(
     const toolCalls: LocalToolCall[] = [];
     const seen = new Set<string>();
     for (const call of toolDeltas.values()) {
-        if (!call.id || !call.name) throw new Error('Model returned an invalid tool call identity; the batch was not executed.');
-        if (seen.has(call.id)) throw new Error('Model returned duplicate tool call IDs; the batch was not executed.');
+        if (!call.id || !call.name) throw new ModelStreamError('Model returned an invalid tool call identity; the batch was not executed.');
+        if (seen.has(call.id)) throw new ModelStreamError('Model returned duplicate tool call IDs; the batch was not executed.');
         seen.add(call.id);
         const args = parseArguments(call.arguments);
-        if (UNPARSED_ARGS_KEY in args) throw new Error('Model returned invalid tool arguments; the batch was not executed.');
+        if (UNPARSED_ARGS_KEY in args) throw new ModelStreamError('Model returned invalid tool arguments; the batch was not executed.');
         toolCalls.push({
             id: call.id,
             name: call.name,
