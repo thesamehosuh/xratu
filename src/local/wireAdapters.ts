@@ -497,6 +497,7 @@ async function requestChatCompletion(
         const delta = json?.choices?.[0]?.delta;
         if (streamEnded && delta && Object.keys(delta).length) throw new Error('Model returned content after completion.');
         const reason = json?.choices?.[0]?.finish_reason;
+        if (streamEnded && typeof reason === 'string' && reason !== finishReason) throw new Error('Model changed its terminal completion reason.');
         if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
         if (!delta) return;
 
@@ -954,7 +955,10 @@ async function requestMessagesCompletion(
             }
             case 'message_delta':
                 if (json.usage) usage = mergeMessagesUsage(json.usage, usage);
-                if (typeof json.delta?.stop_reason === 'string') stopReason = json.delta.stop_reason;
+                if (typeof json.delta?.stop_reason === 'string') {
+                    if (stopReason && stopReason !== json.delta.stop_reason) throw new Error('Model changed its terminal completion reason.');
+                    stopReason = json.delta.stop_reason;
+                }
                 break;
             case 'message_stop':
                 streamEnded = true;
@@ -1718,6 +1722,9 @@ async function requestGoogleCompletion(
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
         if (finishReason && json?.candidates?.[0]?.content?.parts?.length) throw new Error('Model returned content after completion.');
+        if (finishReason && typeof json?.candidates?.[0]?.finishReason === 'string' && finishReason !== json.candidates[0].finishReason) {
+            throw new Error('Model changed its terminal completion reason.');
+        }
         if (typeof json?.candidates?.[0]?.finishReason === 'string') finishReason = json.candidates[0].finishReason;
         const parts = json?.candidates?.[0]?.content?.parts;
         if (!Array.isArray(parts)) return;

@@ -135,6 +135,16 @@ test('SSE removes exactly one value space and joins data fields without trimming
     assert.deepEqual(decoder.push(': ping\r\ndata:  first\r\ndata:\tsecond\r\ndata\r\n\r\n'), [' first\n\tsecond\n']);
     assert.deepEqual(decoder.push('data: incomplete'), [], 'EOF does not dispatch an unterminated event');
 });
+for (const [style, frames] of Object.entries({
+    chat: [fixtures.chat[0], { choices: [{ delta: {}, finish_reason: 'length' }] }, fixtures.chat[1]],
+    messages: [...fixtures.messages.slice(0, 3), { type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, ...fixtures.messages.slice(3)],
+    google: [{ candidates: [{ content: fixtures.google[0].candidates[0].content, finishReason: 'MAX_TOKENS' }] }, { candidates: [{ finishReason: 'STOP' }] }],
+})) {
+    test(`${style}: a later success reason cannot overwrite a tool-call cutoff`, async () => {
+        const run = await read(style, frames.map(event));
+        await assert.rejects(run.result, /terminal completion reason/);
+    });
+}
 test('incomplete and multiline SSE frames are bounded, including comments', () => {
     for (const prefix of ['data: ', ': ']) {
         const decoder = new SseDecoder();
