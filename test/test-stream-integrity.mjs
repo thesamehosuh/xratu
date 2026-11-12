@@ -107,6 +107,18 @@ test('Responses rejects duplicate finalized item identities before collapsing it
     const run = await read('responses', [event({ type: 'response.completed', response: { output } })]);
     await assert.rejects(run.result, /duplicate.*(item|identity)/i);
 });
+test('Responses rejects duplicate fallback identities when completed items omit native IDs', async () => {
+    const output = ['a', 'b'].map(path => ({ type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify({ path }) }));
+    const run = await read('responses', [event({ type: 'response.completed', response: { output } })]);
+    await assert.rejects(run.result, /duplicate.*(item|identity)/i);
+});
+test('Responses accepts distinct fallback call identities in completed output', async () => {
+    const output = ['a', 'b'].map(path => ({ type: 'function_call', call_id: `call-${path}`, name: call.name, arguments: JSON.stringify({ path }) }));
+    const run = await read('responses', [event({ type: 'response.completed', response: { output } })]);
+    const result = await run.result;
+    assert.deepEqual(result.toolCalls.map(item => item.id), ['call-a', 'call-b']);
+    assert.deepEqual(result.toolCalls.map(item => item.arguments.path), ['a', 'b']);
+});
 test('Chat refuses identity replacement at an existing tool index', async () => {
     const run = await read('chat', [event(fixtures.chat[0]), event({ choices: [{ delta: { tool_calls: [
         { index: 0, id: 'replacement', function: { arguments: ' ' } },

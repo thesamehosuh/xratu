@@ -1430,9 +1430,10 @@ async function requestResponsesCompletion(
     if (completedItems) {
         const itemIds = new Set<string>();
         for (const item of providerBlocks) {
-            if (typeof item?.id !== 'string' || !item.id) continue;
-            if (itemIds.has(item.id)) throw new ModelStreamError('Model returned duplicate output item identities; the batch was not executed.');
-            itemIds.add(item.id);
+            const identity = item?.id ?? (item?.type === 'function_call' ? item.call_id : undefined);
+            if (typeof identity !== 'string' || !identity) continue;
+            if (itemIds.has(identity)) throw new ModelStreamError('Model returned duplicate output item identities; the batch was not executed.');
+            itemIds.add(identity);
         }
     }
     // Execution and replay share canonical output order even when the stream
