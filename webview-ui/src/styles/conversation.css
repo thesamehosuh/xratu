@@ -13,8 +13,8 @@
 .conversation-work-group > summary .conversation-work-summary { flex:1; }
 .conversation-work-failures { color:var(--vscode-errorForeground); white-space:nowrap; font-size:var(--xratu-fs-sm); }
 .conversation-work-current { display:flex; align-items:center; gap:7px; min-width:0; padding-inline-start:20px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-sm); line-height:20px; }
-.conversation-work-current > span { flex-shrink:0; }
-.conversation-work-current > code { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:inherit; unicode-bidi:plaintext; }
+.conversation-work-current > span { flex-shrink:0; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-work-current > code { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:inherit; unicode-bidi:plaintext; }
 .conversation-advanced > summary:focus-visible { outline:1px solid var(--vscode-focusBorder,var(--vscode-textLink-foreground)); outline-offset:3px; }
 .activity-filters { display:flex; align-items:center; gap:8px; max-width:700px; margin:0 auto 16px; position:sticky; inset-block-start:0; z-index:10; background:var(--page-canvas); padding-block:14px 10px; border-block-end:1px solid var(--page-line); box-shadow:0 -18px 0 var(--page-canvas); }
 .activity-search-box { flex:1; min-width:0; display:flex; align-items:center; gap:7px; padding:0 9px; min-height:32px; border:1px solid var(--page-line); border-radius:7px; background:var(--vscode-input-background,var(--page-surface)); color:var(--vscode-input-foreground); transition:border-color .15s; }

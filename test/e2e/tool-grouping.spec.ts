@@ -76,6 +76,7 @@ test('running commands, failures and completed output remain reachable', async (
 });
 
 test('manual expansion survives mixed tools and streamed arguments', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'startResponse' });
     await call(page, 'read', 'read_file', { path: 'src/auth.ts' });
@@ -85,10 +86,12 @@ test('manual expansion survives mixed tools and streamed arguments', async ({ pa
     await expect(group).toHaveCount(1);
     await expect(group).toHaveAttribute('open', '');
     await group.locator(':scope > summary').click();
-    await post(page, { type: 'toolCall', callId: 'mcp', tool: 'mcp__docs__lookup', args: '{"query":"refresh"}' });
+    const externalTool = `mcp__docs__${'long_tool_name_'.repeat(12)}`;
+    await post(page, { type: 'toolCall', callId: 'mcp', tool: externalTool, args: JSON.stringify({ query: 'refresh token '.repeat(50) }) });
     await expect(group).not.toHaveAttribute('open');
     await expect(group.locator('.spinner')).toHaveCount(1);
-    await post(page, { type: 'toolResult', callId: 'mcp', tool: 'mcp__docs__lookup', output: 'Found docs' });
+    await post(page, { type: 'toolResult', callId: 'mcp', tool: externalTool, output: 'Found docs' });
     await expect(group).not.toHaveAttribute('open');
     await expect(group.locator('.spinner')).toHaveCount(0);
+    expect(await page.locator('.transcript-pane').evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
 });

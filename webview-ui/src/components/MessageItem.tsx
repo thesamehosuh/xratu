@@ -196,7 +196,7 @@ function ConversationWorkGroup({ group, renderRow, onOpenDiff, prefs }: {
                     <ChevronDown size={13} className="step-chev" />
                 </span>
                 {currentCall && hint && <span className="conversation-work-current">
-                    <span>{toolLabel(currentCall.call.tool).fa}</span>
+                    <span dir="auto">{toolLabel(currentCall.call.tool).fa}</span>
                     <code dir="auto" title={hint}>{hint.replace(/\s+/g, ' ').slice(0, 180)}</code>
                 </span>}
             </summary>
