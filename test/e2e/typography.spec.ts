@@ -13,6 +13,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             if (['activity', 'agents', 'background', 'changes'].includes(name)) {
                 await page.locator(`#surface-tab-${name}`).click();
             }
+            const pageSelector = ({ settings: '.preferences-page', providers: '.cred-page', engines: '.engines-page' } as Record<string, string>)[name];
+            if (pageSelector) await expect(page.locator(pageSelector)).toBeVisible();
+            if (['activity', 'agents', 'background', 'changes'].includes(name)) await expect(page.locator(`#surface-panel-${name}`)).toBeVisible();
             if (name === 'chat') await expect(page.locator('.composer-input')).toBeVisible();
             if (name === 'welcome') await expect(page.locator('.onboarding')).toBeVisible();
             await page.evaluate(() => document.fonts.ready);

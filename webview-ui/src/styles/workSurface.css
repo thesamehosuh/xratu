@@ -97,10 +97,12 @@
 :root { --surface-accent:var(--xratu-accent); --surface-accent-strong:var(--xratu-accent-strong); --surface-merged:#a371f7; }
 body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; --surface-accent-strong:#007f70; --surface-merged:#8250df; }
 /* Give Persian a matching strut and a lower baseline. Increase ascent space
-   while preserving the complete descent; the locale line height grows with it. */
+   while preserving the complete descent; the locale line height grows with it.
+   Space keeps the strut in this face; Latin letters/digits use the host font. */
 @font-face {
     font-family: 'Xratu UI';
     ascent-override: 113%;
+    unicode-range: U+0020, U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200D;
     src: url('./fonts/vazirmatn-variable.woff2') format('woff2');
     font-weight: 100 900;
     font-style: normal;
