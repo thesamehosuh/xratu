@@ -990,7 +990,7 @@ async function testWrapupToolCallIsIgnored() {
         }
         // The wrap-up round hallucinates a tool call alongside its text.
         return sse([
-            ...toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2'),
+            ...toolCallSse('read_file', JSON.stringify({ path: 'b.txt' }), 'call-2').slice(0, -1),
             ...textSse(['final answer']),
         ]);
     }) as typeof fetch;

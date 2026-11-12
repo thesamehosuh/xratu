@@ -31,13 +31,12 @@ import {
     STREAM_OPTIONS_REJECT_RE,
     TOOL_CHOICE_REJECT_RE,
     endpointUrl,
-    extractSseData,
+    readSseData,
     makeGoogleHeaders,
     makeHeaders,
     makeMessagesHeaders,
     outputCapFor,
     providerHttpError,
-    readStreamChunk,
     transportTimeoutError,
     withDispatcher,
 } from './transport';
@@ -476,9 +475,6 @@ async function requestChatCompletion(
         throw new Error('Model returned no response body.');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let text = '';
     let reasoning = '';
     let usage: LocalUsage | null = null;
@@ -492,15 +488,16 @@ async function requestChatCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            return;
+            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
         }
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
 
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usage) usage = chatUsage(json.usage);
+        const delta = json?.choices?.[0]?.delta;
+        if (streamEnded && delta && Object.keys(delta).length) throw new Error('Model returned content after completion.');
         const reason = json?.choices?.[0]?.finish_reason;
         if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
-
-        const delta = json?.choices?.[0]?.delta;
         if (!delta) return;
 
         const textDelta = typeof delta.content === 'string' ? delta.content : '';
@@ -527,13 +524,17 @@ async function requestChatCompletion(
         if (calls.length) onToolCall?.();
         for (const call of calls) {
             const index = Number(call.index ?? 0);
+            if (!Number.isSafeInteger(index) || index < 0) throw new Error('Model returned an invalid tool call identity.');
             const current = toolDeltas.get(index) ?? {
                 id: '',
                 name: '',
                 arguments: '',
             };
 
-            if (call.id) current.id = String(call.id);
+            if (call.id) {
+                if (current.id && current.id !== call.id) throw new Error('Model changed a tool call identity during streaming.');
+                current.id = String(call.id);
+            }
             if (call.function?.name) current.name += String(call.function.name);
             if (call.function?.arguments) {
                 // Deltas carry strings, but some providers ship the whole
@@ -548,16 +549,7 @@ async function requestChatCompletion(
         }
     };
 
-    while (true) {
-        const { value, done } = await readStreamChunk(reader);
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-
-        const parsed = extractSseData(buffer);
-        buffer = parsed.remainder;
-        for (const payload of parsed.events) consume(payload);
-
-        if (done) break;
-    }
+    for await (const payload of readSseData(response.body)) consume(payload);
 
     // Compatible servers may use [DONE] instead of finish_reason. Neither
     // clean TCP EOF nor a token/filter cutoff completes an actionable batch.
@@ -865,9 +857,6 @@ async function requestMessagesCompletion(
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let text = '';
     let reasoning = '';
     let usage: LocalUsage | null = null;
@@ -877,6 +866,7 @@ async function requestMessagesCompletion(
     const blockOrder: number[] = [];
     const blocks = new Map<number, any>();
     const partialJson = new Map<number, string>();
+    const closedBlocks = new Set<number>();
     let streamEnded = false;
     let stopReason: string | null = null;
 
@@ -885,8 +875,10 @@ async function requestMessagesCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            return;
+            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
         }
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
+        if (streamEnded && json.type !== 'ping') throw new Error('Model returned content after completion.');
         switch (json?.type) {
             case 'message_start':
                 if (json.message?.usage) usage = mergeMessagesUsage(json.message.usage, usage);
@@ -894,10 +886,12 @@ async function requestMessagesCompletion(
             case 'content_block_start': {
                 const block = json.content_block;
                 const index = Number(json.index ?? 0);
+                if (!Number.isSafeInteger(index) || index < 0) throw new Error('Model returned an invalid content block identity.');
+                if (blocks.has(index)) throw new Error('Model returned a duplicate content block identity.');
                 if (block?.type === 'tool_use') {
                     onToolCall?.();
                     toolDeltas.set(index, { id: String(block.id ?? ''), name: String(block.name ?? ''), arguments: '' });
-                    blocks.set(index, { type: 'tool_use', id: String(block.id ?? ''), name: String(block.name ?? ''), input: {} });
+                    blocks.set(index, { type: 'tool_use', id: String(block.id ?? ''), name: String(block.name ?? ''), input: block.input ?? {} });
                 } else if (block?.type === 'thinking') {
                     const initial = typeof block.thinking === 'string' ? block.thinking : '';
                     if (initial) {
@@ -928,6 +922,7 @@ async function requestMessagesCompletion(
                 const delta = json.delta;
                 const index = Number(json.index ?? 0);
                 const block = blocks.get(index);
+                if (closedBlocks.has(index)) throw new Error('Model returned content after a block finished.');
                 if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
                     text += delta.text;
                     onDelta(delta.text);
@@ -949,9 +944,11 @@ async function requestMessagesCompletion(
             case 'content_block_stop': {
                 const index = Number(json.index ?? 0);
                 const block = blocks.get(index);
+                closedBlocks.add(index);
                 if (block?.type === 'tool_use') {
                     const raw = partialJson.get(index) ?? '';
                     if (raw) block.input = parseArguments(raw);
+                    toolDeltas.get(index)!.arguments = raw || JSON.stringify(block.input);
                 }
                 break;
             }
@@ -967,15 +964,9 @@ async function requestMessagesCompletion(
         }
     };
 
-    while (true) {
-        const { value, done } = await readStreamChunk(reader);
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-        const parsed = extractSseData(buffer);
-        buffer = parsed.remainder;
-        for (const payload of parsed.events) consume(payload);
-        if (done) break;
-    }
-    if (toolDeltas.size && (!streamEnded || (stopReason != null && !['tool_use', 'end_turn'].includes(stopReason)))) {
+    for await (const payload of readSseData(response.body)) consume(payload);
+    if (toolDeltas.size && (!streamEnded || (stopReason != null && !['tool_use', 'end_turn'].includes(stopReason))
+        || [...toolDeltas.keys()].some(index => !closedBlocks.has(Number(index))))) {
         throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
     }
     const providerBlocks = blockOrder.map((index) => blocks.get(index)).filter(Boolean);
@@ -1282,9 +1273,6 @@ async function requestResponsesCompletion(
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let text = '';
     let reasoning = '';
     let usage: LocalUsage | null = null;
@@ -1299,8 +1287,11 @@ async function requestResponsesCompletion(
     const rememberCall = (item: any) => {
         if (item?.type !== 'function_call') return;
         const key = String(item.id ?? item.call_id ?? '');
-        if (!key) return;
+        if (!key) throw new Error('Model returned an invalid tool call identity.');
         const previous = toolDeltas.get(key);
+        if (previous && ((item.call_id && item.call_id !== previous.id) || (previous.name && item.name && item.name !== previous.name))) {
+            throw new Error('Model changed a tool call identity during streaming.');
+        }
         if (!previous) onToolCall?.();
         toolDeltas.set(key, {
             id: String(item.call_id ?? item.id ?? ''),
@@ -1314,7 +1305,11 @@ async function requestResponsesCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            return;
+            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
+        }
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
+        if (completed && /^response\.(completed|output_|function_call_|reasoning_|refusal)/.test(json.type ?? '')) {
+            throw new Error('Model returned content after completion.');
         }
         switch (json?.type) {
             case 'response.output_text.delta':
@@ -1333,6 +1328,9 @@ async function requestResponsesCompletion(
                 break;
             case 'response.output_item.added': {
                 const item = json.item;
+                if (itemsByIndex.has(Number(json.output_index ?? 0)) || (item?.id && toolDeltas.has(String(item.id)))) {
+                    throw new Error('Model returned a duplicate output item identity.');
+                }
                 if (item) itemsByIndex.set(Number(json.output_index ?? 0), item);
                 rememberCall(item);
                 break;
@@ -1380,14 +1378,7 @@ async function requestResponsesCompletion(
         }
     };
 
-    while (true) {
-        const { value, done } = await readStreamChunk(reader);
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-        const parsed = extractSseData(buffer);
-        buffer = parsed.remainder;
-        for (const payload of parsed.events) consume(payload);
-        if (done) break;
-    }
+    for await (const payload of readSseData(response.body)) consume(payload);
     if (!completed && (request.subscription || toolDeltas.size > 0)) {
         throw new Error('Model stream ended without response.completed');
     }
@@ -1405,7 +1396,15 @@ async function requestResponsesCompletion(
     // Finalized items are authoritative for execution as well as replay.
     // Relays may coalesce deltas, and an interrupted argument delta must not
     // replace the complete JSON that the final item actually approved.
-    if (completedItems) toolDeltas.clear();
+    if (completedItems) {
+        const itemIds = new Set<string>();
+        for (const item of providerBlocks) {
+            if (typeof item?.id !== 'string' || !item.id) continue;
+            if (itemIds.has(item.id)) throw new Error('Model returned duplicate output item identities; the batch was not executed.');
+            itemIds.add(item.id);
+        }
+        toolDeltas.clear();
+    }
     for (const item of providerBlocks) rememberCall(item);
     const finalText = providerBlocks.filter(item => item?.type === 'message')
         .flatMap(item => Array.isArray(item.content) ? item.content : [])
@@ -1701,9 +1700,6 @@ async function requestGoogleCompletion(
     }
     if (!response.body) throw new Error('Model returned no response body.');
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let text = '';
     let reasoning = '';
     let usage: LocalUsage | null = null;
@@ -1716,10 +1712,12 @@ async function requestGoogleCompletion(
         try {
             json = JSON.parse(payload);
         } catch {
-            return;
+            throw new Error('Model returned malformed JSON in its stream; the batch was not executed.');
         }
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Model returned an invalid stream event.');
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usageMetadata) usage = googleUsage(json.usageMetadata);
+        if (finishReason && json?.candidates?.[0]?.content?.parts?.length) throw new Error('Model returned content after completion.');
         if (typeof json?.candidates?.[0]?.finishReason === 'string') finishReason = json.candidates[0].finishReason;
         const parts = json?.candidates?.[0]?.content?.parts;
         if (!Array.isArray(parts)) return;
@@ -1737,8 +1735,8 @@ async function requestGoogleCompletion(
             } else if (part?.functionCall) {
                 onToolCall?.();
                 const id = typeof part.functionCall.id === 'string' && part.functionCall.id
-                    ? part.functionCall.id : `google-call-${toolDeltas.size}`;
-                toolDeltas.set(id, {
+                    ? part.functionCall.id : '';
+                toolDeltas.set(toolDeltas.size, {
                     id,
                     name: String(part.functionCall.name ?? ''),
                     arguments: JSON.stringify(part.functionCall.args ?? {}),
@@ -1750,16 +1748,18 @@ async function requestGoogleCompletion(
         }
     };
 
-    while (true) {
-        const { value, done } = await readStreamChunk(reader);
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-        const parsed = extractSseData(buffer);
-        buffer = parsed.remainder;
-        for (const payload of parsed.events) consume(payload);
-        if (done) break;
-    }
+    for await (const payload of readSseData(response.body)) consume(payload);
     if (toolDeltas.size && finishReason !== 'STOP') {
         throw new Error('Model stream ended with an incomplete tool-call batch; no tools were executed.');
+    }
+    // Reserve every provider ID before assigning IDs to older ID-less calls.
+    // Declaration-order map keys retain duplicates for batch validation.
+    const reservedIds = new Set([...toolDeltas.values()].map(call => call.id).filter(Boolean));
+    let syntheticId = 0;
+    for (const call of toolDeltas.values()) {
+        if (call.id) continue;
+        do { call.id = `google-call-${syntheticId++}`; } while (reservedIds.has(call.id));
+        reservedIds.add(call.id);
     }
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks: modelParts };
     } finally {
@@ -1775,7 +1775,7 @@ function finalizeCompletion(
     const toolCalls: LocalToolCall[] = [];
     const seen = new Set<string>();
     for (const call of toolDeltas.values()) {
-        if (!call.id || !call.name) continue;
+        if (!call.id || !call.name) throw new Error('Model returned an invalid tool call identity; the batch was not executed.');
         if (seen.has(call.id)) throw new Error('Model returned duplicate tool call IDs; the batch was not executed.');
         seen.add(call.id);
         const args = parseArguments(call.arguments);
