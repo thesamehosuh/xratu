@@ -100,6 +100,8 @@ function truncateFromUser(messages: ChatMessage[], userIndex: number): ChatMessa
 
 export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatState {
     switch (msg.type) {
+        case 'resetConversation':
+            return { ...createInitialChatState(), backgroundJobs: state.backgroundJobs };
         case 'restoreUser':
             return append(state, {
                 id: nextId(),

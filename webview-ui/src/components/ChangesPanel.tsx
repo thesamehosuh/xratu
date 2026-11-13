@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, CodeXml, History, ExternalLink, MessageSquarePlus, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
+import { ChevronDown, CodeXml, History, ExternalLink, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
 import type { FromExtensionMessage, ReviewChange, ReviewFile } from '../types';
 import { t, tf, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
@@ -16,7 +16,6 @@ export function ChangesPanel({ turns = [], selectedNumber = null, onTurnFiles, .
     initialPath?: string | null;
     busy: boolean;
     sessionKey: string;
-    onFeedback: (text: string) => void;
     onCount: (count: number) => void;
     onFiles: (files: ReviewChange[]) => void;
 }) {
@@ -47,14 +46,14 @@ export function ChangesPanel({ turns = [], selectedNumber = null, onTurnFiles, .
         {!sha && <ChangeReview {...props} onFiles={ignoreFiles} />}
         {[...(current ? [current] : []), ...previous].map((turn, index) => <ReviewTurnPanel key={`${props.sessionKey}-${turn.number}`} turn={turn}
             current={turn.number === current?.number} incoming={turn.number === incomingNumber} historyHeading={index === 1 && previous.some(item => counts[item.number] > 0)}
-            initialPath={turn.number === incomingNumber ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onFeedback={props.onFeedback} onCount={count} onFiles={props.onFiles} onTurnFiles={onTurnFiles} />)}
+            initialPath={turn.number === incomingNumber ? props.initialPath : undefined} busy={props.busy} sessionKey={props.sessionKey} onCount={count} onFiles={props.onFiles} onTurnFiles={onTurnFiles} />)}
     </div>;
 }
 
-function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onTurnFiles }: {
+function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath, busy, sessionKey, onCount, onFiles, onTurnFiles }: {
     onTurnFiles?: (turn: ReviewTurn, files: ReviewChange[]) => void;
     turn: ReviewTurn; current: boolean; incoming: boolean; historyHeading: boolean; initialPath?: string | null; busy: boolean;
-    sessionKey: string; onFeedback: (text: string) => void; onCount: (number: number, count: number) => void; onFiles: (files: ReviewChange[]) => void;
+    sessionKey: string; onCount: (number: number, count: number) => void; onFiles: (files: ReviewChange[]) => void;
 }) {
     const [count, setCount] = useState(0);
     const [expanded, setExpanded] = useState(false);
@@ -71,12 +70,12 @@ function ReviewTurnPanel({ turn, current, incoming, historyHeading, initialPath,
                 <span className="review-turn-title"><span className="review-turn-heading">{tf('surfacePreviousTurn', { number: String(turn.number) })}<span className="review-turn-files">{tf('surfaceTurnFiles', { count: String(count) })}</span></span></span>
                 <span className="review-turn-action">{t(expanded ? 'surfaceHideChanges' : 'surfaceShowChanges')}</span>
             </summary>
-            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={busy} sessionKey={sessionKey} onFeedback={onFeedback} onCount={updateCount} onFiles={setFiles} onSnapshot={recordFiles} expanded={current || expanded} userIndex={turn.userIndex} />
+            <ChangeReview sha={turn.sha} toSha={turn.toSha} initialPath={initialPath} busy={busy} sessionKey={sessionKey} onCount={updateCount} onFiles={setFiles} onSnapshot={recordFiles} expanded={current || expanded} userIndex={turn.userIndex} />
         </details>
     </>;
 }
 
-function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, onCount, onFiles, onSnapshot, expanded = true, userIndex }: {
+function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onCount, onFiles, onSnapshot, expanded = true, userIndex }: {
     sha: string | null;
     userIndex?: number;
     toSha?: string;
@@ -85,7 +84,6 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
     initialPath?: string | null;
     busy: boolean;
     sessionKey: string;
-    onFeedback: (text: string) => void;
     onCount: (count: number) => void;
     onFiles: (files: ReviewChange[]) => void;
 }) {
@@ -186,14 +184,14 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onFeedback, o
                 <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={opened.includes(change.path)} aria-expanded={opened.includes(change.path)} onClick={() => { setSelected(change.path); setOpened(current => current.includes(change.path) ? current.filter(path => path !== change.path) : [...current, change.path]); }}>
                     <ChevronDown size={12} className={`review-file-chevron${opened.includes(change.path) ? ' open' : ''}`} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
                 </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>
-                {sha && files.filter(change => opened.includes(change.path)).map(change => <OpenFileDiff key={`${sessionKey}-${sha}-${change.path}`} sha={sha} toSha={toSha} path={change.path} expanded={expanded} revision={`${fileRevision}:${change.modifiedAt ?? ''}:${change.added}:${change.removed}:${change.binary}:${change.untracked}`} onFeedback={onFeedback} />)}
+                {sha && files.filter(change => opened.includes(change.path)).map(change => <OpenFileDiff key={`${sessionKey}-${sha}-${change.path}`} sha={sha} toSha={toSha} path={change.path} expanded={expanded} revision={`${fileRevision}:${change.modifiedAt ?? ''}:${change.added}:${change.removed}:${change.binary}:${change.untracked}`} />)}
             </>}
         </div>
     </section>;
 }
 
 /** Each open diff owns its request identity; late replies cannot replace a sibling. */
-function OpenFileDiff({ sha, toSha, path, expanded, revision, onFeedback }: { sha: string; toSha?: string; path: string; expanded: boolean; revision: string; onFeedback: (text: string) => void }) {
+function OpenFileDiff({ sha, toSha, path, expanded, revision }: { sha: string; toSha?: string; path: string; expanded: boolean; revision: string }) {
     const id = useId();
     const sequence = useRef(0);
     const [file, setFile] = useState<ReviewFile | null>(null);
@@ -220,7 +218,7 @@ function OpenFileDiff({ sha, toSha, path, expanded, revision, onFeedback }: { sh
         {loading ? <span className="step-status spinner" aria-label={t('working')} /> : error ? <p role="alert">{tOrRaw(error)}</p> : file ? <>
             {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
             <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={() => postMessage({ type: 'changeFileOpen', sha, toSha, path })}><ExternalLink size={12} /><span>{t('surfaceOpenEditor')}</span></button>
-                <button type="button" className="settings-ghost-action review-ask" onClick={() => onFeedback(tf('surfaceAskReviewPrompt', { files: path }))}><MessageSquarePlus size={12} /><span>{t('surfaceAskReview')}</span></button></div>
+                </div>
         </> : null}
     </section>;
 }

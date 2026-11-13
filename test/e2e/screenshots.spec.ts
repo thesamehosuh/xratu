@@ -424,6 +424,7 @@ async function openSettingsSubpage(page: Page, locale: Locale, row: 'capabilitie
     await expect(page.locator('.composer-input')).toBeVisible();
     await host(page, { type: 'openSettings' });
     await expect(page.locator('.settings-page').first()).toBeVisible();
+    if (!await page.locator('.page-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
     const names = locale === 'fa' ? { capabilities: 'سرور ها', usage: 'مصرف', proxy: 'پروکسی' } : { capabilities: 'Servers', usage: 'Usage', proxy: 'Proxy' };
     const target = page.locator('.page-sidebar').getByRole('button', { name: names[row], exact: true });
     await expect(target).toHaveCount(1);

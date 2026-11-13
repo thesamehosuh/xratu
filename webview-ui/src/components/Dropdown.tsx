@@ -58,7 +58,7 @@ export function Dropdown({
 }) {
     const [open, setOpen] = useState(false);
     /** Cards clip their overflow: flip and shrink the list to fit inside. */
-    const [placement, setPlacement] = useState<{ up: boolean; cap: number | undefined }>({ up: false, cap: undefined });
+    const [placement, setPlacement] = useState({ top: 0, inline: 0, width: 180, cap: 190 });
     const rootRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
@@ -68,13 +68,27 @@ export function Dropdown({
 
     useLayoutEffect(() => {
         if (!open || !triggerRef.current) return;
-        setPlacement(popupPlacement(triggerRef.current, 190));
-    }, [open]);
+        const position = () => {
+            const trigger = triggerRef.current;
+            if (!trigger) return;
+            const rect = trigger.getBoundingClientRect();
+            const height = Math.min(190, options.length * 36 + 10);
+            const up = window.innerHeight - rect.bottom - 12 < height && rect.top > window.innerHeight - rect.bottom;
+            const cap = Math.min(height, Math.max(64, up ? rect.top - 12 : window.innerHeight - rect.bottom - 12));
+            const rtl = getComputedStyle(trigger).direction === 'rtl';
+            setPlacement({ top: up ? rect.top - cap - 4 : rect.bottom + 4, inline: rtl ? window.innerWidth - rect.right : rect.left, width: rect.width, cap });
+        };
+        position();
+        const onScroll = (event: Event) => { if (!listRef.current?.contains(event.target as Node)) position(); };
+        window.addEventListener('resize', position);
+        document.addEventListener('scroll', onScroll, true);
+        return () => { window.removeEventListener('resize', position); document.removeEventListener('scroll', onScroll, true); };
+    }, [open, options.length]);
 
     useEffect(() => {
         if (!open) return;
         const onPointerDown = (e: MouseEvent) => {
-            if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+            if (!rootRef.current?.contains(e.target as Node) && !listRef.current?.contains(e.target as Node)) setOpen(false);
         };
         document.addEventListener('mousedown', onPointerDown);
         return () => document.removeEventListener('mousedown', onPointerDown);
@@ -132,10 +146,10 @@ export function Dropdown({
             {open && (
                 <div
                     ref={listRef}
-                    className={`dropdown-list${placement.up ? ' up' : ''}`}
+                    className="dropdown-list dropdown-portal"
                     role="listbox"
                     aria-label={label}
-                    style={placement.cap != null ? { maxHeight: `${placement.cap}px` } : undefined}
+                    style={{ position: 'fixed', insetBlockStart: placement.top, insetInlineStart: placement.inline, inlineSize: placement.width, maxHeight: placement.cap, zIndex: 200 }}
                     onKeyDown={(e) => {
                         if (e.key === 'Escape') {
                             e.preventDefault();

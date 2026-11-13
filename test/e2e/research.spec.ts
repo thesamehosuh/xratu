@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
+import { openPageNavigation } from './navigation';
 const post = (page: Page, value: object) => page.evaluate(message => window.postMessage(message, '*'), value);
 const sent = (page: Page) => page.evaluate(() => (window as unknown as { __xratuHostMessages: object[] }).__xratuHostMessages);
 const openTool = async (page: Page, name: string) => {
@@ -36,6 +37,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(page.locator('.cred-page')).toBeVisible();
         await expect(page.locator('.research-controls')).toHaveCount(0);
         await page.screenshot({ path: info.outputPath('providers-no-research-config.png') });
+        await openPageNavigation(page);
         await page.locator('.page-sidebar').getByRole('button', { name: locale === 'en' ? 'Proxy' : 'پروکسی', exact: true }).click();
         const state = { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost', resolvedUrl: 'http://127.0.0.1:7890', resolvedSource: 'system', systemProxy: 'http://127.0.0.1:7890', noProxyList: 'localhost', webSearchUseProxy: true };
         await post(page, state);
@@ -50,7 +52,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(buttons.last()).toHaveAttribute('aria-pressed', 'true');
         expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
         await page.screenshot({ path: info.outputPath('search-routing.png') });
-        await page.locator('.sidebar-back').click();
+        await page.locator('.toolbar-back-work').click();
         await post(page, { type: 'showChat' });
         await post(page, { type: 'toolCall', callId: 'research', tool: 'web_search', args: '{"query":"official docs"}' });
         await post(page, { type: 'toolResult', callId: 'research', tool: 'web_search', output: 'A format that cannot be parsed as numbered source text.', research: { version: 1, provider: 'parallel', outcome: 'success', freshness: 'unknown', warnings: [], sources: [{ id: 'one', title: 'Official documentation', url: 'https://example.com/docs', excerpts: ['Observed evidence.'], retrievedAt: '2026-10-21T00:00:00Z', route: 'parallel' }, { id: 'unsafe', title: 'Unsafe link', url: 'javascript:alert(1)', excerpts: [] }] } });

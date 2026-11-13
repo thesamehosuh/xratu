@@ -52,7 +52,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([{ ...link, watch: watching, resume }]) });
         await host(page, { type: 'fullResponse', persian: 'PR linked and watching.' });
         await expect(page.locator('.pr-indicator')).toHaveCount(1);
-        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
+        await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(1);
         await expect(page.locator('.pr-panel')).toBeHidden();
         await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-chat-${locale}-${width}.png`) });
         await page.locator('#surface-tab-activity').click();

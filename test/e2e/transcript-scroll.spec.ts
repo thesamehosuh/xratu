@@ -6,6 +6,7 @@
  * not break: scrolling up detaches the follow, streaming while detached does
  * not move the reader, and scrolling back down re-arms it.
  */
+import { openWorkPanel } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
@@ -131,8 +132,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         // Switching panels hides the composer without dropping the draft.
         await page.locator('.composer-input').fill('Draft survives');
         // This prose-only run has no Activity rows; open the empty panel explicitly.
-        await page.locator('.dock-tabs.main .dock-add-button').click();
-        await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=activity]').click();
+        await openWorkPanel(page, 'activity');
         await expect(page.locator('.composer-input')).toBeHidden();
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toHaveValue('Draft survives');

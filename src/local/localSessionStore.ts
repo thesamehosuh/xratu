@@ -83,6 +83,8 @@ function readEngineSession(raw: unknown): EngineSessionRef | undefined {
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
 export interface LocalSessionMeta {
+    engineId?: 'xratu' | 'opencode';
+    model?: string | null;
     id: string;
     title: string;
     workspace: string;
@@ -533,6 +535,8 @@ export class LocalSessionStore {
                     workspace: parsed?.workspace || 'default',
                     createdAt: parsed?.createdAt ?? Date.now(),
                     updatedAt: parsed?.updatedAt ?? Date.now(),
+                    engineId: readEngineSession(parsed?.engineSession)?.engineId ?? 'xratu',
+                    model: typeof parsed?.model === 'string' ? parsed.model : null,
                     ...(parsed?.renamed ? { renamed: true } : {}),
                 };
             } catch {
@@ -726,6 +730,8 @@ export class LocalSessionStore {
             workspace: snapshot.workspace ?? existing?.workspace ?? 'default',
             createdAt: existing?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
+            engineId: snapshot.engineSession?.engineId ?? 'xratu',
+            model: snapshot.model ?? null,
             ...(existing?.renamed ? { renamed: true } : {}),
         };
         await this.writeMeta(meta, snapshot, contentCap);

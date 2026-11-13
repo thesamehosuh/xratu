@@ -369,6 +369,16 @@ export function CapabilitiesPage({
     onDeleteSkill,
     initialTab = 'servers', onTabChange, native,
 }: CapabilitiesPageProps) {
+    const [inventoryQuery, setInventoryQuery] = useState('');
+    const [skillSelection, setSkillSelection] = useState<string | null>(null);
+    const [sourceFilter, setSourceFilter] = useState('all');
+    const [serverSelection, setServerSelection] = useState<string | null>(null);
+    const matchesInventory = (value: string) => value.toLocaleLowerCase().includes(inventoryQuery.trim().toLocaleLowerCase());
+    const visibleSkills = skills.filter(skill => (sourceFilter === 'all' || (sourceFilter === 'workspace' ? skill.source.startsWith('project-') : skill.source.startsWith('global-'))) && matchesInventory(`${skill.name} ${skill.description ?? ''}`));
+    const visibleServers = servers.filter(server => (sourceFilter === 'all' || (sourceFilter === 'workspace' ? server.source === 'workspace' : server.source !== 'workspace')) && matchesInventory(`${server.name} ${endpointOf(server)} ${sourceLabel(server.source)} ${server.tools?.join(' ') ?? ''}`));
+    const selectedSkill = visibleSkills.find(skill => skill.id === skillSelection) ?? visibleSkills[0];
+    const selectedServer = visibleServers.find(server => `${server.source}:${server.name}` === serverSelection) ?? visibleServers[0];
+    const inventorySearch = <div className="inventory-toolbar"><label className="inventory-search"><Search size={15} /><input type="search" dir="auto" value={inventoryQuery} onChange={event => setInventoryQuery(event.target.value)} aria-label={t('surfaceSearchInventory')} placeholder={t('surfaceSearchInventory')} /></label><div className="lang-choice">{(['all', 'workspace', 'global'] as const).map(source => <button type="button" key={source} className={`lang-chip${sourceFilter === source ? ' active' : ''}`} aria-pressed={sourceFilter === source} onClick={() => setSourceFilter(source)}>{t(source === 'all' ? 'surfaceAllSources' : source === 'workspace' ? 'mcpTargetWorkspace' : 'mcpTargetGlobal')}</button>)}</div></div>;
     const [tab, updateTab] = useState<CapabilityTab>(initialTab);
     const setTab = (next: CapabilityTab) => { updateTab(next); onTabChange?.(next); };
     useEffect(() => { updateTab(initialTab); }, [initialTab]);
@@ -672,12 +682,11 @@ export function CapabilitiesPage({
         const armed = armedDelete === rowId;
         const endpoint = endpointOf(s);
         return (
-            <div key={rowId} className={`mcp-row ${s.disabled ? 'off' : ''}`} dir="ltr">
-                <span className={`mcp-dot ${s.disabled ? 'disabled' : s.state}`} title={statusLabel(s.disabled ? 'disabled' : s.state)} />
-                <button type="button" className="mcp-row-main" onClick={() => openEditor(s)} title={endpoint}>
+            <div key={rowId} className={`mcp-row ${s.disabled ? 'off' : ''}${selectedServer === s ? ' selected' : ''}`} dir="ltr">
+                <Server size={16} aria-hidden="true" /><span className={`mcp-dot ${s.disabled ? 'disabled' : s.state}`} title={statusLabel(s.disabled ? 'disabled' : s.state)} />
+                <button type="button" className="mcp-row-main" onClick={() => setServerSelection(rowId)} title={endpoint} aria-pressed={selectedServer === s}>
                     <span className="mcp-row-title">
                         <strong dir="auto">{s.name}</strong>
-                        <span className={`mcp-badge src-${s.source}`}>{sourceLabel(s.source)}</span>
                     </span>
                     <span className="mcp-row-meta" dir="ltr">
                         <span dir="auto">{transportLabel(s.type ?? (s.url ? 'streamableHttp' : 'stdio'))}</span>
@@ -688,7 +697,7 @@ export function CapabilitiesPage({
                         <span className="mcp-row-error" dir="ltr">{s.lastError}</span>
                     )}
                 </button>
-                <div className="mcp-row-actions">
+                <span className="mcp-badge">{sourceLabel(s.source)}</span><div className="mcp-row-actions">
                     <button
                         type="button"
                         className={`mcp-switch ${s.disabled ? '' : 'on'}`}
@@ -840,11 +849,11 @@ export function CapabilitiesPage({
                 )}
                 {draftError && <span className="mcp-field-error">{draftError}</span>}
                 <div className="mcp-form-actions">
+                    <button type="button" className="settings-ghost-action" onClick={closeEditor}>{t('mcpCancel')}</button>
                     <button type="button" className="mcp-save" onClick={saveDraft}>
                         <Check size={14} />
                         <span>{t('mcpSave')}</span>
                     </button>
-                    <button type="button" className="settings-ghost-action" onClick={closeEditor}>{t('mcpCancel')}</button>
                 </div>
             </div>
         );
@@ -1195,21 +1204,8 @@ export function CapabilitiesPage({
     };
 
     const renderServersTab = () => (
-        <>
+        <>{inventorySearch}<div className="inventory-split">
             <section className="settings-card">
-                <div className="settings-section-head">
-                    <div className="settings-section-icon" aria-hidden="true">
-                        <Server size={15} />
-                    </div>
-                    <div>
-                        <h3>{t('mcpServersTab')}</h3>
-                    </div>
-                    <button type="button" className="cred-local-connect" onClick={() => openEditor()}>
-                        <Plus size={13} />
-                        <span>{t('mcpAddServer')}</span>
-                    </button>
-                </div>
-
                 <div className="settings-card-body">
                     {servers.length === 0 && !draft && (
                         <div className="mcp-empty">
@@ -1221,9 +1217,9 @@ export function CapabilitiesPage({
                         </div>
                     )}
 
-                    {draft && <SidePanel className="server-drawer" label={draft.original ? t('mcpEditServer') : t('mcpAddServer')} onClose={closeEditor}>{renderDraftForm()}</SidePanel>}
+                    {draft && <SidePanel className="server-drawer compact-dialog" label={draft.original ? t('mcpEditServer') : t('mcpAddServer')} onClose={closeEditor}>{renderDraftForm()}</SidePanel>}
 
-                    <div className="inventory-status"><span><i className="health-dot"/>{servers.filter(s => s.state === 'connected' && !s.disabled).length} {t('mcpStatusConnected')}</span>{servers.some(s => s.state === 'error' && !s.disabled) && <span className="health-warning"><i className="health-dot"/>{servers.filter(s => s.state === 'error' && !s.disabled).length} {t('mcpStatusError')}</span>}</div>{servers.map(renderServerRow)}
+                    <div className="inventory-status"><span><i className="health-dot"/>{servers.filter(s => s.state === 'connected' && !s.disabled).length} {t('mcpStatusConnected')}</span>{servers.some(s => s.state === 'error' && !s.disabled) && <span className="health-warning"><i className="health-dot"/>{servers.filter(s => s.state === 'error' && !s.disabled).length} {t('mcpStatusError')}</span>}</div>{visibleServers.map(renderServerRow)}{servers.length > 0 && visibleServers.length === 0 && <div className="inventory-no-results" role="status">{t('surfaceNoMatches')}</div>}
                 </div>
 
                 <button type="button" className="settings-nav-row" onClick={onOpenRawSettings}>
@@ -1233,17 +1229,28 @@ export function CapabilitiesPage({
                     <FileJson size={14} />
                 </button>
             </section>
-        </>
+            {selectedServer && <aside className="inventory-inspector" aria-label={t('surfaceConnectionDetails')}>
+                <h3 dir="auto">{selectedServer.name}</h3>
+                <div className="kv"><span>{t('surfaceStatus')}</span><span>{statusLabel(selectedServer.disabled ? 'disabled' : selectedServer.state)}</span></div>
+                <div className="kv"><span>{t('surfaceSource')}</span><span>{sourceLabel(selectedServer.source)}</span></div>
+                {selectedServer.toolCount != null && <div className="kv"><span>{t('surfaceTools')}</span><span dir="ltr">{selectedServer.toolCount}</span></div>}
+                <p><code dir="ltr">{endpointOf(selectedServer)}</code></p>
+                {selectedServer.tools?.map(tool => <div className="kv" key={tool}><code dir="ltr">{tool}</code></div>)}
+                {selectedServer.lastError && <p className="mcp-row-error" role="alert" dir="auto">{selectedServer.lastError}</p>}
+                <div className="inspector-actions"><button type="button" className="settings-ghost-action" disabled={pendingRestart === selectedServer.name} onClick={() => { setPendingRestart(selectedServer.name); onRestart(selectedServer.name); }}><RefreshCw size={13} /><span>{t('mcpRestart')}</span></button>
+                <button type="button" className="settings-ghost-action" onClick={() => openEditor(selectedServer)}><Pencil size={13} /><span>{t('mcpEdit')}</span></button></div>
+            </aside>}
+        </div></>
     );
 
     const renderSkillRow = (s: SkillView) => {
         const inactive = !!s.error || !!s.shadowed;
         return (
-            <div key={s.id} className={`mcp-row ${s.enabled ? '' : 'off'}`} dir="ltr">
+            <div key={s.id} className={`mcp-row skill-row ${s.enabled ? '' : 'off'}${selectedSkill === s ? ' selected' : ''}`} onClick={event => { if (!(event.target as Element).closest('.mcp-row-actions')) { setSkillSelection(s.id); event.currentTarget.querySelector<HTMLButtonElement>('.skill-select')?.focus(); } }}><BookOpen size={16} aria-hidden="true" />
                 <span className={`mcp-dot ${s.error ? 'error' : s.enabled ? 'connected' : 'disabled'}`} title={s.error ?? undefined} />
                 <div className="mcp-row-main" title={s.dirPath}>
                     <span className="mcp-row-title">
-                        <strong dir="auto">{s.name}</strong>
+                        <button type="button" className="skill-select" aria-pressed={selectedSkill === s} onClick={() => setSkillSelection(s.id)} dir="auto">{s.name}</button>
                         {s.shadowed && <span className="mcp-badge src-shadowed">{t('skillsShadowed')}</span>}
                     </span>
                     {s.error ? (
@@ -1251,48 +1258,8 @@ export function CapabilitiesPage({
                     ) : (
                         s.description && <span className="mcp-row-meta" dir="auto">{s.description}</span>
                     )}
-                    {!s.error && !s.shadowed && s.bodyChars != null && s.bodyChars > 0 && (
-                        <span className="mcp-row-meta" dir="auto">{tf('skillsBodyTokens', { n: formatChars(Math.round(s.bodyChars / 4)) })}</span>
-                    )}
-                    {s.shadowed && (
-                        <span className="mcp-row-meta">{t('skillsShadowedHint')}</span>
-                    )}
                 </div>
-                <div className="mcp-row-actions">
-                    <button
-                        type="button"
-                        className="icon-btn"
-                        title={t('skillsEdit')}
-                        aria-label={t('skillsEdit')}
-                        onClick={() => onOpenSkill(s.dirPath)}
-                    >
-                        <Pencil size={13} />
-                    </button>
-                    <button
-                        type="button"
-                        className="icon-btn"
-                        title={t('skillsReveal')}
-                        aria-label={t('skillsReveal')}
-                        onClick={() => onRevealSkillsFolder(s.dirPath)}
-                    >
-                        <FolderOpen size={13} />
-                    </button>
-                    <button
-                        type="button"
-                        className={`icon-btn danger${confirmDelete === s.id ? ' confirm' : ''}`}
-                        aria-label={confirmDelete === s.id ? t('skillsDeleteConfirm') : t('skillsDelete')}
-                        title={confirmDelete === s.id ? t('skillsDeleteConfirm') : t('skillsDelete')}
-                        onClick={() => {
-                            if (confirmDelete === s.id) {
-                                setConfirmDelete(null);
-                                onDeleteSkill(s.dirPath);
-                                return;
-                            }
-                            setConfirmDelete(s.id);
-                        }}
-                    >
-                        {confirmDelete === s.id ? <Check size={13} /> : <Trash2 size={13} />}
-                    </button>
+                <span className="mcp-badge">{sourceLabel(s.source)}</span><div className="mcp-row-actions">
                     <button
                         type="button"
                         className={`mcp-switch ${s.enabled ? 'on' : ''}`}
@@ -1314,25 +1281,13 @@ export function CapabilitiesPage({
         const groups = SKILL_SOURCES
             .map((source) => ({
                 source,
-                items: skills
+                items: visibleSkills
                     .filter((s) => s.source === source)
                     .sort((a, b) => (a.shadowed === b.shadowed ? a.name.localeCompare(b.name) : a.shadowed ? 1 : -1)),
             }))
             .filter((g) => g.items.length > 0);
         return (
-            <section className="settings-card">
-                <div className="settings-section-head">
-                    <div className="settings-section-icon" aria-hidden="true">
-                        <BookOpen size={15} />
-                    </div>
-                    <div>
-                        <h3>{skills.length} {t('skillsTitle')}</h3>
-                    </div>
-                    <button type="button" className="cred-local-connect" onClick={onNewSkill}>
-                        <Plus size={13} />
-                        <span>{t('skillsNew')}</span>
-                    </button>
-                </div>
+            <>{inventorySearch}<div className="inventory-split"><section className="settings-card">
                 <div className="settings-card-body">
                     {skills.length === 0 ? (
                         <div className="mcp-empty">
@@ -1343,16 +1298,50 @@ export function CapabilitiesPage({
                                 <span>{t('skillsOpenFolder')}</span>
                             </button>
                         </div>
-                    ) : (
+                    ) : visibleSkills.length === 0 ? <div className="inventory-no-results" role="status">{t('surfaceNoMatches')}</div> : (
                         groups.map((g) => (
                             <div key={g.source} className="mcp-group">
-                                <div className="mcp-group-label">{sourceLabel(g.source)}</div>
                                 {g.items.map(renderSkillRow)}
                             </div>
                         ))
                     )}
                 </div>
             </section>
+            {selectedSkill && <aside className="inventory-inspector" aria-label={t('miniDetails')}><h3 dir="auto">{selectedSkill.name}</h3>
+                <div className="kv"><span>{t('surfaceSource')}</span><span>{sourceLabel(selectedSkill.source)}</span></div><div className="kv"><span>{t('surfaceStatus')}</span><span>{t(selectedSkill.enabled ? 'mcpStateEnabled' : 'mcpStateDisabled')}</span></div>
+                <p><code dir="ltr">{selectedSkill.dirPath}</code></p>
+                {selectedSkill.error && <p className="mcp-row-error" role="alert" dir="auto">{selectedSkill.error}</p>}
+                {selectedSkill.shadowed && <p>{t('skillsShadowedHint')}</p>}
+                <p dir="auto">{selectedSkill.description}</p>{selectedSkill.bodyChars != null && <p className="skill-size">{tf('skillsBodyTokens', { n: formatChars(Math.round(selectedSkill.bodyChars / 4)) })}</p>}<div className="skill-inspector-actions">
+                    <button
+                        type="button"
+                        className="icon-btn"
+                        title={t('skillsReveal')}
+                        aria-label={t('skillsReveal')}
+                        onClick={() => onRevealSkillsFolder(selectedSkill.dirPath)}
+                    >
+                        <FolderOpen size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        className={`icon-btn danger${confirmDelete === selectedSkill.id ? ' confirm' : ''}`}
+                        aria-label={confirmDelete === selectedSkill.id ? t('skillsDeleteConfirm') : t('skillsDelete')}
+                        title={confirmDelete === selectedSkill.id ? t('skillsDeleteConfirm') : t('skillsDelete')}
+                        onClick={() => {
+                            if (confirmDelete === selectedSkill.id) {
+                                setConfirmDelete(null);
+                                onDeleteSkill(selectedSkill.dirPath);
+                                return;
+                            }
+                            setConfirmDelete(selectedSkill.id);
+                        }}
+                    >
+                        {confirmDelete === selectedSkill.id ? <Check size={13} /> : <Trash2 size={13} />}
+                    </button>
+</div>
+                <button type="button" className="settings-ghost-action" onClick={() => onOpenSkill(selectedSkill.dirPath)}><ExternalLink size={13} /><span>{t('surfaceOpenFile')}</span></button>
+            </aside>}
+            </div></>
         );
     };
 
@@ -1388,6 +1377,7 @@ export function CapabilitiesPage({
                 <div className="settings-head-copy">
                     <h2>{tab === 'servers' ? t('mcpServersTab') : tab === 'skills' ? t('skillsTitle') : t('mcpMarketTab')}</h2>
                 </div>
+                {tab !== 'marketplace' && <button type="button" className="page-add" onClick={tab === 'servers' ? () => openEditor() : onNewSkill}><Plus size={14} /><span>{t(tab === 'servers' ? 'mcpAddServer' : 'skillsNew')}</span></button>}
                 <button
                     type="button"
                     className="icon-btn"

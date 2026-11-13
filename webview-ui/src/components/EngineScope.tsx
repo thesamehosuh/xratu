@@ -35,8 +35,7 @@ export function NativeInventory({ state, section, refresh }: { state: NativeSetu
 }
 
 export function NativeConfiguration({ state, send, refresh, onManageXratu }: { state: NativeSetupState | null; send: (message: ToExtensionMessage) => void; refresh: () => void; onManageXratu: () => void }) {
-    return <section className="settings-page native-config"><header className="settings-head"><h2>{t('surfaceAgents')}</h2></header><div className="settings-scroll">
-        <button type="button" className="secondary-btn" onClick={onManageXratu}><FolderOpen size={14} aria-hidden="true" /><span>{t('nativeManageXratuAgents')}</span></button>
+    return <section className="settings-page native-config"><header className="settings-head"><h2>{t('surfaceAgents')}</h2><button type="button" className="page-add" onClick={onManageXratu}><FolderOpen size={14} aria-hidden="true" /><span>{t('nativeManageXratuAgents')}</span></button></header><div className="settings-scroll">
         <NativeInventory state={state} section="agents" refresh={refresh} />
         {state?.phase === 'attention' && <button type="button" className="secondary-btn" onClick={() => send({ type: 'setupOpen', path: 'free' })}>{t('setupResume')}</button>}
     </div></section>;

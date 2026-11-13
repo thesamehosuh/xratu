@@ -129,6 +129,7 @@ export class OpenCodeEngine implements AgentEngine {
     }
     async configuration(workspace: string, signal: AbortSignal) {
         const { client } = await this.server.connect();
+        await client.model.list({ location: { directory: workspace } }, { signal });
         await this.syncMcp(client, workspace, signal);
         const input = { location: { directory: workspace } };
         let agentsErrorKey: string | undefined;
@@ -225,9 +226,12 @@ export class OpenCodeEngine implements AgentEngine {
         yield { type: 'status', value: 'connecting' };
         const { client, baseUrl, headers } = await this.server.connect();
         turn.signal.throwIfAborted();
+        // A read-only catalog request fences plugin activation before creating
+        // sessions or changing native model, permissions and bridge state.
+        const catalog = (await client.model.list({ location: { directory: turn.workspace } }, { signal: turn.signal })).data;
         await this.syncMcp(client, turn.workspace, turn.signal);
         const options = { signal: turn.signal };
-        const catalogModel = turn.variant ? (await this.models(turn.workspace, turn.signal)).find((entry) => `${entry.providerID}/${entry.id}` === turn.model) : undefined;
+        const catalogModel = turn.variant ? catalog.find((entry) => `${entry.providerID}/${entry.id}` === turn.model) : undefined;
         const variant = catalogModel?.variants.some((entry) => entry.id === turn.variant) ? turn.variant : 'default';
         const model = { providerID: turn.model.slice(0, slash), id: turn.model.slice(slash + 1), variant };
         // Keep the native tool catalog while refusing every request. Free

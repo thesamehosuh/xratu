@@ -112,6 +112,16 @@ try {
     check('interrupted monitor wake remains hidden on restore', restoredNotification.pendingTurn.hidden, true);
     await store.delete(notification.id);
 
+    // History displays the saved engine before resume, including after index repair.
+    const native = await store.create(ws);
+    await store.save(native.id, { workspace: ws, model: 'provider/model', summary: null, localHistory: [], uiHistory: [], engineSession: { engineId: 'opencode', nativeSessionId: 'native-one', workspace: ws } });
+    check('picker carries native engine identity', (await store.list(ws)).find(item => item.id === native.id).engineId, 'opencode');
+    check('picker carries saved model', (await store.list(ws)).find(item => item.id === native.id).model, 'provider/model');
+    const historyRestart = new LocalSessionStore(root);
+    check('reconciled picker retains engine identity', (await historyRestart.list(ws)).find(item => item.id === native.id).engineId, 'opencode');
+    check('listing does not change native resume identity', (await store.load(native.id)).engineSession.nativeSessionId, 'native-one');
+    await store.delete(native.id);
+
     // 1. Fresh session: workspace label placeholder.
     const meta = await store.create(ws);
     check('create seeds workspace label', meta.title, 'fake-workspace');

@@ -1,45 +1,30 @@
-.engines-page .engines-content { gap: 12px; padding-block: 20px; }
-.engines-page .engine-card {
-    --engine-line: color-mix(in srgb, var(--vscode-foreground), transparent 85%);
-    display: flex; flex-direction: column; gap: 14px; max-width: 540px;
-    border: 1px solid var(--engine-line); border-radius: 8px; padding: 16px;
-    background: color-mix(in srgb, var(--vscode-sideBar-background), var(--vscode-foreground) 3%);
-    box-sizing: border-box; min-width: 0;
-}
-.engines-page .engine-card.selected { border-color: var(--xratu-accent); background: color-mix(in srgb, var(--vscode-sideBar-background), var(--vscode-foreground) 4%); }
-.engine-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.engine-heading h3 { margin: 0; font-size: var(--xratu-fs-base); font-weight: 600; }
-.engine-mark { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid var(--engine-line); border-radius: 6px; background: var(--vscode-sideBar-background); }
-.engines-page .engine-mark svg, .engine-mark img { width: 19px; height: 19px; }
-.engine-mark.xratu { border-color: transparent; }
-.engine-active { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; color: var(--xratu-accent); font-size: var(--xratu-fs-sm); }
-.engines-page code.engine-version { color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-xs); margin-inline-start: auto; background: transparent; padding: 0; border: 0; }
-.engine-version + .engine-active { margin-inline-start: 0; }
-.engine-features { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
-.engine-features span { display: inline-flex; align-items: center; gap: 5px; }
-.engine-features .engine-free { color: var(--xratu-accent); }
-.engine-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; justify-content: space-between; padding-block-start: 12px; border-block-start: 1px solid var(--engine-line); min-height: 28px; }
-.engine-built-in, .engine-status { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
-.engine-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.engine-status.ready { color: var(--vscode-testing-iconPassed); }
-.engine-status.failed, .engine-status.unsupported { color: var(--vscode-editorWarning-foreground); }
-.engines-page .engine-card .primary-btn, .engines-page .engine-card .secondary-btn { width: auto; min-height: 28px; padding: 5px 10px; gap: 5px; font-size: var(--xratu-fs-sm); border-radius: 5px; white-space: normal; }
-.engine-controls { border-block-start: 1px solid var(--engine-line); padding-block-start: 10px; display: flex; flex-direction: column; gap: 8px; }
-.engine-maintenance { border-block-start: 1px solid var(--engine-line); padding-block-start: 10px; font-size: var(--xratu-fs-sm); }
-.engine-maintenance p { margin-block: 0 10px; color: var(--vscode-descriptionForeground); line-height: 1.6; }
-.engine-maintenance-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.engine-remove-confirm { margin-block-start: 12px; }
-.engine-details { width: 100%; min-width: 0; font-size: var(--xratu-fs-sm); }
-.engine-details summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
-.engine-details > summary, .engine-install-source { display: flex; align-items: center; gap: 6px; }
-.engine-details > summary { inline-size: fit-content; }
-.engine-install-source { margin-block-start: 10px; color: var(--vscode-descriptionForeground); }
-.engine-install-source > svg { flex-shrink: 0; }
-.engine-details p { color: var(--vscode-descriptionForeground); margin-block: 10px 0; line-height: 1.6; }
-.engine-details label { display: block; margin-block: 12px 6px; }
-.engine-details input { width: 100%; min-width: 0; box-sizing: border-box; background: var(--xratu-surface-inset); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--engine-line)); padding: 6px 8px; border-radius: 4px; margin-block-end: 8px; }
-.engine-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
-.engine-path { font-family: var(--vscode-editor-font-family, monospace); overflow-wrap: anywhere; font-size: var(--xratu-fs-sm); }
-.engine-download { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; font-size: var(--xratu-fs-sm); }
-.engine-download progress { flex: 1; min-width: 80px; height: 5px; accent-color: var(--xratu-accent); }
-@media (max-width: 700px) { .engines-page .engine-card { padding: 12px; gap: 12px; } .engine-heading { flex-wrap: wrap; } .engine-active > span { display: none; } }
+.engines-page .engine-main { display:flex; flex-direction:column; gap:20px; min-width:0; }
+.engines-page .engine-card { display:flex; flex-direction:column; gap:0; min-width:0; padding:20px; border:1px solid var(--page-line); border-radius:12px; background:transparent; }
+.engines-page .engine-heading { display:flex; align-items:center; gap:12px; min-width:0; }
+.engines-page .engine-heading > :is(img,svg) { width:24px; height:24px; flex-shrink:0; color:var(--page-muted); }
+.engines-page .engine-heading h3 { margin:0; font-size:18px; font-weight:600; }
+.engines-page :is(.engine-status,.engine-active) { margin-inline-start:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--page-muted); }
+.engines-page .engine-active { color:var(--surface-accent); }
+.engines-page .engine-status:is(.failed,.unsupported) { color:var(--vscode-editorWarning-foreground); }
+.engines-page .engine-features { display:flex; flex-wrap:wrap; gap:8px 18px; margin-block:20px 16px; font-size:11px; color:var(--page-muted); }
+.engines-page .engine-facts .kv { display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding-block:6px; font-size:12px; }
+.engines-page .engine-facts .kv > :first-child { color:var(--page-muted); }
+.engines-page .engine-facts .kv > :last-child { min-width:0; overflow-wrap:anywhere; text-align:end; }
+.engines-page .engine-facts code { background:transparent; padding:0; font-size:11px; }
+.engines-page .engine-footer { display:flex; flex-wrap:wrap; gap:10px; margin-block-start:16px; }
+.engines-page .engine-action { display:inline-flex; align-items:center; justify-content:center; gap:7px; width:auto; min-height:35px; padding:7px 13px; border:1px solid var(--page-line); border-radius:8px; background:transparent; color:var(--page-ink); font:inherit; font-size:12px; line-height:1.65; white-space:nowrap; }
+.engines-page .engine-action:hover:not(:disabled) { background:var(--vscode-toolbar-hoverBackground,color-mix(in srgb,var(--page-ink) 6%,transparent)); }
+.engines-page .engine-action:disabled { opacity:.5; cursor:default; }
+.engines-page .engine-inspector { background:transparent; }
+.engines-page .engine-inspector h3 { font-size:14px; margin:0 0 16px; }
+.engines-page .engine-inspector .kv { border:0; padding-block:6px; }
+.engines-page .engine-installation { margin-block-start:20px; padding-block-start:20px; border-block-start:1px solid var(--page-line); }
+.engines-page .engine-installation label { display:block; color:var(--page-muted); font-size:11px; margin-block-end:7px; }
+.engines-page .engine-installation input { display:block; width:100%; min-width:0; background:transparent; color:var(--page-ink); border:1px solid var(--page-line); border-radius:8px; padding:9px 10px; font:inherit; font-size:12px; }
+.engines-page .engine-install-actions { display:flex; flex-wrap:wrap; gap:8px; margin-block-start:14px; }
+.engines-page .engine-maintenance { margin-block-start:20px; font-size:12px; }
+.engines-page .engine-maintenance > summary { color:var(--page-muted); cursor:pointer; }
+.engines-page .engine-install-source { display:flex; flex-direction:column; gap:6px; color:var(--page-muted); margin-block:10px; }
+.engines-page .engine-version { display:block; margin-block-start:12px; font-size:12px; background:transparent; }
+.engines-page .engine-remove-confirm p { margin-block:12px; }
+.engines-page .setup-install { margin-block-start:16px; }

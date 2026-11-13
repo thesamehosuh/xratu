@@ -52,6 +52,7 @@ const MAX_DISCOVERED_TOOLS = 4096;
 export type ExternalServerState = 'disabled' | 'connected' | 'error' | 'unconfigured';
 
 export interface ExternalServerStatus {
+    tools?: string[];
     name: string;
     transport: 'stdio' | 'websocket' | 'streamableHttp' | 'sse' | 'unknown';
     state: ExternalServerState;
@@ -240,6 +241,7 @@ export class ExternalMcpManager {
     async getServerStatuses(): Promise<ExternalServerStatus[]> {
         const config = await this.loadConfig();
         const out: ExternalServerStatus[] = [];
+        const inventoryCurrent = this._inventoryConfig === createHash('sha256').update(JSON.stringify(config)).digest('hex');
         for (const [name, cfg] of Object.entries(config.servers)) {
             const transport = resolveTransport(cfg) ?? 'unknown';
             const base = this._statuses.get(name);
@@ -251,6 +253,7 @@ export class ExternalMcpManager {
                 transport,
                 state,
                 toolCount: state === 'connected' ? base?.toolCount ?? null : null,
+                tools: inventoryCurrent && state === 'connected' ? this._inventory.filter(tool => tool.serverName === name).map(tool => tool.originalName) : [],
                 lastError: state === 'error' ? base?.lastError ?? null : null,
                 source: config.sources[name] ?? 'global',
             });

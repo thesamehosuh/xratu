@@ -1,3 +1,4 @@
+import { Dropdown } from './Dropdown';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
@@ -26,7 +27,6 @@ import {
 } from 'lucide-react';
 import type { ComposerAttachment, ModelCapability, ModelPingState, ThinkingLevel, TokenUsage } from '../types';
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
-import { formatCost, type Cost } from '../cost';
 import { getLocale, t, tf, tOrRaw } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 import { readComposerDraft, saveComposerDraft, readComposerRecoveries, saveComposerRecoveries, type ComposerRecovery } from '../composerDrafts';
@@ -257,6 +257,8 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
 
 interface InputBarProps {
     draftKey: string;
+    /** Re-measure the same textarea when conversation typography changes. */
+    typographyKey?: string;
     busy: boolean;
     onSend: (text: string, attachments: ComposerAttachment[], revision?: number) => boolean | void;
     acceptedSend?: { requestId: string; revision: number; edit?: boolean; attachments?: ComposerAttachment[] } | null;
@@ -271,6 +273,9 @@ interface InputBarProps {
     /** Per-model capability badges (vision / no tools). */
     modelCapabilities?: Record<string, ModelCapability>;
     engineLabel?: string;
+    activeEngine?: 'xratu' | 'opencode';
+    onSelectEngine?: (engine: 'xratu' | 'opencode') => void;
+    engineSwitchDisabled?: boolean;
     modelPings?: Record<string, ModelPingState>;
     onPingModel?: (model: string, automatic?: boolean) => void;
     /** Per-model context windows, shown as a compact badge. */
@@ -292,10 +297,6 @@ interface InputBarProps {
     onSetThinkingLevel?: (level: string | null) => void;
     usage?: TokenUsage | null;
     showContextMeter?: boolean;
-    /** Summed cost of the conversation so far (null when unknown). */
-    sessionCost?: Cost | null;
-    /** Open the usage page (the cost pill is a shortcut into it). */
-    onOpenUsage?: () => void;
     /** Server-provided window for the selected model (null until known). */
     contextWindow?: number | null;
     /** Host-resolved DEFAULT window for the model (without any user override)
@@ -337,6 +338,7 @@ interface InputBarProps {
 
 export function InputBar({
     draftKey,
+    typographyKey,
     acceptedSend,
     onAcceptedSendApplied,
     busy,
@@ -347,7 +349,7 @@ export function InputBar({
     models = [],
     modelDisplayNames,
     modelCapabilities,
-    engineLabel, modelPings,
+    engineLabel, activeEngine, onSelectEngine, engineSwitchDisabled, modelPings,
     onPingModel,
     modelWindows,
     selectedModel,
@@ -361,8 +363,6 @@ export function InputBar({
     onSetThinkingLevel,
     usage,
     showContextMeter = false,
-    sessionCost,
-    onOpenUsage,
     contextWindow,
     defaultContextWindow,
     planMode = false,
@@ -675,13 +675,38 @@ export function InputBar({
         };
     }, [attachMenuOpen]);
 
-    // Auto-grow the textarea up to its max-height.
+    // Measure expanded geometry, even while the mounted input is a slim pill.
+    const resizeTextarea = useCallback(() => {
+        const el = ref.current;
+        if (!el || !el.clientWidth) return;
+        el.classList.add('is-sizing');
+        el.style.height = 'auto';
+        const maximum = parseFloat(getComputedStyle(el).maxHeight) || 140;
+        el.style.height = `${Math.min(el.scrollHeight, maximum)}px`;
+        el.classList.remove('is-sizing');
+    }, []);
+    useLayoutEffect(resizeTextarea, [value, typographyKey, resizeTextarea]);
     useEffect(() => {
         const el = ref.current;
         if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-    }, [value]);
+        const container = el.closest('.compose-dock') ?? el.parentElement ?? el;
+        let width = container.getBoundingClientRect().width;
+        let resizeFrame = 0;
+        const observer = new ResizeObserver(() => {
+            const next = container.getBoundingClientRect().width;
+            if (Math.abs(next - width) < .5) return;
+            width = next;
+            cancelAnimationFrame(resizeFrame);
+            resizeFrame = requestAnimationFrame(resizeTextarea);
+        });
+        observer.observe(container);
+        document.fonts?.addEventListener('loadingdone', resizeTextarea);
+        return () => {
+            observer.disconnect();
+            cancelAnimationFrame(resizeFrame);
+            document.fonts?.removeEventListener('loadingdone', resizeTextarea);
+        };
+    }, [resizeTextarea]);
 
     const filteredModels = useMemo(() => {
         const q = normalizeModelQuery(filter);
@@ -1032,7 +1057,7 @@ export function InputBar({
     };
 
     return (
-        <div className="input-bar">
+        <div className={`input-bar${pickerOpen || policyOpen || attachMenuOpen || ctxOpen || branchPicker ? ' menu-open' : ''}`}>
             <div className="composer-prelude">
                 <div className="composer-status">{statusSlot}</div>
                 {(onTogglePlan || onToggleYolo) && <div className="composer-policies" ref={policyRef} onKeyDown={(event) => {
@@ -1224,6 +1249,7 @@ export function InputBar({
                 </div>
 
                 <div className="composer-chips">
+                    {onSelectEngine && <div className="composer-engine-picker" title={t('engineSwitchHint')}><Dropdown label={t('enginesTitle')} value={activeEngine ?? 'xratu'} disabled={engineSwitchDisabled} options={[{ value: 'xratu', label: t('engineXratu') }, { value: 'opencode', label: t('engineOpenCode') }]} onChange={value => { if (value !== activeEngine) onSelectEngine(value as 'xratu' | 'opencode'); }} /></div>}
                     <button
                         type="button"
                         className="chip-btn picker-chip"
@@ -1235,7 +1261,7 @@ export function InputBar({
                         title={t('pickModel')}
                     >
                         <Cpu size={12} />
-                        {engineLabel && <span className="composer-engine" dir="ltr">{engineLabel}</span>}
+                        {engineLabel && !onSelectEngine && <span className="composer-engine" dir="ltr">{engineLabel}</span>}
                         <span dir="ltr" className="chip-model-name">
                             {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}
                         </span>
@@ -1318,18 +1344,6 @@ export function InputBar({
                                 </div>
                             )}
                         </span>
-                    )}
-                    {formatCost(sessionCost) && (
-                        <button
-                            type="button"
-                            className="session-cost"
-                            dir="auto"
-                            onClick={onOpenUsage}
-                            title={t('sessionCostTitle')}
-                            aria-label={t('sessionCostTitle')}
-                        >
-                            {formatCost(sessionCost)}
-                        </button>
                     )}
                     </div>
                     <div className="composer-buttons">

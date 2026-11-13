@@ -36,7 +36,7 @@ for (const locale of ['fa', 'en'] as const) for (const width of [420, 900]) {
         expect((await sent(page)).some((m) => m.type === 'openBundledGuide' && m.guide === 'offline')).toBe(true);
         const overflow = await page.locator('.settings-page').evaluate((el) => el.scrollWidth - el.clientWidth);
         expect(overflow).toBeLessThanOrEqual(1);
-        await page.locator('.sidebar-back').click();
+        await page.locator('.toolbar-back-work').click();
         await expect(page.locator('.app .offline-banner')).toBeVisible();
     });
 }
@@ -68,50 +68,16 @@ test('Ollama download progress, cancellation and confirmed deletion', async ({ p
     await expect(page.getByRole('button', { name: 'Download model', exact: true })).toBeDisabled();
 });
 
-test('provider onboarding and measured latency retain errors and unknown prices', async ({ page }) => {
+test('connection dialog keeps provider onboarding and the page omits the legacy comparison', async ({ page }) => {
     await page.goto('/');
     await host(page, { type: 'locale', locale: 'en' });
     await host(page, { type: 'showChat' });
     await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
-    await page.getByRole('radio', { name: 'Avalai', exact: true }).click();
+    await page.locator('.cred-provider-box input').fill('Avalai');
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');
     await page.locator('.drawer-head .icon-btn').click();
-    await page.getByText('Compare connection latency', { exact: true }).click();
-    await page.getByRole('button', { name: 'Test active model' }).click();
-    expect((await sent(page)).some((m) => m.type === 'benchmarkProvider')).toBe(true);
-    await host(page, { type: 'providerBenchmark', credentialId: 'avalai', model: 'same-model', busy: false, firstTokenMs: 150, totalMs: 300, price: { input: 1, output: 2, currency: 'USD' }, cost: { amount: 0.0001, currency: 'USD' } });
-    await expect(page.locator('.provider-comparison')).toContainText('First token: 150 ms');
-    await expect(page.locator('.provider-comparison')).toContainText('input 1, output 2 USD');
-    await host(page, { type: 'providerBenchmark', credentialId: 'other', model: 'same-model', busy: false, error: 'Provider unavailable' });
-    await expect(page.locator('.provider-comparison')).toContainText('Provider unavailable');
-    await expect(page.locator('.provider-comparison .runtime-model-row')).toHaveCount(2);
-});
-
-test('offline benchmarks allow only the active loopback connection', async ({ page }) => {
-    await page.goto('/');
-    await host(page, { type: 'locale', locale: 'en' });
-    await host(page, { type: 'showChat' });
-    await host(page, { type: 'savedCredentials', credentials: [] });
-    await host(page, { type: 'openCredentials' });
-    await host(page, { type: 'runtimePreferences', offline: true, errorExplanations: true });
-    await page.locator('.drawer-head .icon-btn').click();
-    await page.getByText('Compare connection latency', { exact: true }).click();
-    const button = page.getByRole('button', { name: 'Test active model' });
-    const connection = { id: 'test', providerId: 'custom', maskedKey: '', label: 'Test', active: true };
-    for (const baseUrl of ['https://provider.example/v1', 'http://localhost.evil.test/v1', 'http://localhost:11434@provider.example/v1', 'http://192.168.1.2:11434/v1']) {
-        await host(page, { type: 'savedCredentials', credentials: [{ ...connection, baseUrl }] });
-        await expect(button).toBeDisabled();
-    }
-    for (const baseUrl of ['http://localhost:11434/v1', 'http://127.0.0.1:1234/v1', 'http://[::1]:11434/v1']) {
-        await host(page, { type: 'savedCredentials', credentials: [{ ...connection, baseUrl }] });
-        await expect(button).toBeEnabled();
-    }
-    await button.click();
-    expect((await sent(page)).some((m) => m.type === 'benchmarkProvider')).toBe(true);
-    await host(page, { type: 'providerBenchmark', credentialId: 'test', model: 'test', busy: true });
-    await expect(button).toBeDisabled();
-    await host(page, { type: 'providerBenchmark', credentialId: 'test', model: 'test', busy: false, errorKey: 'insecureEndpointHttp' });
-    await expect(page.locator('.provider-comparison')).not.toContainText('insecureEndpointHttp');
-    await expect(button).toBeEnabled();
+    await expect(page.locator('.provider-comparison')).toHaveCount(0);
+    expect((await sent(page)).some(message => message.type === 'benchmarkProvider')).toBe(false);
 });

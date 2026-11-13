@@ -514,6 +514,11 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     const tools = await listing;
     assert.deepEqual(tools.map(tool => tool.serverName), ['first', 'second']);
     assert.ok(tools.every(tool => tool.description.includes('untrusted external metadata') && !tool.autoApprove));
+    const statuses = await manager.getServerStatuses();
+    assert.deepEqual(statuses.map(server => server.tools), [['read'], ['read']], 'connected inventories show real tool names');
+    config.servers.first = { url: 'https://changed.example/mcp' };
+    assert.deepEqual((await manager.getServerStatuses()).map(server => server.tools), [[], []], 'a changed configuration must not show stale tool names');
+    config.servers.first = {};
     const retrying = new ExternalMcpManager(async () => config);
     let attempts = 0;
     retrying.connect = name => {

@@ -5989,6 +5989,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             name: s.name,
             state: s.state,
             toolCount: s.toolCount,
+            tools: s.tools,
             lastError: s.lastError,
             source: s.source,
         }));
@@ -6679,13 +6680,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private async _reloadWebviewChat(): Promise<void> {
         if (!this._view) return;
-        // webview.html reload destroys the old page; the template defaults to
-        // welcome-screen shown. The fresh page sends webviewReady, whose
-        // handler runs _showStartScreen() exactly once - never call it here
-        // too: both calls replay the chat history and every message renders
-        // TWICE on the fresh page (hello, response, hello, response).
-        this._startupPage.reset();
-        this._view.webview.html = this._getHtmlForWebview(this._view.webview);
+        // Session adoption is already serialized and settled. Replay into the
+        // mounted page so navigation, docking and managed browser nodes survive.
+        this._view.webview.postMessage({ type: 'resetConversation' });
+        if (this._globalState.get<boolean>('xratu.setupCompleted') !== true) {
+            await this._showStartScreen();
+            return;
+        }
+        this._pushSessionState();
+        this._restoreChatUI();
+        this._postBackgroundJobs();
+        this._view.webview.postMessage({ type: 'showChat' });
+        void this._fetchModels();
     }
 
     /** Session picker listing for the webview. With `all` the list spans
@@ -6693,7 +6699,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     async _listSessions(all: boolean): Promise<void> {
         const metas = await this._localSessionStore.list(all ? undefined : this._localWorkspaceKey());
         const pr = new Map((await this._pullRequests.service.store.sessions().catch(error => { diagnosticsChannel?.appendLine(`PR session badges: ${String(error)}`); return []; })).map(state => [state.sessionId, state]));
-        const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
+        const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, engineId: m.engineId, model: m.model, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
         this._view?.webview.postMessage({ type: 'sessionList', items, currentId: this._sessionId });
     }
 
@@ -6701,7 +6707,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     async _searchSessions(query: string, all: boolean, requestId?: number): Promise<void> {
         const metas = await this._localSessionStore.search(query, all ? undefined : this._localWorkspaceKey());
         const pr = new Map((await this._pullRequests.service.store.sessions().catch(error => { diagnosticsChannel?.appendLine(`PR session badges: ${String(error)}`); return []; })).map(state => [state.sessionId, state]));
-        const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
+        const items = metas.map((m) => ({ id: m.id, title: m.title, workspace: m.workspace, updatedAt: m.updatedAt, engineId: m.engineId, model: m.model, prPending: pr.get(m.id)?.pending, prWatching: pr.get(m.id)?.watching }));
         this._view?.webview.postMessage({ type: 'sessionSearchResults', query, requestId, items });
     }
 
@@ -6805,14 +6811,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         // Persist the engine preference before replacing any in-memory state.
         // A storage failure cannot leave half of the target session adopted.
-        const engine = snapshot.engineSession?.engineId ?? 'xratu';
+        const empty = !snapshot.uiHistory.length && !snapshot.localHistory.length && !snapshot.pendingTurn && !snapshot.engineSession?.nativeSessionId;
+        const engine = empty ? this._activeEngine : snapshot.engineSession?.engineId ?? 'xratu';
         try { await this._globalState.update('xratu.activeEngine', engine); }
         catch { this.notifyBanner('warning', 'sessionLoadFailed'); return; }
         if (!current()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
         this._sessionEpoch++;
         this._resetSessionLedgers();
         this._activeEngine = engine;
-        this._engineSession = snapshot.engineSession;
+        this._engineSession = empty ? { engineId: engine } : snapshot.engineSession;
         this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
         this._sessionId = snapshot.sessionId;
         this._localHistory = snapshot.localHistory;
@@ -6831,7 +6838,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // untitled - otherwise the placeholder blocks first-message seeding
         // and is locked in as renamedTitle on the next save.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
-        this._restoreSessionConnection(snapshot);
+        if (!empty || (snapshot.engineSession?.engineId ?? 'xratu') === engine) this._restoreSessionConnection(snapshot);
         this._postEngineState();
         try {
             await this._globalState.update(this._lastSessionStateKey(), this._sessionId);
@@ -6908,10 +6915,42 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     /** Hard-delete a session (picker context action; the webview confirms).
-     *  Deleting the OPEN session falls back to a fresh empty one. */
+     *  Deleting the OPEN session reuses an unused conversation when available. */
     async _deleteSession(id: string): Promise<void> {
         await this._serializeSessionTransition(async () => {
-            if (id === this._sessionId && !(await this._clearHistoryNow())) return;
+            if (id === this._sessionId) {
+                const workspace = this._localWorkspaceKey();
+                const scanEpoch = this._sessionEpoch;
+                const scanIdentity = this._sessionWorkspaceIdentity();
+                let empty: string | undefined;
+                try {
+                    for (const meta of await this._localSessionStore.list(workspace)) {
+                        if (meta.id === id) continue;
+                        const saved = await this._localSessionStore.load(meta.id);
+                        if (saved && !saved.uiHistory.length && !saved.localHistory.length && !saved.pendingTurn &&
+                            !saved.engineSession?.nativeSessionId) { empty = meta.id; break; }
+                    }
+                } catch { this.notifyBanner('warning', 'sessionLoadFailed'); return; }
+                if (scanIdentity === null || scanEpoch !== this._sessionEpoch || id !== this._sessionId || scanIdentity !== this._sessionWorkspaceIdentity()) {
+                    this.notifyBanner('warning', 'sessionSwitchStale'); return;
+                }
+                if (empty) {
+                    await this._openSessionNow(empty);
+                    if (this._sessionId !== empty) return;
+                } else if (!this._history.length && !this._localHistory.length) {
+                    const epoch = this._sessionEpoch;
+                    const identity = this._sessionWorkspaceIdentity();
+                    this._cancelActiveRequests();
+                    if (!(await this._waitForSessionSettlement())) { this.notifyBanner('warning', 'sessionSwitchBusy'); return; }
+                    if (identity === null || epoch !== this._sessionEpoch || identity !== this._sessionWorkspaceIdentity()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
+                    try { await this._globalState.update(this._lastSessionStateKey(), undefined); }
+                    catch { this.notifyBanner('warning', 'sessionSaveFailed'); return; }
+                    this._sessionEpoch++;
+                    this._resetSessionLedgers();
+                    this._sessionWorkspace = workspace;
+                    await this._reloadWebviewChat();
+                } else if (!(await this._clearHistoryNow())) return;
+            }
             await this._deleteSessionNow(id);
         });
     }
@@ -6950,14 +6989,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
-        const engine = snapshot.engineSession?.engineId ?? 'xratu';
+        const empty = !snapshot.uiHistory.length && !snapshot.localHistory.length && !snapshot.pendingTurn && !snapshot.engineSession?.nativeSessionId;
+        const engine = empty ? this._activeEngine : snapshot.engineSession?.engineId ?? 'xratu';
         try { await this._globalState.update('xratu.activeEngine', engine); }
         catch { this.notifyBanner('warning', 'sessionLoadFailed'); return; }
         if (epoch !== this._sessionEpoch || workspace !== this._sessionWorkspaceIdentity()) {
             this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
-        this._engineSession = snapshot.engineSession;
+        this._engineSession = empty ? { engineId: engine } : snapshot.engineSession;
         this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
         this._activeEngine = engine;
         this._localHistory = snapshot.localHistory;
@@ -6985,7 +7025,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._sessionSummary = snapshot.summary ?? null;
         // Same placeholder rule as _openSessionNow - see resolveSessionTitle.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
-        this._restoreSessionConnection(snapshot);
+        if (!empty || (snapshot.engineSession?.engineId ?? 'xratu') === engine) this._restoreSessionConnection(snapshot);
         if (snapshot.pendingTurn?.prompt) {
             // Crash mid-run: fold the interrupted turn into the ledgers
             // exactly like the cancel path - the partial pills/text stay

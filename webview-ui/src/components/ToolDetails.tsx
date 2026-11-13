@@ -36,8 +36,9 @@ function SourceOutput({ text, path, start = 1 }: { text: string; path: string; s
     const raw = useMemo(() => text.split('\n'), [text]);
     const shown = expanded ? raw.slice(0, 2_000) : raw.slice(0, 80);
     const highlighted = useHighlightedCode(shown.join('\n'), extToLang(path));
+    const lineDigits = Math.max(3, String(start + shown.length - 1).length);
     return <><div className="detail-output-bar"><span>{t('agentOutput')}</span><CopyOutput text={text} /></div><div className="detail-source" dir="ltr">{shown.map((line, index) => <div className="detail-source-line" key={index}>
-        <span className="detail-line-number" aria-hidden="true">{start + index}</span><code dangerouslySetInnerHTML={{ __html: highlighted[index] ?? (escapeHtml(line) || '&nbsp;') }} />
+        <span className="detail-line-number" style={{ minInlineSize: `${lineDigits}ch` }} aria-hidden="true">{start + index}</span><code dangerouslySetInnerHTML={{ __html: highlighted[index] ?? (escapeHtml(line) || '&nbsp;') }} />
     </div>)}</div>{raw.length > shown.length && (expanded ? <p className="detail-limit">{t('toolOutputLimited')}</p> : <button type="button" className="detail-more" onClick={() => setExpanded(true)}>{tf('diffMoreLines', { count: String(raw.length - shown.length) })}</button>)}</>;
 }
 

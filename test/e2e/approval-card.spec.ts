@@ -330,8 +330,8 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
     // than re-parsing hex.
     const expected = await page.evaluate(() => {
         const probe = document.createElement('div');
-        probe.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--xratu-accent-faint').trim();
-        document.body.appendChild(probe);
+        probe.style.backgroundColor = 'var(--xratu-accent-faint)';
+        document.querySelector('.app')!.appendChild(probe);
         const v = getComputedStyle(probe).backgroundColor;
         probe.remove();
         return v;
@@ -378,8 +378,8 @@ test('the verdict button is accent-on-accent, never the theme button foreground'
     const colour = await page.locator('.approval-apply').evaluate((el) => getComputedStyle(el).color);
     const accent = await page.evaluate(() => {
         const probe = document.createElement('div');
-        probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--xratu-accent-strong').trim();
-        document.body.appendChild(probe);
+        probe.style.color = getComputedStyle(document.querySelector('.workbench')!).getPropertyValue('--xratu-accent-strong').trim();
+        document.querySelector('.app')!.appendChild(probe);
         const v = getComputedStyle(probe).color;
         probe.remove();
         return v;

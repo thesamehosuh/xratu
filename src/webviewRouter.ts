@@ -517,6 +517,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         });
                     });
                     break;
+                case 'selectColorTheme':
+                    void vscode.commands.executeCommand('workbench.action.selectTheme');
+                    break;
                 case 'openMcpSettings': {
                     // MCP config lives in dedicated JSON files, NOT
                     // VS Code settings - open the resolved file (the

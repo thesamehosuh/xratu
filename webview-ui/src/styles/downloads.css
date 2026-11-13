@@ -1,4 +1,4 @@
-.downloads-pane { min-width:0; min-height:0; overflow:auto; color:var(--vscode-foreground); background:var(--vscode-editor-background); }
+.downloads-pane { min-width:0; min-height:0; overflow:auto; color:var(--vscode-foreground); background:var(--page-canvas); }
 .downloads-content { max-width:800px; margin-inline:auto; padding:6px 20px 24px; }
 .download-row { padding-block:14px; }
 .download-row + .download-row { border-block-start:1px solid var(--page-line); }
@@ -26,3 +26,6 @@
 .download-error { color:var(--vscode-errorForeground); }
 .download-action-error { margin-block:6px 0; font-size:var(--xratu-fs-xs); line-height:1.8; color:var(--vscode-errorForeground); }
 @media (max-width:480px) { .downloads-content { padding:6px 14px 20px; } }
+.download-group { margin-block:18px 24px; }
+.download-group > h3 { margin:0 0 12px; font-size:13px; font-weight:600; }
+.download-group > .download-list { border:1px solid var(--page-line); border-radius:9px; padding-inline:16px; }

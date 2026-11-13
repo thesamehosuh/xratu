@@ -1,3 +1,4 @@
+import { openWorkPanel } from './navigation';
 import { expect, test } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
@@ -11,7 +12,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         for (const [name, type] of [['chat', 'showChat'], ['activity', 'showChat'], ['agents', 'showChat'], ['background', 'showChat'], ['changes', 'showChat'], ['settings', 'openSettings'], ['providers', 'openCredentials'], ['engines', 'openEngines'], ['welcome', 'showWelcome']]) {
             await page.evaluate(type => window.postMessage({ type }, '*'), type);
             if (['activity', 'agents', 'background', 'changes'].includes(name)) {
-                await page.locator(`#surface-tab-${name}`).click();
+                await openWorkPanel(page, name);
             }
             const pageSelector = ({ settings: '.preferences-page', providers: '.cred-page', engines: '.engines-page' } as Record<string, string>)[name];
             if (pageSelector) await expect(page.locator(pageSelector)).toBeVisible();
@@ -73,13 +74,13 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1854]) {
             window.postMessage({ type: 'locale', locale }, '*');
             window.postMessage({ type: 'showChat', workspaceKind: 'project' }, '*');
         }, locale);
-        await expect(page.locator('.chip-suggest')).toHaveCount(4);
+        await expect(page.locator('.composer-policy')).toHaveCount(2);
         await page.evaluate(async () => {
             await document.fonts.load('400 14px Vazirmatn', 'سلام');
             await document.fonts.ready;
         });
         await page.screenshot({ path: info.outputPath('empty-chat.png') });
-        const measurements = await page.locator('.chip-suggest').evaluateAll((buttons, locale) => {
+        const measurements = await page.locator('.composer-policy').evaluateAll((buttons, locale) => {
             const context = document.createElement('canvas').getContext('2d')!;
             return buttons.map(button => {
                 const label = button.querySelector('span')!;
@@ -137,6 +138,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         await assertCentered('.thinking-seg-opt');
         await page.evaluate(() => window.postMessage({ type: 'openSettings' }, '*'));
         await expect(page.locator('.preferences-page')).toBeVisible();
-        await assertCentered('.preferences-page .lang-chip');
+        await page.locator('.settings-configure-proxy').click();
+        await expect(page.locator('.routing-page')).toBeVisible();
+        await assertCentered('.routing-page .lang-chip');
     });
 }

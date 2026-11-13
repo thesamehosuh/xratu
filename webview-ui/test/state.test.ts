@@ -577,3 +577,17 @@ ok(!s.busy && !s.streamingId, 'failure still settles its own stream');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+// Session replacement removes old actions and usage while live jobs remain real.
+{
+    let old = reduceChat(createInitialChatState(), M('restoreUser', { value: 'old session' }));
+    old = reduceChat(old, M('startResponse'));
+    old = reduceChat(old, M('needsApproval', { approval_id: 'old-approval', approvals: [] }));
+    old = reduceChat(old, M('backgroundJobs', { jobs: [{ id: 'running', status: 'running' }] }));
+    const reset = reduceChat(old, M('resetConversation'));
+    ok(reset.messages.length === 0 && !reset.busy && reset.streamingId === null, 'session replay starts without old transcript or approvals');
+    ok(reset.lastUsage === null && reset.sessionCost === null, 'session replay clears old usage');
+    ok(reset.backgroundJobs === old.backgroundJobs, 'session replay retains live background jobs');
+    const restored = reduceChat(reset, M('restoreUser', { value: 'new session' }));
+    ok(restored.messages.length === 1 && restored.messages[0].text === 'new session', 'new transcript replays once');
+}

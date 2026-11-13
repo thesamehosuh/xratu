@@ -66,7 +66,7 @@ export function Welcome(props: WelcomeProps) {
     return <main className="onboarding">
         <div className="setup-shell">
             <header className="setup-top">
-                <span className="setup-brand"><img src={brandMark} alt="" /><span dir="ltr">Xratu</span></span>
+                <span className="setup-brand"><span className="xratu-brand-mark" style={{ maskImage: `url("${brandMark}")` }} aria-hidden="true" /><span dir="ltr">Xratu</span></span>
                 <div className="lang-choice" role="group" aria-label={t('settingsLanguage')}>
                     <button type="button" className={locale === 'fa' ? 'lang-chip active' : 'lang-chip'} onClick={() => props.onSetLocale('fa')}>فارسی</button>
                     <button type="button" className={locale === 'en' ? 'lang-chip active' : 'lang-chip'} onClick={() => props.onSetLocale('en')}>English</button>
