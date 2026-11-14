@@ -1549,6 +1549,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
         await post(page, { type: 'fullResponse', persian: 'Done' });
         await page.locator('.msg.user').click();
         await expect(page.locator('.tok-meter')).toBeVisible();
+        await expect(page.locator('.tok-pct')).toBeHidden();
+        await expect(page.locator('.tok-text')).toBeHidden();
         await expect(page.locator('.git-status')).toBeVisible();
         const ring = (await page.locator('.tok-meter').boundingBox())!;
         const composer = (await page.locator('.composer').boundingBox())!;
