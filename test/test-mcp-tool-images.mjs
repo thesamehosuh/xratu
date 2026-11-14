@@ -665,6 +665,44 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     assert.equal(connects, 1);
 }
 
+// Failed replacement clients are evicted, while a newer connection remains owned.
+for (const replacedDuringCall of [false, true]) {
+    const cfg = { url: 'https://replacement.example/mcp' };
+    const config = { servers: { changed: cfg }, sources: { changed: 'global' } };
+    const manager = new ExternalMcpManager(async () => config);
+    const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(['global', cfg, undefined])).digest('hex');
+    let attempts = 0, closed = 0;
+    const newer = Promise.resolve({ name: 'changed', configHash: hash, client: {} });
+    manager._states.set('changed', Promise.resolve({ name: 'changed', configHash: 'old', client: { close: async () => {} } }));
+    manager.connect = name => {
+        attempts++;
+        const state = { name, configHash: hash, client: {
+            close: async () => { closed++; },
+            callTool: async () => {
+                if (attempts > 1) return { content: [{ type: 'text', text: 'recovered' }] };
+                if (replacedDuringCall) manager._states.set(name, newer);
+                throw new Error('replacement connection closed');
+            },
+        } };
+        const pending = Promise.resolve(state);
+        manager._states.set(name, pending);
+        return pending;
+    };
+    assert.match((await manager.callTool('mcp__changed__read', {})).text, /remote outcome is unknown/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1, 'failed mutations are never replayed');
+    if (replacedDuringCall) {
+        assert.equal(manager._states.get('changed'), newer, 'cleanup cannot evict a newer connection');
+        assert.equal(closed, 0, 'cleanup cannot close a newer connection');
+    } else {
+        assert.equal(manager._states.has('changed'), false, 'the failed replacement is evicted');
+        assert.equal(closed, 1, 'the failed replacement is closed');
+        assert.equal((await manager.getServerStatuses())[0].state, 'error');
+        assert.equal((await manager.callTool('mcp__changed__read', {})).text, 'recovered');
+        assert.equal(attempts, 2, 'the next call reconnects');
+    }
+}
+
 console.log(failed === 0
     ? '\nall external-MCP image passthrough tests passed'
     : `\n${failed} FAILURE(S)`);

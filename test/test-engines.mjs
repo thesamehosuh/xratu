@@ -175,6 +175,30 @@ try {
         assert.equal(startup.requests.slice(0, firstMutation).filter(request => request.path.startsWith('/api/model')).length, 3);
     } finally { await startup.close(); }
     console.log('ok location plugin readiness waits before a single native session creation and prompt');
+    for (const restored of [false, true]) {
+        const test = await harness();
+        try {
+            const controller = new AbortController();
+            let entered;
+            const waiting = new Promise(resolve => { entered = resolve; });
+            test.engine.models = async (_workspace, signal) => {
+                entered();
+                await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+            };
+            const run = (async () => {
+                for await (const _event of test.engine.runTurn({ ...baseTurn, signal: controller.signal,
+                    ...(restored ? { session: { engineId: 'opencode', nativeSessionId: 'native-1', workspace: root } } : {}),
+                }, host)) { /* drain */ }
+            })();
+            await waiting;
+            controller.abort();
+            await assert.rejects(run, { name: 'AbortError' });
+            assert.equal(test.wasDisposed(), restored, 'catalog cancellation restarts only a restored execution');
+            assert.equal(test.requests.some(request => request.method !== 'GET'), false, 'cancelled startup cannot mutate a native session');
+        } finally { await test.close(); }
+    }
+    console.log('ok restored catalog cancellation restarts the server without affecting fresh sessions');
+
     const nativePolicy = await harness('resume');
     try {
         let session;
