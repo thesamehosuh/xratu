@@ -286,9 +286,9 @@ fs.writeFileSync(
     ok('description lists custom reviewer', description.includes('- reviewer: Project reviewer'));
     ok('description excludes invalid defs', !description.includes('mismatch'));
     ok('description states the fresh-context contract', description.includes('FRESH context'));
-    ok('description guides when to delegate', description.includes('When to delegate'));
-    ok('description guides when NOT to delegate', description.includes('When NOT to delegate'));
-    ok('description names tours/research as the delegation case', description.includes('tours'));
+    ok('description leaves delegation choice to the agent', !description.includes('When to delegate'));
+    ok('description retains the user-decision boundary', description.includes("Do not delegate what needs the user's decision"));
+    ok('description does not promote delegation for research', !description.includes('tours'));
     const schema = buildTaskToolSchema(defs);
     check('schema requires prompt (type comes from subagent_type or task_id)', JSON.stringify(schema.required), JSON.stringify(['prompt']));
     ok('schema enum line lists types', String(schema.properties.subagent_type.description).includes('explore'));

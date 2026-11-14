@@ -41,7 +41,6 @@ import { toolIcon, toolLabel } from '../toolMeta';
 import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 import { formatDuration, formatFullTimestamp, formatMessageTimestamp, formatRelativeTime } from '../datetime';
-import { formatCost } from '../cost';
 import { conversationPrefs, prefOn, toolFamily, transcriptOptions, type TranscriptPrefs, type TranscriptOptions } from '../transcriptPrefs';
 
 /** Open the native diff editor for completed edit call(s). */
@@ -2120,7 +2119,7 @@ function DecisionCard({
     );
 }
 
-function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, onAskReview, message, onApprovalDecision, onDecisionResponse, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
+function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activitySearch = '', observation = false, reviewSha, reviewTurnNumber, reviewFiles, message, onApprovalDecision, onDecisionResponse, onEditMessage, onRestoreCheckpoint, onReviewChanges, onOpenDiff, onBackgroundTerminal, onKillBackground, userIndex, busy, conn, taskList, dir: _dir = 'ltr', transcriptPrefs }: MessageItemProps) {
     const { role, status, renderedHtml, text, steps, tone, attachments } = message;
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
@@ -2362,7 +2361,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                 </div>
             )}
 
-            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome sha={reviewSha} files={reviewFiles} onReview={onReviewChanges ? (sha, path) => onReviewChanges(sha, path, reviewTurnNumber) : undefined} onAskReview={onAskReview} />}
+            {!readOnly && role === 'assistant' && status === 'done' && !busy && reviewSha && <CompletedOutcome sha={reviewSha} files={reviewFiles} onReview={onReviewChanges ? (sha, path) => onReviewChanges(sha, path, reviewTurnNumber) : undefined} />}
 
             {showFooter && (
                 <div className="msg-footer">
@@ -2375,11 +2374,6 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
                     >
                         {copied ? <Check size={13} /> : <Copy size={13} />}
                     </button>
-                    {message.usage?.cost && (
-                        <span className="msg-meta" dir="auto" title={t('costTitle')}>
-                            {formatCost(message.usage.cost)}
-                        </span>
-                    )}
                     <span className="msg-meta" title={formatFullTimestamp(message.createdAt)}>
                         {copied ? t('copiedMsg') : formatMessageTimestamp(message.createdAt)}
                     </span>
@@ -2426,7 +2420,6 @@ interface MessageItemProps {
     reviewSha?: string;
     reviewTurnNumber?: number;
     reviewFiles?: ReviewChange[];
-    onAskReview?: (text: string) => void;
     message: ChatMessage;
     onApprovalDecision?: (approvalId: string, decisions: Record<string, boolean>, sessionApprove?: boolean) => void;
     /** Answer a decision card (pick / free text / dismiss). */
@@ -2480,7 +2473,6 @@ export const MessageItem = memo(MessageItemImpl, (a, b) =>
     a.reviewSha === b.reviewSha &&
     a.reviewTurnNumber === b.reviewTurnNumber &&
     a.reviewFiles === b.reviewFiles &&
-    a.onAskReview === b.onAskReview &&
     a.message === b.message &&
     a.onApprovalDecision === b.onApprovalDecision &&
     a.onDecisionResponse === b.onDecisionResponse &&

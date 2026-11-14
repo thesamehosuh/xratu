@@ -1,3 +1,4 @@
+import { openPageNavigation, openSettingsFromWork } from './navigation';
 /**
  * MCP marketplace tab - browser smoke tests for the built bundle.
  *
@@ -96,9 +97,10 @@ async function openMarketplace(page: Page, locale: 'fa' | 'en' = 'fa'): Promise<
     await page.goto('/');
     await hostMessage(page, { type: 'locale', locale });
     await hostMessage(page, { type: 'showChat' });
-    await page.getByTitle(locale === 'fa' ? 'سرور ها و مهارت ها' : 'Servers & Skills').click();
+    await openSettingsFromWork(page);
     await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await hostMessage(page, { type: 'skillsState', skills: [] });
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: locale === 'fa' ? 'فروشگاه' : 'Marketplace', exact: true }).click();
     // The tab requests the catalog on first open.
     await expect.poll(async () => (await sentMessages(page)).some((m) => m.type === 'mcpMarketplaceGetState')).toBe(true);
@@ -109,6 +111,26 @@ async function openMarketplace(page: Page, locale: 'fa' | 'en' = 'fa'): Promise<
     // - seen as a flake only under the parallel run, where a second worker
     // competes for CPU and the commit lands later.
     await expect(page.locator('.mp-row').first()).toBeVisible();
+}
+
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1440]) {
+    test(`marketplace card content remains contained (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 950 });
+        await openMarketplace(page, locale);
+        await hostMessage(page, { ...MARKET_STATE, entries: [{ ...ENTRIES[1], name: 'LongUnbrokenServerName'.repeat(8), tagline: 'LongUnbrokenDescription'.repeat(12), author: 'LongUnbrokenAuthor'.repeat(8) }] });
+        const row = page.locator('.mp-row').first();
+        await expect(row.locator('.mcp-row-meta')).toContainText('LongUnbrokenDescription');
+        const overflow = await row.evaluate(card => {
+            const bounds = card.getBoundingClientRect();
+            return [...card.querySelectorAll('.mcp-row-title strong, .mcp-row-meta, .mp-meta')].map(element => {
+                const rect = element.getBoundingClientRect();
+                return Math.max(bounds.left - rect.left, rect.right - bounds.right);
+            });
+        });
+        expect(Math.max(...overflow)).toBeLessThanOrEqual(1);
+        await row.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('marketplace.png'), animations: 'disabled' });
+    });
 }
 
 test('marketplace tab renders catalog rows with their exact command', async ({ page }) => {
@@ -146,9 +168,9 @@ test('marketplace rows stay LTR inside the RTL page', async ({ page }) => {
     // The search box follows the UI language, not the row convention: its
     // placeholder is Persian, so an LTR box rendered the ellipsis backwards.
     expect(probe.inputDir).toBe('rtl');
-    // Transparent would mean the theme fixture failed to install.
+    // Approved neutral cards inherit the themed page surface.
     expect(probe.badgeBg).toBe('rgba(0, 0, 0, 0)');
-    expect(probe.rowBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(probe.rowBg).toBe('rgba(0, 0, 0, 0)');
     expect(probe.overflow).toBeLessThanOrEqual(1);
 });
 

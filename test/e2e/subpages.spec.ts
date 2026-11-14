@@ -1,3 +1,4 @@
+import { openPageNavigation } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
@@ -33,51 +34,58 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'openSettings' });
+        await openPageNavigation(page);
         await page.locator('.page-sidebar').getByRole('button', { name: locale === 'en' ? 'Usage' : 'مصرف', exact: true }).click();
         await expect(page.locator('.usage-loading')).toBeVisible();
         await expect(page.locator('.usage-metrics')).toHaveCount(0);
         await post(page, usage);
         const numbers = new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US');
-        const metrics = page.locator('.usage-metrics');
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(350));
-        await expect(metrics.locator('strong').nth(2)).toHaveText(numbers.format(2));
+        const metrics = page.locator('.usage-summary');
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(200));
+        await expect(metrics.locator('.usage-output-total')).toHaveText(numbers.format(50));
+        await page.locator('.usage-view-tabs button').nth(1).click();
         await expect(metrics).toContainText('$2.00');
+        await page.locator('.usage-breakdown-tabs button').nth(1).click();
         await expect(page.locator('.prov-row')).toHaveCount(2);
         await expect(page.locator('.prov-row').filter({ hasText: 'Cloud API' })).toContainText('$2.00');
-        await expect(page.locator('.prov-row').filter({ hasText: 'Cloud API' }).locator('.prov-stats')).toContainText(numbers.format(60));
+        await expect(page.locator('.prov-row').filter({ hasText: 'Cloud API' }).locator('.usage-model-tokens')).toContainText(numbers.format(120));
         await expect(page.locator('.usage-lifetime')).toContainText(numbers.format(3500));
+        await expect(page.locator('.cost-seg').last()).toHaveCSS('border-start-start-radius', '4px');
+        await expect(page.locator('.usage-activity-chart > header')).toHaveCSS('margin-bottom', '22px');
         await expect(page.locator('.cost-dates > span').first()).toHaveText(locale === 'en' ? '1' : '۱');
         await page.mouse.move(15, 15);
         await page.screenshot({ path: testInfo.outputPath('usage-overview.png') });
         await page.locator('.rate-disclosure > summary').click();
         await page.locator('.settings-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight; });
         await page.screenshot({ path: testInfo.outputPath('usage-rates.png') });
-        await page.locator('.usage-overview').scrollIntoViewIfNeeded();
+        await page.locator('.usage-activity-chart').scrollIntoViewIfNeeded();
 
         const model = page.locator('.cost-filters .dropdown').first();
         await model.locator('.dropdown-trigger').click();
-        await model.getByRole('option', { name: 'model-a', exact: true }).click();
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(120));
+        await page.getByRole('option', { name: 'model-a', exact: true }).click();
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(60));
         await expect(page.locator('.prov-row')).toHaveCount(1);
         await expect(page.locator('.cost-legend')).toContainText('model-a');
         await expect(page.locator('.cost-currencies')).toHaveCount(0);
         const host = page.locator('.cost-filters .dropdown').nth(1);
         await host.locator('.dropdown-trigger').click();
-        await host.getByRole('option', { name: 'Local gateway', exact: true }).click();
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(0));
+        await page.getByRole('option', { name: 'Local gateway', exact: true }).click();
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(0));
         await expect(page.locator('.prov-row')).toHaveCount(0);
         await page.locator('.usage-clear-filters').click();
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(350));
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(200));
         await expect(page.locator('.prov-row')).toHaveCount(2);
         await page.getByLabel(locale === 'en' ? 'Previous month' : 'ماه قبل', { exact: true }).click();
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(5));
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(4));
         await expect(page.locator('.prov-row')).toHaveCount(1);
         await expect(page.locator('.usage-lifetime')).toContainText(numbers.format(3500));
+        await expect(page.locator('.cost-seg').last()).toHaveCSS('border-start-start-radius', '4px');
+        await expect(page.locator('.usage-activity-chart > header')).toHaveCSS('margin-bottom', '22px');
 
         await post(page, { ...usage, history: [{ day: '2026-08-02', cells: [{ model: 'free-local', host: providers[0].host, input: 100, output: 20, cached: 0, USD: 0, IRT: 0 }] }] });
-        await expect(metrics.locator('strong').nth(1)).toHaveText(numbers.format(120));
+        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(100));
         await expect(page.locator('.usage-chart-empty')).toContainText(locale === 'en' ? 'Tokens were recorded without a cost' : 'توکن ثبت شده');
-        await expect(page.locator('.usage-period-cost')).not.toContainText('$0');
+        await expect(page.locator('.usage-summary-cost')).not.toContainText('$0');
         await page.getByRole('button', { name: locale === 'en' ? 'View token usage' : 'نمایش مصرف توکن', exact: true }).click();
         await expect(page.locator('.cost-cols')).toHaveAttribute('aria-label', locale === 'en' ? 'Daily tokens by model' : 'نمودار مصرف روزانه توکن به تفکیک مدل');
         await expect(page.locator('.cost-legend')).toContainText('free-local');
@@ -104,15 +112,18 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
             ? ['Providers', 'Engines', 'Servers', 'Marketplace', 'Skills', 'Agent files', 'Usage', 'Proxy', 'Settings']
             : ['ارائه دهنده ها', 'موتورهای اجرا', 'سرور ها', 'فروشگاه', 'مهارت ها', 'فایل های ایجنت', 'مصرف', 'پروکسی', 'تنظیمات'];
         for (const [index, name] of names.entries()) {
+            await openPageNavigation(page);
             const target = page.locator('.page-sidebar').getByRole('button', { name, exact: true });
             await target.focus();
             await page.keyboard.press('Enter');
+            await openPageNavigation(page);
             await expect(target).toHaveAttribute('aria-current', 'page');
+            if (width < 860) await page.locator('.toolbar > .sidebar-toggle').click();
             await expect(page.locator('.page-content h2')).toBeVisible();
             expect(await page.locator('.page-content').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
             await page.screenshot({ path: testInfo.outputPath(`page-${index}.png`) });
         }
-        await page.locator('.sidebar-back').click();
+        await page.locator('.toolbar-back-work').click();
         await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
     });
 }

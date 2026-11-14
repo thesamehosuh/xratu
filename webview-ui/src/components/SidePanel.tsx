@@ -31,7 +31,7 @@ export function SidePanel({ label, className, onClose, children }: {
         (focusables()[0] ?? panel).focus();
         const onKey = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
-                if (document.activeElement?.getAttribute('aria-expanded') === 'true') return;
+                if (document.activeElement?.getAttribute('aria-expanded') === 'true' || document.activeElement?.closest('[role="listbox"],[role="menu"]')) return;
                 event.preventDefault();
                 event.stopPropagation();
                 close.current();
@@ -54,7 +54,7 @@ export function SidePanel({ label, className, onClose, children }: {
         };
     }, []);
     return (
-        <div className="page-drawer-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+        <div className={`page-drawer-backdrop${className.includes('compact-dialog') ? ' compact-dialog-backdrop' : ''}`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
             <div ref={ref} className={className} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
                 {children}
             </div>

@@ -269,5 +269,13 @@ for (const [mode, directive] of [['en', REPLY_LANGUAGE_EN], ['fa', REPLY_LANGUAG
     ok(`native context respects ${mode} reply language`, buildNativeSystemContext(false, mode).includes(directive));
 }
 
+const execution = buildLocalSystemPrompt({ rulesContext: '', sessionSummary: null, planMode: false, evictedUserTurns: 0 });
+for (const [name, prompt] of [['built-in', execution], ['native', buildNativeSystemContext(false)]]) {
+    ok(`${name} skips checklists for simple fixes`, prompt.includes('Skip it for simple fixes and short tasks'));
+    ok(`${name} avoids per-tool checklist updates`, prompt.includes('not after every tool call'));
+    ok(`${name} does not direct broad research to subagents`, !prompt.includes('Prefer it for codebase-wide research'));
+}
+ok('native plan mode still requires the plan handoff', buildNativeSystemContext(true).includes('Draft the plan with update_task_list, then call exit_plan_mode'));
+
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

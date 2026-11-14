@@ -11,7 +11,7 @@ const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'ut
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
 const names = ['_sessionWorkspaceMatches', '_restoreSessionConnection', '_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
-names.push('_renameSession');
+names.push('_renameSession', '_reloadWebviewChat');
 names.push('_killBackgroundJob');
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
@@ -41,7 +41,7 @@ function harness() {
     host._cancelActiveRequests = () => { events.push('cancel'); host._abortControllers.clear(); };
     host._resetSessionLedgers = () => { events.push('reset'); host._sessionId = null; host._history = []; host._localHistory = []; host._sessionCost = { USD: 0, IRT: 0 }; };
     host._restoreEngine = async ref => { host._activeEngine = ref?.engineId ?? 'xratu'; host._engineSession = ref; };
-    host._localSessionStore = { load: async id => snapshot(id) };
+    host._localSessionStore = { list: async () => [], load: async id => snapshot(id) };
     host._deriveEvictedUserTurns = () => {};
     host._restoreReplayBoundary = () => {};
     host._restoreSessionUsage = () => {};
@@ -465,3 +465,93 @@ console.log('ok failed renames preserve the active title and show a localized re
     } finally { clearTimeout(timer); }
 }
 console.log('ok unverifiable background stops keep their controls and report a localized error');
+
+// A session replay must never reload the HTML or re-enter the startup queue.
+{
+    const t = harness();
+    t.state.set('xratu.setupCompleted', true);
+    let replays = 0;
+    const webview = { postMessage: message => { t.messages.push(message); return Promise.resolve(true); } };
+    Object.defineProperty(webview, 'html', { set: () => { throw new Error('session switch reloaded HTML'); } });
+    t.host._view = { webview };
+    t.host._pushSessionState = () => { t.messages.push({ type: 'sessionState', id: t.host._sessionId }); };
+    t.host._restoreChatUI = () => { replays++; t.messages.push({ type: 'restoreUser', value: t.host._sessionId }); };
+    t.host._postBackgroundJobs = () => { t.messages.push({ type: 'backgroundJobs', jobs: [{ id: 'running' }] }); };
+    t.host._fetchModels = async () => { t.events.push('models'); };
+    t.host._startupPage = { reset: () => { throw new Error('session switch reset startup'); } };
+    t.host._localSessionStore.load = async () => snapshot('B');
+    t.host._reloadWebviewChat = sandbox.Host.prototype._reloadWebviewChat;
+    await t.host._openSession('B');
+    assert.equal(t.host._sessionId, 'B');
+    assert.equal(replays, 1);
+    assert.deepEqual(t.messages.map(message => message.type), ['resetConversation', 'sessionState', 'restoreUser', 'backgroundJobs', 'showChat']);
+    assert.equal(t.messages[2].value, 'B');
+    assert.ok(t.events.includes('models'));
+}
+console.log('ok session adoption resets and replays once into the mounted webview');
+
+{
+    const t = harness();
+    t.host._showStartScreen = async () => { t.messages.push({ type: 'showWelcome', path: 'provider' }); };
+    await sandbox.Host.prototype._reloadWebviewChat.call(t.host);
+    assert.deepEqual(t.messages.map(message => message.type), ['resetConversation', 'showWelcome']);
+}
+console.log('ok in-place session reset preserves unfinished first-run setup');
+
+{
+    const t = harness();
+    const deleted = [];
+    t.host._localSessionStore.list = async () => [{ id: 'empty' }];
+    t.host._localSessionStore.load = async id => id === 'empty' ? { ...snapshot(id), uiHistory: [], localHistory: [], engineSession: { engineId: 'opencode' } } : snapshot(id);
+    t.host._localSessionStore.delete = async id => { deleted.push(id); return true; };
+    t.host._localSessionStore.create = async () => { throw Error('should reuse the existing empty chat'); };
+    await t.host._deleteSession('A');
+    assert.equal(t.host._sessionId, 'empty');
+    assert.equal(t.host._activeEngine, 'xratu');
+    assert.deepEqual(deleted, ['A']);
+}
+{
+    const t = harness();
+    t.host._history = []; t.host._localHistory = [];
+    t.host._localSessionStore.create = async () => { throw Error('deleting empty must not create another persisted empty'); };
+    const deleted = [];
+    t.host._localSessionStore.delete = async id => { deleted.push(id); return true; };
+    await t.host._deleteSession('A');
+    assert.equal(t.host._sessionId, null);
+    assert.equal(t.host._activeEngine, 'xratu');
+    assert.deepEqual(deleted, ['A']);
+}
+console.log('ok deletion reuses an empty chat without switching engines, or leaves an unsaved empty conversation');
+
+{
+    const t = harness();
+    t.host._localSessionStore.load = async id => ({ ...snapshot(id), uiHistory: [], localHistory: [], engineSession: { engineId: 'opencode' } });
+    await t.host._openSession('empty');
+    assert.equal(t.host._activeEngine, 'xratu');
+    assert.equal(t.host._selectedModel, 'A model', 'unused native placeholders cannot replace the selected built-in model');
+}
+{
+    const t = harness();
+    let deleted = false;
+    t.host._localSessionStore.list = async () => { t.host._sessionEpoch++; return []; };
+    t.host._localSessionStore.delete = async () => { deleted = true; };
+    await t.host._deleteSession('A');
+    assert.equal(deleted, false, 'a changed session during empty-chat lookup invalidates deletion');
+    assert.ok(t.notices.some(n => n[1] === 'sessionSwitchStale'));
+}
+console.log('ok unused engine placeholders retain the selected model and stale empty-chat scans cannot delete sessions');
+
+{
+    const t = harness();
+    t.host._activeEngine = 'opencode';
+    t.host._engineSession = { engineId: 'opencode', nativeSessionId: 'unused-native' };
+    t.host._history = []; t.host._localHistory = [];
+    t.host._localSessionStore.create = async () => { throw Error('empty native chat must not create another persisted placeholder'); };
+    const deleted = [];
+    t.host._localSessionStore.delete = async id => { deleted.push(id); return true; };
+    await t.host._deleteSession('A');
+    assert.equal(t.host._sessionId, null);
+    assert.equal(t.host._activeEngine, 'opencode');
+    assert.deepEqual(deleted, ['A']);
+}
+console.log('ok deleting an empty native chat leaves an unsaved conversation on the same engine');

@@ -21,7 +21,8 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         }, locale);
         await expect(page.locator('.app')).toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
         await page.locator('.composer-input').fill('Keep my draft');
-        await page.locator('#surface-tab-downloads').click();
+        await page.locator('.toolbar-tools button').filter({ has: page.locator('.lucide-plus') }).click();
+        await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel="downloads"]').click();
         const panel = page.locator('#surface-panel-downloads');
         await expect(panel).toBeVisible();
         await expect(panel).toContainText(locale === 'en' ? 'No downloads yet' : 'هنوز دانلودی شروع نشده');

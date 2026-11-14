@@ -1,3 +1,4 @@
+import { openPageNavigation, openSettingsFromWork } from './navigation';
 /**
  * Browser smoke tests for the built webview bundle (dist/webview-ui).
  *
@@ -54,15 +55,16 @@ test('showWelcome renders the welcome screen', async ({ page }) => {
     await expect(page.locator('.onboarding')).toBeVisible();
 });
 
-test('the composer cost pill opens the usage page and goes back to chat', async ({ page }) => {
+test('chat costs stay hidden and Usage remains a settings destination', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     // No pill until the host reports a cost.
     await expect(page.locator('.session-cost')).toHaveCount(0);
     await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
-    const pill = page.locator('.session-cost');
-    await expect(pill).toBeVisible();
-    await pill.click();
+    await expect(page.locator('.session-cost')).toHaveCount(0);
+    await hostMessage(page, { type: 'openSettings' });
+    await openPageNavigation(page);
+    await page.locator('.page-sidebar').getByRole('button', { name: 'مصرف', exact: true }).click();
     await expect(page.locator('.settings-nav-row')).toHaveCount(0);
     // The usage page asks the host for its state and renders it.
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
@@ -74,9 +76,9 @@ test('the composer cost pill opens the usage page and goes back to chat', async 
         history: [],
         allTime: { input: 300, output: 30, cached: 0, USD: 0.0068, IRT: 0 },
     });
-    await expect(page.locator('.settings-section-head', { hasText: 'روند هزینه' })).toBeVisible();
+    await expect(page.locator('.usage-activity-chart h3', { hasText: 'روند مصرف توکن' })).toBeVisible();
     // Back returns to the chat composer, not to Settings.
-    await page.locator('.sidebar-back').click();
+    await page.locator('.toolbar-back-work').click();
     await expect(page.locator('.composer-input')).toBeVisible();
 });
 
@@ -89,13 +91,13 @@ test('composer draft survives leaving and returning to the chat screen', async (
     // Leaving the chat screen renders a different tree, which UNMOUNTS the
     // composer - a half-written message used to die with it.
     await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
-    await page.locator('.session-cost').click();
+    await hostMessage(page, { type: 'openSettings' });
     // The chat is no longer unmounted when another screen opens - that rebuild
     // was the cost of every return. It stays mounted but hidden, so the draft
     // has nothing left to lose it to.
     await expect(input).toHaveCount(1);
     await expect(input).toBeHidden();
-    await page.locator('.sidebar-back').click();
+    await page.locator('.toolbar-back-work').click();
     await expect(input).toHaveValue('half-written message');
 
     // Sending still clears it: the store mirrors the composer's state, it does
@@ -105,8 +107,8 @@ test('composer draft survives leaving and returning to the chat screen', async (
     expect(sent).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'half-written message' }));
     const request = (sent as Array<{ type: string; requestId?: string }>).findLast(message => message.type === 'askQuestion')!;
     await hostMessage(page, { type: 'sendReceipt', requestId: request.requestId, sessionKey: '', status: 'accepted' });
-    await page.locator('.session-cost').click();
-    await page.locator('.sidebar-back').click();
+    await hostMessage(page, { type: 'openSettings' });
+    await page.locator('.toolbar-back-work').click();
     await expect(input).toHaveValue('');
 });
 
@@ -399,7 +401,9 @@ test('capabilities refresh spinner keeps spinning until EVERY echo arrives', asy
     await hostMessage(page, { type: 'showChat' });
     // Open the capabilities page (fa locale by default) and let the initial
     // mcpGetState / skillsGetState echoes settle.
-    await page.getByTitle('سرور ها و مهارت ها').click();
+    await openSettingsFromWork(page);
+    await openPageNavigation(page);
+    await page.locator('.sidebar-item[data-section="mcp"]').click();
     await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
     await hostMessage(page, { type: 'skillsState', skills: [] });
     const spinner = page.locator('.settings-head .spinning');
@@ -465,7 +469,8 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await hostMessage(page, { type: 'showChat' });
 
     // Settings → Usage
-    await page.getByTitle('تنظیمات').first().click();
+    await openSettingsFromWork(page);
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: 'مصرف', exact: true }).click();
 
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
@@ -498,6 +503,7 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
         history,
         allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 109000 },
     });
+    await page.locator('.usage-view-tabs button').nth(1).click();
     // Latest month (August) is Toman-only: bars render, no currency toggle.
     await expect(page.locator('.cost-col')).toHaveCount(31);
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
@@ -520,12 +526,12 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-detail')).toContainText('تیر');
     // The detail line must never wrap: a hover cannot change the card's height
     // and shove every section below it.
-    const chartHeightHovered = (await page.locator('.settings-card').first().boundingBox())!.height;
-    const providersTopHovered = (await page.locator('.settings-card').nth(1).boundingBox())!.y;
+    const chartHeightHovered = (await page.locator('.usage-activity-chart').boundingBox())!.height;
+    const providersTopHovered = (await page.locator('.usage-breakdown').boundingBox())!.y;
     await page.mouse.move(5, 5);
-    await expect(page.locator('.cost-detail')).toBeEmpty();
-    const chartHeightIdle = (await page.locator('.settings-card').first().boundingBox())!.height;
-    const providersTopIdle = (await page.locator('.settings-card').nth(1).boundingBox())!.y;
+    await expect(page.locator('.cost-detail')).toContainText('مصرف بازه انتخاب شده');
+    const chartHeightIdle = (await page.locator('.usage-activity-chart').boundingBox())!.height;
+    const providersTopIdle = (await page.locator('.usage-breakdown').boundingBox())!.y;
     expect(Math.round(chartHeightHovered)).toBe(Math.round(chartHeightIdle));
     expect(Math.round(providersTopHovered)).toBe(Math.round(providersTopIdle));
 
@@ -543,20 +549,20 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     const modelFilter = page.locator('.cost-filters .dropdown').first();
     await page.getByLabel('ماه قبل').click();
     await modelFilter.locator('.dropdown-trigger').click();
-    await modelFilter.locator('.dropdown-option', { hasText: 'glm-5.3' }).click();
+    await page.getByRole('option', { name: 'glm-5.3', exact: true }).click();
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
 
     // Week mode: a 7-day axis with a range label, stepping by week.
     await modelFilter.locator('.dropdown-trigger').click();
-    await modelFilter.locator('.dropdown-option', { hasText: 'همه مدل ها' }).click();
+    await page.getByRole('option', { name: 'همه مدل ها', exact: true }).click();
     await page.locator('.cost-granularity .usage-range', { hasText: 'هفته' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(7);
     await expect(page.locator('.cost-granularity .usage-range.active')).toContainText('هفته');
     await expect(page.locator('.cost-period-label')).toContainText('–');
     await page.getByLabel('هفته قبل').click();
     // The previous week really has no usage, so the empty state is correct.
-    await expect(page.locator('.usage-overview .usage-empty')).toBeVisible();
+    await expect(page.locator('.usage-activity-chart .usage-empty')).toBeVisible();
     // Two more weeks back is the window that holds the July usage.
     await page.getByLabel('هفته قبل').click();
     await page.getByLabel('هفته قبل').click();
@@ -567,12 +573,14 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
 
     // Provider rows follow the same period and filters as the chart. Lifetime
     // usage from Metis must not leak into the August view.
+    await page.locator('.usage-breakdown-tabs button').nth(1).click();
     const providerRows = page.locator('.prov-row');
     await expect(providerRows).toHaveCount(1);
     await expect(providerRows.first()).toContainText('Avalai');
     await expect(providerRows.locator('.pricing-badge')).toHaveCount(1);
-    await expect(providerRows.first().locator('.prov-bar > span')).toHaveCount(2);
-    await expect(page.locator('.usage-metrics')).toContainText('۳۳۰');
+    await expect(providerRows.first().locator('.usage-model-tokens')).toHaveText('۳۳۰');
+    await expect(page.locator('.usage-input-total')).toHaveText('۳۰۰');
+    await expect(page.locator('.usage-output-total')).toHaveText('۳۰');
     await expect(page.locator('.usage-lifetime')).toContainText('۱٬۱۵۵');
     await expect(page.locator('.cost-dates')).toBeVisible();
     await page.locator('.rate-disclosure > summary').click();
@@ -662,14 +670,12 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
         currency: 'USD',
     });
 
-    // A cramped card must never clip the list: it flips and caps to fit (the
-    // card hides its overflow, so an uncapped list gets cut in half).
+    // Short windows still expose the entire list inside the viewport.
     await page.setViewportSize({ width: 420, height: 320 });
     await page.locator('.cost-filters .dropdown').first().locator('.dropdown-trigger').click();
     const listBox = await page.locator('.dropdown-list').boundingBox();
-    const chartCardBox = await page.locator('.settings-card').first().boundingBox();
-    expect(listBox!.y).toBeGreaterThanOrEqual(chartCardBox!.y - 1);
-    expect(listBox!.y + listBox!.height).toBeLessThanOrEqual(chartCardBox!.y + chartCardBox!.height + 1);
+    expect(listBox!.y).toBeGreaterThanOrEqual(0);
+    expect(listBox!.y + listBox!.height).toBeLessThanOrEqual(320);
     await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 420, height: 900 });
 
@@ -766,6 +772,7 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await expect(output).toHaveText('Expanded');
     await hostMessage(page, { type: 'showChat' });
     await expect(command).toHaveAttribute('open', '');
+    await page.locator('.composer-input').focus();
     await expect(page.locator('.tok-pct')).toBeVisible();
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {} } });
     await expect(page.locator('.tok-pct')).toHaveCount(0);
@@ -794,41 +801,12 @@ test('the reasoning body stays LTR in fa - reasoning is always English', async (
         .toHaveCSS('direction', 'rtl');
 });
 
-test('suggestion chips read RTL in fa - icon on the leading (right) edge', async ({ page }) => {
+for (const locale of ['en', 'fa']) test(`calm entry keeps suggestions out of the conversation (${locale})`, async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'fa' });
-    const chip = page.locator('.chip-suggest').first();
-    await expect(chip).toBeVisible();
-    await expect(chip).toHaveCSS('direction', 'rtl');
-    // A flex row's main axis follows `direction`, so the leading icon belongs
-    // on the RIGHT under RTL. It used to be pinned to the physical left by a
-    // `row-reverse` override, which stranded the Persian label on the right
-    // edge and made the row read LTR.
-    const side = await chip.evaluate((el) => {
-        const svg = el.querySelector('svg');
-        if (!svg) return 'no-icon';
-        const c = el.getBoundingClientRect();
-        const s = svg.getBoundingClientRect();
-        return s.left - c.left < c.right - s.right ? 'left' : 'right';
-    });
-    expect(side).toBe('right');
-});
-
-test('en keeps suggestion chip icons on the left', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    const chip = page.locator('.chip-suggest').first();
-    await expect(chip).toBeVisible();
-    const side = await chip.evaluate((el) => {
-        const svg = el.querySelector('svg');
-        if (!svg) return 'no-icon';
-        const c = el.getBoundingClientRect();
-        const s = svg.getBoundingClientRect();
-        return s.left - c.left < c.right - s.right ? 'left' : 'right';
-    });
-    expect(side).toBe('left');
+    await hostMessage(page, { type: 'locale', locale });
+    await expect(page.locator('.composer-welcome')).toBeVisible();
+    await expect(page.locator('.chip-suggest').first()).toBeHidden();
 });
 
 test('an empty or bare workspace gets starting-from-scratch chips', async ({ page }) => {
@@ -865,14 +843,12 @@ test('an empty or bare workspace gets starting-from-scratch chips', async ({ pag
         .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
 });
 
-test('the fresh-workspace chips type a prompt with no {file} placeholder', async ({ page }) => {
+test('a fresh workspace starts with a focused composer and accepts a prompt', async ({ page }) => {
     await page.goto('/');
-    await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
-    // No editor is open, so a file-dependent template would resolve to its
-    // "any" variant; the fresh set has no file variant at all.
-    await page.locator('.chip-suggest').first().click();
-    await expect(page.locator('.composer-input')).toHaveValue(/This folder is empty/);
+    await page.locator('.composer-input').fill('Build a new application');
+    await page.locator('.composer-input').press('Enter');
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Build a new application' }));
 });
 
 test('automatic monitor wakes hide their user row and keep the response visible', async ({ page }) => {

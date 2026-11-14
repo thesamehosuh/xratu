@@ -531,11 +531,9 @@ export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): s
     return [
         'Delegates a self-contained task to a specialized subagent. The subagent runs in a FRESH context - it cannot see this conversation - and returns only its final report (its intermediate tool calls stay private).',
         'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The subagent cannot ask questions mid-run. Do not delegate what needs the user\'s decision.',
-        'When to delegate: open-ended codebase research (project tours, "how does X work", finding something whose location you do not know), searches that may span many files, and independent subtasks you can hand over whole. Delegation keeps this conversation clean - the subagent\'s long search and file output never lands here.',
-        'When NOT to delegate: a lookup you can finish in one or two tool calls, work that leans on this conversation\'s context, and anything where the user must choose.',
         'Every run reports a task_id. If a run was interrupted, failed, or needs follow-up work, pass that task_id to CONTINUE the same subagent with its context restored - never relaunch the same work from scratch.',
         'A task_id lives only as long as this chat does in this VS Code window: reloading the window or clearing the history drops it, and the run must then be started again with subagent_type.',
-        'Several task calls in ONE message run CONCURRENTLY as independent subagents - use that for parallelizable subtasks (a few at a time; the rest start as slots free up). They cannot coordinate with each other; one task = one coherent piece of work.',
+        'Several task calls in ONE message run CONCURRENTLY as independent subagents (the rest start as slots free up). They cannot coordinate with each other; one task = one coherent piece of work.',
         'Subagent types (for subagent_type):',
         ...typeLines(defs),
     ].join('\n');

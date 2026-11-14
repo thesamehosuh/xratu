@@ -23,6 +23,7 @@ async function harness(mode = 'complete', mcpSource) {
     let subscribed = false;
     const requests = [];
     let prompts = 0;
+    let catalogRequests = 0;
     let stopping = false;
     let settlement;
     let disposed = false;
@@ -59,7 +60,11 @@ async function harness(mode = 'complete', mcpSource) {
             res.writeHead(204).end(); return;
         }
         if (req.method === 'GET' && req.url.startsWith('/api/skill')) { json([{ id: 'skill-1', name: 'Native skill', path: 'skill.md', content: 'must-not-render' }]); return; }
-        if (req.url.startsWith('/api/model')) { json([
+        if (req.url.startsWith('/api/model')) {
+            catalogRequests++;
+            if (mode === 'emptyCatalog' && catalogRequests < 3) { json([]); return; }
+            if (mode === 'pluginsStarting' && catalogRequests < 3) { res.writeHead(503, { 'content-type': 'application/json' }); res.end(JSON.stringify({ errorName: 'ServiceUnavailableError', message: 'Location plugins did not finish activating' })); return; }
+            json([
             { id: 'big-pickle', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
             { id: 'paid-model', providerID: 'opencode', enabled: true, status: 'active', capabilities: { tools: true, output: ['text'] }, variants: [{ id: 'high' }, { id: 'adaptive' }], cost: [{ input: 1, output: 1, cache: { read: 0, write: 0 } }] },
         ]); return; }
@@ -141,7 +146,7 @@ async function harness(mode = 'complete', mcpSource) {
                 emit('session.tool.called', { sessionID: 'native-1', id: 'call-1', input: { command: 'echo test' } });
                 if (mode === 'complete' || mode === 'plan' || (mode === 'cancelGate' && prompt === 1)) emit('permission.asked', { sessionID: 'native-1', id: 'permission-1', action: 'shell', resources: ['echo test'], source: { type: 'tool', id: 'call-1' } });
                 if (mode === 'failed') emit('session.execution.failed', { sessionID: 'native-1', error: { type: 'provider', message: 'Provider failed' } });
-                if (mode === 'resume' || (mode.startsWith('cancel') && prompt > 1)) finish();
+                if (mode === 'resume' || mode === 'emptyCatalog' || mode === 'pluginsStarting' || (mode.startsWith('cancel') && prompt > 1)) finish();
             });
             return;
         }
@@ -154,13 +159,46 @@ async function harness(mode = 'complete', mcpSource) {
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    const client = OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' } });
+    const client = OpenCode.make({ baseUrl, headers: { Authorization: 'Basic test' }, fetch: openCodeFetch });
     const engine = new OpenCodeEngine('opencode', undefined, { connect: async () => ({ baseUrl, headers: { Authorization: 'Basic test' }, client }), dispose: async () => { disposed = true; stopping = false; } }, mcpSource, join(root, 'attachments # نمونه'));
     return { engine, requests, instructions, wasDisposed: () => disposed, close: async () => { await engine.dispose(); stream?.destroy(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); } };
 }
 const baseTurn = { prompt: 'Test', model: 'opencode/big-pickle', workspace: root, plan: false, yolo: false };
 const host = { approvals: { requestApproval: async (_id, calls) => { assert.equal(calls[0].id, 'call-1'); return { 'call-1': true }; } }, questions: { ask: async (question) => { assert.equal(question.multiSelect, true); assert.equal(question.minItems, 2); assert.equal(question.maxItems, 2); assert.equal(question.allowCustomAnswer, false); return { kind: 'custom', text: '["First","Second"]' }; } } };
 try {
+    const startup = await harness('pluginsStarting');
+    try {
+        for await (const _event of startup.engine.runTurn({ ...baseTurn, signal: AbortSignal.timeout(5000) }, host)) { /* drain */ }
+        assert.equal(startup.requests.filter(request => request.method === 'POST' && request.path === '/api/session').length, 1);
+        assert.equal(startup.requests.filter(request => request.path.endsWith('/prompt')).length, 1);
+        const firstMutation = startup.requests.findIndex(request => !['GET', 'HEAD'].includes(request.method));
+        assert.equal(startup.requests.slice(0, firstMutation).filter(request => request.path.startsWith('/api/model')).length, 3);
+    } finally { await startup.close(); }
+    console.log('ok location plugin readiness waits before a single native session creation and prompt');
+    for (const restored of [false, true]) {
+        const test = await harness();
+        try {
+            const controller = new AbortController();
+            let entered;
+            const waiting = new Promise(resolve => { entered = resolve; });
+            test.engine.models = async (_workspace, signal) => {
+                entered();
+                await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+            };
+            const run = (async () => {
+                for await (const _event of test.engine.runTurn({ ...baseTurn, signal: controller.signal,
+                    ...(restored ? { session: { engineId: 'opencode', nativeSessionId: 'native-1', workspace: root } } : {}),
+                }, host)) { /* drain */ }
+            })();
+            await waiting;
+            controller.abort();
+            await assert.rejects(run, { name: 'AbortError' });
+            assert.equal(test.wasDisposed(), restored, 'catalog cancellation restarts only a restored execution');
+            assert.equal(test.requests.some(request => request.method !== 'GET'), false, 'cancelled startup cannot mutate a native session');
+        } finally { await test.close(); }
+    }
+    console.log('ok restored catalog cancellation restarts the server without affecting fresh sessions');
+
     const nativePolicy = await harness('resume');
     try {
         let session;
@@ -501,6 +539,14 @@ try {
             assert.equal(write.body.model.variant, variant === 'high' || variant === 'adaptive' ? variant : 'default', 'SDK switching receives advertised variants and clears stale selections');
         } finally { await test.close(); }
     }
+    const emptyCatalog = await harness('emptyCatalog');
+    try {
+        for await (const _event of emptyCatalog.engine.runTurn({ ...baseTurn, variant: 'high', signal: AbortSignal.timeout(5000) }, host)) { /* Drain native execution. */ }
+        const catalogs = emptyCatalog.requests.filter(request => request.path.startsWith('/api/model'));
+        assert.equal(catalogs.length, 3, 'successful empty catalogs are retried before selecting the variant');
+        const create = emptyCatalog.requests.find(request => request.path === '/api/session' && request.method === 'POST');
+        assert.equal(create.body.model.variant, 'high', 'the requested variant survives catalog startup');
+    } finally { await emptyCatalog.close(); }
     console.log('ok native thinking variants, custom variant IDs and reset to default');
     const readiness = { engine: 'opencode', hasWorkspace: true, installed: true, offline: false, hasCredential: false, freeOnly: true };
     assert.equal(setupPhase({ ...readiness, installed: false }), 'install');
@@ -1238,9 +1284,18 @@ try {
     assert.ok(openCodeEnvironment(inherited).NO_PROXY.includes('internal,other'));
     assert.equal(inherited.HTTP_PROXY, 'http://old:1', 'do not mutate the extension host environment');
     const requests = [];
+    let receivedCancellation;
+    const cancellationReceived = new Promise(resolve => { receivedCancellation = resolve; });
     const transportServer = createServer((request, response) => {
         requests.push(request.url);
+        if (request.url === '/activation/cancelled') receivedCancellation();
         assert.equal(request.headers.authorization, 'Basic local-only');
+        if (request.url.startsWith('/activation/')) {
+            const seen = requests.filter(url => url === request.url).length;
+            if (request.url === '/activation/recover' && seen >= 3) { response.writeHead(200).end('ready'); return; }
+            const status = request.url === '/activation/auth' ? 401 : 503;
+            response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ message: request.url === '/activation/unrelated' ? 'Service overloaded' : 'Location plugins did not finish activating' })); return;
+        }
         if (request.url === '/api/event') {
             response.writeHead(200, { 'content-type': 'text/event-stream' });
             response.end('data: {"type":"local.ready","data":{"ok":true}}\n\n');
@@ -1267,6 +1322,20 @@ try {
         for await (const event of stream) { assert.equal(event.type, 'local.ready'); break; }
         assert.ok(requests.some((url) => url.startsWith('/api/model')));
         assert.ok(requests.includes('/api/event'));
+        assert.equal((await openCodeFetch(`${baseUrl}/activation/recover`, { headers })).status, 200);
+        assert.equal(requests.filter(url => url === '/activation/recover').length, 3);
+        for (const [route, method, status] of [['mutation', 'POST', 503], ['unrelated', 'GET', 503], ['auth', 'GET', 401]]) {
+            assert.equal((await openCodeFetch(`${baseUrl}/activation/${route}`, { headers, method })).status, status);
+            assert.equal(requests.filter(url => url === `/activation/${route}`).length, 1);
+        }
+        assert.equal((await openCodeFetch(`${baseUrl}/activation/bounded`, { headers })).status, 503);
+        assert.equal(requests.filter(url => url === '/activation/bounded').length, 5);
+        const during = new AbortController();
+        const waiting = openCodeFetch(`${baseUrl}/activation/cancelled`, { headers, signal: during.signal });
+        await cancellationReceived;
+        during.abort();
+        await assert.rejects(waiting, { name: 'AbortError' });
+        assert.equal(requests.filter(url => url === '/activation/cancelled').length, 1);
         const cancelled = new AbortController();
         cancelled.abort();
         await assert.rejects(openCodeFetch(baseUrl, { signal: cancelled.signal }), { name: 'AbortError' });

@@ -12,7 +12,7 @@
  * an empty approvable set must disable BOTH approve affordances, and a
  * decision must be reachable by keyboard alone.
  */
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
 async function host(page: Page, message: Record<string, unknown>): Promise<void> {
@@ -277,18 +277,44 @@ test('an expanded file row renders the diff with both add and remove styling', a
     await expect(page.locator('.approval-diff-wrap')).toHaveAttribute('dir', 'ltr');
 });
 
+async function basenameBox(base: Locator) {
+    return base.evaluate((el) => {
+        // Compare layout widths: boundingClientRect is affected by the
+        // containing message's entrance scale, but scrollWidth is not.
+        return { width: el.clientWidth, scroll: el.scrollWidth, clipped: el.scrollWidth > el.clientWidth + 1 };
+    });
+}
+
 test('a long path truncates the DIRECTORY, never the basename', async ({ page }) => {
     const long = 'webview-ui/src/components/settings/credentials/ProvidersSection.tsx';
     await open(page, { approvals: [fileItem('call-9', long, 4, 1)] });
     const base = page.locator('.approval-path .base');
     await expect(base).toHaveText('ProvidersSection.tsx');
     // The basename is never the shrinkable half: it must render at full width.
-    const box = await base.evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        return { width: r.width, scroll: el.scrollWidth, clipped: el.scrollWidth > Math.ceil(r.width) + 1 };
-    });
+    const box = await basenameBox(base);
     expect(box.clipped).toBe(false);
     expect(box.width).toBeGreaterThan(40);
+});
+
+test('basename clipping measurement remains accurate during message scaling', async ({ page }) => {
+    const long = 'webview-ui/src/components/settings/credentials/ProvidersSection.tsx';
+    await open(page, { approvals: [fileItem('call-scale', long, 4, 1)] });
+    const base = page.locator('.approval-path .base');
+    await expect(base).toHaveText('ProvidersSection.tsx');
+    // Freeze the message mid-entrance: xratu-rise scales the entire message.
+    await page.locator('.msg').evaluate((el: HTMLElement) => {
+        el.style.animation = 'none';
+        el.style.transform = 'scale(0.985)';
+    });
+    const box = await basenameBox(base);
+    expect(box.clipped).toBe(false);
+    expect(box.width).toBeGreaterThan(40);
+    // A genuinely constrained basename must still be detected as clipped.
+    await base.evaluate((el: HTMLElement) => {
+        el.style.flex = '0 0 50px';
+        el.style.overflow = 'hidden';
+    });
+    expect((await basenameBox(base)).clipped).toBe(true);
 });
 
 test('a batch with nothing approvable disables both approve affordances', async ({ page }) => {
@@ -312,12 +338,11 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
         const s = getComputedStyle(el);
         return { h: s.height, pad: s.paddingInlineStart, r: s.borderRadius, fs: s.fontSize, min: s.minWidth };
     });
-    // The prototype's button atom, verbatim. These are the numbers the design
-    // was approved on; a "close enough" refactor of them is a visual change.
-    expect(geo.h).toBe('24px');
+    // The button grows with typography while keeping the compact atom's minimum.
+    expect(parseFloat(geo.h)).toBeGreaterThanOrEqual(24);
     expect(geo.pad).toBe('10px');
     expect(geo.r).toBe('5px');          // --xratu-radius-xs
-    expect(geo.fs).toBe('12px');        // --xratu-fs-sm
+    expect(geo.fs).toBe('13px');        // --xratu-fs-sm
     expect(geo.min).toBe('92px');
 
     // The accent, NOT --vscode-button-background. In Dark Modern that token is
@@ -330,8 +355,8 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
     // than re-parsing hex.
     const expected = await page.evaluate(() => {
         const probe = document.createElement('div');
-        probe.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--xratu-accent-faint').trim();
-        document.body.appendChild(probe);
+        probe.style.backgroundColor = 'var(--xratu-accent-faint)';
+        document.querySelector('.app')!.appendChild(probe);
         const v = getComputedStyle(probe).backgroundColor;
         probe.remove();
         return v;
@@ -378,8 +403,8 @@ test('the verdict button is accent-on-accent, never the theme button foreground'
     const colour = await page.locator('.approval-apply').evaluate((el) => getComputedStyle(el).color);
     const accent = await page.evaluate(() => {
         const probe = document.createElement('div');
-        probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--xratu-accent-strong').trim();
-        document.body.appendChild(probe);
+        probe.style.color = getComputedStyle(document.querySelector('.workbench')!).getPropertyValue('--xratu-accent-strong').trim();
+        document.querySelector('.app')!.appendChild(probe);
         const v = getComputedStyle(probe).color;
         probe.remove();
         return v;
@@ -394,11 +419,11 @@ test('the ledger and the row table keep the approved metrics', async ({ page }) 
         page.locator(sel).first().evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
     expect(await read('.approval-head', 'min-height')).toBe('30px');
     expect(await read('.approval-item summary', 'min-height')).toBe('26px');
-    expect(await read('.approval-title', 'font-size')).toBe('13px');   // --xratu-fs-md
+    expect(await read('.approval-title', 'font-size')).toBe('14px');   // --xratu-fs-md
     expect(await read('.approval-title', 'font-weight')).toBe('650');
-    expect(await read('.approval-ledger', 'font-size')).toBe('11px'); // --xratu-fs-xs
-    expect(await read('.approval-path', 'font-size')).toBe('11px');
-    expect(await read('.approval-session', 'font-size')).toBe('11px');
+    expect(await read('.approval-ledger', 'font-size')).toBe('12px'); // --xratu-fs-xs
+    expect(await read('.approval-path', 'font-size')).toBe('12px');
+    expect(await read('.approval-session', 'font-size')).toBe('12px');
     // The ledger aligns like a diffstat.
     expect(await read('.approval-ledger .n', 'font-variant-numeric')).toContain('tabular-nums');
     // No nested chrome: the block is not a frame.

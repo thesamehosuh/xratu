@@ -1,7 +1,8 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { postMessage } from '../vscode';
 import { t } from '../i18n';
+import { highlightedLines, useShikiTheme } from '../highlight';
 
 const CHECK_ICON = '<svg class="check-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 
@@ -111,6 +112,26 @@ interface RenderedMarkdownProps {
 }
 
 export function RenderedMarkdown({ html, streaming = false, live = false }: RenderedMarkdownProps) {
+    const theme = useShikiTheme();
+    const forcedDark = typeof document !== 'undefined' && document.querySelector('.app')?.getAttribute('data-color-scheme') === 'dark';
+    const [themed, setThemed] = useState<{ source: string; html: string } | null>(null);
+    useEffect(() => {
+        if (!forcedDark || streaming || !html.includes('code-block') || typeof DOMParser === 'undefined') return;
+        let cancelled = false;
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        void Promise.all([...doc.querySelectorAll('.code-block pre')].map(async pre => {
+            const code = pre.querySelector('code');
+            if (!code) return;
+            const source = code.textContent ?? '';
+            const lang = pre.closest('.code-block')?.querySelector('.code-title')?.textContent?.trim().toLowerCase() || 'text';
+            const lines = await highlightedLines(source, lang, theme);
+            if (lines.length) code.innerHTML = lines.join('\n');
+            else code.textContent = source;
+            pre.classList.add('xratu-dark-code');
+            (pre as HTMLElement).style.color = '#e1e4e8';
+        })).then(() => { if (!cancelled) setThemed({ source: html, html: doc.body.innerHTML }); });
+        return () => { cancelled = true; };
+    }, [html, streaming, forcedDark, theme]);
     const seenRef = useRef<number | null>(null);
     const animsRef = useRef(new Map<number, WordAnim>());
     const cacheRef = useRef<{ src: string; out: string } | null>(null);
@@ -118,7 +139,7 @@ export function RenderedMarkdown({ html, streaming = false, live = false }: Rend
     // The wrap is derived from the source html string only: an unchanged
     // string must return the identical output or React would reset the
     // container and interrupt in-flight word fades for no reason.
-    let rendered = html;
+    let rendered = forcedDark && !streaming && themed?.source === html ? themed.html : html;
     if (streaming) {
         if (cacheRef.current?.src !== html) {
             const wrapped = wrapStreamedHtml(html, animsRef.current, seenRef.current);

@@ -52,6 +52,7 @@ const MAX_DISCOVERED_TOOLS = 4096;
 export type ExternalServerState = 'disabled' | 'connected' | 'error' | 'unconfigured';
 
 export interface ExternalServerStatus {
+    tools?: string[];
     name: string;
     transport: 'stdio' | 'websocket' | 'streamableHttp' | 'sse' | 'unknown';
     state: ExternalServerState;
@@ -220,7 +221,7 @@ export class ExternalMcpManager {
      *  the MCP page's status reflects the retry immediately. */
     async restart(name: string): Promise<void> {
         this._generation++; this._listing = undefined; this._inventoryAt = 0;
-        this._inventory = [];
+        this._inventory = this._inventory.filter(tool => tool.serverName !== name);
         this._retryAfter.delete(name);
         const pending = this._states.get(name);
         this._states.delete(name);
@@ -240,6 +241,7 @@ export class ExternalMcpManager {
     async getServerStatuses(): Promise<ExternalServerStatus[]> {
         const config = await this.loadConfig();
         const out: ExternalServerStatus[] = [];
+        const inventoryCurrent = this._inventoryConfig === createHash('sha256').update(JSON.stringify(config)).digest('hex');
         for (const [name, cfg] of Object.entries(config.servers)) {
             const transport = resolveTransport(cfg) ?? 'unknown';
             const base = this._statuses.get(name);
@@ -251,6 +253,7 @@ export class ExternalMcpManager {
                 transport,
                 state,
                 toolCount: state === 'connected' ? base?.toolCount ?? null : null,
+                tools: inventoryCurrent && state === 'connected' ? this._inventory.filter(tool => tool.serverName === name).map(tool => tool.originalName) : [],
                 lastError: state === 'error' ? base?.lastError ?? null : null,
                 source: config.sources[name] ?? 'global',
             });
@@ -399,7 +402,17 @@ export class ExternalMcpManager {
             if ((this._retryAfter.get(name) ?? 0) > Date.now()) return null;
             pending = this.connect(name, cfg, source);
         }
-        const state = await pending;
+        let state = await pending;
+        if (state && state.configHash !== serverConfigHash(cfg, source)) {
+            if (this._states.get(name) !== pending) return null;
+            this._states.delete(name);
+            this._retryAfter.delete(name);
+            await closeState(state);
+            if (this._stopped || isOfflineMode()) return null;
+            pending = this._states.get(name) ?? this.connect(name, cfg, source);
+            state = await pending;
+            if (state && state.configHash !== serverConfigHash(cfg, source)) return null;
+        }
         if (isOfflineMode() && state) {
             await closeState(state);
             this._states.delete(name);
@@ -532,8 +545,8 @@ export class ExternalMcpManager {
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
         const stateRequest = this.getState(serverName, cfg, source);
-        const usedPromise = this._states.get(serverName);
         const state = await stateRequest;
+        const usedPromise = this._states.get(serverName);
         signal?.throwIfAborted();
         if (!state) {
             return textResult(`Error: MCP server '${serverName}' is not reachable`);
@@ -567,7 +580,7 @@ export class ExternalMcpManager {
             const msg = e instanceof Error ? e.message : String(e);
             const protocolError = e instanceof McpError;
             const connectionFailure = !protocolError || e.code === ErrorCode.ConnectionClosed;
-            if (connectionFailure && usedPromise && this._states.get(serverName) === usedPromise) {
+            if (connectionFailure && usedPromise && await usedPromise.catch(() => null) === state && this._states.get(serverName) === usedPromise) {
                 this._states.delete(serverName);
                 void usedPromise.then(state => closeState(state)).catch(() => undefined);
                 this._markStatus(serverName, { state: 'error', lastError: msg }, source);

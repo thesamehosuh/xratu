@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
@@ -31,7 +31,8 @@ interface ProxyPageProps {
     /** MCP servers for per-server routing overrides. */
     servers: McpServerView[];
     onGetState: () => void;
-    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy: boolean) => void;
+    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy: boolean, requestId: string) => void;
+    onSaveMode: (mode: 'auto' | 'off', requestId: string) => void;
     onDetect: () => void;
     onTest: () => void;
     onSetServerProxy: (name: string, mode: ProxyRouteMode) => void;
@@ -91,6 +92,7 @@ export function ProxyPage({
     servers,
     onGetState,
     onSave,
+    onSaveMode,
     onDetect,
     onTest,
     onSetServerProxy,
@@ -100,14 +102,26 @@ export function ProxyPage({
     const [serverDraft, setServerDraft] = useState<ServerDraft>({ scheme: 'http', host: '', port: '' });
     const [noProxy, setNoProxy] = useState('');
     const [webSearchUseProxy, setWebSearchUseProxy] = useState(true);
+    const [modeSaving, setModeSaving] = useState(false);
 
-    // Host echo is the source of truth - re-sync drafts when it lands.
+    const previousState = useRef<ProxyStateView | null>(null);
+    const pendingMode = useRef<string | null>(null);
+
+    // Mode-only acknowledgements must not discard unsaved endpoint edits.
     useEffect(() => {
         if (!state) return;
-        setMode(state.mode);
-        setServerDraft(splitProxyUrl(state.proxyUrl));
-        setNoProxy(state.noProxy);
-        setWebSearchUseProxy(state.webSearchUseProxy !== false);
+        const previous = previousState.current;
+        if (pendingMode.current && state.requestId === pendingMode.current) {
+            setMode(state.mode);
+            pendingMode.current = null;
+            setModeSaving(false);
+        } else if (!pendingMode.current) {
+            setMode(d => !previous || d === previous.mode ? state.mode : d);
+        }
+        if (!previous || previous.proxyUrl !== state.proxyUrl) setServerDraft(d => !previous || joinProxyUrl(d) === joinProxyUrl(splitProxyUrl(previous.proxyUrl)) ? splitProxyUrl(state.proxyUrl) : d);
+        if (!previous || previous.noProxy !== state.noProxy) setNoProxy(d => !previous || d === previous.noProxy ? state.noProxy : d);
+        if (!previous || previous.webSearchUseProxy !== state.webSearchUseProxy) setWebSearchUseProxy(d => !previous || d === (previous.webSearchUseProxy !== false) ? state.webSearchUseProxy !== false : d);
+        previousState.current = state;
     }, [state]);
 
     useEffect(() => {
@@ -118,6 +132,13 @@ export function ProxyPage({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const saveSettings = (nextMode: 'auto' | 'custom' | 'off', url: string) => {
+        const requestId = `${Date.now()}-${Math.random()}`;
+        pendingMode.current = requestId;
+        setModeSaving(true);
+        onSave(nextMode, url, noProxy, webSearchUseProxy, requestId);
+    };
+
     const composedUrl = useMemo(() => joinProxyUrl(serverDraft), [serverDraft]);
     const dirty = !!state && (
         mode !== state.mode
@@ -125,7 +146,7 @@ export function ProxyPage({
         || noProxy.trim() !== (state.noProxy ?? '').trim()
         || webSearchUseProxy !== (state.webSearchUseProxy !== false)
     );
-    const socksWarn = mode !== 'off' && serverDraft.scheme === 'socks5';
+    const socksWarn = mode === 'custom' && serverDraft.scheme === 'socks5';
     /** The save check marks a click, not the idle state - it drops again as
      *  soon as something new is drafted. */
     const [justSaved, setJustSaved] = useState(false);
@@ -150,21 +171,48 @@ export function ProxyPage({
                 </div>
                 <button
                     type="button"
-                    className="icon-btn"
+                    className="settings-ghost-action proxy-test-action"
                     onClick={onTest}
                     disabled={testing}
                     title={t('proxyTest')}
                     aria-label={t('proxyTest')}
                 >
-                    {testing ? <span className="step-status spinner" /> : <PlugZap size={14} />}
+                    {testing ? <span className="step-status spinner" /> : <PlugZap size={14} />}<span>{t('proxyTest')}</span>
                 </button>
             </header>
 
             <div className="settings-scroll">
+                    <div className="routing-mode-toolbar">
+                        <div className="lang-choice">
+                            {(['auto', 'custom', 'off'] as const).map((m) => (
+                                <button
+                                    key={m}
+                                    type="button"
+                                    className={mode === m ? 'lang-chip active' : 'lang-chip'}
+                                    aria-pressed={mode === m}
+                                    disabled={modeSaving || !state}
+                                    title={t(MODE_TIPS[m])}
+                                    onClick={() => {
+                                        setMode(m);
+                                        if (state && m !== 'custom' && m !== state.mode) {
+                                            const requestId = `${Date.now()}-${Math.random()}`;
+                                            pendingMode.current = requestId;
+                                            setModeSaving(true);
+                                            onSaveMode(m, requestId);
+                                        }
+                                    }}
+                                >
+                                    {m === 'auto' ? t('proxyModeAuto') : m === 'custom' ? t('proxyModeCustom') : t('proxyModeOff')}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+
                 {state && <div className="route-map" aria-label={t('miniRoute')}>
                     <div className="route-node"><PlugZap size={14}/><span>{t('miniApp')}</span></div>
                     <span className="route-wire"/>
-                    <div className="route-node route-current"><Globe size={14}/><strong dir="auto">{state.resolvedUrl ?? t('proxyStatusDirect')}</strong><span>{t(SOURCE_KEYS[state.resolvedSource])}</span></div>
+                    <div className="route-node route-current"><Globe size={14}/><strong dir={state.resolvedUrl ? 'ltr' : 'auto'}>{state.resolvedUrl ?? t('proxyStatusDirect')}</strong><span>{t(SOURCE_KEYS[state.resolvedSource])}</span></div>
                     <span className="route-wire"/>
                     <div className="route-node"><Server size={14}/><span>{t('miniProvider')}</span></div>
                 </div>}
@@ -180,33 +228,139 @@ export function ProxyPage({
                     </div>
                 )}
 
-                <section className="settings-card">
+                <div className="inventory-split proxy-configuration"><div className="proxy-destination-main">
+<section className="settings-card proxy-destinations">
+                    <div className="settings-section-head">
+                        <div className="settings-section-icon" aria-hidden="true">
+                            <Server size={15} />
+                        </div>
+                        <h3>{t('proxyRouteDestinations')}</h3>
+                    </div>
+
+                    <div className="proxy-mcp-bulk">
+                        <span>{t('proxyMcpAll')}</span>
+                        <div className="lang-choice">
+                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('auto')}>
+                                {t('proxyMcpAuto')}
+                            </button>
+                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('proxy')}>
+                                {t('proxyMcpProxy')}
+                            </button>
+                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('direct')}>
+                                {t('proxyMcpDirect')}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="proxy-mcp-bulk proxy-search-routing">
+                        <span>{t('proxyWebSearch')}</span>
+                        <div className="lang-choice" role="group" aria-label={t('proxyWebSearch')}>
+                            <button type="button" className={`lang-chip${webSearchUseProxy ? ' active' : ''}`} aria-pressed={webSearchUseProxy} onClick={() => setWebSearchUseProxy(true)}><span>{t('proxyMcpProxy')}</span></button>
+                            <button type="button" className={`lang-chip${!webSearchUseProxy ? ' active' : ''}`} aria-pressed={!webSearchUseProxy} onClick={() => setWebSearchUseProxy(false)}><span>{t('proxyMcpDirect')}</span></button>
+                        </div>
+                    </div>
+                    {servers.length === 0 && (
+                        <div className="proxy-hint" dir="auto">{t('proxyMcpEmpty')}</div>
+                    )}
+                    {servers.map((s) => (
+                        <div key={s.name} className="proxy-mcp-row">
+                            <div className="proxy-candidate-main">
+                                <strong>{s.name}</strong>
+                                <span dir="ltr">{s.url ?? s.command ?? ''}</span>
+                            </div>
+                            <div className="lang-choice">
+                                {(['auto', 'proxy', 'direct'] as const).map((m) => (
+                                    <button
+                                        key={m}
+                                        type="button"
+                                        className={(s.proxy ?? 'auto') === m ? 'lang-chip active' : 'lang-chip'}
+                                        aria-pressed={(s.proxy ?? 'auto') === m}
+                                        onClick={() => onSetServerProxy(s.name, m)}
+                                    >
+                                        {m === 'auto' ? t('proxyMcpAuto') : m === 'proxy' ? t('proxyMcpProxy') : t('proxyMcpDirect')}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </section>
+<section className="settings-card proxy-discovery">
+                    <div className="settings-section-head">
+                        <div className="settings-section-icon" aria-hidden="true">
+                            <Radar size={15} />
+                        </div>
+                        <h3>{t('proxyCardDetect')}</h3>
+                        <button
+                            type="button"
+                            className="icon-btn proxy-head-action"
+                            onClick={onDetect}
+                            disabled={detecting}
+                            title={t('proxyScan')}
+                            aria-label={t('proxyScan')}
+                        >
+                            {detecting ? <span className="step-status spinner" /> : <Radar size={14} />}
+                        </button>
+                    </div>
+
+                    {candidates === null && !detecting && (
+                        <div className="proxy-hint" dir="auto">{t('proxyDetectIdle')}</div>
+                    )}
+                    {candidates !== null && candidates.length === 0 && (
+                        <div className="proxy-hint" dir="auto">{t('proxyDetectEmpty')}</div>
+                    )}
+                    {candidates?.map((c) => (
+                        <div key={c.service + (c.ports[0]?.port ?? '')} className="proxy-candidate">
+                            <div className="proxy-candidate-main">
+                                <div className="proxy-candidate-head">
+                                    <strong>{c.service}</strong>
+                                    <div className="proxy-port-list" dir="ltr">
+                                        {c.ports.map((p) => (
+                                            <span
+                                                key={p.port}
+                                                className={p.usable ? 'proxy-port-chip' : 'proxy-port-chip disabled'}
+                                                title={p.url}
+                                            >
+                                                {p.port} · {p.protocol === 'mixed' ? t('proxyProtoMixed') : p.protocol === 'socks5' ? 'SOCKS5' : 'HTTP'}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            {c.url ? (
+                                <button
+                                    type="button"
+                                    className="apply-btn"
+                                    disabled={modeSaving}
+                                    onClick={() => {
+                                        const draft = splitProxyUrl(c.url!);
+                                        setServerDraft(draft);
+                                        setMode('custom');
+                                        saveSettings('custom', c.url!);
+                                    }}
+                                >
+                                    {t('proxyUse')}
+                                </button>
+                            ) : (
+                                <span className="proxy-candidate-tag disabled">{t('proxySocksUnsupported')}</span>
+                            )}
+                        </div>
+                    ))}
+                    {state?.systemProxy && (
+                        <div className="proxy-hint" dir="auto">
+                            {t('proxySystemDetected')} <span dir="ltr">{state.systemProxy}</span>
+                        </div>
+                    )}
+                </section>
+                </div><section className="settings-card inventory-inspector proxy-connection-card">
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
                             <Globe size={15} />
                         </div>
-                        <h3>{t('proxyCardConnection')}</h3>
+                        <h3>{t('proxyDetectedTitle')}</h3>
                     </div>
 
-                    <div className="settings-nav-row">
-                        <div className="settings-nav-main">
-                            <strong>{t('proxyModeLabel')}</strong>
-                        </div>
-                        <div className="lang-choice">
-                            {(['auto', 'custom', 'off'] as const).map((m) => (
-                                <button
-                                    key={m}
-                                    type="button"
-                                    className={mode === m ? 'lang-chip active' : 'lang-chip'}
-                                    title={t(MODE_TIPS[m])}
-                                    onClick={() => setMode(m)}
-                                >
-                                    {m === 'auto' ? t('proxyModeAuto') : m === 'custom' ? t('proxyModeCustom') : t('proxyModeOff')}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
+                    {state && <div className="kv"><span>{t('surfaceSource')}</span><span>{t(SOURCE_KEYS[state.resolvedSource])}</span></div>}
+                    {mode !== 'custom' && <label className="proxy-readonly-url"><span>{t('credUrlLabel')}</span><input dir="ltr" readOnly value={state?.resolvedUrl ?? ''} placeholder={t('proxyStatusDirect')} /></label>}
                     {mode === 'custom' && <>
                     <div className="proxy-field-row">
                         <div className="proxy-field">
@@ -253,13 +407,13 @@ export function ProxyPage({
                         <div className="proxy-hint warn" dir="auto">{t('proxySocksUnsupported')}</div>
                     )}
 
-                    <details className="bypass-details"><summary>{t('miniBypass')}<code dir="ltr">{noProxy}</code></summary><div className="proxy-field-row">
+                    <details className="bypass-details" open><summary>{t('miniBypass')}<code dir="ltr">{noProxy}</code></summary><div className="proxy-field-row">
                         <div className="proxy-field grow">
                             <label htmlFor="proxy-noproxy">{t('proxyNoProxyLabel')}</label>
-                            <input
+                            <textarea
                                 id="proxy-noproxy"
                                 dir="ltr"
-                                type="text"
+                                rows={3}
                                 spellCheck={false}
                                 placeholder="localhost,127.0.0.1,.internal"
                                 value={noProxy}
@@ -269,13 +423,6 @@ export function ProxyPage({
                     </div>
                     <div className="proxy-hint" dir="auto">{t('proxyNoProxyDesc')}</div></details>
 
-                    <div className="proxy-mcp-bulk proxy-search-routing">
-                        <span>{t('proxyWebSearch')}</span>
-                        <div className="lang-choice" role="group" aria-label={t('proxyWebSearch')}>
-                            <button type="button" className={`lang-chip${webSearchUseProxy ? ' active' : ''}`} aria-pressed={webSearchUseProxy} onClick={() => setWebSearchUseProxy(true)}><span>{t('proxyMcpProxy')}</span></button>
-                            <button type="button" className={`lang-chip${!webSearchUseProxy ? ' active' : ''}`} aria-pressed={!webSearchUseProxy} onClick={() => setWebSearchUseProxy(false)}><span>{t('proxyMcpDirect')}</span></button>
-                        </div>
-                    </div>
                     <div className="proxy-save-row">
                         {state && (
                             <div className="proxy-status" dir="auto">
@@ -287,132 +434,18 @@ export function ProxyPage({
                         <button
                             type="button"
                             className="apply-btn"
-                            disabled={!dirty || socksWarn}
+                            disabled={modeSaving || !dirty || socksWarn}
                             onClick={() => {
                                 setJustSaved(true);
-                                onSave(mode, composedUrl, noProxy, webSearchUseProxy);
+                                saveSettings(mode, composedUrl);
                             }}
                         >
                             {justSaved && !dirty ? <Check size={13} /> : null}
-                            <span>{t('proxySave')}</span>
+                            <span>{t('proxySaveRouting')}</span>
                         </button>
                     </div>
                 </section>
-
-                <section className="settings-card">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Radar size={15} />
-                        </div>
-                        <h3>{t('proxyCardDetect')}</h3>
-                        <button
-                            type="button"
-                            className="icon-btn proxy-head-action"
-                            onClick={onDetect}
-                            disabled={detecting}
-                            title={t('proxyScan')}
-                            aria-label={t('proxyScan')}
-                        >
-                            {detecting ? <span className="step-status spinner" /> : <Radar size={14} />}
-                        </button>
-                    </div>
-
-                    {candidates === null && !detecting && (
-                        <div className="proxy-hint" dir="auto">{t('proxyDetectIdle')}</div>
-                    )}
-                    {candidates !== null && candidates.length === 0 && (
-                        <div className="proxy-hint" dir="auto">{t('proxyDetectEmpty')}</div>
-                    )}
-                    {candidates?.map((c) => (
-                        <div key={c.service + (c.ports[0]?.port ?? '')} className="proxy-candidate">
-                            <div className="proxy-candidate-main">
-                                <div className="proxy-candidate-head">
-                                    <strong>{c.service}</strong>
-                                    <div className="proxy-port-list" dir="ltr">
-                                        {c.ports.map((p) => (
-                                            <span
-                                                key={p.port}
-                                                className={p.usable ? 'proxy-port-chip' : 'proxy-port-chip disabled'}
-                                                title={p.url}
-                                            >
-                                                {p.port} · {p.protocol === 'mixed' ? t('proxyProtoMixed') : p.protocol === 'socks5' ? 'SOCKS5' : 'HTTP'}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                            {c.url ? (
-                                <button
-                                    type="button"
-                                    className="apply-btn"
-                                    onClick={() => {
-                                        const draft = splitProxyUrl(c.url!);
-                                        setServerDraft(draft);
-                                        setMode('custom');
-                                        onSave('custom', c.url!, noProxy, webSearchUseProxy);
-                                    }}
-                                >
-                                    {t('proxyUse')}
-                                </button>
-                            ) : (
-                                <span className="proxy-candidate-tag disabled">{t('proxySocksUnsupported')}</span>
-                            )}
-                        </div>
-                    ))}
-                    {state?.systemProxy && (
-                        <div className="proxy-hint" dir="auto">
-                            {t('proxySystemDetected')} <span dir="ltr">{state.systemProxy}</span>
-                        </div>
-                    )}
-                </section>
-
-                <section className="settings-card">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Server size={15} />
-                        </div>
-                        <h3>{t('proxyCardMcp')}</h3>
-                    </div>
-
-                    <div className="proxy-mcp-bulk">
-                        <span>{t('proxyMcpAll')}</span>
-                        <div className="lang-choice">
-                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('auto')}>
-                                {t('proxyMcpAuto')}
-                            </button>
-                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('proxy')}>
-                                {t('proxyMcpProxy')}
-                            </button>
-                            <button type="button" className="lang-chip" onClick={() => onSetAllProxies('direct')}>
-                                {t('proxyMcpDirect')}
-                            </button>
-                        </div>
-                    </div>
-
-                    {servers.length === 0 && (
-                        <div className="proxy-hint" dir="auto">{t('proxyMcpEmpty')}</div>
-                    )}
-                    {servers.map((s) => (
-                        <div key={s.name} className="proxy-mcp-row">
-                            <div className="proxy-candidate-main">
-                                <strong>{s.name}</strong>
-                                <span dir="ltr">{s.url ?? s.command ?? ''}</span>
-                            </div>
-                            <div className="lang-choice">
-                                {(['auto', 'proxy', 'direct'] as const).map((m) => (
-                                    <button
-                                        key={m}
-                                        type="button"
-                                        className={(s.proxy ?? 'auto') === m ? 'lang-chip active' : 'lang-chip'}
-                                        onClick={() => onSetServerProxy(s.name, m)}
-                                    >
-                                        {m === 'auto' ? t('proxyMcpAuto') : m === 'proxy' ? t('proxyMcpProxy') : t('proxyMcpDirect')}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                </section>
+                </div>
 
                 <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
 

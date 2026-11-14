@@ -25,7 +25,6 @@ interface MessageListProps {
     /** Restore workspace files to a turn's shadow checkpoint. */
     onRestoreCheckpoint?: (userIndex: number, sha: string) => void;
     onReviewChanges?: (sha: string, path?: string, turnNumber?: number) => void;
-    onAskReview?: (text: string) => void;
     reviewSha?: string | null;
     reviewPanelOpen?: boolean;
     reviewFiles?: ReviewChange[];
@@ -91,7 +90,7 @@ const SUGGESTIONS_FRESH: Suggestion[] = [
 ];
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function MessageList(
-    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, onAskReview, reviewSha, reviewPanelOpen, reviewFiles, turnFiles, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
+    { messages, onScroll, contentRef, onPickSuggestion, onApprovalDecision, onDecisionResponse, onRegenerate, onEditMessage, onRestoreCheckpoint, onReviewChanges, reviewSha, reviewFiles, turnFiles, onOpenDiff, onBackgroundTerminal, onKillBackground, busy, conn, setupMode, onOpenCredentials, activeFile, workspaceKind, taskList, firstVisible = 0, onShowEarlier, transcriptPrefs },
     ref
 ) {
     // Per-item context the footer buttons need: 0-based index among USER
@@ -136,7 +135,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
         >
             <div className="messages-inner" ref={contentRef}>
             {messages.length === 0 && setupMode && (
-                <div className="empty-state">
+                <div className="empty-state setup-empty">
                     <div className="empty-mark" aria-hidden="true">
                         <Unlink size={26} />
                     </div>
@@ -210,7 +209,6 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(function
                     onEditMessage={onEditMessage}
                     onRestoreCheckpoint={onRestoreCheckpoint}
                     onReviewChanges={onReviewChanges}
-                    onAskReview={reviewPanelOpen ? undefined : onAskReview}
                     reviewSha={checkpoints.get(m.id)}
                     reviewTurnNumber={checkpointNumbers.get(m.id)}
                     reviewFiles={turnFiles?.[checkpointKeys.get(checkpointNumbers.get(m.id) ?? 0) ?? ''] ?? (checkpoints.get(m.id) === reviewSha ? reviewFiles : undefined)}

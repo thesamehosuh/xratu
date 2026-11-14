@@ -45,7 +45,7 @@ out/
 # Test output and reports
 test-results/
 playwright-report/
-output/playwright/
+output/
 dist-tests/
 
 # Environment files and logs must never ship

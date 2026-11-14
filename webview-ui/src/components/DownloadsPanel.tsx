@@ -30,7 +30,11 @@ export function DownloadsPanel({ downloads, error, visible, panelClass, pending,
             <div className="surface-empty-icon" aria-hidden="true"><Download size={22} /></div>
             <strong>{t('downloadEmpty')}</strong>
         </div> : <div className="downloads-content">
-            <div className="download-list">{downloads.map(r => {
+            {[
+                { label: 'downloadInProgress', rows: downloads.filter(download => !['completed', 'failed', 'cancelled'].includes(download.status)) },
+                { label: 'downloadCompleted', rows: downloads.filter(download => download.status === 'completed') },
+                { label: 'downloadStoppedGroup', rows: downloads.filter(download => ['failed', 'cancelled'].includes(download.status)) },
+            ].filter(group => group.rows.length > 0).map(group => <section className="download-group" key={group.label}><h3>{t(group.label as Parameters<typeof t>[0])}</h3><div className="download-list">{group.rows.map(r => {
                 const percent = r.total !== null && r.total > 0 ? Math.min(100, Math.floor(r.received / r.total * 100)) : r.status === 'completed' ? 100 : undefined;
                 const Icon = r.status === 'completed' ? Check : r.status === 'paused' || r.status === 'interrupted' ? Pause : r.status === 'retrying' ? RefreshCw : r.status === 'failed' || r.status === 'cancelled' ? X : FileDown;
                 const route = t(({ auto: 'downloadRouteAuto', proxy: 'downloadRouteProxy', direct: 'downloadRouteDirect' } as const)[r.effectiveRoute ?? r.route]);
@@ -52,7 +56,7 @@ export function DownloadsPanel({ downloads, error, visible, panelClass, pending,
                     })}</div></div>
                     {actionErrors[r.id] && <p className="download-action-error" role="status">{t(actionErrors[r.id])}</p>}
                 </article>;
-            })}</div>
+            })}</div></section>)}
         </div>}
     </section>;
 }

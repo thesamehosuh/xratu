@@ -1,3 +1,4 @@
+import { openPageNavigation } from './navigation';
 /**
  * Proxy page smoke tests: host messages drive the page (mode + resolution
  * report, detected local clients, per-MCP routing, connectivity test) and the
@@ -10,19 +11,19 @@ async function hostMessage(page: Page, message: Record<string, unknown>): Promis
     await page.evaluate((msg) => window.postMessage(msg, '*'), message);
 }
 
-async function openProxy(page: Page, locale: 'fa' | 'en' = 'en'): Promise<void> {
-    await installVscodeTheme(page);
-    await page.addInitScript(() => {
+async function openProxy(page: Page, locale: 'fa' | 'en' = 'en', theme: 'dark' | 'light' = 'dark', forceDark = false): Promise<void> {
+    await installVscodeTheme(page, theme);
+    await page.addInitScript(forceDark => {
         const sent: unknown[] = [];
         (window as unknown as Record<string, unknown>).__xratuHostMessages = sent;
         (window as unknown as Record<string, unknown>).acquireVsCodeApi = () => ({
             postMessage: (m: unknown) => {
                 sent.push(m);
             },
-            getState: () => undefined,
+            getState: () => forceDark ? { surfaceAppearance: { scheme: 'dark', accent: 'violet' } } : undefined,
             setState: (s: unknown) => s,
         });
-    });
+    }, forceDark);
     await page.goto('/');
     await hostMessage(page, { type: 'locale', locale });
     await hostMessage(page, { type: 'showChat' });
@@ -37,6 +38,7 @@ async function openProxy(page: Page, locale: 'fa' | 'en' = 'en'): Promise<void> 
         systemProxy: 'http://127.0.0.1:7890',
         noProxyList: 'localhost,127.0.0.1',
     });
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: /^(Proxy|پروکسی)$/, exact: true }).click();
     await page.waitForSelector('.routing-page');
 }
@@ -48,7 +50,7 @@ test('proxy page renders the resolution report and fields', async ({ page }) => 
     await page.getByRole('button', { name: 'Custom', exact: true }).click();
     await expect(page.locator('#proxy-host')).toHaveValue('127.0.0.1');
     await expect(page.locator('#proxy-port')).toHaveValue('7890');
-    await page.locator('.bypass-details > summary').click();
+    await expect(page.locator('.bypass-details')).toHaveAttribute('open', '');
     await expect(page.locator('#proxy-noproxy')).toHaveValue('localhost,127.0.0.1');
     await expect(page.locator('.proxy-save-row .apply-btn')).toBeEnabled();
 });
@@ -67,7 +69,107 @@ test('saving composes the server URL and posts it', async ({ page }) => {
         proxyUrl: 'http://127.0.0.1:7897',
         noProxy: 'localhost,127.0.0.1',
         webSearchUseProxy: true,
+        requestId: expect.any(String),
     });
+});
+
+test('full save blocks mode changes until its own acknowledgment while preserving later edits', async ({ page }) => {
+    await openProxy(page);
+    await page.locator('#proxy-noproxy').fill('saved.example');
+    await page.locator('.proxy-save-row .apply-btn').click();
+    const save = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySave')!);
+    expect(save.requestId).toEqual(expect.any(String));
+    const off = page.getByRole('button', { name: 'Off', exact: true });
+    await expect(off).toBeDisabled();
+    await page.locator('#proxy-noproxy').fill('later.example');
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'unrelated.example', resolvedSource: 'system', requestId: 'unrelated' });
+    await expect(off).toBeDisabled();
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'saved.example', resolvedSource: 'system', requestId: save.requestId });
+    await expect(off).toBeEnabled();
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('later.example');
+    await off.click();
+    const modeSave = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySaveMode')!);
+    await hostMessage(page, { type: 'proxyState', mode: 'off', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'saved.example', resolvedSource: 'none', requestId: modeSave.requestId });
+    await expect(off).toBeEnabled();
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('later.example');
+});
+
+test('failed full save acknowledgment unlocks controls and retains unsaved edits', async ({ page }) => {
+    await openProxy(page);
+    await page.locator('#proxy-noproxy').fill('draft.example');
+    await page.locator('.proxy-save-row .apply-btn').click();
+    const save = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySave')!);
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost,127.0.0.1', resolvedSource: 'system', requestId: save.requestId });
+    await expect(page.getByRole('button', { name: 'Off', exact: true })).toBeEnabled();
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('draft.example');
+    await expect(page.locator('.proxy-save-row .apply-btn')).toBeEnabled();
+});
+
+test('mode save only writes mode and ignores unrelated state until its acknowledgment', async ({ page }) => {
+    await openProxy(page);
+    await page.locator('#proxy-noproxy').fill('draft.example');
+    const off = page.getByRole('button', { name: 'Off', exact: true });
+    await off.click();
+    const save = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySaveMode'));
+    expect(save).toEqual({ type: 'proxySaveMode', mode: 'off', requestId: expect.any(String) });
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://new.example:8080', noProxy: 'external.example', resolvedUrl: 'http://new.example:8080', resolvedSource: 'system', requestId: 'unrelated' });
+    await expect(page.locator('.route-map')).toContainText('http://new.example:8080');
+    await expect(off).toBeDisabled();
+    await expect(off).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('draft.example');
+    await hostMessage(page, { type: 'proxyState', mode: 'off', proxyUrl: 'http://new.example:8080', noProxy: 'external.example', resolvedSource: 'none', requestId: save!.requestId });
+    await expect(off).toBeEnabled();
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('draft.example');
+});
+
+test('detected proxy cannot trigger a competing save while mode is pending', async ({ page }) => {
+    await openProxy(page);
+    await hostMessage(page, { type: 'proxyDetectResult', candidates: [{ service: 'Client', url: 'http://127.0.0.1:7897', ports: [{ port: 7897, protocol: 'http', url: 'http://127.0.0.1:7897', usable: true }] }] });
+    const use = page.locator('.proxy-candidate').getByRole('button');
+    await expect(use).toBeEnabled();
+    await page.getByRole('button', { name: 'Off', exact: true }).click();
+    await expect(use).toBeDisabled();
+});
+
+test('unrelated host refresh preserves a drafted custom mode', async ({ page }) => {
+    await openProxy(page);
+    const custom = page.getByRole('button', { name: 'Custom', exact: true });
+    await custom.click();
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost,127.0.0.1', resolvedUrl: 'http://changed.example:8080', resolvedSource: 'system' });
+    await expect(page.locator('.route-map')).toContainText('http://changed.example:8080');
+    await expect(custom).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('rapid off then auto sends the latest mode without saving drafts', async ({ page }) => {
+    await openProxy(page);
+    await page.locator('#proxy-noproxy').fill('draft.example');
+    await page.getByRole('button', { name: 'Off', exact: true }).click();
+    const auto = page.locator('.routing-mode-toolbar').getByRole('button', { name: 'Auto', exact: true });
+    await expect(auto).toBeDisabled();
+    const first = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySaveMode')!);
+    await hostMessage(page, { type: 'proxyState', mode: 'off', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost,127.0.0.1', resolvedUrl: null, resolvedSource: 'none', webSearchUseProxy: true, requestId: first.requestId });
+    await expect(auto).toBeEnabled();
+    await auto.click();
+    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.filter(m => m.type === 'proxySaveMode'));
+    expect(messages.map(m => m.mode)).toEqual(['off', 'auto']);
+    expect(messages.every(m => !('noProxy' in m) && !('proxyUrl' in m))).toBe(true);
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('draft.example');
+});
+
+test('failed mode save restores the host mode and allows retry while keeping drafts', async ({ page }) => {
+    await openProxy(page);
+    await page.locator('#proxy-noproxy').fill('draft.example');
+    const off = page.getByRole('button', { name: 'Off', exact: true });
+    await off.click();
+    await expect(off).toBeDisabled();
+    const first = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySaveMode')!);
+    await hostMessage(page, { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost,127.0.0.1', resolvedUrl: 'http://127.0.0.1:7890', resolvedSource: 'system', webSearchUseProxy: true, requestId: first.requestId });
+    await expect(off).toBeEnabled();
+    await expect(page.locator('.routing-mode-toolbar').getByRole('button', { name: 'Auto', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#proxy-noproxy')).toHaveValue('draft.example');
+    await off.click();
+    const saves = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.filter(m => m.type === 'proxySaveMode'));
+    expect(saves.map(m => m.mode)).toEqual(['off', 'off']);
 });
 
 test('a saved SOCKS URL does not prevent turning proxy routing off', async ({ page }) => {
@@ -75,13 +177,10 @@ test('a saved SOCKS URL does not prevent turning proxy routing off', async ({ pa
     await hostMessage(page, { type: 'proxyState', mode: 'custom', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost', resolvedSource: 'none' });
     await expect(page.locator('#proxy-port')).toHaveValue('1080');
     await expect(page.locator('.proxy-hint.warn')).toBeVisible();
-    await page.locator('.routing-page .settings-card').first().getByRole('button', { name: 'Auto', exact: true }).click();
-    await expect(page.locator('.proxy-save-row .apply-btn')).toBeDisabled();
     await page.getByRole('button', { name: 'Off', exact: true }).click();
     await expect(page.locator('.proxy-hint.warn')).toHaveCount(0);
-    await page.locator('.proxy-save-row .apply-btn').click();
     const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'proxySave', mode: 'off', proxyUrl: 'socks5://127.0.0.1:1080', noProxy: 'localhost', webSearchUseProxy: true });
+    expect(messages).toContainEqual({ type: 'proxySaveMode', mode: 'off', requestId: expect.any(String) });
 });
 
 test('detected clients group their ports under one family row', async ({ page }) => {
@@ -141,7 +240,7 @@ test('per-MCP routing rows and the connectivity test result', async ({ page }) =
     // Result strip under the header (the test itself runs from the header icon).
     await expect(page.locator('.route-test-result')).toHaveClass(/fail/);
     await expect(page.locator('.route-test-result')).toContainText('fetch failed');
-    await expect(page.locator('.routing-page header .icon-btn')).toBeVisible();
+    await expect(page.locator('.routing-page header .proxy-test-action')).toBeVisible();
     // Toggling one server's route posts a targeted mcpSave.
     await page.locator('.proxy-mcp-row').first().locator('.lang-chip', { hasText: /via proxy/i }).click();
     const sent = await page.evaluate(() =>
@@ -164,7 +263,8 @@ test('save button is gray until something is drafted', async ({ page }) => {
     await expect(btn).toBeDisabled();
     await page.getByRole('button', { name: 'Custom', exact: true }).click();
     await page.locator('.proxy-save-row .apply-btn').click();
-    await hostMessage(page, { type: 'proxyState', mode:'custom',proxyUrl:'http://127.0.0.1:7890',noProxy:'localhost,127.0.0.1',resolvedUrl:'http://127.0.0.1:7890',resolvedSource:'setting',systemProxy:null,noProxyList:'localhost,127.0.0.1' });
+    const save = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySave')!);
+    await hostMessage(page, { type: 'proxyState', mode:'custom',proxyUrl:'http://127.0.0.1:7890',noProxy:'localhost,127.0.0.1',resolvedUrl:'http://127.0.0.1:7890',resolvedSource:'setting',systemProxy:null,noProxyList:'localhost,127.0.0.1', requestId: save.requestId });
     await expect(btn).toBeDisabled();
     await expect(page.locator('#proxy-port')).toHaveValue('7890');
     const idle = await btn.evaluate((el) => {
@@ -182,6 +282,60 @@ test('save button is gray until something is drafted', async ({ page }) => {
         .not.toBe(idle.background);
 });
 
+for (const theme of ['dark', 'light', 'app-dark'] as const) for (const locale of ['en', 'fa'] as const) for (const width of [420, 1440]) {
+    test(`routing save keeps readable ink through state changes (${theme}, ${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 960 });
+        await openProxy(page, locale, theme === 'app-dark' ? 'light' : theme, theme === 'app-dark');
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        const button = page.locator('.proxy-save-row .apply-btn');
+        await expect(button).toBeDisabled();
+        const monitor = async (change: () => Promise<unknown>) => {
+            await button.evaluate(element => {
+                const context = document.createElement('canvas').getContext('2d')!;
+                const rgb = (color: string) => {
+                    context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+                    return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+                };
+                const luminance = (color: string) => {
+                    const [r, g, b] = rgb(color).map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+                    return .2126 * r + .7152 * g + .0722 * b;
+                };
+                Object.assign(window, { routingFrames: new Promise<string[]>(resolve => {
+                    const failures: string[] = [];
+                    let frames = 0;
+                    const sample = () => {
+                        const style = getComputedStyle(element);
+                        const label = getComputedStyle(element.querySelector('span')!);
+                        const a = luminance(style.backgroundColor), b = luminance(label.color);
+                        const background = rgb(style.backgroundColor);
+                        if ((element as HTMLButtonElement).disabled) {
+                            if (Math.max(...background) - Math.min(...background) > 1) failures.push(`Disabled colored surface: ${style.backgroundColor}`);
+                        } else if ((Math.max(a, b) + .05) / (Math.min(a, b) + .05) < 4.5) failures.push(`Unreadable active action: ${label.color} on ${style.backgroundColor}`);
+                        if (label.color !== style.color) failures.push('Label does not inherit button ink');
+                        if (++frames < 18) requestAnimationFrame(sample);
+                        else resolve(failures.slice(0, 5));
+                    };
+                    requestAnimationFrame(sample);
+                }) });
+            });
+            await change();
+            expect(await page.evaluate(() => (window as unknown as { routingFrames: Promise<string[]> }).routingFrames)).toEqual([]);
+        };
+        await page.locator('.routing-mode-toolbar button').last().click();
+        const first = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySaveMode')!);
+        await hostMessage(page, { type: 'proxyState', mode: 'off', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost,127.0.0.1', resolvedUrl: null, resolvedSource: 'none', webSearchUseProxy: true, requestId: first.requestId });
+        await monitor(() => page.locator('#proxy-noproxy').fill('draft.example'));
+        await expect(button).toBeEnabled();
+        await monitor(() => button.hover());
+        await button.click();
+        const fullSave = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages.find(m => m.type === 'proxySave')!);
+        await monitor(() => hostMessage(page, { type: 'proxyState', mode: 'off', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'draft.example', resolvedUrl: null, resolvedSource: 'none', webSearchUseProxy: true, requestId: fullSave.requestId }));
+        await expect(button).toBeDisabled();
+        await button.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('routing-save-settled.png') });
+    });
+}
+
 test('settings keeps offline controls beside the dedicated proxy navigation', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 860 });
     await installVscodeTheme(page);
@@ -197,7 +351,9 @@ test('settings keeps offline controls beside the dedicated proxy navigation', as
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
+    await openPageNavigation(page);
     await expect(page.locator('.sidebar-item').filter({ hasText: 'Proxy' })).toBeVisible();
+    await page.locator('.toolbar > .sidebar-toggle').click();
     await expect(page.locator('.settings-page').getByRole('switch', { name: 'Offline mode', exact: true })).toBeVisible();
 });
 
@@ -232,12 +388,13 @@ test('proxy page polish assertions', async ({ page }) => {
             ],
         }],
     });
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: /^(Proxy|پروکسی)$/, exact: true }).click();
     await page.waitForSelector('.routing-page');
 
     await page.getByRole('button', { name: 'Custom', exact: true }).click();
     // 1. Header test icon is the plug-style connection icon, not a bolt.
-    const iconClass = await page.locator('.routing-page header .icon-btn svg').getAttribute('class');
+    const iconClass = await page.locator('.routing-page header .proxy-test-action svg').getAttribute('class');
     console.log('HEADER ICON', iconClass);
     expect(iconClass).toContain('lucide-plug-zap');
 
@@ -254,10 +411,10 @@ test('proxy page polish assertions', async ({ page }) => {
     });
     console.log('SIZES', JSON.stringify(sizes));
     expect(sizes.clientName).toBe('14px');
-    expect(sizes.label).toBe('12px');
+    expect(sizes.label).toBe('13px');
     expect(sizes.input).toBe('14px');
     expect(sizes.dropdown).toBe('14px');
-    expect(sizes.hint).toBe('12px');
+    expect(sizes.hint).toBe('13px');
 
     // 3. Scheme uses the shared dropdown, no native select.
     await expect(page.locator('.proxy-field .dropdown-trigger')).toHaveCount(1);
@@ -317,6 +474,7 @@ test('entering credentials from settings requests the saved providers', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: 'Providers', exact: true }).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
@@ -343,6 +501,7 @@ test('entering capabilities from settings requests MCP + skills state', async ({
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'openSettings' });
     await page.waitForSelector('.settings-page');
+    await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: 'Servers', exact: true }).click();
     const sent = await page.evaluate(() =>
         (window as unknown as Record<string, unknown>).__xratuHostMessages as Array<{ type?: string }>);
@@ -354,7 +513,7 @@ test('header actions sit at the far end (justify-between)', async ({ page }) => 
     await openProxy(page);
     const geometry = await page.evaluate(() => {
         const head = document.querySelector('.routing-page .settings-head')!.getBoundingClientRect();
-        const icon = document.querySelector('.routing-page header .icon-btn')!.getBoundingClientRect();
+        const icon = document.querySelector('.routing-page header .proxy-test-action')!.getBoundingClientRect();
         const title = document.querySelector('.routing-page .settings-head-copy')!.getBoundingClientRect();
         return {
             headLeft: head.left,

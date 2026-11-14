@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 /**
  * Room for a popup anchored to `el`, bounded by the clipping ancestors (a
@@ -47,6 +48,10 @@ export function Dropdown({
     value,
     options,
     onChange,
+    side = 'auto',
+    onOpenChange,
+    showCaret = true,
+    leadingIcon,
 }: {
     label: string;
     id?: string;
@@ -55,26 +60,49 @@ export function Dropdown({
     value: string;
     options: Array<{ value: string; label: string }>;
     onChange: (value: string) => void;
+    side?: 'auto' | 'top';
+    showCaret?: boolean;
+    leadingIcon?: ReactNode;
+    onOpenChange?: (open: boolean) => void;
 }) {
     const [open, setOpen] = useState(false);
     /** Cards clip their overflow: flip and shrink the list to fit inside. */
-    const [placement, setPlacement] = useState<{ up: boolean; cap: number | undefined }>({ up: false, cap: undefined });
+    const [placement, setPlacement] = useState({ top: 0, inline: 0, width: 180, cap: 190 });
     const rootRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
+    const Caret = side === 'top' ? ChevronUp : ChevronDown;
     const current = options.find((o) => o.value === value) ?? options[0];
+
+    useLayoutEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
 
     useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
     useLayoutEffect(() => {
         if (!open || !triggerRef.current) return;
-        setPlacement(popupPlacement(triggerRef.current, 190));
-    }, [open]);
+        const position = () => {
+            const trigger = triggerRef.current;
+            if (!trigger) return;
+            const rect = trigger.getBoundingClientRect();
+            const height = Math.min(190, options.length * 36 + 10);
+            const up = side === 'top' || window.innerHeight - rect.bottom - 12 < height && rect.top > window.innerHeight - rect.bottom;
+            const cap = Math.min(height, Math.max(64, up ? rect.top - 12 : window.innerHeight - rect.bottom - 12));
+            const rtl = getComputedStyle(trigger).direction === 'rtl';
+            setPlacement({ top: up ? rect.top - cap - 4 : rect.bottom + 4, inline: rtl ? window.innerWidth - rect.right : rect.left, width: rect.width, cap });
+        };
+        position();
+        const observer = new ResizeObserver(position);
+        observer.observe(triggerRef.current.closest('.input-bar') ?? triggerRef.current);
+        const onScroll = (event: Event) => { if (!listRef.current?.contains(event.target as Node)) position(); };
+        window.addEventListener('resize', position);
+        document.addEventListener('scroll', onScroll, true);
+        return () => { observer.disconnect(); window.removeEventListener('resize', position); document.removeEventListener('scroll', onScroll, true); };
+    }, [open, options.length, side]);
 
     useEffect(() => {
         if (!open) return;
         const onPointerDown = (e: MouseEvent) => {
-            if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+            if (!rootRef.current?.contains(e.target as Node) && !listRef.current?.contains(e.target as Node)) setOpen(false);
         };
         document.addEventListener('mousedown', onPointerDown);
         return () => document.removeEventListener('mousedown', onPointerDown);
@@ -126,19 +154,21 @@ export function Dropdown({
                     }
                 }}
             >
+                {leadingIcon}
                 <span className="dropdown-value" dir="auto">{current?.label ?? ''}</span>
-                <ChevronDown size={12} className="dropdown-caret" aria-hidden="true" />
+                {showCaret && <Caret size={12} className="dropdown-caret" aria-hidden="true" />}
             </button>
-            {open && (
+            {open && rootRef.current && createPortal(
                 <div
                     ref={listRef}
-                    className={`dropdown-list${placement.up ? ' up' : ''}`}
+                    className="dropdown-list dropdown-portal"
                     role="listbox"
                     aria-label={label}
-                    style={placement.cap != null ? { maxHeight: `${placement.cap}px` } : undefined}
+                    style={{ position: 'fixed', insetBlockStart: placement.top, insetInlineStart: placement.inline, inlineSize: placement.width, maxHeight: placement.cap, zIndex: 200 }}
                     onKeyDown={(e) => {
                         if (e.key === 'Escape') {
                             e.preventDefault();
+                            e.stopPropagation();
                             setOpen(false);
                             triggerRef.current?.focus();
                         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -164,7 +194,7 @@ export function Dropdown({
                             {option.label}
                         </button>
                     ))}
-                </div>
+                </div>, rootRef.current.closest('.app') ?? document.body
             )}
         </div>
     );

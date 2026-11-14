@@ -424,6 +424,7 @@ async function openSettingsSubpage(page: Page, locale: Locale, row: 'capabilitie
     await expect(page.locator('.composer-input')).toBeVisible();
     await host(page, { type: 'openSettings' });
     await expect(page.locator('.settings-page').first()).toBeVisible();
+    if (!await page.locator('.page-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
     const names = locale === 'fa' ? { capabilities: 'سرور ها', usage: 'مصرف', proxy: 'پروکسی' } : { capabilities: 'Servers', usage: 'Usage', proxy: 'Proxy' };
     const target = page.locator('.page-sidebar').getByRole('button', { name: names[row], exact: true });
     await expect(target).toHaveCount(1);
@@ -451,6 +452,7 @@ async function usageScreen(page: Page, locale: Locale): Promise<Locator> {
     // The chart's month axis is built from the LEDGER, never from `new Date()`,
     // so 31 columns for the last (August) month is a fixed, reviewable state.
     await expect(page.locator('.cost-col')).toHaveCount(31);
+    await page.locator('.usage-breakdown-tabs button').last().click();
     await expect(page.locator('.prov-row')).toHaveCount(1);
     return view;
 }

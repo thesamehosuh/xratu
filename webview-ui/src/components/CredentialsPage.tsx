@@ -14,6 +14,7 @@ import {
     Eye,
     EyeOff,
     Laptop,
+    KeyRound,
     Link,
     Lock,
     LogOut,
@@ -29,12 +30,10 @@ import {
 import type {
     DiscoveredLocalRuntime,
     LocalModelOperation,
-    ProviderBenchmark,
     OAuthHostState,
     SavedCredential,
 } from '../types';
 import { LocalModelManager } from './LocalModelManager';
-import { ProviderComparison } from './ProviderComparison';
 import { getLocale, t, tf } from '../i18n';
 import type { StringKey } from '../i18n';
 
@@ -49,6 +48,8 @@ interface CredentialsPageProps {
      *  'byok' → remote provider, 'local' → Ollama). */
     initialOpenCard?: 'byok' | 'local' | null;
     savedCredentials: SavedCredential[];
+    models?: string[];
+    modelDisplayNames?: Record<string, string>;
     credentialsReady?: boolean;
     localRuntimes: DiscoveredLocalRuntime[];
     localModelsScanning: boolean;
@@ -74,9 +75,7 @@ interface CredentialsPageProps {
     onOAuthSignOut: (credentialId: string) => void;
     offline?: boolean;
     localModelOperation?: LocalModelOperation | null;
-    benchmarks?: ProviderBenchmark[];
     onManageLocalModel?: (action: 'pull' | 'delete' | 'cancel', baseUrl: string, model: string) => void;
-    onBenchmark?: () => void;
     onOpenGuide?: (guide: 'offline' | 'providers') => void;
     onBack: () => void;
 }
@@ -187,7 +186,7 @@ export function CredentialsPage({
     currentUrl,
     activeCredentialId,
     initialOpenCard = null,
-    savedCredentials, credentialsReady = true,
+    models, modelDisplayNames, savedCredentials, credentialsReady = true,
     localRuntimes,
     localModelsScanning,
     localScanError = null,
@@ -207,7 +206,7 @@ export function CredentialsPage({
     onOAuthManualCode,
     onOAuthSignOut,
     onBack,
-    offline = false, localModelOperation, benchmarks = [], onManageLocalModel, onBenchmark, onOpenGuide,
+    offline = false, localModelOperation, onManageLocalModel, onOpenGuide,
 }: CredentialsPageProps) {
     /** Entry-point target wins over any currentUrl echo: the setup chips
      *  ask for a specific provider kind (remote vs local). */
@@ -230,6 +229,8 @@ export function CredentialsPage({
     const [apiKey, setApiKey] = useState('');
     const [showApiKey, setShowApiKey] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [connectionSelection, setConnectionSelection] = useState<string | null>(null);
+    const [connectionQuery, setConnectionQuery] = useState('');
     const [providerQuery, setProviderQuery] = useState('');
     const [providerOpen, setProviderOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -298,6 +299,9 @@ export function CredentialsPage({
 
     const active = savedCredentials.find((c) => c.id === activeCredentialId) ?? savedCredentials.find((c) => c.active);
     const selectedPreset = PRESETS.find((p) => p.id === presetId) ?? PRESETS.find((p) => p.id === 'openai')!;
+    const matchesConnection = (credential: SavedCredential) => `${credential.label} ${credential.providerId} ${credential.baseUrl}`.toLocaleLowerCase().includes(connectionQuery.trim().toLocaleLowerCase());
+    const visibleConnections = savedCredentials.filter(matchesConnection);
+    const inspected = visibleConnections.find(credential => credential.id === connectionSelection) ?? visibleConnections.find(credential => credential.id === active?.id) ?? visibleConnections[0];
     const keyOptional = selectedPreset.group === 'local' || isLocalishUrl(url);
     const canSave = url.trim().length > 0 && (apiKey.trim().length > 0 || keyOptional);
 
@@ -394,8 +398,8 @@ export function CredentialsPage({
                     return (
                         <div key={provider.providerId} className={`cred-oauth-row${accounts.length ? ' connected' : ''}${busy ? ' busy' : ''}`}>
                             <div className="cred-oauth-header">
-                                <div className="cred-oauth-copy">
-                                    <span className="cred-oauth-name" dir="ltr">{provider.label}</span>
+                                <span className="account-provider-icon" aria-hidden="true"><UserRound size={18} /></span><div className="cred-oauth-copy">
+                                    <span className="cred-oauth-name" dir="ltr">{provider.label}</span><span className="account-connection-status">{t(busy ? 'working' : accounts.length ? 'credOAuthConnected' : 'miniSignIn')}</span>
                                 </div>
                                 <div className="cred-oauth-actions">
                                     {!busy && accounts.length > 0 && <button type="button" className="ghost-btn cred-oauth-action"
@@ -450,16 +454,17 @@ export function CredentialsPage({
                                             <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
                                                 aria-label={t('credOAuthSignOut')} title={t('credOAuthSignOut')}
                                                 onClick={() => onOAuthSignOut(account.credentialId)}><LogOut size={14} /></button>
-                                        </div>
-                                        {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
-                                        {!account.active && <div className="cred-oauth-account-actions">
-                                            <button type="button" className="ghost-btn cred-oauth-action"
+                                        {!account.active && <>
+                                            <button type="button" className="settings-ghost-action cred-oauth-action cred-oauth-use"
                                                 disabled={!!inProgress || selectingId === account.credentialId}
                                                 onClick={() => { setSelectingId(account.credentialId); onSelectCredential(account.credentialId); }}>
                                                 {selectingId === account.credentialId && <RefreshCw size={12} className="spinning" />}
                                                 <span>{t('credOAuthUseAccount')}</span>
                                             </button>
-                                        </div>}
+                                        </>}
+                                        </div>
+                                        {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
+
                                     </div>
                                 ))}
                             </div>}
@@ -595,7 +600,7 @@ export function CredentialsPage({
     };
 
     const renderSection = (icon: ReactNode, title: string, desc: string, body: ReactNode) => (
-        <section className="cred-card open">
+        <section className={`cred-card open${title === t('credOAuthTitle') ? ' account-connections' : ''}`}>
             <div className="cred-card-head static">
                 <span className="cred-card-icon" aria-hidden="true">{icon}</span>
                 <span className="cred-card-copy">
@@ -614,14 +619,20 @@ export function CredentialsPage({
                 <input
                     type="text"
                     role="combobox"
+                    id="cred-provider-input"
                     dir="ltr"
                     aria-expanded={providerOpen}
                     aria-controls="cred-provider-listbox"
                     aria-autocomplete="list"
                     value={providerQuery}
                     onChange={(e) => {
-                        setProviderQuery(e.target.value);
-                        setProviderOpen(true);
+                        const value = e.target.value;
+                        setProviderQuery(value);
+                        if (/^https?:\/\//i.test(value.trim())) {
+                            setPresetId('custom');
+                            setUrl(value.trim());
+                            setProviderOpen(false);
+                        } else setProviderOpen(true);
                     }}
                     onFocus={() => setProviderOpen(true)}
                     onKeyDown={(e) => {
@@ -683,10 +694,12 @@ export function CredentialsPage({
         </div>
     );
 
-    const renderProviderForm = () => (
+    const renderProviderForm = (compact = false) => (
         <>
+            {compact && <label className="cred-field provider-picker-label" htmlFor="cred-provider-input"><span>{t('credSelectProvider')}</span></label>}
             {renderProviderCombobox()}
 
+            {!compact && <>
             <div className="cred-providers-inline" role="radiogroup" aria-label={t('credPopular')}>
                 {POPULAR.slice(0, 4).map((p) => (
                     <button
@@ -727,6 +740,7 @@ export function CredentialsPage({
                 </div>
             </div>
 
+            </>}
             {/* Inherit the card's RTL: the hint is a Persian sentence and must
                 read right-to-left. Only the Latin brand name is isolated. */}
             <div className="cred-form-provider">
@@ -778,6 +792,8 @@ export function CredentialsPage({
                 </div>
             </label>
 
+            {compact && error && <p className="cred-form-error" role="alert" dir="auto">{error}</p>}
+            <div className="cred-form-footer" style={compact ? undefined : { display: 'contents' }}>
             <div className="cred-form-actions">
                 <button
                     type="button"
@@ -798,6 +814,7 @@ export function CredentialsPage({
                 <Lock size={11} />
                 <span>{t('credSecurityHint')}</span>
             </p>
+            </div>
         </>
     );
 
@@ -812,7 +829,7 @@ export function CredentialsPage({
                     <span>{t('credSavedHeading')}</span>
                 </div>
                 <div className="cred-saved-list">
-                    {credentials.map((credential) => {
+                    {credentials.filter(matchesConnection).map((credential) => {
                         const preset = PRESETS.find((p) => p.id === credential.providerId) ?? presetForUrl(credential.baseUrl) ?? PRESETS.find((p) => p.id === 'custom')!;
                         const isActive = credential.id === active?.id;
                         const editing = editingId === credential.id;
@@ -877,10 +894,10 @@ export function CredentialsPage({
                                         disabled={selectingId === credential.id}
                                         onClick={() => {
                                             setDeletingId(null);
-                                            setSelectingId(credential.id);
-                                            onSelectCredential(credential.id);
+                                            setConnectionSelection(credential.id);
+                                            if (embedded) onSelectCredential?.(credential.id);
                                         }}
-                                        aria-pressed={isActive}
+                                        aria-pressed={inspected?.id === credential.id}
                                     >
                                         <ProviderMark provider={preset} />
                                         <span className="saved-credential-copy">
@@ -1010,8 +1027,12 @@ export function CredentialsPage({
                 </div>
             )}
 
+            <div className="inventory-split provider-inventory"><div className="provider-main">
+            <label className="inventory-search"><Search size={15} /><input type="search" dir="auto" value={connectionQuery} onChange={event => setConnectionQuery(event.target.value)} aria-label={t('surfaceSearchInventory')} placeholder={t('surfaceSearchInventory')} /></label>
             {renderSavedList()}
-            {!addOpen && (oauthState?.accounts?.length || oauthState?.registrations?.length) ? renderOauthSection() : null}
+            {savedCredentials.length > 0 && visibleConnections.length === 0 && <div className="inventory-no-results" role="status">{t('surfaceNoMatches')}</div>}
+            {!addOpen && renderOauthSection()}
+            <section className="regional-providers"><h3>{t('surfaceRegionalProviders')}</h3><div className="regional-provider-list">{PRESETS.filter(preset => preset.group === 'iranian').map(preset => <button type="button" key={preset.id} onClick={() => { pick(preset.id); setAddOpen(true); }}><ProviderMark provider={preset} /><span><strong>{presetLabel(preset)}</strong><small>{t('credOpenAICompatible')}</small></span><span className="regional-connect">{t('credConnect')}</span></button>)}</div></section>
 
             <section className={`cred-card${localRuntimes.length > 0 ? ' open' : ''}`}>
                 <div className="cred-card-head static">
@@ -1041,24 +1062,30 @@ export function CredentialsPage({
             </section>
 
 
-            {addOpen && <SidePanel className="connection-drawer" label={t('miniAdd')} onClose={() => setAddOpen(false)}>
+            {addOpen && <SidePanel className="connection-drawer compact-dialog" label={t('miniAdd')} onClose={() => setAddOpen(false)}>
                 <header className="drawer-head">
                     <h3>{t('miniAdd')}</h3>
                     <button type="button" className="icon-btn" aria-label={t('editCancel')} onClick={() => setAddOpen(false)}><X size={13} /></button>
                 </header>
                 <div className="drawer-scroll">
+                    {renderProviderForm(true)}
                     {renderOauthSection()}
-                    {renderSection(
-                        <Link size={15} />,
-                        t('credAddProviderTitle'),
-                        t('credAddProviderDesc'),
-                        renderProviderForm()
-                    )}
                 </div>
             </SidePanel>}
 
-            <ProviderComparison results={benchmarks} credentials={savedCredentials} offline={offline}
-                onRun={() => onBenchmark?.()} onGuide={() => onOpenGuide?.('providers')} />
+            </div>
+            {inspected && <aside className="inventory-inspector provider-inspector" aria-label={t('surfaceConnectionDetails')}>
+                <h3 dir="ltr">{presetLabel(PRESETS.find(preset => preset.id === inspected.providerId) ?? presetForUrl(inspected.baseUrl) ?? PRESETS.find(preset => preset.id === 'custom')!)}</h3>
+                <div className="kv"><span>{t('surfaceStatus')}</span><span>{t(inspected.id === active?.id ? 'credActive' : 'credSavedHeading')}</span></div>
+                <label className="cred-field"><span>{t('credUrlLabel')}</span><input dir="ltr" readOnly value={inspected.baseUrl} /></label>
+                <label className="cred-field"><span>{t('credKeyLabel')}</span><input dir="ltr" readOnly value={inspected.maskedKey ?? ''} /></label>
+                <div className="provider-inspector-actions">
+                    {!inspected.oauth && <button type="button" className="settings-ghost-action" onClick={() => { setEditingId(inspected.id); setEditKey(''); }}><Pencil size={13} /><span>{t('credEditKey')}</span></button>}
+                    {inspected.id !== active?.id && <button type="button" className="settings-ghost-action" disabled={selectingId === inspected.id} onClick={() => { setSelectingId(inspected.id); onSelectCredential(inspected.id); }}>{t('credUseConnection')}</button>}
+                </div>
+                {models && inspected.id === active?.id && <><h4>{t('modelListAria')}</h4><div className="provider-models">{models.map(model => <div className="kv" key={model}><span dir="ltr">{modelDisplayNames?.[model] ?? model}</span></div>)}</div><button type="button" className="settings-ghost-action" disabled={modelsRefreshing} onClick={onRetryFetch}><RefreshCw size={13} className={modelsRefreshing ? 'spinning' : undefined} /><span>{t('refreshModels')}</span></button></>}
+            </aside>}
+            </div>
         </div>
     );
 }
@@ -1068,19 +1095,56 @@ function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPage
     const [integrationID, setIntegrationID] = useState('');
     const [key, setKey] = useState('');
     const [code, setCode] = useState('');
-    const selected = state?.integrations.find((entry) => entry.id === integrationID);
+    const [connecting, setConnecting] = useState(false);
+    const selected = state?.integrations.find(entry => entry.id === integrationID);
     useEffect(() => { setKey(''); setCode(''); }, [integrationID, state?.requestId, state?.busy]);
     const locked = !state || state.phase !== 'ready' || !!state.busy;
-    return <section className="settings-page native-config"><header className="settings-head"><h2>{t('providersTitle')}</h2><button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} onClick={refresh} disabled={state?.busy}><RefreshCw size={13} /></button></header><div className="settings-scroll">
-        {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
-        {state?.phase === 'checking' && <span role="status">{t('setupChecking')}</span>}
-        {state?.integrations.filter((entry) => entry.connections.length).map((entry) => <div className="native-config-row" key={entry.id}><strong dir="ltr">{entry.name}</strong>{entry.connections.map((connection, index) => <span className="native-connection" key={index}><span dir="auto">{connection.label === 'Personal account' ? t('nativePersonalAccount') : connection.label}</span><span>{t(connection.needsAuth ? 'nativeNeedsAuth' : 'nativeConfigured')}</span><span>{t(connection.source === 'env' ? 'nativeEnvironment' : 'nativeStored')}</span></span>)}</div>)}
-        {state?.phase === 'ready' && <form className="native-provider-form" onSubmit={(event) => { event.preventDefault(); if (!selected?.key || !key.trim() || locked) return; send({ type: 'nativeConnect', requestId: state.requestId, integrationID, key: key.trim() }); setKey(''); }}>
-            <label htmlFor="native-provider">{t('credSelectProvider')}</label><Dropdown id="native-provider" label={t('credSelectProvider')} value={integrationID} disabled={locked} onChange={setIntegrationID} options={[{ value: '', label: t('nativeChooseProvider') }, ...state.integrations.filter((entry) => entry.key || entry.oauth.length).map((entry) => ({ value: entry.id, label: entry.name }))]} />
-            {selected?.key && <><label htmlFor="native-key">{t('credKeyLabel')}</label><input id="native-key" type="password" dir="ltr" autoComplete="off" value={key} disabled={locked} onChange={(event) => setKey(event.target.value)} /><button type="submit" className="primary-btn" disabled={locked || !key.trim()}>{t('credConnect')}</button></>}
-            {selected?.oauth.map((method) => <button key={method.id} type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'nativeConnect', requestId: state.requestId, integrationID, methodID: method.id })}>{method.label}</button>)}
-        </form>}
-        {state?.oauth && <div className="native-provider-form"><a href={state.oauth.url} target="_blank" rel="noreferrer">{t('credOAuthOpenBrowser')}</a><p dir="auto">{state.oauth.instructions}</p>{state.oauth.mode === 'code' && <form onSubmit={(event) => { event.preventDefault(); if (!code.trim() || state.busy) return; send({ type: 'nativeOAuthCode', requestId: state.requestId, code: code.trim() }); setCode(''); }}><input name="oauthCode" aria-label={t('nativeAuthCode')} value={code} disabled={state.busy} onChange={(event) => setCode(event.target.value)} autoComplete="off" /><button type="submit" className="secondary-btn" disabled={!code.trim() || state.busy}>{t('nativeSubmitCode')}</button></form>}<button type="button" className="secondary-btn" onClick={refresh}>{t('engineCancel')}</button></div>}
-        {state?.phase === 'attention' && <button type="button" className="secondary-btn" onClick={() => send({ type: 'setupOpen', path: 'free' })}>{t('setupResume')}</button>}
-    </div></section>;
+    const connections = state?.integrations.filter(entry => entry.connections.length) ?? [];
+    const close = () => { setConnecting(false); setKey(''); setCode(''); if (state?.oauth) refresh(); };
+    return <section className="settings-page native-config native-providers">
+        <header className="settings-head"><h2>{t('providersTitle')}</h2>
+            <button type="button" className="page-add" disabled={locked} onClick={() => setConnecting(true)}><Plus size={14} /><span>{t('miniAdd')}</span></button>
+            <button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} title={t('surfaceRefresh')} onClick={refresh} disabled={state?.busy}><RefreshCw size={13} /></button>
+        </header>
+        <div className="settings-scroll">
+            {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
+            {(!state || state.phase === 'checking') && <span role="status">{t('setupChecking')}</span>}
+            <section className="native-connections-section">
+                <div className="settings-section-head"><h3>{t('credSavedHeading')}</h3><span className="mcp-badge">{t('engineOpenCode')}</span></div>
+                <div className="native-connections-list">
+                    {connections.map(entry => <div className="native-config-row" key={entry.id}>
+                        <KeyRound size={17} aria-hidden="true" /><div className="native-connection-copy"><strong dir="ltr">{entry.name}</strong>
+                            {entry.connections.map((connection, index) => <span className="native-connection" key={index}><span dir="auto">{connection.label === 'Personal account' ? t('nativePersonalAccount') : connection.label}</span><span>{t(connection.needsAuth ? 'nativeNeedsAuth' : 'nativeConfigured')}</span><span>{t(connection.source === 'env' ? 'nativeEnvironment' : 'nativeStored')}</span></span>)}
+                        </div>
+                    </div>)}
+                    {state?.phase === 'ready' && connections.length === 0 && <div className="inventory-no-results">{t('nativeNoneConfigured')}</div>}
+                </div>
+            </section>
+            {state?.phase === 'attention' && <button type="button" className="secondary-btn" onClick={() => send({ type: 'setupOpen', path: 'free' })}>{t('setupResume')}</button>}
+        </div>
+        {(connecting || state?.oauth) && <SidePanel label={t('miniAdd')} className="connection-drawer compact-dialog" onClose={close}>
+            <header className="drawer-head"><h3>{t('miniAdd')}</h3><button type="button" className="ghost-btn" aria-label={t('editCancel')} title={t('editCancel')} onClick={close}><X size={14} /></button></header>
+            <div className="drawer-scroll">
+                {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
+                {state?.phase === 'ready' && <form className="native-provider-form" onSubmit={event => {
+                    event.preventDefault();
+                    if (!selected?.key || !key.trim() || locked) return;
+                    send({ type: 'nativeConnect', requestId: state.requestId, integrationID, key: key.trim() }); setKey('');
+                }}>
+                    <label htmlFor="native-provider">{t('credSelectProvider')}</label>
+                    <Dropdown id="native-provider" label={t('credSelectProvider')} value={integrationID} disabled={locked} onChange={setIntegrationID} options={[{ value: '', label: t('nativeChooseProvider') }, ...state.integrations.filter(entry => entry.key || entry.oauth.length).map(entry => ({ value: entry.id, label: entry.name }))]} />
+                    {selected?.key && <><label htmlFor="native-key">{t('credKeyLabel')}</label><input id="native-key" type="password" dir="ltr" autoComplete="off" value={key} disabled={locked} onChange={event => setKey(event.target.value)} /><button type="submit" className="primary-btn" disabled={locked || !key.trim()}>{t('credConnect')}</button></>}
+                    {selected?.oauth.map(method => <button key={method.id} type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'nativeConnect', requestId: state.requestId, integrationID, methodID: method.id })}>{method.label}</button>)}
+                </form>}
+                {state?.oauth && <div className="native-provider-form">
+                    <a href={state.oauth.url} target="_blank" rel="noreferrer">{t('credOAuthOpenBrowser')}</a><p dir="auto">{state.oauth.instructions}</p>
+                    {state.oauth.mode === 'code' && <form onSubmit={event => {
+                        event.preventDefault(); if (!code.trim() || state.busy) return;
+                        send({ type: 'nativeOAuthCode', requestId: state.requestId, code: code.trim() }); setCode('');
+                    }}><input name="oauthCode" aria-label={t('nativeAuthCode')} value={code} disabled={state.busy} onChange={event => setCode(event.target.value)} autoComplete="off" /><button type="submit" className="secondary-btn" disabled={!code.trim() || state.busy}>{t('nativeSubmitCode')}</button></form>}
+                    <button type="button" className="secondary-btn" onClick={close}>{t('engineCancel')}</button>
+                </div>}
+            </div>
+        </SidePanel>}
+    </section>;
 }

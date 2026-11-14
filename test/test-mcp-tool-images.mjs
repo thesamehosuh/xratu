@@ -514,6 +514,11 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     const tools = await listing;
     assert.deepEqual(tools.map(tool => tool.serverName), ['first', 'second']);
     assert.ok(tools.every(tool => tool.description.includes('untrusted external metadata') && !tool.autoApprove));
+    const statuses = await manager.getServerStatuses();
+    assert.deepEqual(statuses.map(server => server.tools), [['read'], ['read']], 'connected inventories show real tool names');
+    config.servers.first = { url: 'https://changed.example/mcp' };
+    assert.deepEqual((await manager.getServerStatuses()).map(server => server.tools), [[], []], 'a changed configuration must not show stale tool names');
+    config.servers.first = {};
     const retrying = new ExternalMcpManager(async () => config);
     let attempts = 0;
     retrying.connect = name => {
@@ -527,7 +532,8 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     assert.equal(attempts, 1, 'failed connections do not retry on every turn');
     retrying._inventory = [{ serverName: 'second', serverConfigHash: 'old-generation' }];
     await retrying.restart('first');
-    assert.equal(retrying._inventory.length, 0, 'restart withholds all stale generation bindings');
+    assert.equal(retrying._inventory.length, 1, 'restart retains unaffected server inventory for display');
+    assert.equal(retrying._inventory[0].serverName, 'second');
     assert.equal(attempts, 2, 'manual restart bypasses cooldown');
     await retrying.reload();
     await retrying.getState('first', {}, 'global');
@@ -636,6 +642,65 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     rejectOld(new Error('late failure from the old configuration'));
     assert.deepEqual(await listing, []);
     assert.equal((await manager.getServerStatuses())[0].state, 'unconfigured', 'stale discovery cannot overwrite a reloaded configuration with an old error');
+}
+
+// A changed config reconnects instead of relabeling tools from the old client.
+{
+    const manager = new ExternalMcpManager(async () => ({ servers: {}, sources: {} }));
+    let closed = 0, connects = 0;
+    const old = Promise.resolve({ name: 'changed', configHash: 'old-config', client: { close: async () => { closed++; } } });
+    manager._states.set('changed', old);
+    const fresh = { name: 'changed', client: {} };
+    manager.connect = (name, cfg, source) => {
+        connects++;
+        fresh.configHash = require('node:crypto').createHash('sha256').update(JSON.stringify([source, cfg, undefined])).digest('hex');
+        const pending = Promise.resolve(fresh);
+        manager._states.set(name, pending);
+        return pending;
+    };
+    const cfg = { url: 'https://changed.example/mcp' };
+    assert.equal(await manager.getState('changed', cfg, 'global'), fresh);
+    assert.equal(await manager.getState('changed', cfg, 'global'), fresh);
+    assert.equal(closed, 1);
+    assert.equal(connects, 1);
+}
+
+// Failed replacement clients are evicted, while a newer connection remains owned.
+for (const replacedDuringCall of [false, true]) {
+    const cfg = { url: 'https://replacement.example/mcp' };
+    const config = { servers: { changed: cfg }, sources: { changed: 'global' } };
+    const manager = new ExternalMcpManager(async () => config);
+    const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(['global', cfg, undefined])).digest('hex');
+    let attempts = 0, closed = 0;
+    const newer = Promise.resolve({ name: 'changed', configHash: hash, client: {} });
+    manager._states.set('changed', Promise.resolve({ name: 'changed', configHash: 'old', client: { close: async () => {} } }));
+    manager.connect = name => {
+        attempts++;
+        const state = { name, configHash: hash, client: {
+            close: async () => { closed++; },
+            callTool: async () => {
+                if (attempts > 1) return { content: [{ type: 'text', text: 'recovered' }] };
+                if (replacedDuringCall) manager._states.set(name, newer);
+                throw new Error('replacement connection closed');
+            },
+        } };
+        const pending = Promise.resolve(state);
+        manager._states.set(name, pending);
+        return pending;
+    };
+    assert.match((await manager.callTool('mcp__changed__read', {})).text, /remote outcome is unknown/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(attempts, 1, 'failed mutations are never replayed');
+    if (replacedDuringCall) {
+        assert.equal(manager._states.get('changed'), newer, 'cleanup cannot evict a newer connection');
+        assert.equal(closed, 0, 'cleanup cannot close a newer connection');
+    } else {
+        assert.equal(manager._states.has('changed'), false, 'the failed replacement is evicted');
+        assert.equal(closed, 1, 'the failed replacement is closed');
+        assert.equal((await manager.getServerStatuses())[0].state, 'error');
+        assert.equal((await manager.callTool('mcp__changed__read', {})).text, 'recovered');
+        assert.equal(attempts, 2, 'the next call reconnects');
+    }
 }
 
 console.log(failed === 0

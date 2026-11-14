@@ -171,6 +171,12 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
                 event.preventDefault(); returnFocus.current = event.target as HTMLElement; setMenu((event.target as HTMLElement).dataset.panel as SurfaceTab); return;
             }
             if (event.key === 'Delete' && (event.target as HTMLElement).dataset.panel !== 'conversation') { event.preventDefault(); onClose([(event.target as HTMLElement).dataset.panel as SurfaceTab]); return; }
+            if (wide && event.ctrlKey && event.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                event.preventDefault();
+                const panel = (event.target as HTMLElement).dataset.panel;
+                if (isSurfaceTab(panel) && panel !== 'conversation') onMove(panel, event.key === (locale === 'fa' ? 'ArrowLeft' : 'ArrowRight') ? 'side' : 'main');
+                return;
+            }
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
             const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
             const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
@@ -219,7 +225,11 @@ export function SurfaceTabs({ location, panels, active, wide, count, agentCount 
             <button type="button" role="menuitem" disabled={!panels.some(panel => panel !== menu && panel !== 'conversation')} onClick={() => { onClose(panels.filter(panel => panel !== menu)); onActivate(menu); setMenu(null); }}><span>{t('surfaceCloseOtherTabs')}</span></button>
             <div className="dock-menu-separator" role="separator" />
             <button type="button" role="menuitem" disabled={!canReopen} onClick={() => { onReopen(); setMenu(null); }}><span>{t('surfaceReopenTab')}</span></button>
-            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => document.getElementById('surface-tab-conversation')?.focus()); }}><RotateCcw size={14} /><span>{t('surfaceResetLayout')}</span></button>
+            <button type="button" role="menuitem" onClick={() => { onReset(); setMenu(null); requestAnimationFrame(() => {
+                const tab = document.getElementById('surface-tab-conversation');
+                if (tab && getComputedStyle(tab).visibility !== 'hidden' && tab.getBoundingClientRect().height > 0) tab.focus();
+                else document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus();
+            }); }}><RotateCcw size={14} /><span>{t('surfaceResetLayout')}</span></button>
         </div>}
     </nav>;
 }

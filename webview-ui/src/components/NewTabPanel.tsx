@@ -10,9 +10,9 @@ const hints = {
 
 /** An unassigned tab is a destination picker, not an empty work surface. */
 export function NewTabPanel({ tab, panelClass, openPanels, onChoose }: {
-    tab: NewTab; panelClass: string; openPanels: SurfaceTab[]; onChoose: (panel: SurfacePanel) => void;
+    tab?: NewTab; panelClass: string; openPanels: SurfaceTab[]; onChoose: (panel: SurfacePanel) => void;
 }) {
-    return <section className={`new-tab-pane ${panelClass}`} id={`surface-panel-${tab}`} role="tabpanel" aria-labelledby={`surface-tab-${tab}`}>
+    return <section className={`new-tab-pane ${panelClass}`} id={tab ? `surface-panel-${tab}` : undefined} role={tab ? 'tabpanel' : undefined} aria-labelledby={tab ? `surface-tab-${tab}` : undefined}>
         <div className="new-tab-content">
             <div className="new-tab-heading"><span className="surface-empty-icon"><FilePlus2 size={22} /></span><h2>{t('surfaceChoosePanel')}</h2><p>{t('surfaceNewTabHint')}</p></div>
             <div className="new-tab-choices">

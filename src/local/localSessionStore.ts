@@ -83,6 +83,8 @@ function readEngineSession(raw: unknown): EngineSessionRef | undefined {
 
 /** Slim list entry for the session picker: metadata only, never transcripts. */
 export interface LocalSessionMeta {
+    engineId?: 'xratu' | 'opencode';
+    model?: string | null;
     id: string;
     title: string;
     workspace: string;
@@ -533,6 +535,8 @@ export class LocalSessionStore {
                     workspace: parsed?.workspace || 'default',
                     createdAt: parsed?.createdAt ?? Date.now(),
                     updatedAt: parsed?.updatedAt ?? Date.now(),
+                    engineId: readEngineSession(parsed?.engineSession)?.engineId ?? 'xratu',
+                    model: typeof parsed?.model === 'string' ? parsed.model : null,
                     ...(parsed?.renamed ? { renamed: true } : {}),
                 };
             } catch {
@@ -632,15 +636,15 @@ export class LocalSessionStore {
         return all.find(meta => meta.workspace === workspaceRoot) ?? null;
     }
 
-    async create(workspaceRoot: string): Promise<LocalSessionMeta> {
-        return this.enqueue(() => this._create(workspaceRoot));
+    async create(workspaceRoot: string, engineId?: 'xratu' | 'opencode'): Promise<LocalSessionMeta> {
+        return this.enqueue(() => this._create(workspaceRoot, engineId));
     }
 
-    private async _create(workspaceRoot: string): Promise<LocalSessionMeta> {
+    private async _create(workspaceRoot: string, engineId?: 'xratu' | 'opencode'): Promise<LocalSessionMeta> {
         const id = randomUUID();
         const now = Date.now();
-        const meta: LocalSessionMeta = { id, title: workspaceLabel(workspaceRoot), workspace: workspaceRoot, createdAt: now, updatedAt: now };
-        await this.writeMeta(meta, { model: null, summary: null, localHistory: [], uiHistory: [] });
+        const meta: LocalSessionMeta = { id, title: workspaceLabel(workspaceRoot), workspace: workspaceRoot, createdAt: now, updatedAt: now, engineId };
+        await this.writeMeta(meta, { model: null, summary: null, localHistory: [], uiHistory: [], engineSession: engineId ? { engineId, workspace: workspaceRoot } : undefined });
         return meta;
     }
 
@@ -726,6 +730,8 @@ export class LocalSessionStore {
             workspace: snapshot.workspace ?? existing?.workspace ?? 'default',
             createdAt: existing?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
+            engineId: snapshot.engineSession?.engineId ?? 'xratu',
+            model: snapshot.model ?? null,
             ...(existing?.renamed ? { renamed: true } : {}),
         };
         await this.writeMeta(meta, snapshot, contentCap);

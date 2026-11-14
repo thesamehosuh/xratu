@@ -144,6 +144,7 @@ export type ToExtensionMessage =
     | { type: 'editMessage'; requestId?: string; sessionKey?: string; userIndex: number; value: string; attachments?: ComposerAttachment[] }
     /** Regenerate the last exchange (same prompt, fresh response). */
     | { type: 'regenerate' }
+    | { type: 'selectColorTheme' }
     /** Open the raw MCP config file (workspace mcp.json when present, else global) in the editor. */
     | { type: 'openMcpSettings' }
     /** MCP page: request the current server list + statuses. */
@@ -212,7 +213,8 @@ export type ToExtensionMessage =
     /** Proxy page: request settings + the live resolution report. */
     | { type: 'proxyGetState' }
     /** Proxy page: persist mode + proxy URL + no_proxy list. */
-    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string; webSearchUseProxy?: boolean }
+    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string; webSearchUseProxy?: boolean; requestId: string }
+    | { type: 'proxySaveMode'; mode: 'auto' | 'off'; requestId: string }
     /** Proxy page: scan loopback for running proxy clients (Clash, v2rayN…). */
     | { type: 'proxyDetect' }
     /** Proxy page: live connectivity check through the current resolution. */
@@ -372,6 +374,8 @@ export interface ModelPingState {
 }
 
 export interface SessionMeta {
+    engineId?: 'xratu' | 'opencode';
+    model?: string | null;
     prPending?: number;
     prWatching?: number;
     id: string;
@@ -502,6 +506,8 @@ export type FromExtensionMessage =
     /** History was rewound to before the userIndex-th user message. */
     | { type: 'truncateFromUser'; userIndex: number }
     | { type: 'byokSetupHint' }
+    /** Clear the settled transcript before replaying an adopted session in place. */
+    | { type: 'resetConversation' }
     /** Current session identity for the toolbar's title button. */
     | { type: 'sessionState'; workspace?: string; id: string | null; title: string | null; browserSessionId?: string }
     /** Response to listSessions - the session-picker panel's contents. */
@@ -625,6 +631,7 @@ export interface ProxyCandidateView {
 /** Response to proxyGetState - settings plus WHY the traffic routes as it
  *  does (which resolution layer won). */
 export interface ProxyStateView {
+    requestId?: string;
     webSearchUseProxy?: boolean;
     mode: 'auto' | 'custom' | 'off';
     proxyUrl: string;
@@ -733,6 +740,7 @@ export interface McpServerPayload {
 
 /** Config + live status for the MCP page's server list. */
 export interface McpServerView extends McpServerPayload {
+    tools?: string[];
     state: 'disabled' | 'connected' | 'error' | 'unconfigured';
     toolCount: number | null;
     lastError: string | null;

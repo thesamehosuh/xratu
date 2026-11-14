@@ -1,17 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-    Activity,
     ArrowLeft,
     ArrowRight,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
     ChevronUp,
-    Coins,
     ExternalLink,
-    Info,
     Pencil,
     Plus,
+    RefreshCw,
     Tag,
 } from 'lucide-react';
 import { getLocale, t } from '../i18n';
@@ -35,6 +33,7 @@ interface UsagePageProps {
     state: UsageState | null;
     oauthState?: OAuthHostState | null;
     onBack: () => void;
+    onRefresh?: () => void;
     onSaveModel: (id: string, input: number, output: number, cachedInput: number | null, currency: 'USD' | 'IRT') => void;
     onRemoveModel: (id: string) => void;
 }
@@ -42,7 +41,7 @@ interface UsagePageProps {
 /** Palette for stacked model segments. Stable per model id (indexed by the
  *  all-time model list) so a color does not move when a filter changes. */
 const MODEL_COLORS = [
-    '#4ec9b0', '#e0a458', '#7aa2f7', '#c586c0', '#d16969',
+    '#82dbc5', '#a6bcf4', '#edc68a', '#c586c0', '#d16969',
     '#8dc891', '#d7ba7d', '#569cd6', '#b2675e', '#9d7cd8',
 ];
 
@@ -149,8 +148,8 @@ function niceMax(value: number): number {
 function formatAxis(value: number, currency: Currency, step: number): string {
     const digits = step >= 1 ? 1 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4;
     if (currency === 'IRT') {
-        if (value <= 0) return '۰';
-        return new Intl.NumberFormat('fa-IR', {
+        if (value <= 0) return getLocale() === 'fa' ? '۰' : '0';
+        return new Intl.NumberFormat(getLocale() === 'fa' ? 'fa-IR' : 'en-US', {
             notation: step >= 1000 ? 'compact' : 'standard',
             maximumFractionDigits: digits,
         }).format(value);
@@ -164,7 +163,8 @@ function formatAxis(value: number, currency: Currency, step: number): string {
 }
 
 function UsageAmounts({ totals }: { totals: { USD: number; IRT: number } }) {
-    const amounts = [formatCost({ amount: totals.IRT, currency: 'IRT' }), formatCost({ amount: totals.USD, currency: 'USD' })].filter(Boolean);
+    const toman = totals.IRT > 0 ? `${formatTokens(totals.IRT)} ${t('costCurrencyIrt')}` : null;
+    const amounts = [toman, formatCost({ amount: totals.USD, currency: 'USD' })].filter(Boolean);
     return <span className="usage-amounts">{amounts.length ? amounts.map((amount) => <span dir="ltr" key={amount}>{amount}</span>) : <span dir="ltr">—</span>}</span>;
 }
 
@@ -453,7 +453,7 @@ function AddModelForm({ onSave, onCancel }: { onSave: UsagePageProps['onSaveMode
     );
 }
 
-export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveModel }: UsagePageProps) {
+export function UsagePage({ state, oauthState, onBack, onRefresh, onSaveModel, onRemoveModel }: UsagePageProps) {
     const locale = getLocale();
     const history = state?.history ?? [];
     const providers = useMemo(() => state?.providers ?? [], [state?.providers]);
@@ -483,7 +483,11 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
     const [modelFilter, setModelFilter] = useState('all');
     const [hostFilter, setHostFilter] = useState('all');
     const [currencyChoice, setCurrencyChoice] = useState<'auto' | Currency>('auto');
-    const [chartMetric, setChartMetric] = useState<'cost' | 'tokens'>('cost');
+    const [viewChoice, setViewChoice] = useState<'tokens' | 'cost' | 'plan' | null>(null);
+    const view = viewChoice === 'plan' && !showPlan ? 'tokens' : viewChoice ?? (showPlan && !history.length ? 'plan' : 'tokens');
+    const chartMetric = view === 'cost' ? 'cost' : 'tokens';
+    const setChartMetric = (metric: 'cost' | 'tokens') => setViewChoice(metric);
+    const [breakdown, setBreakdown] = useState<'models' | 'providers'>('models');
     const [activeDay, setActiveDay] = useState<string | null>(null);
     /** Model segment under the cursor - narrows the detail line to that one. */
     const [activeModel, setActiveModel] = useState<string | null>(null);
@@ -532,11 +536,14 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
     }, [axisDays, dayCells, modelFilter, hostFilter]);
 
     const periodTotals = useMemo(() => {
-        const totals = { USD: 0, IRT: 0, tokens: 0 };
+        const totals = { USD: 0, IRT: 0, tokens: 0, input: 0, output: 0, cached: 0 };
         for (const { cell } of filteredCells) {
             totals.USD += cell.USD;
             totals.IRT += cell.IRT;
             totals.tokens += totalTokens(cell);
+            totals.input += cell.input;
+            totals.output += cell.output;
+            totals.cached += cell.cached;
         }
         return totals;
     }, [filteredCells]);
@@ -554,6 +561,15 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
         }
         return [...grouped.values()].sort((a, b) => totalTokens(b) - totalTokens(a));
     }, [filteredCells, providers]);
+    const periodModels = useMemo(() => {
+        const rows = new Map<string, UsageTotals>();
+        for (const { cell } of filteredCells) {
+            const totals = rows.get(cell.model) ?? { input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
+            for (const key of ['input', 'output', 'cached', 'USD', 'IRT'] as const) totals[key] += cell[key];
+            rows.set(cell.model, totals);
+        }
+        return [...rows].sort((a, b) => totalTokens(b[1]) - totalTokens(a[1]));
+    }, [filteredCells]);
     const hasFilters = modelFilter !== 'all' || hostFilter !== 'all';
     const clearFilters = () => { setModelFilter('all'); setHostFilter('all'); setActiveDay(null); setActiveModel(null); };
 
@@ -602,76 +618,27 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
 
     const active = activeDay ? series.find((d) => d.day === activeDay) ?? null : null;
     const axisTicks = Array.from({ length: GRID_LINES + 1 }, (_, i) => (max * i) / GRID_LINES).reverse();
+    const displayedModels = chartMetric === 'cost' ? [...periodModels].sort((a, b) => b[1][currency] - a[1][currency]) : periodModels;
     const chartValue = (value: number) => chartMetric === 'tokens' ? formatTokens(value) : formatCost({ amount: value, currency }) ?? '-';
+    const chartCaption = (value: number) => chartMetric === 'tokens'
+        ? new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+        : currency === 'USD' ? chartValue(value).replace(/(\.\d{2})0$/, '$1') : formatAxis(value, currency, max / GRID_LINES);
 
-    return (
-        <div className="settings-page usage-page">
-            <header className="settings-head">
-                <button
-                    type="button"
-                    className="ghost-btn small"
-                    onClick={onBack}
-                    aria-label={t('credBack')}
-                    title={t('credBack')}
-                >
-                    {getLocale() === 'fa' ? <ArrowRight size={14} /> : <ArrowLeft size={14} />}
-                </button>
-                <div className="settings-head-copy">
-                    <h2>{t('usagePageTitle')}</h2>
-                </div>
-            </header>
-
-            <div className="settings-scroll">
-                {!state && <p className="usage-loading" role="status">{t('working')}</p>}
-                {showPlan && (
-                    <section className="settings-card usage-plan">
-                        <div className="settings-section-head">
-                            <div className="settings-section-icon" aria-hidden="true"><Activity size={15} /></div>
-                            <div>
-                                <h3>{t('usageChatGptTitle')}</h3>
-                                <p>{t('usageChatGptPeriod')}</p>
-                            </div>
-                        </div>
-                        <div className="settings-card-body">
-                            {accounts.map((account) => (
-                                <div className="usage-plan-account" key={account.credentialId}>
-                                    <bdi dir="auto">{account.accountLabel || t('credOAuthConnected')}</bdi>
-                                    {account.active && <span className="cred-oauth-active">{t('credActive')}</span>}
-                                </div>
-                            ))}
-                            <div className="usage-plan-total">
-                                <strong dir="ltr">{plan ? formatTokens(totalTokens(plan.totals)) : '—'}</strong>
-                                <span>{t('usageTokens')}</span>
-                            </div>
-                            {(plan?.models.length ?? 0) > 0 && (
-                                <div className="usage-plan-models">
-                                    {plan?.models.map(({ model, tokens }) => (
-                                        <div key={model}><span dir="ltr">{model}</span><span dir="ltr">{formatTokens(tokens)}</span></div>
-                                    ))}
-                                </div>
-                            )}
-                            <div className="usage-plan-footer">
-                                <p>{t('usageChatGptHint')}</p>
-                                <a className="usage-manage" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">
-                                    <span>{t('usageManage')}</span><ExternalLink size={12} aria-hidden="true" />
-                                </a>
-                            </div>
-                        </div>
-                    </section>
-                )}
-                {state && <details className="usage-api" open={showPlan ? history.length > 0 : true}>
-                    <summary hidden={!showPlan}>{t('usageApiTitle')}</summary>
-                <section className="settings-card usage-overview">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Activity size={15} />
-                        </div>
-                        <div>
-                            <h3>{t(chartMetric === 'tokens' ? 'usageTokensOverTime' : 'costChartTitle')}</h3>
-                        </div>
-                    </div>
-
-                    <div className="settings-card-body">
+    const summary = view === 'plan' ? plan?.totals : state ? periodTotals : undefined;
+    const summaryTotal = summary ? totalTokens(summary) : 0;
+    const shares = summary ? [
+        { key: 'usageInput' as const, value: uncachedInput(summary.input, summary.cached), className: 'input' },
+        { key: 'usageCached' as const, value: Math.min(summary.input, summary.cached), className: 'cached' },
+        { key: 'usageOutput' as const, value: summary.output, className: 'output' },
+    ] : [];
+    return <div className={`settings-page usage-page usage-dashboard${view === 'cost' ? ' cost-view' : ''}`}>
+        <header className="settings-head"><button type="button" className="ghost-btn small" onClick={onBack} aria-label={t('credBack')}>{locale === 'fa' ? <ArrowRight size={14} /> : <ArrowLeft size={14} />}</button><h2>{t('usagePageTitle')}</h2><div className="usage-header-actions">{onRefresh && <button type="button" className="icon-btn" aria-label={t('usageRefresh')} title={t('usageRefresh')} onClick={onRefresh}><RefreshCw size={15} /></button>}</div></header>
+        <div className="settings-scroll"><div className="usage-dashboard-content">
+            <div className="usage-view-tabs" role="group" aria-label={t('usageView')}>
+                {(['tokens', 'cost', ...(showPlan ? ['plan'] as const : [])] as const).map(choice => <button type="button" key={choice} className={view === choice ? 'active' : ''} aria-pressed={view === choice} onClick={() => { setViewChoice(choice); setActiveDay(null); setActiveModel(null); }}><span>{t(choice === 'tokens' ? 'usageTokens' : choice === 'cost' ? 'usageCost' : 'usageSubscription')}</span></button>)}
+            </div>
+            {!state && <p className="usage-loading" role="status">{t('working')}</p>}
+            {view === 'plan' ? <div className="usage-plan-heading"><div><h3>{t('usageSubscription')}</h3><span>{t('usageLocalPeriod')}</span></div><a className="usage-manage" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer"><span>{t('usageManage')}</span><ExternalLink size={13} /></a></div> : <div className="usage-filter-toolbar">
                         <div className="cost-toolbar">
                             <div className="cost-granularity" role="group" aria-label={t('costGranularity')}>
                                 <button
@@ -715,64 +682,21 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 </button>
                             </div>
                         </div>
-
-                        <div className="cost-filters">
-                            <Dropdown
-                                label={t('costAllModels')}
-                                value={modelFilter}
-                                options={[
-                                    { value: 'all', label: t('costAllModels') },
-                                    ...allModels.map((model) => ({ value: model, label: model })),
-                                ]}
-                                onChange={(next) => { setModelFilter(next); setActiveDay(null); }}
-                            />
-                            <Dropdown
-                                label={t('costAllProviders')}
-                                value={hostFilter}
-                                options={[
-                                    { value: 'all', label: t('costAllProviders') },
-                                    ...providers.map((p) => ({ value: p.host, label: p.label })),
-                                ]}
-                                onChange={(next) => { setHostFilter(next); setActiveDay(null); }}
-                            />
-                            {hasFilters && <button type="button" className="settings-ghost-action usage-clear-filters" onClick={clearFilters}>{t('usageClearFilters')}</button>}
-                        </div>
-
-                        <div className="usage-metrics" aria-label={t('usageSelectedPeriod')}>
-                            <div className="usage-period-cost"><span>{t('usageRecordedCost')}</span><strong><UsageAmounts totals={periodTotals} /></strong></div>
-                            <div><span>{t('usageTokens')}</span><strong dir="ltr">{formatTokens(periodTotals.tokens)}</strong></div>
-                            <div><span>{t('providersTitle')}</span><strong dir="ltr">{formatTokens(periodProviders.length)}</strong></div>
-                        </div>
-
-                        <div className="usage-chart-controls">
-                            <div className="usage-metric-choice" role="group" aria-label={t('usageChartMetric')}>
-                                {(['cost', 'tokens'] as const).map((metric) => <button key={metric} type="button" className={`usage-range${chartMetric === metric ? ' active' : ''}`} aria-pressed={chartMetric === metric} onClick={() => { setChartMetric(metric); setActiveDay(null); setActiveModel(null); }}><span>{t(metric === 'cost' ? 'usageCost' : 'usageTokens')}</span></button>)}
-                            </div>
-                        {bothCurrencies && chartMetric === 'cost' && (
-                            <div className="cost-currencies" role="group" aria-label={t('usageCost')}>
-                                <button
-                                    type="button"
-                                    className={`usage-range${currency === 'IRT' ? ' active' : ''}`}
-                                    aria-pressed={currency === 'IRT'}
-                                    onClick={() => setCurrencyChoice('IRT')}
-                                >
-                                    {t('costCurrencyIrt')}
-                                </button>
-                                <button
-                                    type="button"
-                                    className={`usage-range${currency === 'USD' ? ' active' : ''}`}
-                                    aria-pressed={currency === 'USD'}
-                                    onClick={() => setCurrencyChoice('USD')}
-                                >
-                                    {t('costCurrencyUsd')}
-                                </button>
-                            </div>
-                        )}
-                        </div>
-
+                <div className="cost-filters"><Dropdown label={t('costAllModels')} value={modelFilter} options={[{ value: 'all', label: t('costAllModels') }, ...allModels.map(model => ({ value: model, label: model }))]} onChange={value => { setModelFilter(value); setActiveDay(null); }} /><Dropdown label={t('costAllProviders')} value={hostFilter} options={[{ value: 'all', label: t('costAllProviders') }, ...providers.map(provider => ({ value: provider.host, label: provider.label }))]} onChange={value => { setHostFilter(value); setActiveDay(null); }} />{hasFilters && <button type="button" className="usage-clear-filters" onClick={clearFilters}>{t('usageClearFilters')}</button>}</div>
+            </div>}
+            <section className={`usage-summary${view === 'plan' ? ' usage-plan-summary' : ''}`} aria-label={t(view === 'cost' ? 'usageRecordedCost' : 'usageRecordedTokens')}>
+                <div className="usage-summary-main"><span>{t(view === 'cost' ? 'usageRecordedCost' : 'usageRecordedTokens')}</span>{view === 'cost' ? <div className="usage-summary-cost"><strong dir="ltr">{state && periodTotals[currency] > 0 ? formatCost({ amount: periodTotals[currency], currency }) : '—'}</strong>{bothCurrencies && <span dir="ltr">{formatCost({ amount: periodTotals[currency === 'USD' ? 'IRT' : 'USD'], currency: currency === 'USD' ? 'IRT' : 'USD' })}</span>}</div> : <strong dir="ltr">{summary ? formatTokens(summaryTotal) : '—'}</strong>}</div>
+                <div className="usage-token-breakdown">{shares.map(share => <div key={share.key}><span><i className={share.className} />{t(share.key)}</span><strong className={`usage-${share.className}-total`} dir="ltr">{formatTokens(share.value)}</strong></div>)}</div>
+                {summaryTotal > 0 && <div className="usage-token-share" role="img" aria-label={shares.map(share => `${t(share.key)}: ${formatTokens(share.value)}`).join(', ')}>{shares.filter(share => share.value > 0).map(share => <span key={share.key} className={share.className} style={{ flexGrow: share.value }} title={`${t(share.key)}: ${formatTokens(share.value)}`} />)}</div>}
+            </section>
+            {view === 'plan' ? <section className="usage-subscription-detail">
+                {accounts.map(account => <div className="usage-plan-account" key={account.credentialId}><span dir="auto">{account.accountLabel || t('credOAuthConnected')}</span>{account.active && <span className="usage-account-active">{t('credActive')}</span>}</div>)}
+                <h3>{t('usageByModel')}</h3><div className="usage-model-list">{plan?.models.map(({ model, tokens }) => <div className="usage-model-row" key={model}><div className="usage-model-name"><strong dir="ltr">{model}</strong><span className="usage-model-track" aria-hidden="true"><span style={{ inlineSize: `${Math.min(100, tokens / Math.max(1, summaryTotal) * 100)}%` }} /></span></div><span className="usage-model-tokens" dir="ltr">{formatTokens(tokens)}</span><span className="usage-model-percent" dir="ltr">{new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US', { style: 'percent', maximumFractionDigits: 0 }).format(tokens / Math.max(1, summaryTotal))}</span></div>)}{!plan?.models.length && <p className="usage-empty">{t('usageEmpty')}</p>}</div><p className="usage-quota-note">{t('usageChatGptHint')}</p>
+            </section> : <>
+                <section className="usage-activity-chart"><header><h3>{t(chartMetric === 'tokens' ? 'usageTokensOverTime' : 'usageDailySpend')}</h3>{bothCurrencies && chartMetric === 'cost' && <div className="cost-currencies" role="group" aria-label={t('usageCost')}>{(['IRT', 'USD'] as const).map(value => <button type="button" key={value} className={`usage-range${currency === value ? ' active' : ''}`} aria-pressed={currency === value} onClick={() => setCurrencyChoice(value)}>{t(value === 'USD' ? 'costCurrencyUsd' : 'costCurrencyIrt')}</button>)}</div>}</header><div className="usage-chart-body">
                         {legend.length > 0 ? (
                             <>
-                                <div className="cost-chart" dir="ltr">
+                                <div className={`cost-chart ${granularity}`} dir="ltr">
                                     <div className="cost-axis" aria-hidden="true">
                                         {axisTicks.map((tick, i) => (
                                             <span key={i}>{chartMetric === 'tokens' ? new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tick) : formatAxis(tick, currency, max / GRID_LINES)}</span>
@@ -796,6 +720,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                                         onFocus={() => setActiveDay(day.day)}
                                                         onBlur={() => setActiveDay((cur) => (cur === day.day ? null : cur))}
                                                     >
+                                                        {granularity === 'week' && day.total > 0 && <span className="cost-col-total" aria-hidden="true" style={{ bottom: `calc(${(day.total / max) * 100}% + 6px)` }}>{chartCaption(day.total)}</span>}
                                                         <span className="cost-stack" aria-hidden="true">
                                                             {[...day.byModel.entries()].map(([model, value]) => (
                                                                 <span
@@ -815,8 +740,8 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 </div>
 
                                 <div className="cost-dates" dir="ltr" aria-hidden="true" style={{ gridTemplateColumns: `repeat(${axisDays.length}, minmax(0, 1fr))` }}>
-                                    {axisDays.map((day, index) => index === 0 || index === axisDays.length - 1 || index % Math.ceil((axisDays.length - 1) / 5) === 0
-                                        ? <span key={day} style={{ gridColumn: index + 1 }}>{new Intl.DateTimeFormat(calendarName(), { day: 'numeric' }).format(new Date(localDayTimestamp(day)))}</span> : null)}
+                                    {axisDays.map((day, index) => granularity === 'week' || index === 0 || index === axisDays.length - 1 || index % Math.ceil((axisDays.length - 1) / 5) === 0
+                                        ? <span key={day} title={formatCalendarDate(localDayTimestamp(day))} data-short={locale === 'fa' && granularity === 'week' ? new Intl.DateTimeFormat(calendarName(), { weekday: 'narrow' }).format(new Date(localDayTimestamp(day))) : undefined} style={{ gridColumn: index + 1 }}>{new Intl.DateTimeFormat(calendarName(), granularity === 'week' ? { weekday: 'short' } : { day: 'numeric' }).format(new Date(localDayTimestamp(day)))}</span> : null)}
                                 </div>
 
                                 <div className="cost-legend">
@@ -833,7 +758,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                     single segment under the cursor narrows the
                                     line to that model instead of the whole day. */}
                                 <p className="cost-detail" role="status">
-                                    {active && (() => {
+                                    {active ? (() => {
                                         const hovered = activeModel != null ? active.byModel.get(activeModel) : undefined;
                                         return (
                                             <>
@@ -851,7 +776,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                                 )}
                                             </>
                                         );
-                                    })()}
+                                    })() : <><strong>{t('usageSelectedPeriod')}</strong><span dir="ltr">{chartValue(series.reduce((sum, day) => sum + day.total, 0))}</span></>}
                                 </p>
                             </>
                         ) : (
@@ -861,61 +786,11 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                                 {hasFilters && <button type="button" className="settings-ghost-action" onClick={clearFilters}>{t('usageClearFilters')}</button>}
                             </div>
                         )}
-                    </div>
+                </div></section>
+                <section className="usage-breakdown"><header><div className="usage-breakdown-tabs" role="group" aria-label={t('usageBreakdown')}>{(['models', 'providers'] as const).map(value => <button type="button" key={value} className={breakdown === value ? 'active' : ''} aria-pressed={breakdown === value} onClick={() => setBreakdown(value)}>{t(value === 'models' ? 'usageByModel' : 'usageByProvider')}</button>)}</div><span>{t(chartMetric === 'cost' ? 'usageCost' : 'usageTokens')}</span></header>
+                    {breakdown === 'models' ? <div className="usage-model-list">{displayedModels.map(([model, totals]) => <div className="usage-model-row" key={model}><div className="usage-model-name"><button type="button" dir="ltr" onClick={() => setModelFilter(modelFilter === model ? 'all' : model)} title={t('usageFilterModel')}><i style={{ background: colorFor(model) }} /><strong>{model}</strong></button><span className="usage-model-track" aria-hidden="true"><span style={{ inlineSize: `${Math.min(100, (chartMetric === 'cost' ? totals[currency] / Math.max(Number.EPSILON, periodTotals[currency]) : totalTokens(totals) / Math.max(1, periodTotals.tokens)) * 100)}%`, background: colorFor(model) }} /></span></div><span className="usage-model-tokens" dir="ltr">{formatTokens(totalTokens(totals))}</span><span className="usage-model-cost"><UsageAmounts totals={totals} /></span></div>)}{!periodModels.length && <p className="usage-empty">{t(hasFilters ? 'usageNoProviders' : 'usageEmpty')}</p>}</div> : <div className="usage-provider-list">{periodProviders.map(provider => <div className="usage-model-row prov-row" key={provider.host}><div className="usage-model-name"><strong dir="auto">{provider.label}{provider.iranian && <span className="pricing-badge">{t('pricingIranianBadge')}</span>}</strong><span className="prov-host" dir="ltr">{provider.host}</span></div><span className="usage-model-tokens" dir="ltr">{formatTokens(totalTokens(provider))}</span><span className="usage-model-cost"><UsageAmounts totals={provider} /></span></div>)}{!periodProviders.length && <p className="usage-empty">{t('usageNoProviders')}</p>}</div>}
                 </section>
-
-                <section className="settings-card usage-providers">
-                    <div className="settings-section-head">
-                        <div className="settings-section-icon" aria-hidden="true">
-                            <Coins size={15} />
-                        </div>
-                        <div>
-                            <h3>{t('providersTitle')}</h3>
-                        </div>
-                    </div>
-
-                    <div className="settings-card-body">
-                        {periodProviders.length > 0 ? periodProviders.map((p) => {
-                            const tokens = totalTokens(p);
-                            const uncached = uncachedInput(p.input, p.cached);
-                            const share = (value: number) => `${tokens > 0 ? (value / tokens) * 100 : 0}%`;
-                            return (
-                                <div className="prov-row" key={p.host}>
-                                    <div className="prov-head">
-                                        <span className="prov-name">
-                                            <strong dir="auto">{p.label}</strong>
-                                            {p.iranian && <span className="pricing-badge">{t('pricingIranianBadge')}</span>}
-                                            <span className="prov-host" dir="ltr">{p.host}</span>
-                                        </span>
-                                        <span className="usage-cost"><UsageAmounts totals={p} /></span>
-                                    </div>
-                                    {tokens > 0 && (
-                                        <span className="prov-bar" dir="ltr" aria-hidden="true">
-                                            {uncached > 0 && <span className="in" style={{ width: share(uncached) }} />}
-                                            {p.output > 0 && <span className="out" style={{ width: share(p.output) }} />}
-                                            {p.cached > 0 && <span className="cached" style={{ width: share(p.cached) }} />}
-                                        </span>
-                                    )}
-                                    <span className="prov-stats" dir="ltr">
-                                        <span><i className="in" aria-hidden="true" />{t('usageInput')} <b>{formatTokens(uncached)}</b></span>
-                                        <span><i className="out" aria-hidden="true" />{t('usageOutput')} <b>{formatTokens(p.output)}</b></span>
-                                        {p.cached > 0 && <span><i className="cached" aria-hidden="true" />{t('usageCached')} <b>{formatTokens(p.cached)}</b></span>}
-                                    </span>
-                                </div>
-                            );
-                        }) : (
-                            <p className="usage-empty">{t('usageNoProviders')}</p>
-                        )}
-
-                    </div>
-                </section>
-
-                {allTime && <section className="usage-lifetime" aria-label={t('usageAllTime')}>
-                    <span>{t('usageAllTime')}</span>
-                    <span><bdi dir="ltr">{formatTokens(totalTokens(allTime))}</bdi> {t('usageTokens')}</span>
-                    <UsageAmounts totals={allTime} />
-                </section>}
-
+                {allTime && <section className="usage-lifetime" aria-label={t('usageAllTime')}><span>{t('usageAllTime')}</span><span><bdi dir="ltr">{formatTokens(totalTokens(allTime))}</bdi> {t('usageTokens')}</span><UsageAmounts totals={allTime} /></section>}
                 <details className="settings-card rate-disclosure"><summary><span><Tag size={13} aria-hidden="true" /><strong>{t('miniPricing')}</strong></span><ChevronDown size={12}/></summary>
                     <div className="settings-section-head">
                         <div className="settings-section-icon" aria-hidden="true">
@@ -949,14 +824,7 @@ export function UsagePage({ state, oauthState, onBack, onSaveModel, onRemoveMode
                         )}
                     </div>
                 </details>
-
-                </details>}
-                {/* Fine print lives at the footer, like the MCP/Skills page. */}
-                <details className="page-help"><summary><Info size={11}/><span>{t('miniDetails')}</span></summary><div className="page-help-body">
-
-                    <span>{t('pricingDesc')}</span>
-                </div></details>
-            </div>
-        </div>
-    );
+            </>}
+        </div></div>
+    </div>;
 }

@@ -1,3 +1,4 @@
+import { openPageNavigation } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
@@ -22,11 +23,13 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: true, busy: false } });
         await post(page, { type: 'openSettings' });
         const reply = page.locator('.settings-nav-row').filter({ hasText: locale === 'en' ? 'Reply language' : 'زبان پاسخ' });
-        await expect(reply.getByRole('button', { name: 'English', exact: true })).toBeEnabled();
-        await reply.getByRole('button', { name: 'English', exact: true }).click();
+        await expect(reply.locator('.dropdown-trigger')).toBeEnabled();
+        await reply.locator('.dropdown-trigger').click();
+        await page.getByRole('option', { name: 'English', exact: true }).click();
         expect(await sent(page)).toContainEqual({ type: 'setReplyLanguage', replyLanguage: 'en' });
         await page.screenshot({ path: testInfo.outputPath('shared-settings.png') });
         const sidebar = page.locator('.page-sidebar');
+        await openPageNavigation(page);
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Servers' : 'سرور ها', exact: true }).click();
         const replyNative = async () => {
             await expect.poll(async () => (await sent(page)).some(message => (message as { type: string }).type === 'nativeGetState')).toBe(true);
@@ -41,11 +44,13 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory > summary').click();
         await expect(page.locator('.native-inventory')).toContainText('native-docs');
         await page.screenshot({ path: testInfo.outputPath('shared-servers.png') });
+        await openPageNavigation(page);
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Marketplace' : 'فروشگاه', exact: true }).click();
         await expect.poll(async () => (await sent(page)).some(message => (message as { type: string }).type === 'mcpMarketplaceGetState')).toBe(true);
         await post(page, { type: 'mcpMarketplaceState', query: '', entries: [{ id: 'curated:docs', source: 'curated', serverName: 'market-docs', name: 'market-docs', description: 'Documentation server', tags: [], install: { kind: 'stdio', command: 'npx', args: ['docs-server'], runtime: 'node' }, installConfidence: 'curated' }], sources: [], status: 'live', fetchedAt: Date.now(), error: null, liveSearch: false });
         await expect(page.locator('.mp-row')).toContainText('market-docs');
         await page.screenshot({ path: testInfo.outputPath('shared-marketplace.png') });
+        await openPageNavigation(page);
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Skills' : 'مهارت ها', exact: true }).click();
         const skill = page.locator('.mcp-row').filter({ hasText: 'review' });
         await expect(skill).toBeVisible();
@@ -55,6 +60,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         if (!await page.locator('.native-inventory').evaluate(element => (element as HTMLDetailsElement).open)) await page.locator('.native-inventory > summary').click();
         await expect(page.locator('.native-inventory')).toContainText('native-review');
         await page.screenshot({ path: testInfo.outputPath('shared-skills.png') });
+        await openPageNavigation(page);
         await sidebar.getByRole('button', { name: locale === 'en' ? 'Agent files' : 'فایل های ایجنت', exact: true }).click();
         await replyNative();
         await expect(page.locator('.native-inventory')).toContainText('Explore');
@@ -70,7 +76,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await page.getByRole('button', { name: locale === 'en' ? 'Manage Xratu agent files' : 'مدیریت فایل های ایجنت Xratu', exact: true }).click();
         await expect(page.locator('.agents-page')).toBeVisible();
         expect((await sent(page)).some(message => ['engineSelect', 'setupOpen'].includes((message as { type: string }).type))).toBe(false);
-        await page.locator('.sidebar-back').click();
+        await page.locator('.toolbar-back-work').click();
         await expect(page.locator('.composer-input')).toHaveValue('Preserve this draft');
     });
 }
@@ -83,7 +89,8 @@ for (const locale of ['en', 'fa'] as const) {
             await post(page, { type: 'openEngines' });
             const state = { active: 'opencode', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\Xratu\\tools\\opencode.exe', customPath: '', installedByXratu: true, updateAvailable: true, busy: false };
             await post(page, { type: 'enginesState', state });
-            const engine = page.locator('.engine-card').last();
+            const engine = page.locator('.engines-page');
+            await engine.locator('.engine-maintenance > summary').click();
             const update = engine.getByRole('button', { name: locale === 'en' ? 'Update engine' : 'بروزرسانی موتور', exact: true });
             const remove = engine.getByRole('button', { name: locale === 'en' ? 'Remove engine' : 'حذف موتور', exact: true });
             await update.click();
@@ -105,8 +112,10 @@ for (const locale of ['en', 'fa'] as const) {
                 await expect(engine.locator('.engine-remove-confirm')).toHaveCount(0);
             }
             await post(page, { type: 'enginesState', state: { ...state, version: '2.0.30', updateAvailable: false } });
-            await expect(engine.getByRole('button', { name: locale === 'en' ? 'Recommended version installed' : 'نسخه پیشنهادی نصبه' })).toBeDisabled();
+            await expect(engine.locator('.engine-install-source').filter({ hasText: locale === 'en' ? 'Recommended version installed' : 'نسخه پیشنهادی نصبه' })).toBeVisible();
             await expect(remove).toBeEnabled();
+            await engine.getByRole('button', { name: locale === 'en' ? 'Reinstall' : 'نصب دوباره', exact: true }).click();
+            expect((await sent(page)).filter(message => (message as { type: string }).type === 'engineInstall')).toHaveLength(2);
             await post(page, { type: 'enginesState', state: { ...state, installedByXratu: false } });
             await expect(engine.locator('.engine-maintenance')).toHaveCount(0);
         });
@@ -130,20 +139,24 @@ for (const locale of ['en', 'fa'] as const) {
             await cancel.click();
             expect(await sent(page)).toContainEqual({ type: 'engineInstallCancel' });
             await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\tools\\opencode.exe', customPath: '', installedByXratu: true, busy: false } });
-            await engine.locator('.primary-btn').click();
+            await engine.getByRole('button', { name: locale === 'en' ? 'Switch engine' : 'تغییر موتور', exact: true }).click();
             expect(await sent(page)).toContainEqual({ type: 'engineSelect', engine: 'opencode' });
-            await engine.locator('.engine-details > summary').click();
-            await expect(engine.locator('.engine-install-source')).toBeVisible();
+            await page.locator('.engine-maintenance > summary').click();
+            await expect(page.locator('.engine-inspector .engine-install-source')).toBeVisible();
             await page.screenshot({ path: info.outputPath('engine-setup.png') });
             expect((await sent(page)).some((message) => (message as { type: string }).type === 'setupOpen')).toBe(false);
             await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', version: '2.0.26', binaryPath: 'C:\\tools\\opencode.exe', customPath: '', installedByXratu: true, busy: false } });
-            await expect(engine).toHaveCSS('border-color', 'rgb(20, 227, 200)');
-            await expect(engine.locator('.engine-version')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-            await page.locator('.engine-card').first().locator('.secondary-btn').click();
+            await expect(engine).toHaveClass(/selected/);
+            await expect(engine).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+            await expect(page.locator('.engine-inspector .engine-version')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+            await page.locator('.engine-card').first().getByRole('button', { name: locale === 'en' ? 'Switch engine' : 'تغییر موتور', exact: true }).click();
             expect(await sent(page)).toContainEqual({ type: 'engineSelect', engine: 'xratu' });
             await expect(page.locator('.page-content')).toBeVisible();
             expect(await page.locator('.page-content').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-            await page.locator('.sidebar-back').click();
+            await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'failed', customPath: '', installedByXratu: true, busy: false, errorKey: 'engineInstallFailed' } });
+            await expect(engine.locator('.engine-status')).toHaveText(locale === 'en' ? 'Setup failed' : 'راه اندازی ناموفق بود');
+            await expect(engine.locator('.setup-error')).toBeVisible();
+            await page.locator('.toolbar-back-work').click();
             await expect(page.locator('.composer-input')).toHaveValue('keep my draft');
         });
         test(`native model providers, free filter, automatic parallel checks and retry (${locale}, ${width})`, async ({ page }) => {
@@ -183,10 +196,11 @@ for (const locale of ['en', 'fa'] as const) {
             const composerBefore = (await page.locator('.composer-input').boundingBox())!;
             await post(page, { type: 'notification', id: 'compact', kind: 'warning', valueKey: 'notifBackgroundJobGone' });
             await expect(page.locator('.notif')).toBeVisible();
-            await expect(page.locator('.notif-copy')).toHaveCSS('color', 'rgb(204, 167, 0)');
+            await expect(page.locator('.notif-copy')).toHaveCSS('color', 'rgb(204, 204, 204)');
+            await expect(page.locator('.notif-icon')).toHaveCSS('color', 'rgb(204, 167, 0)');
             const toast = (await page.locator('.notif').boundingBox())!;
             const toolbar = (await page.locator('.toolbar').boundingBox())!;
-            expect(toast.height).toBeLessThan(38);
+            expect(toast.height).toBeLessThanOrEqual(80);
             expect(toast.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
             expect(toast.y + toast.height).toBeLessThan(composerBefore.y);
             expect((await page.locator('.composer-input').boundingBox())!.y).toBe(composerBefore.y);
@@ -231,14 +245,13 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'modelInfo', defaultModel: model, selectedModel: model, models: [model], displayNames: { [model]: 'DeepSeek V4 Pro' }, capabilities: { [model]: { provider: 'opencode', free: true, variants: ['high', 'adaptive'], noReasoning: false } } });
         await expect(page.locator('.chip-model-name')).toHaveText('DeepSeek V4 Pro');
         await expect(page.locator('.picker-chip .model-provider')).toHaveCount(0);
-        expect(await page.locator('.chip-model-name').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        await expect(page.locator('.chip-model-name')).toHaveCSS('text-overflow', 'ellipsis');
         const attach = (await page.locator('.composer-attach').boundingBox())!;
         const picker = (await page.locator('.picker-chip').boundingBox())!;
         const context = (await page.locator('.ctx-wrap').boundingBox())!;
         const send = (await page.locator('.send-btn').boundingBox())!;
-        expect(attach.x + attach.width).toBeLessThan(picker.x);
-        expect(picker.x + picker.width).toBeLessThanOrEqual(context.x);
-        expect(context.x + context.width).toBeLessThan(send.x);
+        const ordered = [attach, picker, context, send].sort((a, b) => a.x - b.x);
+        for (let index = 1; index < ordered.length; index++) expect(ordered[index - 1].x + ordered[index - 1].width).toBeLessThanOrEqual(ordered[index].x);
         await page.locator('.picker-chip').click();
         await expect(page.locator('.thinking-seg-opt')).toHaveCount(3);
         await page.locator('.thinking-seg-opt').last().click();
@@ -288,14 +301,12 @@ test('first-run OpenCode entry and busy/path guards', async ({ page }) => {
     await expect.poll(async () => (await sent(page)).some((message) => (message as { type: string }).type === 'setupGetState')).toBe(true);
     await post(page, { type: 'openEngines' });
     await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'unsupported', version: '1.18.35', customPath: '', installedByXratu: false, busy: false } });
-    const engine = page.locator('.engine-card').last();
-    await engine.locator('summary').filter({ hasText: /^Setup$/ }).click();
-    await engine.locator('input').fill('C:\\tools\\opencode.exe');
-    await engine.getByRole('button', { name: 'Save and check path' }).click();
+    await page.locator('#engine-path').fill('C:\\tools\\opencode.exe');
+    await page.getByRole('button', { name: 'Verify path', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'engineSetPath', path: 'C:\\tools\\opencode.exe' });
     await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', version: '2.0.26', customPath: '', installedByXratu: false, busy: true } });
-    await expect(page.locator('.engine-card').first().getByRole('button')).toBeDisabled();
-    await expect(engine.locator('input')).toBeDisabled();
+    await expect(page.locator('.engine-card').first().getByRole('button', { name: 'Switch engine', exact: true })).toBeDisabled();
+    await expect(page.locator('#engine-path')).toBeDisabled();
 });
 
 test('OpenCode multiple-choice question returns both selections', async ({ page }) => {

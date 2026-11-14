@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { getLocale, t } from '../i18n';
 import { getWebviewState, patchWebviewState } from '../vscode';
 
 const MIN_WIDTH = 260;
-const MAX_WIDTH = 600;
+const MAX_WIDTH = 4096;
 
 export function DockSidebar({ children, active, dragging }: { children: ReactNode; active: boolean; dragging: boolean }) {
     const pane = useRef<HTMLElement>(null);
@@ -16,7 +16,7 @@ export function DockSidebar({ children, active, dragging }: { children: ReactNod
     const [maximum, setMaximum] = useState(MAX_WIDTH);
     const [resizing, setResizing] = useState(false);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const surface = pane.current?.parentElement;
         if (!surface) return;
         const update = () => {

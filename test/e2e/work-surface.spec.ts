@@ -1,3 +1,5 @@
+import { openPageNavigation } from './navigation';
+import { setLocale as setTestLocale, t } from '../../webview-ui/src/i18n';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme, VSCODE_LIGHT_THEME_CSS } from './vscodeTheme';
 
@@ -5,6 +7,119 @@ const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const post = (page: Page, message: Record<string, unknown>) => page.evaluate((msg) => window.postMessage(msg, '*'), message);
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> => page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
+
+test('action notifications bypass persistent banners in FIFO order without losing them', async ({ page }) => {
+    await post(page, { type: 'notification', id: 'warning', kind: 'warning', valueKey: 'warning before confirms' });
+    await post(page, { type: 'notification', id: 'error', kind: 'error', valueKey: 'error before confirms' });
+    await expect(page.locator('.notif-copy')).toHaveText('warning before confirms');
+    await post(page, { type: 'notification', id: 'first', kind: 'warning', valueKey: 'first confirm', actions: ['accept first'] });
+    await post(page, { type: 'notification', id: 'second', kind: 'error', valueKey: 'second confirm', actions: ['accept second'] });
+    await expect(page.locator('.notif-copy')).toHaveText('first confirm');
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.locator('.notif-action').focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'first', action: 'accept first' },
+    ]);
+    await expect(page.locator('.notif-copy')).toHaveText('second confirm');
+    await expect(page.getByRole('button', { name: 'accept second', exact: true })).toBeVisible();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.locator('.notif-close').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('warning before confirms');
+    await page.locator('.notif-close').click();
+    await expect(page.locator('.notif-copy')).toHaveText('error before confirms');
+    await page.locator('.notif-close').click();
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'first', action: 'accept first' },
+        { type: 'notificationAction', id: 'second', action: null },
+        { type: 'notificationAction', id: 'warning', action: null },
+        { type: 'notificationAction', id: 'error', action: null },
+    ]);
+    await expect(page.locator('.notif')).toHaveCount(0);
+});
+test('notification focus survives preemption and action dismissal without activating the next action', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'focus-warning', kind: 'warning', valueKey: 'focus warning' });
+    await expect(page.locator('.notif-copy')).toHaveText('focus warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').focus();
+    await post(page, { type: 'notification', id: 'focus-first', kind: 'warning', valueKey: 'focus first', actions: ['delete first'] });
+    await expect(page.locator('.notif-copy')).toHaveText('focus first');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await post(page, { type: 'notification', id: 'focus-second', kind: 'error', valueKey: 'focus second', actions: ['delete second'] });
+    await page.locator('.notif-action').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('focus second');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('focus warning');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(background).toBeFocused();
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'focus-first', action: 'delete first' },
+        { type: 'notificationAction', id: 'focus-second', action: null },
+        { type: 'notificationAction', id: 'focus-warning', action: null },
+    ]);
+});
+
+test('notification changes do not steal focus from the background', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'background-warning', kind: 'warning', valueKey: 'background warning' });
+    await expect(page.locator('.notif-copy')).toHaveText('background warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').focus();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'background-confirm', kind: 'warning', valueKey: 'background confirm', actions: ['delete'] });
+    await expect(page.locator('.notif-copy')).toHaveText('background confirm');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').dispatchEvent('click');
+    await expect(page.locator('.notif-copy')).toHaveText('background warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').dispatchEvent('click');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(background).toBeFocused();
+});
+
+test('notification dismissal recovers focus when the previous control is unavailable', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'missing-focus', kind: 'warning', valueKey: 'missing focus' });
+    await expect(page.locator('.notif-copy')).toHaveText('missing focus');
+    await page.locator('.notif-close').focus();
+    await background.evaluate((element: HTMLButtonElement) => { element.disabled = true; });
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(page.locator('.app')).toBeFocused();
+});
+
+test('preempted info timer cannot dismiss a confirmation and restarts when shown', async ({ page }) => {
+    await page.clock.install();
+    await post(page, { type: 'notification', id: 'info', kind: 'info', valueKey: 'temporary information' });
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(3000);
+    await post(page, { type: 'notification', id: 'confirm', kind: 'info', valueKey: 'pending confirm', actions: ['proceed'] });
+    await expect(page.locator('.notif-copy')).toHaveText('pending confirm');
+    await page.clock.fastForward(10000);
+    await expect(page.locator('.notif-copy')).toHaveText('pending confirm');
+    expect((await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([]);
+    await page.locator('.notif-action').click();
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(5000);
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(1000);
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'confirm', action: 'proceed' },
+        { type: 'notificationAction', id: 'info', action: null },
+    ]);
+});
 const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
     await expect.poll(async () => {
         const message = (await sent(page)).filter((m) => m.type === type).at(-1);
@@ -18,7 +133,7 @@ const computedColor = (page: Page, cssValue: string) =>
     page.evaluate((value) => {
         const probe = document.createElement('span');
         probe.style.color = value;
-        document.body.appendChild(probe);
+        document.querySelector('.app')!.appendChild(probe);
         const color = getComputedStyle(probe).color;
         probe.remove();
         return color;
@@ -60,8 +175,14 @@ const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
-    await expect(page.locator('#surface-tab-changes')).toBeVisible();
-    await page.locator('#surface-tab-changes').click();
+    const wide = page.viewportSize()!.width >= 860;
+    const tab = page.locator('#surface-tab-changes');
+    // The viewport resize can precede useDockLayout's matchMedia update. Wait
+    // for the rendered tab's layout, not merely the stale narrow tab's visibility.
+    await expect(tab).toHaveAttribute('draggable', String(wide));
+    if (wide && !await tab.isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
+    await expect(tab).toBeVisible();
+    await tab.click();
     await replyFile(page);
     await expect(page.locator('.review-diff')).toBeVisible();
 };
@@ -105,6 +226,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(page.locator('.msg.user .icon-btn').filter({ has: page.locator('.lucide-rotate-ccw') })).toHaveCount(1);
         await post(page, { type: 'startResponse' });
         await expect(page.locator('.msg.user .lucide-rotate-ccw')).toHaveCount(0);
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await page.locator('#surface-tab-changes').click();
         await expect(empty).toBeVisible();
     });
@@ -176,11 +298,13 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
+    await page.locator('.toolbar-tools button[aria-pressed]').first().click();
     for (const panel of ['Activity', 'Browser']) {
         await page.locator('.dock-tabs.main .dock-add-button').click();
         await page.locator(`.new-tab-pane:not(.panel-hidden) [data-open-panel="${panel.toLowerCase()}"]`).click();
     }
     await page.locator('#surface-tab-conversation').click();
+    await page.locator('.composer-input').focus();
 });
 
 for (const locale of ['en', 'fa']) {
@@ -231,7 +355,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         expect(boxes[0].right).toBeCloseTo(boxes[1].right, 0);
         expect(boxes[0].direction).toBe('ltr');
         expect(boxes[1].direction).toBe('rtl');
-        await expect(page.locator('.toolbar-brand')).toHaveCount(1);
+        await expect(page.locator('.toolbar > .sidebar-toggle')).toHaveCount(1);
         expect(await page.locator('.app').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
     });
 }
@@ -241,18 +365,23 @@ test('sidebar pages preserve drafts and Escape returns from a setup panel before
     await post(page, { type: 'openSettings' });
     await post(page, { type: 'savedCredentials', credentials: [{ id: 'one', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true }] });
     for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 0]) {
+        await openPageNavigation(page);
         await page.locator('.sidebar-item').nth(index).click();
+        await openPageNavigation(page);
         await expect(page.locator('.sidebar-item').nth(index)).toHaveAttribute('aria-current', 'page');
+        if (page.viewportSize()!.width < 860) await page.locator('.toolbar > .sidebar-toggle').click();
     }
     await page.getByRole('button', { name: 'Add connection', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByRole('radio', { name: 'Avalai', exact: true })).toBeVisible();
+    await expect(page.locator('.compact-dialog .cred-provider-box input')).toBeVisible();
     await page.keyboard.press('Shift+Tab');
     expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
+    await openPageNavigation(page);
     await expect(page.locator('.sidebar-item').first()).toHaveAttribute('aria-current', 'page');
-    await page.locator('.sidebar-back').click();
+    if (page.viewportSize()!.width < 860) await page.locator('.toolbar > .sidebar-toggle').click();
+    await page.locator('.toolbar-back-work').click();
     await expect(page.locator('.composer-input')).toHaveValue('Unfinished draft');
 });
 
@@ -270,20 +399,22 @@ test('preference help and usage details remain reachable without API history', a
     await help.focus();
     await expect(help).toBeFocused();
     await expect(help).toHaveAccessibleName(/.+/);
+    await openPageNavigation(page);
     await page.locator('.sidebar-item').nth(6).click();
     const totals = { input: 0, output: 0, cached: 0, USD: 0, IRT: 0 };
     await post(page, { type: 'usageState', providers: [], rates: [], history: [], allTime: totals, chatgpt: { totals, models: [], hasHistory: true } });
-    await expect(page.locator('.usage-plan')).toBeVisible();
-    await expect(page.locator('.usage-api')).not.toHaveAttribute('open');
-    const details = page.locator('.usage-page .page-help > summary');
-    await expect(details).toBeVisible();
-    await details.focus();
+    await expect(page.locator('.usage-subscription-detail')).toBeVisible();
+    await expect(page.locator('.cost-toolbar')).toHaveCount(0);
+    await page.locator('.usage-view-tabs button').first().click();
+    await expect(page.locator('.rate-disclosure > summary')).toBeVisible();
+    await page.locator('.rate-disclosure > summary').focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('.usage-page .page-help-body')).toBeVisible();
+    await expect(page.locator('.rates-add-toggle')).toBeVisible();
 });
 
 test('mode controls wait for the host echo and closing their menu does not cancel a run', async ({ page }) => {
     await post(page, { type: 'startResponse' });
+    await page.locator('.composer-input').focus();
     await page.locator('[data-policy="mode"]').click();
     await page.getByRole('menuitemradio', { name: 'Plan', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'togglePlanMode' });
@@ -308,6 +439,7 @@ test('review responses reject old checkpoints and settled requests do not time o
     await post(page, { ...historical, type: 'changesState', files: [] });
     await post(page, { ...previous, type: 'changesState', files: [{ ...changes[0], path: 'stale.ts' }] });
     await post(page, { ...current, type: 'changesState', files: changes });
+    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
     await page.locator('#surface-tab-changes').click();
     await replyFile(page);
     await expect(page.locator('.review-current .review-diff')).toBeVisible();
@@ -317,13 +449,13 @@ test('review responses reject old checkpoints and settled requests do not time o
     await expect(page.locator('.review-diff')).toBeVisible();
 });
 
-test('ask for review names the selected file and preserves the composer draft', async ({ page }) => {
+test('review stays read-only and preserves the composer draft', async ({ page }) => {
     await page.locator('.composer-input').fill('My existing draft');
     await openReview(page);
     await expect(page.locator('.review-input')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Mark reviewed', exact: true })).toHaveCount(0);
-    await page.locator('.review-ask').click();
-    await expect(page.locator('.composer-input')).toHaveValue(/My existing draft[\s\S]*src\/first.ts/);
+    await expect(page.locator('.review-ask')).toHaveCount(0);
+    await expect(page.locator('.composer-input')).toHaveValue('My existing draft');
     expect((await sent(page)).some((m) => m.type === 'askQuestion')).toBe(false);
 });
 
@@ -341,7 +473,7 @@ test('refresh keeps the diff visible and native editor access uses the guarded c
     await expect(page.locator('.review-diff')).toContainText('new');
     await replyFile(page, 'changed again', previousFile.requestId);
     await expect(page.locator('.review-diff')).toContainText('changed again');
-    await expect(page.locator('.review-ask')).toBeVisible();
+    await expect(page.locator('.review-ask')).toHaveCount(0);
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
@@ -389,6 +521,7 @@ test('Activity keeps tool output, omits answer prose and updates persisted event
 
 test('agent loading stays compact while profile discovery is pending', async ({ page }) => {
     await post(page, { type: 'openSettings' });
+    await openPageNavigation(page);
     await page.locator('.sidebar-item').nth(5).click();
     const loading = page.locator('.agent-loading');
     await expect(loading).toBeVisible();
@@ -463,15 +596,16 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`agent 
     await page.setViewportSize({ width, height: 900 });
     await post(page, { type: 'locale', locale });
     await post(page, { type: 'openSettings' });
+    await openPageNavigation(page);
     await page.locator('.sidebar-item').nth(5).click();
     await post(page, { type: 'agentsState', profiles: [{ name: 'reviewer', description: 'Review code', source: 'project-xratu', editable: true, error: 'No valid tools remain', warning: 'Dropped unknown tool Read' }] });
     await expect(page.locator('.agent-profile')).toContainText(locale === 'en' ? 'Invalid profile' : 'پروفایل نامعتبر');
     await expect(page.locator('.agent-profile')).not.toContainText('Review code');
     await page.screenshot({ path: info.outputPath('agent-profile.png') });
     await page.locator('.agent-profile').click();
-    await expect(page.locator('.agent-profile-details')).toContainText('Review code');
-    await expect(page.locator('.agent-profile-details')).toContainText('No valid tools remain');
-    await expect(page.locator('.agent-profile-details')).toContainText('Dropped unknown tool Read');
+    await expect(page.locator('.agents-page .inventory-inspector')).toContainText('Review code');
+    await expect(page.locator('.agents-page .inventory-inspector')).toContainText('No valid tools remain');
+    await expect(page.locator('.agents-page .inventory-inspector')).toContainText('Dropped unknown tool Read');
     await page.screenshot({ path: info.outputPath('agent-profile-details.png') });
     await page.getByRole('button', { name: locale === 'en' ? 'Open file' : 'باز کردن فایل', exact: true }).click();
     expect(await sent(page)).toContainEqual({ type: 'agentFileOpen', name: 'reviewer', source: 'project-xratu' });
@@ -485,6 +619,7 @@ test('a session switch clears review notes and rejects the previous file respons
     await expect.poll(async () => (await latest(page, 'changesGetState')).requestId).not.toBe(previousList.requestId);
     const currentList = await latest(page, 'changesGetState');
     await post(page, { ...currentList, type: 'changesState', files: changes });
+    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
     await page.locator('#surface-tab-changes').click();
     await replyFile(page, 'new', previousFile.requestId);
     await post(page, { ...previousFile, type: 'changeFileState', errorKey: 'surfaceChangesFailed' });
@@ -496,6 +631,7 @@ test('large change lists reveal more files and binary files keep native editor a
     await post(page, { type: 'restoreUser', value: 'Many files', cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: Array.from({ length: 100 }, (_, i) => ({ path: `assets/image-${i}.png`, added: 0, removed: 0, binary: true })) });
+    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
     await page.locator('#surface-tab-changes').click();
     await expect(page.locator('.review-file')).toHaveCount(80);
     await page.locator('.review-more').click();
@@ -531,11 +667,12 @@ for (const locale of ['en', 'fa']) {
         await post(page, { type: 'openSettings' });
         await post(page, { type: 'savedCredentials', credentials: [{ id: 'one', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true }] });
         for (const index of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
+            await openPageNavigation(page);
             await page.locator('.sidebar-item').nth(index).click();
             const overflow = await page.locator('.page-content').evaluate((el) => el.scrollWidth - el.clientWidth);
             expect(overflow).toBeLessThanOrEqual(1);
         }
-        await page.locator('.sidebar-back').click();
+        await page.locator('.toolbar-back-work').click();
         await expect(page.locator('.send-btn')).toBeVisible();
         await expect(page.locator('.composer-input')).toBeVisible();
     });
@@ -593,8 +730,10 @@ for (const locale of ['en', 'fa']) {
         await page.locator('#surface-tab-changes').dragTo(page.locator('.dock-tabs.main'));
         await expect(page.locator('.changes-pane.panel-main')).toBeVisible();
         await expect(page.locator('.composer-input')).toHaveValue('A draft that survives docking');
-        // Moving the last sidebar panel removes its column.
+        // An explicitly opened empty sidebar offers another view.
         await page.locator('.dock-tabs.side #surface-tab-activity').dragTo(page.locator('.dock-tabs.main'));
+        await expect(page.locator('.dock-empty')).toBeVisible();
+        await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await expect(page.locator('.work-surface')).not.toHaveClass(/has-sidebar/);
         await page.locator('#surface-tab-conversation').click();
         const stage = await page.locator('.chat-stage').boundingBox();
@@ -618,7 +757,7 @@ for (const locale of ['en', 'fa']) {
         await expect(page.locator('.dock-tabs.main #surface-tab-changes')).toBeVisible();
         await page.setViewportSize({ width: 420, height: 900 });
         await expect(page.locator('.dock-sidebar')).toBeHidden();
-        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(5);
+        await expect(page.locator('.dock-tabs.main [role="tab"]')).toHaveCount(4);
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
         await page.setViewportSize({ width: 1080, height: 900 });
@@ -646,10 +785,10 @@ for (const locale of ['en', 'fa']) {
         await page.keyboard.press('End');
         await page.keyboard.press('Enter');
         await expect(page.locator('#surface-tab-activity')).toHaveCount(0);
-        await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toBeVisible();
-        await expect(page.locator('#surface-tab-conversation')).toBeFocused();
+        await expect(page.locator('.dock-tabs.side #surface-tab-changes')).toBeHidden();
+        await expect(page.locator('.composer-input')).toBeFocused();
         await expect(page.locator('.activity-pane')).toBeHidden();
-        await expect(page.locator('.work-surface')).toHaveClass(/review-visible/);
+        await expect(page.locator('.work-surface')).not.toHaveClass(/review-visible/);
     });
 }
 
@@ -782,6 +921,7 @@ for (const locale of ['en', 'fa']) for (const segments of [true, false]) {
         await expect(activity).toContainText('I will inspect the validation path.');
         await expect(activity).toContainText('The expiry guard needs a regression test.');
         await expect(activity).not.toContainText('Expired tokens are now rejected.');
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await page.locator('#surface-tab-changes').click();
         await expect(page.locator('.composer-input')).toBeHidden();
         await page.locator('#surface-tab-conversation').click();
@@ -802,8 +942,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.evaluate(() => window.postMessage({ type: 'toolResult', tool: 'write_file', output: 'Written', callId: 'write' }, '*'));
         const changed = await latest(page, 'changesGetState', first.requestId);
         await post(page, { ...changed, type: 'changesState', files: changes });
-        await expect(page.locator('#surface-tab-changes')).toBeVisible();
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
+    await expect(page.locator('#surface-tab-changes')).toBeVisible();
         await replyFile(page, 'first result');
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await page.locator('#surface-tab-changes').click();
         await expect(page.locator('.review-current .review-diff')).toBeVisible();
         await expect(page.locator('.review-head h2')).toHaveCount(0);
@@ -817,6 +959,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(page.locator('.review-current .review-diff')).toContainText('first result');
         await post(page, { ...current, type: 'changesState', files: changes });
         await post(page, { ...historical, type: 'changesState', files: [changes[0]] });
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await page.locator('#surface-tab-changes').click();
         const turn = page.locator('.review-turn');
         await expect(turn).toHaveCount(1);
@@ -833,7 +976,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await turn.locator('summary').click();
         await post(page, { type: 'truncateFromUser', userIndex: 0 });
         await expect(page.locator('.review-turn')).toHaveCount(0);
-        await expect(page.locator('#surface-tab-changes')).toBeVisible();
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
+    await expect(page.locator('#surface-tab-changes')).toBeVisible();
         await expect(page.locator('.changes-pane .surface-empty-state')).toBeVisible();
     });
 }
@@ -854,7 +998,7 @@ for (const locale of ['en', 'fa']) {
         await page.mouse.move(target.x + 80, target.y + 200, { steps: 5 });
         await page.mouse.up();
         await expect(page.locator('.activity-pane.panel-side')).toBeVisible();
-        await page.locator('#surface-tab-activity').dragTo(page.locator('.chat-stage'));
+        await page.locator('#surface-tab-activity').dragTo(page.locator('.conversation-panel'));
         await expect(page.locator('.activity-pane.panel-main')).toBeVisible();
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toHaveValue('Keep draft');
@@ -870,6 +1014,7 @@ test('reused checkpoints keep the latest diff live without an empty previous-tur
     const request = await latest(page, 'changesGetState', previous.requestId);
     expect(request.toSha).toBeUndefined();
     await post(page, { ...request, type: 'changesState', files: changes });
+    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
     await expect(page.locator('#surface-tab-changes')).toBeVisible();
     await expect(page.locator('.review-turn')).toHaveCount(0);
 });
@@ -919,6 +1064,7 @@ for (const locale of ['en', 'fa']) {
             const request = requests.filter(message => message.sha === from && message.toSha === to).at(-1)!;
             await post(page, { ...request, type: 'changesState', files: changes });
         }
+        if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
         await page.locator('#surface-tab-changes').click();
         await expect(page.locator('.review-turn')).toHaveCount(3);
         const earlierA = page.locator('.review-turn').last();
@@ -957,6 +1103,19 @@ for (const locale of ['en', 'fa']) {
             await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'whole workspace' : 'کل پوشه کاری');
             await expect(page.locator('.notif-action')).toHaveCount(3);
             await page.screenshot({ path: testInfo.outputPath('restore-confirm.png') });
+            // Confirmation copy must retain a readable line length rather than
+            // being squeezed by the action row (the sidebar regression).
+            const copyWidth = await page.locator('.notif-copy').evaluate(el => el.getBoundingClientRect().width);
+            const bannerWidth = await page.locator('.notif').evaluate(el => el.getBoundingClientRect().width);
+            expect(copyWidth).toBeGreaterThan(bannerWidth * 0.6);
+            const bounds = await page.locator('.notif').evaluate(el => {
+                const box = el.getBoundingClientRect();
+                return Array.from(el.querySelectorAll('button')).every(button => {
+                    const rect = button.getBoundingClientRect();
+                    return rect.left >= box.left && rect.right <= box.right && rect.bottom <= box.bottom;
+                });
+            });
+            expect(bounds).toBe(true);
             await page.locator('.notif-action').first().click();
             await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-confirm')?.action).toBe('checkpointScopeFiles');
             for (const [key, text] of [
@@ -969,6 +1128,13 @@ for (const locale of ['en', 'fa']) {
                 await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
                 await page.locator('.notif-close').click();
             }
+            await post(page, { type: 'notification', id: 'restore-error', kind: 'error', valueKey: 'checkpointActionStale' });
+            await expect(page.locator('.notif-error[role="alert"] .notif-copy')).toBeVisible();
+            setTestLocale(locale === 'en' ? 'en' : 'fa');
+            await expect(page.locator('.notif-error .notif-copy')).toHaveText(t('checkpointActionStale'));
+            await page.screenshot({ path: testInfo.outputPath('error.png') });
+            await page.locator('.notif-close').click();
+            await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-error')?.action).toBe(null);
         });
     }
 }
@@ -1042,11 +1208,12 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.getByRole('menuitem', { name: 'Reset layout', exact: true }).click();
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
-        await expect(page.locator('[role="tab"]')).toHaveCount(2);
+        await expect(page.locator('[role="tab"]')).toHaveCount(1);
+        await page.locator('.toolbar-tools button[aria-pressed]').first().click();
         for (const panel of ['agents', 'background', 'downloads', 'changes', 'activity', 'pullRequests', 'browser']) {
             await page.locator('.dock-tabs.main .dock-add-button').click();
             const blank = page.locator('.new-tab-pane:not(.panel-hidden)');
-            await expect(blank.locator('h2')).not.toBeEmpty();
+            await expect(page.getByRole('dialog')).toBeVisible();
             await expect(blank.locator('.new-tab-choice')).toHaveCount(8);
             await blank.locator(`[data-open-panel="${panel}"]`).click();
             await expect(page.locator(`#surface-tab-${panel}`)).toHaveAttribute('aria-selected', 'true');
@@ -1058,20 +1225,21 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
     });
 }
 
-for (const locale of ['en', 'fa']) test(`assistant ask-review hides while the diff panel is visible (${locale})`, async ({ page }) => {
+for (const locale of ['en', 'fa']) test(`completed outcomes offer only Review and hide it while the diff panel is visible (${locale})`, async ({ page }) => {
     await post(page, { type: 'restoreUser', value: 'Edit the file', cp: sha });
     await post(page, { type: 'startResponse' });
     await post(page, { type: 'fullResponse', persian: 'Updated.', renderedHtml: '<p>Updated.</p>' });
     await answerChangesUntilReview(page);
     await post(page, { type: 'locale', locale });
-    await expect(page.locator('.outcome-actions button')).toHaveCount(2);
+    await expect(page.locator('.outcome-actions button')).toHaveCount(1);
     await page.setViewportSize({ width: 1080, height: 900 });
+    await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
     await expect(page.locator('.changes-pane')).toBeVisible();
     await expect(page.locator('.outcome-actions button')).toHaveCount(1);
     await expect(page.locator('.outcome-review')).toBeHidden();
     await page.setViewportSize({ width: 420, height: 900 });
     await expect(page.locator('.changes-pane')).toBeHidden();
-    await expect(page.locator('.outcome-actions button')).toHaveCount(2);
+    await expect(page.locator('.outcome-actions button')).toHaveCount(1);
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
@@ -1081,11 +1249,11 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.locator('.composer-input').fill('Keep my draft');
         const add = page.locator('.dock-tabs.main .dock-add-button');
         await add.click();
-        await add.click();
-        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(2);
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(0);
         await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=activity]').click();
         await expect(page.locator('#surface-tab-activity')).toHaveCount(1);
-        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(1);
+        await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(0);
         await page.locator('.activity-search-box input').fill('Retained filter');
         const activityTab = page.locator('.dock-tab[data-panel=activity]');
         await activityTab.hover();
@@ -1103,7 +1271,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.locator('#surface-tab-browser').click({ button: 'middle' });
         await expect(page.locator('html')).toHaveAttribute('data-middle-click-prevented', 'true');
         await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
-        await page.locator('[role=tab][data-panel^="new-"]').click();
+        await add.click();
         await page.locator('.new-tab-pane:not(.panel-hidden) [data-open-panel=browser]').click();
         await expect(page.locator('#surface-tab-browser')).toHaveAttribute('aria-selected', 'true');
         await expect(page.locator('[role=tab][data-panel^="new-"]')).toHaveCount(0);
@@ -1117,15 +1285,17 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await page.locator('#surface-tab-conversation').click();
         await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
         await add.click();
-        const blankId = await page.locator('[role=tab][data-panel^="new-"]').getAttribute('id');
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await page.keyboard.press('Escape');
         const saved = await page.evaluate(() => (window as unknown as { __xratuUiState: unknown }).__xratuUiState);
         await page.addInitScript(value => Object.assign(window, { __xratuUiState: value }), saved);
         await page.reload();
         await post(page, { type: 'showChat' });
-        await expect(page.locator(`#${blankId}`)).toHaveAttribute('aria-selected', 'true');
-        await expect(page.locator('.new-tab-pane:not(.panel-hidden)')).toBeVisible();
+        await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('aria-selected', 'true');
+        await expect(page.getByRole('dialog')).toHaveCount(0);
         await expect(page.locator('#surface-tab-browser')).toHaveCount(0);
         await post(page, { type: 'locale', locale: 'en' });
+        await page.locator('.toolbar > .sidebar-toggle').click();
         await page.getByRole('button', { name: 'New chat', exact: true }).click();
         await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('aria-selected', 'true');
         expect(await sent(page)).toContainEqual({ type: 'newSession' });
@@ -1151,7 +1321,11 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
     await post(page, { type: 'locale', locale });
     const nav = page.locator('.dock-tabs.main');
     const list = nav.locator('.dock-tab-list');
-    for (let i = 0; i < 8; i++) await nav.locator('.dock-add-button').click();
+    for (const panel of ['changes', 'agents', 'background', 'downloads', 'pullRequests']) {
+        await nav.locator('.dock-add-button').click();
+        await page.locator(`.panel-picker-dialog [data-open-panel="${panel}"]`).click();
+    }
+    await nav.locator('[role=tab][aria-selected=true]').press('End');
     const previous = nav.getByRole('button', { name: locale === 'en' ? 'Scroll to previous tabs' : 'نمایش تب های قبلی', exact: true });
     const next = nav.getByRole('button', { name: locale === 'en' ? 'Scroll to next tabs' : 'نمایش تب های بعدی', exact: true });
     await expect(previous).toBeVisible();
@@ -1171,7 +1345,8 @@ for (const locale of ['en', 'fa']) test(`overflowing tabs scroll by arrows, whee
         };
     });
     await expect.poll(selectedFits).toMatchObject({ fits: true });
-    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(11);
+    await expect(next).toBeDisabled();
+    await expect(nav.locator('.dock-tab-close[tabindex="-1"]')).toHaveCount(7);
     await nav.locator('[role=tab][aria-selected=true]').press('Tab');
     if (process.platform === 'darwin') {
         // macOS Chromium follows the system Full Keyboard Access setting, which
@@ -1342,3 +1517,49 @@ test('automatic change refreshes only reload open files that changed', async ({ 
     await page.locator('.review-head .icon-btn').click();
     await expect.poll(async () => (await fileRequests('src/first.ts')).length).toBe(firstBefore + 1);
 });
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
+    test(`overlay Escape preserves a running response (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'chunk', value: 'Still running' });
+        for (const section of ['appearance', 'history', 'workspace']) {
+            if (section === 'appearance') {
+                await post(page, { type: 'openSettings' });
+                await openPageNavigation(page);
+                await page.locator('[data-section=appearance]').click();
+            } else {
+                if (!await page.locator('.workspace-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
+                await page.locator('.workspace-sidebar .workspace-views').first().locator('button').nth(section === 'workspace' ? 0 : 1).click();
+            }
+            await expect(page.locator('.page-content')).toBeVisible();
+            await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+            await page.keyboard.press('Escape');
+            await expect(page.locator('.page-content')).toHaveCount(0);
+            expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
+        }
+    });
+}
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
+    test(`resting composer retains context and git status (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
+        await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+        await post(page, { type: 'restoreUser', value: 'Keep the context visible' });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'fullResponse', persian: 'Done' });
+        await page.locator('.msg.user').click();
+        await expect(page.locator('.tok-meter')).toBeVisible();
+        await expect(page.locator('.tok-pct')).toBeHidden();
+        await expect(page.locator('.tok-text')).toBeHidden();
+        await expect(page.locator('.git-status')).toBeVisible();
+        const ring = (await page.locator('.tok-meter').boundingBox())!;
+        const composer = (await page.locator('.composer').boundingBox())!;
+        expect(ring.y).toBeGreaterThanOrEqual(composer.y);
+        expect(ring.y + ring.height).toBeLessThanOrEqual(composer.y + composer.height);
+        await page.screenshot({ path: info.outputPath('resting-composer.png') });
+    });
+}

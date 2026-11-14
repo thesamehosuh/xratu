@@ -1,4 +1,4 @@
-import { EngineScope, NativeConfiguration } from './components/EngineScope';
+import { NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
@@ -9,21 +9,25 @@ import { collectAgentRuns } from './subagentView';
 import { SubagentsPanel } from './components/SubagentsPanel';
 import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
+import { AppearancePage } from './components/AppearancePage';
+import { appearanceStyle, readAppearance } from './appearance';
+import { SessionPages } from './components/SessionPages';
 import { AgentsPage } from './components/AgentsPage';
 import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { ChangesPanel } from './components/ChangesPanel';
 import { DockSidebar } from './components/DockSidebar';
-import { SurfaceTabs, PANEL_DRAG_TYPE } from './components/SurfaceTabs';
+import { SurfaceTabs, PANEL_DRAG_TYPE, PANEL_LABELS, PANEL_ICONS } from './components/SurfaceTabs';
 import { PullRequestsPanel } from './components/PullRequestsPanel';
 import { usePullRequests } from './usePullRequests';
 import { useDockLayout } from './useDockLayout';
 import { isNewTab } from './dockLayout';
+import { SidePanel } from './components/SidePanel';
 import { NewTabPanel } from './components/NewTabPanel';
 import { ActivityPanel } from './components/ActivityPanel';
 import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { BookOpen, WifiOff, ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
-import { postMessage } from './vscode';
+import { X, BookOpen, WifiOff, ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
+import { getWebviewState, patchWebviewState, postMessage } from './vscode';
 import { composerDraftKey, promoteComposerDraft } from './composerDrafts';
 import type {
     ConnectionStatus as ConnStatus,
@@ -31,7 +35,6 @@ import type {
     ComposerAttachment,
     DiscoveredLocalRuntime,
     LocalModelOperation,
-    ProviderBenchmark,
     FromExtensionMessage,
     GitStatusSummary,
     InstallConfidence,
@@ -72,7 +75,7 @@ import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, transcriptOptions, type TranscriptPrefs } from './transcriptPrefs';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
+type Screen = 'appearance' | 'workspace' | 'history' | 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -190,7 +193,6 @@ export function App() {
     const [offline, setOffline] = useState(false);
     const [errorExplanations, setErrorExplanations] = useState(true);
     const [localModelOperation, setLocalModelOperation] = useState<LocalModelOperation | null>(null);
-    const [benchmarks, setBenchmarks] = useState<ProviderBenchmark[]>([]);
     const [localScanError, setLocalScanError] = useState<string | null>(null);
     /** Heuristic vision support of the selected model (null = unknown). */
     const [visionCapable, setVisionCapable] = useState<boolean | null>(null);
@@ -211,7 +213,7 @@ export function App() {
      *  each display (and never re-display an older one). */
     const [composerError, setComposerError] = useState<{ id: number; value: string; valueKey?: string; params?: Record<string, string> } | null>(null);
     /** In-app notification banners (replaces VS Code toasts). Queue order is
-     *  preserved; NotificationBanner shows the head. Confirm banners answer
+     *  preserved; NotificationBanner prioritizes confirms. Confirm banners answer
      *  the host with the picked action (null = dismissed/cancelled). */
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     /** UI language - mirrored from the host's persisted choice on ready. */
@@ -223,6 +225,8 @@ export function App() {
      *  blob is the correct starting state: every id then resolves to its own
      *  default in transcriptPrefs.ts, so no pill waits on the host to render. */
     const [transcriptPrefs, setTranscriptPrefs] = useState<TranscriptPrefs>(EMPTY_TRANSCRIPT_PREFS);
+    const [appearance, setAppearance] = useState(() => readAppearance(getWebviewState().surfaceAppearance));
+    useEffect(() => { patchWebviewState({ surfaceAppearance: appearance }); }, [appearance]);
     /** Session picker state - the toolbar's centered title button drives it. */
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
@@ -250,7 +254,8 @@ export function App() {
     }, [currentSessionId]);
     const pullRequests = usePullRequests(currentSessionId);
     const downloads = useDownloads();
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, false, hasActivity(chat.messages));
+    const [browserAvailable, setBrowserAvailable] = useState(false);
+    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, pullRequests.state.links.length > 0, hasActivity(chat.messages), downloads.downloads.length > 0, browserAvailable);
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
@@ -332,7 +337,13 @@ export function App() {
         send({ type: 'setupGetState', requestId, engine: setupPath === 'free' ? 'opencode' : 'xratu', path: setupPath, credentialId: setupCredentialId, onboarding: true });
         return () => { setupRequestId.current = ''; send({ type: 'setupCancel' }); };
     }, [screen, setupPath, setupCredentialId, setupRefresh, send]);
-    useEffect(() => { setSettingsEngine(engineState?.active ?? 'xratu'); }, [engineState?.active, screen]);
+    const settingsScopeInitialized = useRef(false);
+    useEffect(() => {
+        if (engineState && !settingsScopeInitialized.current) {
+            settingsScopeInitialized.current = true;
+            setSettingsEngine(engineState.active);
+        }
+    }, [engineState]);
     useEffect(() => {
         if (!ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
         const requestId = crypto.randomUUID();
@@ -354,7 +365,7 @@ export function App() {
     const sessionSearchLatest = useRef(0);
     // Debounced full-text session search while the picker is open.
     useEffect(() => {
-        if (!sessionsOpen || !sessionQuery.trim()) {
+        if ((!sessionsOpen && screen !== 'history' && screen !== 'workspace') || !sessionQuery.trim()) {
             // Invalidate any in-flight search and drop the results view.
             sessionSearchLatest.current = ++sessionSearchSeq.current;
             setSessionResults(null);
@@ -369,7 +380,7 @@ export function App() {
             send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all', requestId });
         }, 200);
         return () => clearTimeout(handle);
-    }, [sessionQuery, sessionsOpen, sessionsScope, send]);
+    }, [sessionQuery, sessionsOpen, sessionsScope, send, screen]);
 
     /** Kick off local-runtime discovery (welcome screen + credentials page).
      *  Probing can finish near-instantly - the ≥1s spinner floor lives in
@@ -730,6 +741,10 @@ export function App() {
             case 'usage': setScreen(usageReturnTo); return true;
             case 'proxy': setScreen(proxyReturnTo); return true;
             case 'settings':
+            case 'appearance':
+            case 'history':
+            case 'workspace':
+            case 'engines':
             case 'agents': setScreen('chat'); return true;
             default: return false;
         }
@@ -748,7 +763,8 @@ export function App() {
             if (gitPickerOpen) { e.preventDefault(); setGitPickerOpen(false); return; }
             const target = e.target as HTMLElement | null;
             if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
-            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop, .composer-policy-menu')) return;
+            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .composer-policy-menu')) return;
+            if (sessionsOpen && !dock.wide) { e.preventDefault(); setSessionsOpen(false); return; }
             // A subpage owns Escape first: leaving it is the expected
             // meaning, and the run behind it must be left alone.
             if (backFromOverlay()) {
@@ -761,7 +777,7 @@ export function App() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [send, backFromOverlay, taskChipOpen, gitPickerOpen]);
+    }, [send, backFromOverlay, taskChipOpen, gitPickerOpen, sessionsOpen, dock.wide]);
 
     useEffect(() => {
         send({ type: 'webviewReady' });
@@ -786,6 +802,21 @@ export function App() {
                     setSetupCanBack(msg.canBack ?? false);
                     setSetupCredentialId(undefined);
                     setScreen('welcome');
+                    break;
+                case 'resetConversation':
+                    dispatch(msg);
+                    pendingSteers.current.clear();
+                    setQueuedSteers([]);
+                    pendingSend.current = null;
+                    setAcceptedSend(null);
+                    setComposerRestore([]);
+                    setComposerError(null);
+                    setSelectedAgentId(null);
+                    setTaskChipOpen(false);
+                    setChangeCount(0);
+                    setReviewFiles(undefined);
+                    setModelInfo(null);
+                    setSelectedModel(null);
                     break;
                 case 'showChat':
                     setScreen('chat');
@@ -846,6 +877,7 @@ export function App() {
                     break;
                 case 'proxyState':
                     setProxyState({
+                        requestId: msg.requestId,
                         mode: msg.mode,
                         proxyUrl: msg.proxyUrl,
                         noProxy: msg.noProxy,
@@ -1026,9 +1058,6 @@ export function App() {
                     break;
                 case 'localModelOperation':
                     setLocalModelOperation(msg);
-                    break;
-                case 'providerBenchmark':
-                    setBenchmarks((previous) => [...previous.filter((r) => r.credentialId !== msg.credentialId || r.model !== msg.model), msg]);
                     break;
                 case 'replyLanguage':
                     setReplyLanguageState(msg.replyLanguage);
@@ -1306,17 +1335,10 @@ export function App() {
         return undefined;
     }, [chat.messages]);
     useEffect(() => { setActiveReviewSha(null); setActiveReviewNumber(null); setReviewPath(null); }, [newestCheckpoint, currentSessionId]);
-    const dockSession = useRef<string | null>(null);
-    useEffect(() => {
-        if (dockSession.current !== null && dockSession.current !== currentSessionId) setSurfaceTab('conversation');
-        dockSession.current = currentSessionId;
-    }, [currentSessionId, setSurfaceTab]);
-
-
     const checkpointSha = activeReviewSha ?? newestCheckpoint ?? null;
-    const activeSection: SettingsSection = screen === 'engines' ? 'engines' : screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : 'settings';
+    const activeSection: SettingsSection = screen === 'engines' ? 'engines' : screen === 'credentials' ? 'providers' : screen === 'capabilities' ? capabilityTab === 'servers' ? 'mcp' : capabilityTab : screen === 'agents' ? 'agents' : screen === 'usage' ? 'usage' : screen === 'proxy' ? 'proxy' : screen === 'appearance' ? 'appearance' : 'settings';
     const openSection = (section: SettingsSection) => {
-        setSessionsOpen(false);
+        setSessionsOpen(dock.wide);
         if (section === 'providers') {
             setCredReturnTo('chat'); setScreen('credentials'); send({ type: 'openCredentials' });
         } else if (section === 'engines') {
@@ -1329,11 +1351,13 @@ export function App() {
             setProxyReturnTo('chat'); setScreen('proxy'); send({ type: 'proxyGetState' }); send({ type: 'mcpGetState' });
         } else setScreen(section);
     };
-    const addReviewFeedback = (text: string) => {
-        setSurfaceTab('conversation'); setScreen('chat'); setInjectedText({ id: Date.now(), text, autoSend: false });
-    };
     let overlay: JSX.Element | null = null;
-    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} />;
+    if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={setAppearance} onTheme={() => send({ type: 'selectColorTheme' })} />;
+    if (screen === 'history' || screen === 'workspace') overlay = <SessionPages history={screen === 'history'} sessions={sessionQuery.trim() ? sessionResults ?? [] : sessions} loading={sessionsLoading || !!sessionQuery.trim() && sessionResults === null} query={sessionQuery} onQuery={setSessionQuery}
+        onOpen={id => { setScreen('chat'); if (id !== currentSessionId) { setEditDraft(null); send({ type: 'openSession', id }); } }} onNew={() => { setEditDraft(null); showConversation(); send({ type: 'newSession' }); }}
+        onConversation={() => { setScreen('chat'); showConversation(); }} onAgents={() => { setScreen('chat'); setSurfaceTab('agents'); }} onBackground={() => { setScreen('chat'); setSurfaceTab('background'); }}
+        onPanel={panel => { setScreen('chat'); dock.activate(panel); }} pending={chat.messages.reduce((count, message) => count + (message.approval && !message.approval.resolution ? 1 : 0) + (message.decisions?.filter(decision => !decision.answered).length ?? 0), 0)} agents={agentRuns.length} background={liveJobs.length} />;
+    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { settingsScopeInitialized.current = true; setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
         overlay = <AgentsPage profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
@@ -1351,10 +1375,10 @@ export function App() {
                     initialOpenCard={embedded === 'local' ? 'local' : embedded === 'provider' ? 'byok' : credOpenCard}
                     offline={offline}
                     localModelOperation={localModelOperation}
-                    benchmarks={benchmarks}
                     onManageLocalModel={(action, baseUrl, model) => send({ type: 'manageLocalModel', action, baseUrl, model })}
-                    onBenchmark={() => send({ type: 'benchmarkProvider' })}
                     onOpenGuide={(guide) => send({ type: 'openBundledGuide', guide })}
+                    models={engineState?.active === 'opencode' ? undefined : modelInfo?.models}
+                    modelDisplayNames={modelInfo?.displayNames}
                     savedCredentials={savedCredentials}
                     credentialsReady={credentialsReady}
                     localRuntimes={localRuntimes}
@@ -1422,6 +1446,7 @@ export function App() {
     if (screen === 'usage') {
         overlay = (
                 <UsagePage
+                    onRefresh={() => send({ type: 'usageGetState' })}
                     state={usage}
                     oauthState={oauthState}
                     onBack={() => setScreen(usageReturnTo)}
@@ -1464,9 +1489,13 @@ export function App() {
                         // visit happened first.
                         send({ type: 'mcpGetState' });
                     }}
-                    onSave={(mode, proxyUrl, noProxy, webSearchUseProxy) => {
+                    onSave={(mode, proxyUrl, noProxy, webSearchUseProxy, requestId) => {
                         setProxyTestResult(null);
-                        send({ type: 'proxySave', mode, proxyUrl, noProxy, webSearchUseProxy });
+                        send({ type: 'proxySave', mode, proxyUrl, noProxy, webSearchUseProxy, requestId });
+                    }}
+                    onSaveMode={(mode, requestId) => {
+                        setProxyTestResult(null);
+                        send({ type: 'proxySaveMode', mode, requestId });
                     }}
                     onDetect={() => {
                         setProxyDetecting(true);
@@ -1551,7 +1580,7 @@ export function App() {
 
     if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
         if (ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
-        overlay = <div className="scoped-page"><EngineScope engine={settingsEngine} onChange={setSettingsEngine} />{overlay}</div>;
+        overlay = <div className="scoped-page">{overlay}</div>;
     }
     const taskControl = taskProgress && taskListView && (
                 <div className="task-list-chip-wrap">
@@ -1599,11 +1628,15 @@ export function App() {
     />;
 
     const overlayOpen = overlay !== null;
+    const settingsOpen = overlayOpen && screen !== 'welcome' && screen !== 'workspace' && screen !== 'history';
+    useLayoutEffect(() => {
+        if (overlayOpen && screen !== 'welcome') setSessionsOpen(window.innerWidth >= 860);
+    }, [overlayOpen, screen]);
 
     if (screen === 'boot') {
         // Empty shell until the host resolves the start screen - keeps the
         // locale/direction root mounted without flashing the welcome page.
-        return <div className="app" dir={locale === 'fa' ? 'rtl' : 'ltr'} />;
+        return <div className="app workbench" style={appearanceStyle(appearance, true)} data-color-scheme={appearance.scheme} data-accent={appearance.accent} data-accent-saturation={appearance.saturation} data-contrast-dark={appearance.darkContrast} data-contrast-light={appearance.lightContrast} dir={locale === 'fa' ? 'rtl' : 'ltr'} />;
     }
 
 
@@ -1616,9 +1649,24 @@ export function App() {
             scroll position and mounted page survive the trip - and it drops the
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
-        <div className={`app workbench${screen === 'welcome' ? ' setting-up' : ''}`} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <div className={`app workbench${screen === 'welcome' ? ' setting-up' : ''}${sessionsOpen ? ' navigation-open' : ''}`} style={appearanceStyle(appearance, screen === 'welcome')} data-color-scheme={appearance.scheme} data-accent={appearance.accent} data-accent-saturation={appearance.saturation} data-contrast-dark={appearance.darkContrast} data-contrast-light={appearance.lightContrast} data-density={appearance.density} data-motion={appearance.motion} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             {offlineBanner}
             <Toolbar
+                tabsVisible={dock.tabsVisible}
+                sideOpen={dock.sideOpen}
+                onToggleTabs={dock.toggleTabs}
+                onToggleSide={dock.toggleSide}
+                onAddTab={() => { setScreen('chat'); dock.add('main'); }}
+                onBackWork={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }}
+                destinationLabel={overlayOpen ? t(screen === 'history' ? 'surfaceHistory' : screen === 'workspace' ? 'surfaceWorkspace' : screen === 'welcome' ? 'settingsTitle' : activeSection === 'appearance' ? 'appearanceTitle' : activeSection === 'settings' ? 'settingsTitle' : activeSection === 'mcp' ? 'mcpServersTab' : activeSection === 'providers' ? 'providersTitle' : activeSection === 'engines' ? 'enginesTitle' : activeSection === 'skills' ? 'skillsTitle' : activeSection === 'marketplace' ? 'mcpMarketTab' : activeSection === 'agents' ? 'surfaceAgents' : activeSection === 'usage' ? 'settingsUsage' : 'proxyPageTitle') : undefined}
+                onOpenHistory={() => { setScreen('history'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
+                onOpenWorkspace={() => { setScreen('workspace'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
+                settingsNavigation={settingsOpen ? <PageSidebar current={activeSection} onSelect={openSection} onBack={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }} /> : undefined}
+                workNavigation={<nav className="workspace-views" aria-label={t('surfaceWorkspace')}>{dock.allPanels.filter(panel => !isNewTab(panel)).map(panel => {
+                    if (isNewTab(panel)) return null;
+                    const Icon = PANEL_ICONS[panel];
+                    return <button key={panel} type="button" className={surfaceTab === panel ? 'active' : ''} onClick={() => { setScreen('chat'); showConversation(); setSurfaceTab(panel); if (!dock.wide) setSessionsOpen(false); }}><Icon size={15} /><span>{t(PANEL_LABELS[panel])}</span></button>;
+                })}</nav>}
                 conn={conn}
                 yolo={yolo}
                 plan={plan}
@@ -1660,10 +1708,12 @@ export function App() {
                     }
                 }}
                 onOpenSession={(id) => {
-                    setSessionsOpen(false);
-                    setEditDraft(null);
-                    showConversation();
-                    send({ type: 'openSession', id });
+                    if (!dock.wide) setSessionsOpen(false);
+                    setScreen('chat');
+                    if (id !== currentSessionId) {
+                        setEditDraft(null);
+                        send({ type: 'openSession', id });
+                    }
                 }}
                 onRenameSession={(id, title) => send({ type: 'renameSession', id, title })}
                 onDeleteSession={(id) => {
@@ -1680,17 +1730,16 @@ export function App() {
                     setByokError(null);
                     send({ type: 'openCredentials' });
                 }}
-                onOpenCapabilities={() => {
-                    setCapabilityTab('servers');
-                    setCapReturnTo('chat');
-                    setScreen('capabilities');
-                }}
                 onOpenSettings={() => setScreen('settings')}
             />
+            {dock.picker && <SidePanel className="panel-picker-dialog compact-dialog" label={t('surfaceAddTab')} onClose={dock.dismissPicker}>
+                <header className="panel-picker-header"><h3>{t('surfaceAddTab')}</h3><button type="button" className="icon-btn" aria-label={t('editCancel')} onClick={dock.dismissPicker}><X size={16} /></button></header>
+                <NewTabPanel panelClass="" openPanels={dock.allPanels} onChoose={dock.choose} />
+            </SidePanel>}
             <div className="workbench-body">
             {banner}
             <AgentNavigation.Provider value={observeAgent}><div className={`conversation-surface${overlayOpen ? ' behind' : ''}`} aria-hidden={overlayOpen || undefined}>
-            <main className={`work-surface show-${surfaceTab}${dock.wide && dock.sidePanels.length ? ' has-sidebar' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
+            <main className={`work-surface${dock.tabsVisible ? '' : ' tabs-hidden'}${dock.sideOpen ? '' : ' side-collapsed'} show-${surfaceTab}${dock.wide && dock.sideOpen ? ' has-sidebar' : ''}${dock.wide && dock.sidePanels.length && !dock.sideOpen && dock.tabsVisible ? ' has-rail' : ''}${dock.sideActive === 'changes' ? ' review-visible' : ''}${dock.dragging ? ' docking' : ''}`}
                 onDragOver={(event) => {
                     if (dock.wide && dock.dragging && event.dataTransfer.types.includes(PANEL_DRAG_TYPE) && (event.target as Element).closest('.panel-side,.dock-sidebar,.panel-main')) {
                         event.preventDefault(); event.dataTransfer.dropEffect = 'move';
@@ -1704,7 +1753,7 @@ export function App() {
                 }}>
             <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
             {[...dock.layout.main, ...dock.layout.side].filter(isNewTab).map(tab => <NewTabPanel key={tab} tab={tab} panelClass={dock.position(tab)} openPanels={dock.allPanels} onChoose={panel => dock.open(panel, dock.layout.side.includes(tab) ? 'side' : 'main', tab)} />)}
-            <div className={`conversation-panel ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
+            <div className={`conversation-panel${chat.messages.length === 0 ? ' empty-conversation' : ''} ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
             <div className="chat-stage">
             <div className="transcript-pane">
 
@@ -1727,7 +1776,6 @@ export function App() {
                     onEditMessage={canRewind ? handleEditMessage : undefined}
                     onRestoreCheckpoint={handleRestoreCheckpoint}
                     onReviewChanges={handleReviewChanges}
-                    onAskReview={addReviewFeedback}
                     reviewSha={checkpointSha}
                     reviewPanelOpen={dock.mainActive === 'changes' || dock.sideActive === 'changes'}
                     reviewFiles={reviewFiles}
@@ -1755,6 +1803,7 @@ export function App() {
             </div>
             </div>
             <div className="compose-dock">
+            {chat.messages.length === 0 && !byokHint && <h2 className="composer-welcome">{t('surfaceEmptyPrompt')}</h2>}
             {dock.mainActive !== 'pullRequests' && dock.sideActive !== 'pullRequests' && <PullRequestIndicator state={pullRequests.state} onOpen={() => setSurfaceTab('pullRequests')} />}
             <div className="composer-support">
             {chat.busy && chat.compacting && <div className="compaction-status" role="status" aria-live="polite"><span className="step-status spinner" aria-hidden="true" /><span>{t('compactingContext')}</span></div>}
@@ -1800,6 +1849,7 @@ export function App() {
             <InputBar
                 key={composerMountKey}
                 draftKey={draftKey}
+                typographyKey={screen === 'welcome' ? 'welcome' : `${appearance.font}:${appearance.textSize}`}
                 acceptedSend={acceptedSend}
                 onAcceptedSendApplied={() => { if (acceptedSend?.edit) setEditDraft(null); setAcceptedSend(null); }}
                 yolo={yolo}
@@ -1811,12 +1861,6 @@ export function App() {
                 busy={chat.busy}
                 usage={chat.lastUsage}
                 showContextMeter={transcriptOptions(transcriptPrefs).showContextMeter}
-                sessionCost={chat.sessionCost}
-                onOpenUsage={() => {
-                    setUsageReturnTo('chat');
-                    setScreen('usage');
-                    send({ type: 'usageGetState' });
-                }}
                 contextWindow={selectedModel && ctxOverrides[selectedModel] != null ? modelWindowsMerged[selectedModel] : resolveWindow(modelInfo?.contextWindows, selectedModel)}
                 defaultContextWindow={resolveWindow(modelInfo?.contextWindows, selectedModel)}
                 ctxOverridden={!!(selectedModel && ctxOverrides[selectedModel] != null)}
@@ -1829,6 +1873,9 @@ export function App() {
                 modelDisplayNames={modelInfo?.displayNames}
                 modelCapabilities={modelInfo?.capabilities}
                 modelPings={modelPings}
+                activeEngine={engineState?.active}
+                engineSwitchDisabled={chat.busy || engineState?.busy}
+                onSelectEngine={engine => send({ type: 'engineSelect', engine })}
                 engineLabel={t(engineState?.active === 'opencode' ? 'engineOpenCode' : 'engineXratu')}
                 onPingModel={(model, automatic) => send({ type: 'pingFreeModel', model, ...(automatic ? { automatic: true } : {}) })}
                 modelWindows={modelWindowsMerged}
@@ -1905,19 +1952,24 @@ export function App() {
             </div>
             </div>
             {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={showConversation} prefs={transcriptPrefs} sessionKey={currentSessionId} />
-            <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={showConversation} />
+            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={() => { setScreen('chat'); showConversation(); }} prefs={transcriptPrefs} sessionKey={currentSessionId} />
+            <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={() => { setScreen('chat'); showConversation(); }} />
             <DownloadsPanel {...downloads} visible={dock.mainActive === 'downloads' || dock.sideActive === 'downloads'} panelClass={dock.position('downloads')} />
-            <BrowserPanel visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
+            <BrowserPanel onAvailable={setBrowserAvailable} visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
             {(pullRequests.state.links.length > 0 || dock.allPanels.includes('pullRequests')) && <PullRequestsPanel state={pullRequests.state} pending={pullRequests.pending} error={pullRequests.error} action={pullRequests.action} visible={!overlayOpen && (dock.mainActive === 'pullRequests' || dock.sideActive === 'pullRequests')} panelClass={dock.position('pullRequests')} />}
-            <DockSidebar active={dock.wide && dock.sidePanels.length > 0} dragging={!!dock.dragging}>
+            {dock.wide && !dock.sideOpen && dock.tabsVisible && dock.sidePanels.length > 0 && <nav className="dock-mini" aria-label={t('surfaceSidebarTabs')}>{dock.sidePanels.map(panel => {
+                const Icon = isNewTab(panel) ? PANEL_ICONS.conversation : PANEL_ICONS[panel];
+                return <button key={panel} type="button" className="icon-btn" title={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} aria-label={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} onClick={() => setSurfaceTab(panel)}><Icon size={15} /></button>;
+            })}</nav>}
+            <DockSidebar active={dock.wide && dock.sideOpen} dragging={!!dock.dragging}>
                 <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
+                {dock.sidePanels.length === 0 && <div className="dock-empty"><button type="button" className="settings-ghost-action" onClick={() => dock.add('side')}><span>{t('surfaceAddTab')}</span></button></div>}
             </DockSidebar>
-            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onFeedback={addReviewFeedback} onCount={setChangeCount} onFiles={setReviewFiles} onTurnFiles={recordTurnFiles} /></div>
+            <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onCount={setChangeCount} onFiles={setReviewFiles} onTurnFiles={recordTurnFiles} /></div>
             </main>
             </div>
             </AgentNavigation.Provider>
-            {overlayOpen && (screen === 'welcome' ? <div className="setup-overlay">{overlay}</div> : <div className="page-layout"><PageSidebar current={activeSection} onSelect={openSection} onBack={() => setScreen('chat')} /><div className="page-content">{overlay}</div></div>)}
+            {overlayOpen && (screen === 'welcome' ? <div className="setup-overlay">{overlay}</div> : <div className="page-layout"><div className="page-content">{overlay}</div></div>)}
         </div>
         </div>
         </>

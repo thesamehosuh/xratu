@@ -1322,7 +1322,7 @@ button {
     width: 100%;
     border-collapse: collapse;
     font-family: var(--vscode-editor-font-family);
-    font-size: var(--xratu-fs-xs);
+    font-size: var(--xratu-fs-code);
     line-height: var(--xratu-line-ui);
     tab-size: 4;
 }
@@ -2748,16 +2748,12 @@ button {
     .code-surface > pre,
     .code-surface > pre.shiki {
         padding: 9px 10px;
-        font-size: var(--xratu-fs-md);
     }
 
     /* Tool and diff details keep their compact scale in the sidebar. */
     .step,
-    .step pre,
     .step-think-body,
-    .tool-path,
-    pre.tool-cmd,
-    .pill-diff-code {
+    .tool-path {
         font-size: var(--xratu-fs-md);
     }
 }
@@ -3564,7 +3560,7 @@ button {
     margin: 0;
     padding: 0;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-md);
+    font-size: var(--xratu-fs-code);
     white-space: pre-wrap;
     /* Long unbreakable strings (URLs, paths) wrap instead of forcing a
        horizontal scrollbar on an otherwise wrapped block. */
@@ -3734,7 +3730,7 @@ pre.tool-cmd {
 
 .pill-diff-code {
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-md);
+    font-size: var(--xratu-fs-code);
     white-space: pre-wrap;
     word-break: break-word;
     text-align: left;
@@ -4141,11 +4137,11 @@ pre.tool-cmd {
     transition: border-color var(--xratu-dur-2) var(--xratu-ease-settle), box-shadow var(--xratu-dur-2) var(--xratu-ease-settle);
 }
 
-/* Teal marks a DRAFT, not attention: focus alone (clicking an empty composer)
+/* The accent marks a DRAFT, not attention: focus alone (clicking an empty composer)
    must not colour the card. */
 .composer.has-draft {
     border-color: color-mix(in srgb, var(--xratu-accent) 40%, var(--vscode-input-border));
-    box-shadow: 0 0 0 1px rgba(20, 227, 200, 0.08);
+    box-shadow: 0 0 0 1px var(--xratu-accent-faint);
 }
 
 /* Suggestion auto-typing in progress - the composer "breathes" until the
@@ -4157,10 +4153,10 @@ pre.tool-cmd {
 
 @keyframes xratu-composer-breathe {
     0%, 100% {
-        box-shadow: 0 0 0 1px rgba(20, 227, 200, 0.10);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--xratu-accent) 10%, transparent);
     }
     50% {
-        box-shadow: 0 0 0 3px rgba(20, 227, 200, 0.16);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--xratu-accent) 16%, transparent);
     }
 }
 
@@ -4168,7 +4164,7 @@ pre.tool-cmd {
    at a glance. */
 .composer.has-attachments {
     border-color: color-mix(in srgb, var(--xratu-accent) 55%, var(--vscode-input-border));
-    box-shadow: 0 0 0 2px rgba(20, 227, 200, 0.12);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--xratu-accent) 12%, transparent);
 }
 
 .composer-top-row {
@@ -5036,7 +5032,7 @@ pre.tool-cmd {
     padding: 8px 10px;
     font-size: var(--xratu-fs-md);
     font-weight: 650;
-    color: #04201c;
+    color: var(--xratu-accent-ink, #04201c);
     background: var(--xratu-accent);
     border: 1px solid var(--xratu-accent);
     border-radius: var(--xratu-radius-sm);
@@ -5390,12 +5386,13 @@ pre.tool-cmd {
     z-index: 60;
     inset-block-start: 8px;
     inset-inline-end: 12px;
-    max-width: min(420px, calc(100% - 24px));
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    min-height: 22px;
+    width: min(420px, calc(100% - 24px));
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) 24px;
+    align-items: start;
+    column-gap: 8px;
+    row-gap: 10px;
+    padding: 12px;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 6px;
     background: var(--vscode-editorWidget-background);
@@ -5415,6 +5412,7 @@ pre.tool-cmd {
 }
 
 .notif-icon {
+    align-self: center;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5433,42 +5431,41 @@ pre.tool-cmd {
 }
 
 .notif-copy {
-    flex: 1;
+    grid-column: 2;
     min-width: 0;
-    color: var(--vscode-descriptionForeground);
-    font-size: var(--xratu-fs-xs);
+    color: var(--vscode-foreground);
+    font-size: var(--xratu-fs-sm);
     line-height: var(--xratu-line-ui);
-    word-break: break-word;
-}
-
-.notif-warning .notif-copy {
-    color: var(--vscode-editorWarning-foreground);
-}
-
-.notif-error .notif-copy {
-    color: var(--vscode-errorForeground);
+    overflow-wrap: anywhere;
 }
 
 .notif-actions {
+    grid-column: 2 / -1;
+    grid-row: 2;
     display: flex;
     align-items: center;
-    gap: 5px;
-    flex: 0 0 auto;
+    gap: 6px;
+    min-width: 0;
     flex-wrap: wrap;
-    justify-content: flex-end;
 }
 
-/* Banner action buttons: compact, NOT the composer chip's 24px pill -
-   two side-by-side actions must fit beside the copy without squashing it. */
 .notif-action {
-    height: 20px;
-    max-width: none;
-    padding: 0 8px;
-    font-size: var(--xratu-fs-xs);
-    white-space: nowrap;
+    min-height: 28px;
+    height: auto;
+    max-width: 100%;
+    padding: 4px 10px;
+    font-size: var(--xratu-fs-sm);
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    background: var(--vscode-button-secondaryBackground);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 5px;
 }
 
 .notif-close {
+    grid-column: 3;
+    grid-row: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -6099,7 +6096,7 @@ pre.tool-cmd {
     gap: 7px;
     padding: 7px 10px;
     font-weight: 650;
-    color: #04201c;
+    color: var(--xratu-accent-ink, #04201c);
     background: var(--xratu-accent);
     border: 1px solid var(--xratu-accent);
 }
@@ -6959,12 +6956,13 @@ pre.tool-cmd {
     font: inherit;
     font-size: var(--xratu-fs-sm);
     white-space: nowrap;
+    line-height: var(--xratu-line-ui);
 }
 
 .settings-primary-action {
     background: var(--xratu-accent);
     border-color: var(--xratu-accent);
-    color: #04201c;
+    color: var(--xratu-accent-ink, #04201c);
     font-weight: 650;
 }
 
@@ -7957,7 +7955,7 @@ button.settings-nav-row:hover {
    field label rather than a caption - 12.5px still looked like body copy
    (measured in the built bundle, then bumped). */
 .mcp-target-row .mcp-field-label {
-    font-size: var(--xratu-fs-code);
+    font-size: var(--xratu-fs-md);
     font-weight: 600;
     letter-spacing: 0.01em;
     color: var(--vscode-foreground);
@@ -8607,7 +8605,7 @@ button.mcp-row-main:hover strong {
     border: 1px solid var(--xratu-accent);
     border-radius: var(--xratu-radius-sm);
     background: var(--xratu-accent);
-    color: #04201c;
+    color: var(--xratu-accent-ink, #04201c);
     font: inherit;
     font-size: var(--xratu-fs-sm);
     font-weight: 650;

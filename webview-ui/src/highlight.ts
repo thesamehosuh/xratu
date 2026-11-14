@@ -23,18 +23,24 @@ const SHIKI_LIGHT_THEME = 'github-light';
 
 function currentShikiTheme(): string {
     if (typeof document === 'undefined') return SHIKI_DARK_THEME;
+    if (document.querySelector('.app')?.getAttribute('data-color-scheme') === 'dark') return SHIKI_DARK_THEME;
     return document.body?.classList.contains('vscode-light') ? SHIKI_LIGHT_THEME : SHIKI_DARK_THEME;
 }
 
-// One shared observer watches the body theme class and notifies every mounted
-// code block, so switching VS Code themes re-highlights already-rendered pills
+function themeSnapshot(): string {
+    const forced = typeof document !== 'undefined' && document.querySelector('.app')?.getAttribute('data-color-scheme') === 'dark';
+    return `${currentShikiTheme()}:${forced ? 'dark' : 'editor'}`;
+}
+
+// One shared observer watches the editor theme and app override, so switching
+// either re-highlights already-rendered pills
 // instead of leaving stale token colors until the webview is recreated.
 const themeListeners = new Set<() => void>();
 let themeObserver: MutationObserver | null = null;
-let lastTheme = currentShikiTheme();
+let lastTheme = themeSnapshot();
 
 function onBodyClassMutation(): void {
-    const next = currentShikiTheme();
+    const next = themeSnapshot();
     if (next === lastTheme) return;
     lastTheme = next;
     for (const listener of themeListeners) listener();
@@ -43,19 +49,23 @@ function onBodyClassMutation(): void {
 function subscribeTheme(callback: () => void): () => void {
     if (typeof document !== 'undefined') {
         if (!themeObserver) {
+            lastTheme = themeSnapshot();
             themeObserver = new MutationObserver(onBodyClassMutation);
             themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+            const app = document.querySelector('.app');
+            if (app) themeObserver.observe(app, { attributes: true, attributeFilter: ['data-color-scheme'] });
         }
         themeListeners.add(callback);
     }
     return () => {
         themeListeners.delete(callback);
+        if (!themeListeners.size) { themeObserver?.disconnect(); themeObserver = null; }
     };
 }
 
 /** Reactive VS Code code-block theme for the webview. */
 export function useShikiTheme(): string {
-    return useSyncExternalStore(subscribeTheme, currentShikiTheme, currentShikiTheme);
+    return useSyncExternalStore(subscribeTheme, themeSnapshot, themeSnapshot).split(':')[0];
 }
 
 /** Memo of Shiki output per (theme, lang, code). Highlighting is async and
@@ -73,6 +83,30 @@ function cacheKey(theme: string, lang: string, code: string): string {
     return `${theme}\u0000${lang}\u0000${code}`;
 }
 
+export async function highlightedLines(code: string, lang: string, theme: string): Promise<string[]> {
+    if (!code || lang === 'text' || code.length > HIGHLIGHT_MAX_CHARS) return [];
+    const key = cacheKey(theme, lang, code);
+    const hit = HIGHLIGHT_CACHE.get(key);
+    if (hit) return hit;
+    try {
+        const highlighter = await getSingletonHighlighter({
+            themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME], langs: [lang], engine: SHIKI_ENGINE,
+        });
+        const html = highlighter.codeToHtml(code, { lang, theme });
+        const match = html.match(/<code>([\s\S]*?)<\/code>/);
+        if (!match) return [];
+        const lines = match[1].replace(/<span class="line">/g, '').replace(/<\/span>\s*(?=<span class="line">|$)/g, '').split('\n');
+        if (HIGHLIGHT_CACHE.size >= HIGHLIGHT_CACHE_MAX) {
+            const keys = Array.from(HIGHLIGHT_CACHE.keys());
+            for (const old of keys.slice(0, Math.floor(keys.length / 2))) HIGHLIGHT_CACHE.delete(old);
+        }
+        HIGHLIGHT_CACHE.set(key, lines);
+        return lines;
+    } catch {
+        return [];
+    }
+}
+
 export function useHighlightedCode(code: string, lang: string): string[] {
     const theme = useShikiTheme();
     const key = cacheKey(theme, lang, code);
@@ -88,28 +122,8 @@ export function useHighlightedCode(code: string, lang: string): string[] {
             return;
         }
         let cancelled = false;
-        getSingletonHighlighter({
-            themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME],
-            langs: [lang === 'text' ? 'plaintext' : lang],
-            engine: SHIKI_ENGINE,
-        }).then((h) => {
+        highlightedLines(code, lang, theme).then((lines) => {
             if (cancelled) return;
-            const html = h.codeToHtml(code, { lang, theme });
-            const match = html.match(/<code>([\s\S]*?)<\/code>/);
-            if (!match) {
-                setHighlighted({ key, lines: [] });
-                return;
-            }
-            const inner = match[1]
-                .replace(/<span class="line">/g, '')
-                .replace(/<\/span>\s*(?=<span class="line">|$)/g, '');
-            const lines = inner.split('\n');
-            if (HIGHLIGHT_CACHE.size >= HIGHLIGHT_CACHE_MAX) {
-                // Cheap LRU-ish trim: drop the oldest half.
-                const keys = Array.from(HIGHLIGHT_CACHE.keys());
-                for (const k of keys.slice(0, Math.floor(keys.length / 2))) HIGHLIGHT_CACHE.delete(k);
-            }
-            HIGHLIGHT_CACHE.set(key, lines);
             setHighlighted({ key, lines });
         }).catch(() => {
             if (!cancelled) setHighlighted({ key, lines: [] });

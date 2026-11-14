@@ -5,13 +5,14 @@ import type { FromExtensionMessage } from '../types';
 import { getLocale, t, tOrRaw } from '../i18n';
 import { postMessage } from '../vscode';
 
-interface Props { visible: boolean; panelClass: string; sessionKey: string | null }
+interface Props { onAvailable?: (available: boolean) => void; visible: boolean; panelClass: string; sessionKey: string | null }
 
-export function BrowserPanel({ visible, panelClass, sessionKey }: Props) {
+export function BrowserPanel({ onAvailable, visible, panelClass, sessionKey }: Props) {
     const [state, setState] = useState<BrowserState | null>(null);
     const [frame, setFrame] = useState<BrowserFrame | null>(null);
     const [url, setUrl] = useState('');
     const [error, setError] = useState<{ key: string; detail: string } | null>(null);
+    useEffect(() => { onAvailable?.(!!state && state.status !== 'closed' && state.url !== 'about:blank'); }, [onAvailable, state]);
     const stateRef = useRef(state);
     const image = useRef<HTMLImageElement>(null);
     const content = useRef<HTMLDivElement>(null);
