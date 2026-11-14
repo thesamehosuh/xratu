@@ -454,16 +454,17 @@ export function CredentialsPage({
                                             <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
                                                 aria-label={t('credOAuthSignOut')} title={t('credOAuthSignOut')}
                                                 onClick={() => onOAuthSignOut(account.credentialId)}><LogOut size={14} /></button>
-                                        </div>
-                                        {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
-                                        {!account.active && <div className="cred-oauth-account-actions">
-                                            <button type="button" className="ghost-btn cred-oauth-action"
+                                        {!account.active && <>
+                                            <button type="button" className="settings-ghost-action cred-oauth-action cred-oauth-use"
                                                 disabled={!!inProgress || selectingId === account.credentialId}
                                                 onClick={() => { setSelectingId(account.credentialId); onSelectCredential(account.credentialId); }}>
                                                 {selectingId === account.credentialId && <RefreshCw size={12} className="spinning" />}
                                                 <span>{t('credOAuthUseAccount')}</span>
                                             </button>
-                                        </div>}
+                                        </>}
+                                        </div>
+                                        {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
+
                                     </div>
                                 ))}
                             </div>}

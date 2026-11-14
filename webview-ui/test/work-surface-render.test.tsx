@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { ACCENTS, readAppearance, DEFAULT_APPEARANCE, appearanceStyle } from '../src/appearance';
+import { ACCENTS, accentPalette, readAppearance, DEFAULT_APPEARANCE, appearanceStyle } from '../src/appearance';
 import { renderToString } from 'react-dom/server';
 import { strict as assert } from 'node:assert';
 import { MessageItem, ActivityTimeline } from '../src/components/MessageItem';
@@ -147,4 +147,15 @@ const luminance = (hex: string) => {
 for (const accent of Object.values(ACCENTS)) for (const [bg, fg] of [[accent.dark, accent.ink], [accent.light, '#ffffff']]) {
     const a = luminance(bg), b = luminance(fg);
     assert.ok((Math.max(a,b) + .05) / (Math.min(a,b) + .05) >= 4.5, `${accent.label} keeps filled action labels readable`);
+}
+
+assert.deepEqual(readAppearance({ saturation:Infinity, customAccent:'red; display:none', darkContrast:NaN }).customAccent, DEFAULT_APPEARANCE.customAccent);
+assert.equal(readAppearance({ saturation:300 }).saturation, 150);
+assert.equal(readAppearance({ darkContrast:-1 }).darkContrast, 0);
+for (const customAccent of ['#000000','#ffffff','#ff0000','#00ff00','#0000ff','#777777']) for (const saturation of [0,100,150]) {
+    const palette = accentPalette(readAppearance({accent:'custom',customAccent,saturation}));
+    const ratio = (a: string,b: string) => (Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+    assert.ok(ratio(palette.dark,palette.ink)>=4.5, 'custom filled actions remain readable');
+    assert.ok(ratio(palette.strong,palette.ink)>=4.5, 'custom hover actions remain readable');
+    assert.ok(ratio(palette.light,'#ffffff')>=4.5, 'light accent labels remain readable');
 }

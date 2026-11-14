@@ -6004,12 +6004,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Push the Proxy page's view: stored settings plus the LIVE resolution
      *  (which layer won - the answer is often "your OS system proxy", which
      *  is invisible in the settings UI otherwise). */
-    async _sendProxyState(): Promise<void> {
+    async _sendProxyState(requestId?: string): Promise<void> {
         if (!this._view) return;
         const cfg = vscode.workspace.getConfiguration('xratu');
         const resolved = getProxyResolution();
         this._view.webview.postMessage({
             type: 'proxyState',
+            requestId,
             mode: resolved.mode,
             proxyUrl: cfg.get<string>('proxyUrl') ?? '',
             noProxy: cfg.get<string>('noProxy') ?? '',
@@ -6021,16 +6022,40 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         });
     }
 
+    private _proxySaveQueue: Promise<void> = Promise.resolve();
+
+    private _enqueueProxySave(save: () => Promise<void>): Promise<void> {
+        const pending = this._proxySaveQueue.then(save);
+        this._proxySaveQueue = pending.catch(() => {});
+        return pending;
+    }
+
+    async _saveProxyMode(mode: 'auto' | 'off', requestId: string): Promise<void> {
+        return this._enqueueProxySave(async () => {
+            try {
+                await vscode.workspace.getConfiguration('xratu').update('proxyMode', mode, vscode.ConfigurationTarget.Global);
+            } finally {
+                await this._sendProxyState(requestId);
+            }
+        });
+    }
+
     /** Persist proxy settings (Proxy page). Writes the `xratu.*` settings -
      *  the dispatcher picks them up on the next request (its cache keys off
      *  the resolved URL). */
-    async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean): Promise<void> {
-        const cfg = vscode.workspace.getConfiguration('xratu');
-        await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
-        await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
-        await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
-        if (typeof webSearchUseProxy === 'boolean') await cfg.update('webSearchUseProxy', webSearchUseProxy, vscode.ConfigurationTarget.Global);
-        await this._sendProxyState();
+    async _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean, requestId?: string): Promise<void> {
+        return this._enqueueProxySave(async () => {
+            const cfg = vscode.workspace.getConfiguration('xratu');
+            try {
+                await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
+                await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
+                await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
+                if (typeof webSearchUseProxy === 'boolean') await cfg.update('webSearchUseProxy', webSearchUseProxy, vscode.ConfigurationTarget.Global);
+            } finally {
+                // Reconcile the UI even if a settings write fails part-way through.
+                await this._sendProxyState(requestId);
+            }
+        });
     }
 
     /** Scan loopback for running proxy clients (Clash family, v2rayN, …). */

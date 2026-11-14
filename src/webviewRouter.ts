@@ -125,7 +125,8 @@ export interface WebviewMessageHost {
         cachedInput?: number | null,
         currency?: 'USD' | 'IRT',
     ): Promise<void>;
-    _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean): Promise<void>;
+    _saveProxySettings(mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy?: boolean, requestId?: string): Promise<void>;
+    _saveProxyMode(mode: 'auto' | 'off', requestId: string): Promise<void>;
     _saveTaskListEdits(): Promise<void>;
     _searchSessions(query: string, all: boolean, requestId?: number): Promise<void>;
     _secrets: vscode.SecretStorage;
@@ -611,12 +612,18 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'proxyGetState':
                     await host._sendProxyState();
                     break;
+                case 'proxySaveMode':
+                    if ((data.mode === 'auto' || data.mode === 'off') && typeof data.requestId === 'string') {
+                        await host._saveProxyMode(data.mode, data.requestId);
+                    }
+                    break;
                 case 'proxySave':
                     await host._saveProxySettings(
                         data.mode === 'off' || data.mode === 'custom' ? data.mode : 'auto',
                         String(data.proxyUrl ?? ''),
                         String(data.noProxy ?? ''),
                         typeof data.webSearchUseProxy === 'boolean' ? data.webSearchUseProxy : undefined,
+                        typeof data.requestId === 'string' ? data.requestId : undefined,
                     );
                     break;
                 case 'proxyDetect':

@@ -82,7 +82,7 @@ export function taskListReminderLine(items: TaskListItem[]): string {
         lines.push(`- [${t.status === 'completed' ? 'x' : ' '}] ${t.label}`);
     }
     lines.push(
-        'Keep this list current with the update_task_list tool: exactly one item in_progress while executing, ' +
+        'Use update_task_list only when progress or scope materially changes; do not resend unchanged lists or update after every tool call. Keep exactly one item in_progress while executing, ' +
         'mark items completed as you finish them, keep every label a short single sentence, ' +
         'write every label in the language you are replying to the user in (the checklist is user-facing UI, ' +
         'so match the user\'s language instead of defaulting to English), ' +

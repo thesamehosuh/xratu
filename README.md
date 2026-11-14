@@ -19,7 +19,7 @@ An open-source AI coding agent for VS Code. Use free OpenCode models, bring
 your own API key, or run a model locally. Available in English and Persian.
 
 <p align="center">
-  <img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu: setup, coding, approvals, and reviewing changes" />
+  <a href="assets/brand/xratu-showcase.mp4"><img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu: build a website, add workspace tabs, and verify the result in the browser" /></a>
 </p>
 
 ## Get started

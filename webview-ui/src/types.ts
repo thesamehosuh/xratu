@@ -213,7 +213,8 @@ export type ToExtensionMessage =
     /** Proxy page: request settings + the live resolution report. */
     | { type: 'proxyGetState' }
     /** Proxy page: persist mode + proxy URL + no_proxy list. */
-    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string; webSearchUseProxy?: boolean }
+    | { type: 'proxySave'; mode: 'auto' | 'custom' | 'off'; proxyUrl: string; noProxy: string; webSearchUseProxy?: boolean; requestId: string }
+    | { type: 'proxySaveMode'; mode: 'auto' | 'off'; requestId: string }
     /** Proxy page: scan loopback for running proxy clients (Clash, v2rayN…). */
     | { type: 'proxyDetect' }
     /** Proxy page: live connectivity check through the current resolution. */
@@ -630,6 +631,7 @@ export interface ProxyCandidateView {
 /** Response to proxyGetState - settings plus WHY the traffic routes as it
  *  does (which resolution layer won). */
 export interface ProxyStateView {
+    requestId?: string;
     webSearchUseProxy?: boolean;
     mode: 'auto' | 'custom' | 'off';
     proxyUrl: string;

@@ -19,7 +19,7 @@
 کلید API خودت یا یه مدل محلی کار کن. رابط برنامه فارسی و انگلیسی داره.
 
 <p align="center">
-  <img src="assets/brand/xratu-demo-fa.gif" width="1080" alt="خراتو: راه اندازی، کدنویسی، تایید کارها و بررسی تغییرات" />
+  <a href="assets/brand/xratu-showcase-fa.mp4"><img src="assets/brand/xratu-demo-fa.gif" width="1080" alt="خراتو: ساخت سایت، افزودن تب ها و بررسی نتیجه توی مرورگر" /></a>
 </p>
 
 ## شروع به کار

@@ -977,7 +977,7 @@ export function CapabilitiesPage({
                                 correctly - bidi keeps an RTL run intact - but it
                                 must not re-align to the right edge while the name
                                 above and the command below sit left. */}
-                            {summary && <span className="mcp-row-meta">{summary}</span>}
+                            {summary && <span className="mcp-row-meta" title={summary}>{summary}</span>}
                             <span className="mp-meta" dir="ltr">
                                 {entry.author && <span className="mp-meta-item">{entry.author}</span>}
                                 {entry.version && <span className="mp-meta-item">{`v${entry.version}`}</span>}

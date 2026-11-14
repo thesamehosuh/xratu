@@ -387,6 +387,7 @@ export function InputBar({
     const [value, setValue] = useState(initialDraft.text);
     const [recoveryDrafts, setRecoveryDrafts] = useState<ComposerRecovery[]>(() => readComposerRecoveries(draftKey));
     const [pickerOpen, setPickerOpen] = useState(false);
+    const [engineOpen, setEngineOpen] = useState(false);
     const [filter, setFilter] = useState('');
     const [freeOnly, setFreeOnly] = useState(true);
     const autoPinged = useRef(new Set<string>());
@@ -401,6 +402,7 @@ export function InputBar({
     }, [pickerOpen, models, modelCapabilities, modelPings, onPingModel]);
     const [ctxOpen, setCtxOpen] = useState(false);
     const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+    const [attachMenuCollapsed, setAttachMenuCollapsed] = useState(false);
     const [attachments, setAttachments] = useState<ComposerAttachment[]>(initialDraft.attachments);
     const editRecoveryId = useRef(`edit-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     useEffect(() => {
@@ -679,11 +681,16 @@ export function InputBar({
     const resizeTextarea = useCallback(() => {
         const el = ref.current;
         if (!el || !el.clientWidth) return;
+        const transition = el.style.transition;
+        el.style.transition = 'none';
         el.classList.add('is-sizing');
         el.style.height = 'auto';
         const maximum = parseFloat(getComputedStyle(el).maxHeight) || 140;
         el.style.height = `${Math.min(el.scrollHeight, maximum)}px`;
         el.classList.remove('is-sizing');
+        // Restore the resting geometry before enabling focus transitions again.
+        el.getBoundingClientRect();
+        el.style.transition = transition;
     }, []);
     useLayoutEffect(resizeTextarea, [value, typographyKey, resizeTextarea]);
     useEffect(() => {
@@ -691,19 +698,16 @@ export function InputBar({
         if (!el) return;
         const container = el.closest('.compose-dock') ?? el.parentElement ?? el;
         let width = container.getBoundingClientRect().width;
-        let resizeFrame = 0;
         const observer = new ResizeObserver(() => {
             const next = container.getBoundingClientRect().width;
             if (Math.abs(next - width) < .5) return;
             width = next;
-            cancelAnimationFrame(resizeFrame);
-            resizeFrame = requestAnimationFrame(resizeTextarea);
+            resizeTextarea();
         });
         observer.observe(container);
         document.fonts?.addEventListener('loadingdone', resizeTextarea);
         return () => {
             observer.disconnect();
-            cancelAnimationFrame(resizeFrame);
             document.fonts?.removeEventListener('loadingdone', resizeTextarea);
         };
     }, [resizeTextarea]);
@@ -1057,7 +1061,7 @@ export function InputBar({
     };
 
     return (
-        <div className={`input-bar${pickerOpen || policyOpen || attachMenuOpen || ctxOpen || branchPicker ? ' menu-open' : ''}`}>
+        <div className={`input-bar${engineOpen || pickerOpen || policyOpen || ctxOpen || branchPicker ? ' menu-open' : ''}${attachMenuCollapsed ? ' attachment-menu-collapsed' : ''}`}>
             <div className="composer-prelude">
                 <div className="composer-status">{statusSlot}</div>
                 {(onTogglePlan || onToggleYolo) && <div className="composer-policies" ref={policyRef} onKeyDown={(event) => {
@@ -1172,6 +1176,7 @@ export function InputBar({
                     placeholder={busy ? t('inputPlaceholderBusy') : t('inputPlaceholder')}
                     value={value}
                     autoFocus
+                    onFocus={() => setAttachMenuCollapsed(false)}
                     onChange={onValueChange}
                     onKeyDown={onKeyDown}
                     onPaste={onPaste}
@@ -1183,7 +1188,8 @@ export function InputBar({
                         type="button"
                         className="attach-btn"
                         ref={attachBtnRef}
-                        onClick={() => setAttachMenuOpen((s) => !s)}
+                        onPointerDown={event => { if (event.button === 0) event.preventDefault(); }}
+                        onClick={() => { setAttachMenuCollapsed((composerRef.current?.querySelector('.composer-actions')?.getBoundingClientRect().height ?? 36) < 2); setAttachMenuOpen((s) => !s); }}
                         aria-haspopup="menu"
                         aria-expanded={attachMenuOpen}
                         aria-label={t('attachMenuAria')}
@@ -1240,6 +1246,7 @@ export function InputBar({
                         className="sr-only"
                         onChange={(e) => {
                             if (e.target.files && e.target.files.length > 0) {
+                                setAttachMenuCollapsed(false);
                                 void addFiles(e.target.files);
                             }
                             e.target.value = '';
@@ -1249,7 +1256,7 @@ export function InputBar({
                 </div>
 
                 <div className="composer-chips">
-                    {onSelectEngine && <div className="composer-engine-picker" title={t('engineSwitchHint')}><Dropdown label={t('enginesTitle')} value={activeEngine ?? 'xratu'} disabled={engineSwitchDisabled} options={[{ value: 'xratu', label: t('engineXratu') }, { value: 'opencode', label: t('engineOpenCode') }]} onChange={value => { if (value !== activeEngine) onSelectEngine(value as 'xratu' | 'opencode'); }} /></div>}
+                    {onSelectEngine && <div className="composer-engine-picker" dir="ltr" title={t('engineSwitchHint')}><Dropdown side="top" showCaret={false} leadingIcon={<Cpu size={14} aria-hidden="true" />} onOpenChange={setEngineOpen} label={t('enginesTitle')} value={activeEngine ?? 'xratu'} disabled={engineSwitchDisabled} options={[{ value: 'xratu', label: t('engineXratu') }, { value: 'opencode', label: t('engineOpenCode') }]} onChange={value => { if (value !== activeEngine) onSelectEngine(value as 'xratu' | 'opencode'); }} /></div>}
                     <button
                         type="button"
                         className="chip-btn picker-chip"
@@ -1260,7 +1267,7 @@ export function InputBar({
                         aria-label={t('pickModel')}
                         title={t('pickModel')}
                     >
-                        <Cpu size={12} />
+                        {!onSelectEngine && <Cpu size={12} />}
                         {engineLabel && !onSelectEngine && <span className="composer-engine" dir="ltr">{engineLabel}</span>}
                         <span dir="ltr" className="chip-model-name">
                             {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}

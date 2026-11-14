@@ -113,6 +113,26 @@ async function openMarketplace(page: Page, locale: 'fa' | 'en' = 'fa'): Promise<
     await expect(page.locator('.mp-row').first()).toBeVisible();
 }
 
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1440]) {
+    test(`marketplace card content remains contained (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 950 });
+        await openMarketplace(page, locale);
+        await hostMessage(page, { ...MARKET_STATE, entries: [{ ...ENTRIES[1], name: 'LongUnbrokenServerName'.repeat(8), tagline: 'LongUnbrokenDescription'.repeat(12), author: 'LongUnbrokenAuthor'.repeat(8) }] });
+        const row = page.locator('.mp-row').first();
+        await expect(row.locator('.mcp-row-meta')).toContainText('LongUnbrokenDescription');
+        const overflow = await row.evaluate(card => {
+            const bounds = card.getBoundingClientRect();
+            return [...card.querySelectorAll('.mcp-row-title strong, .mcp-row-meta, .mp-meta')].map(element => {
+                const rect = element.getBoundingClientRect();
+                return Math.max(bounds.left - rect.left, rect.right - bounds.right);
+            });
+        });
+        expect(Math.max(...overflow)).toBeLessThanOrEqual(1);
+        await row.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('marketplace.png'), animations: 'disabled' });
+    });
+}
+
 test('marketplace tab renders catalog rows with their exact command', async ({ page }) => {
     await openMarketplace(page);
     await expect(page.locator('.mp-row')).toHaveCount(3);

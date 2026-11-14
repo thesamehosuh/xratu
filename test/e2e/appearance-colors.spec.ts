@@ -93,7 +93,7 @@ for (const editor of ['dark', 'light'] as const) for (const locale of ['en', 'fa
         await expect(page.locator('.appearance-page')).toHaveCSS('background-color', 'rgb(24, 24, 24)');
         await expect(page.locator('.appearance-theme')).toHaveCount(0);
         const swatches = page.locator('#appearance-accent').getByRole('radio');
-        await expect(swatches).toHaveCount(8);
+        await expect(swatches).toHaveCount(9);
         await expect(page.locator('#appearance-accent [tabindex="0"]')).toHaveCount(1);
         await swatches.nth(1).focus();
         await page.keyboard.press('End');

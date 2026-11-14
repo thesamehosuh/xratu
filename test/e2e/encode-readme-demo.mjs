@@ -11,7 +11,7 @@ if (!input || !output || !Number.isFinite(Number(start)) || Number(start) < 0
 const trim = ['-ss', start, '-i', resolve(input), ...(duration ? ['-t', duration] : [])];
 const result = spawn.sync('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-y', ...trim,
-    '-filter_complex', 'fps=16,scale=1080:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle',
+    '-filter_complex', 'fps=16,scale=1080:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=192:stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle',
     '-loop', '0', resolve(output),
 ], { stdio: 'inherit' });
 if (result.error) { console.error(result.error.message); process.exit(1); }

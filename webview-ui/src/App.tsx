@@ -872,6 +872,7 @@ export function App() {
                     break;
                 case 'proxyState':
                     setProxyState({
+                        requestId: msg.requestId,
                         mode: msg.mode,
                         proxyUrl: msg.proxyUrl,
                         noProxy: msg.noProxy,
@@ -1483,9 +1484,13 @@ export function App() {
                         // visit happened first.
                         send({ type: 'mcpGetState' });
                     }}
-                    onSave={(mode, proxyUrl, noProxy, webSearchUseProxy) => {
+                    onSave={(mode, proxyUrl, noProxy, webSearchUseProxy, requestId) => {
                         setProxyTestResult(null);
-                        send({ type: 'proxySave', mode, proxyUrl, noProxy, webSearchUseProxy });
+                        send({ type: 'proxySave', mode, proxyUrl, noProxy, webSearchUseProxy, requestId });
+                    }}
+                    onSaveMode={(mode, requestId) => {
+                        setProxyTestResult(null);
+                        send({ type: 'proxySaveMode', mode, requestId });
                     }}
                     onDetect={() => {
                         setProxyDetecting(true);
@@ -1626,7 +1631,7 @@ export function App() {
     if (screen === 'boot') {
         // Empty shell until the host resolves the start screen - keeps the
         // locale/direction root mounted without flashing the welcome page.
-        return <div className="app workbench" style={appearanceStyle(appearance, true)} data-color-scheme={appearance.scheme} data-accent={appearance.accent} dir={locale === 'fa' ? 'rtl' : 'ltr'} />;
+        return <div className="app workbench" style={appearanceStyle(appearance, true)} data-color-scheme={appearance.scheme} data-accent={appearance.accent} data-accent-saturation={appearance.saturation} data-contrast-dark={appearance.darkContrast} data-contrast-light={appearance.lightContrast} dir={locale === 'fa' ? 'rtl' : 'ltr'} />;
     }
 
 
@@ -1639,7 +1644,7 @@ export function App() {
             scroll position and mounted page survive the trip - and it drops the
             hidden tree from the tab order and the a11y tree, which unmounting
             used to handle for free. */}
-        <div className={`app workbench${screen === 'welcome' ? ' setting-up' : ''}${sessionsOpen ? ' navigation-open' : ''}`} style={appearanceStyle(appearance, screen === 'welcome')} data-color-scheme={appearance.scheme} data-accent={appearance.accent} data-density={appearance.density} data-motion={appearance.motion} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+        <div className={`app workbench${screen === 'welcome' ? ' setting-up' : ''}${sessionsOpen ? ' navigation-open' : ''}`} style={appearanceStyle(appearance, screen === 'welcome')} data-color-scheme={appearance.scheme} data-accent={appearance.accent} data-accent-saturation={appearance.saturation} data-contrast-dark={appearance.darkContrast} data-contrast-light={appearance.lightContrast} data-density={appearance.density} data-motion={appearance.motion} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
             {offlineBanner}
             <Toolbar
                 tabsVisible={dock.tabsVisible}

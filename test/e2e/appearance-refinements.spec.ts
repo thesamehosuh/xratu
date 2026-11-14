@@ -89,7 +89,7 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
 
         await post(page, { type: 'openSettings' });
         await navigate('appearance');
-        await expect(page.locator('.appearance-control')).toHaveCount(9);
+        await expect(page.locator('.appearance-control')).toHaveCount(12);
         await shot('appearance');
         await choose(page, 'appearance-text-size', 2);
         await choose(page, 'appearance-code-size', 3);

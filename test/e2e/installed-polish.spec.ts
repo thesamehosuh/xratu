@@ -219,7 +219,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`sessio
     await expect(page.locator('.msg.user')).toHaveCount(1);
 });
 
-for (const locale of ['en', 'fa']) test(`navigation width supports dragging, restore and narrow windows (${locale})`, async ({ page }) => {
+for (const locale of ['en', 'fa']) test(`navigation width supports dragging, restore and narrow windows (${locale})`, async ({ page }, info) => {
     await installVscodeTheme(page);
     await page.setViewportSize({ width: 1080, height: 900 });
     await page.addInitScript(() => {
@@ -234,8 +234,12 @@ for (const locale of ['en', 'fa']) test(`navigation width supports dragging, res
     const separator = page.locator('.navigation-resize');
     const start = (await separator.boundingBox())!;
     await page.mouse.move(start.x + start.width / 2, start.y + 100);
+    const resizeColor = () => separator.evaluate(el => getComputedStyle(el, '::before').backgroundColor);
+    await expect.poll(resizeColor).toBe('rgb(130, 219, 197)');
     await page.mouse.down();
     await page.mouse.move(start.x + start.width / 2 + (locale === 'fa' ? -90 : 90), start.y + 100, { steps: 5 });
+    await expect.poll(resizeColor).toBe('rgb(130, 219, 197)');
+    await page.screenshot({ animations: 'disabled', path: info.outputPath('navigation-resize.png') });
     await page.mouse.up();
     await expect(page.locator('.workspace-sidebar')).toHaveCSS('width', '308px');
     const saved = await page.evaluate(() => (window as unknown as { navigationState: Record<string, unknown> }).navigationState);

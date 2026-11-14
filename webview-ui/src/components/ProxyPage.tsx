@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
@@ -31,7 +31,8 @@ interface ProxyPageProps {
     /** MCP servers for per-server routing overrides. */
     servers: McpServerView[];
     onGetState: () => void;
-    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy: boolean) => void;
+    onSave: (mode: 'auto' | 'custom' | 'off', proxyUrl: string, noProxy: string, webSearchUseProxy: boolean, requestId: string) => void;
+    onSaveMode: (mode: 'auto' | 'off', requestId: string) => void;
     onDetect: () => void;
     onTest: () => void;
     onSetServerProxy: (name: string, mode: ProxyRouteMode) => void;
@@ -91,6 +92,7 @@ export function ProxyPage({
     servers,
     onGetState,
     onSave,
+    onSaveMode,
     onDetect,
     onTest,
     onSetServerProxy,
@@ -100,14 +102,26 @@ export function ProxyPage({
     const [serverDraft, setServerDraft] = useState<ServerDraft>({ scheme: 'http', host: '', port: '' });
     const [noProxy, setNoProxy] = useState('');
     const [webSearchUseProxy, setWebSearchUseProxy] = useState(true);
+    const [modeSaving, setModeSaving] = useState(false);
 
-    // Host echo is the source of truth - re-sync drafts when it lands.
+    const previousState = useRef<ProxyStateView | null>(null);
+    const pendingMode = useRef<string | null>(null);
+
+    // Mode-only acknowledgements must not discard unsaved endpoint edits.
     useEffect(() => {
         if (!state) return;
-        setMode(state.mode);
-        setServerDraft(splitProxyUrl(state.proxyUrl));
-        setNoProxy(state.noProxy);
-        setWebSearchUseProxy(state.webSearchUseProxy !== false);
+        const previous = previousState.current;
+        if (pendingMode.current && state.requestId === pendingMode.current) {
+            setMode(state.mode);
+            pendingMode.current = null;
+            setModeSaving(false);
+        } else if (!pendingMode.current) {
+            setMode(d => !previous || d === previous.mode ? state.mode : d);
+        }
+        if (!previous || previous.proxyUrl !== state.proxyUrl) setServerDraft(d => !previous || joinProxyUrl(d) === joinProxyUrl(splitProxyUrl(previous.proxyUrl)) ? splitProxyUrl(state.proxyUrl) : d);
+        if (!previous || previous.noProxy !== state.noProxy) setNoProxy(d => !previous || d === previous.noProxy ? state.noProxy : d);
+        if (!previous || previous.webSearchUseProxy !== state.webSearchUseProxy) setWebSearchUseProxy(d => !previous || d === (previous.webSearchUseProxy !== false) ? state.webSearchUseProxy !== false : d);
+        previousState.current = state;
     }, [state]);
 
     useEffect(() => {
@@ -117,6 +131,13 @@ export function ProxyPage({
         onDetect();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    const saveSettings = (nextMode: 'auto' | 'custom' | 'off', url: string) => {
+        const requestId = `${Date.now()}-${Math.random()}`;
+        pendingMode.current = requestId;
+        setModeSaving(true);
+        onSave(nextMode, url, noProxy, webSearchUseProxy, requestId);
+    };
 
     const composedUrl = useMemo(() => joinProxyUrl(serverDraft), [serverDraft]);
     const dirty = !!state && (
@@ -169,8 +190,17 @@ export function ProxyPage({
                                     type="button"
                                     className={mode === m ? 'lang-chip active' : 'lang-chip'}
                                     aria-pressed={mode === m}
+                                    disabled={modeSaving || !state}
                                     title={t(MODE_TIPS[m])}
-                                    onClick={() => setMode(m)}
+                                    onClick={() => {
+                                        setMode(m);
+                                        if (state && m !== 'custom' && m !== state.mode) {
+                                            const requestId = `${Date.now()}-${Math.random()}`;
+                                            pendingMode.current = requestId;
+                                            setModeSaving(true);
+                                            onSaveMode(m, requestId);
+                                        }
+                                    }}
                                 >
                                     {m === 'auto' ? t('proxyModeAuto') : m === 'custom' ? t('proxyModeCustom') : t('proxyModeOff')}
                                 </button>
@@ -300,11 +330,12 @@ export function ProxyPage({
                                 <button
                                     type="button"
                                     className="apply-btn"
+                                    disabled={modeSaving}
                                     onClick={() => {
                                         const draft = splitProxyUrl(c.url!);
                                         setServerDraft(draft);
                                         setMode('custom');
-                                        onSave('custom', c.url!, noProxy, webSearchUseProxy);
+                                        saveSettings('custom', c.url!);
                                     }}
                                 >
                                     {t('proxyUse')}
@@ -403,10 +434,10 @@ export function ProxyPage({
                         <button
                             type="button"
                             className="apply-btn"
-                            disabled={!dirty || socksWarn}
+                            disabled={modeSaving || !dirty || socksWarn}
                             onClick={() => {
                                 setJustSaved(true);
-                                onSave(mode, composedUrl, noProxy, webSearchUseProxy);
+                                saveSettings(mode, composedUrl);
                             }}
                         >
                             {justSaved && !dirty ? <Check size={13} /> : null}

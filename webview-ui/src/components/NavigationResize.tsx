@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { getLocale, t } from '../i18n';
 import { getWebviewState, patchWebviewState } from '../vscode';
 
@@ -10,7 +10,7 @@ export function NavigationResize() {
         const saved = getWebviewState().navigationWidth;
         return typeof saved === 'number' && Number.isFinite(saved) ? Math.max(MIN, Math.min(MAX, saved)) : DEFAULT;
     });
-    useEffect(() => {
+    useLayoutEffect(() => {
         const app = handle.current?.closest<HTMLElement>('.app');
         app?.style.setProperty('--navigation-width', `${width}px`);
         patchWebviewState({ navigationWidth: width });
