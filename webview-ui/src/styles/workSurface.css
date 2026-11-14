@@ -137,7 +137,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) { --surface-accent:#007f70; -
 .surface-tab:focus:not(:focus-visible) { outline:none; }
 .tab-count { font-size:var(--xratu-fs-xs); border-radius:4px; padding:0 4px; color:var(--surface-accent); background:var(--xratu-accent-faint); }
 .work-surface { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:41px minmax(0,1fr) auto; min-height:0; flex:1; }
-.conversation-panel { display:flex; flex-direction:column; min-width:0; min-height:0; container-type:inline-size; }
+.conversation-panel { display:flex; flex-direction:column; min-width:0; min-height:0; container-type:inline-size; background:var(--page-canvas); }
 .conversation-panel.panel-main { grid-row:2 / span 2; }
 .conversation-panel.panel-hidden { display:none; }
 .conversation-panel .chat-stage { flex:1; }
