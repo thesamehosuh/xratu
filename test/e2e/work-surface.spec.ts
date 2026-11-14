@@ -1,4 +1,5 @@
 import { openPageNavigation } from './navigation';
+import { setLocale as setTestLocale, t } from '../../webview-ui/src/i18n';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme, VSCODE_LIGHT_THEME_CSS } from './vscodeTheme';
 
@@ -21,6 +22,7 @@ test('action notifications bypass persistent banners in FIFO order without losin
         { type: 'notificationAction', id: 'first', action: 'accept first' },
     ]);
     await expect(page.locator('.notif-copy')).toHaveText('second confirm');
+    await expect(page.getByRole('button', { name: 'accept second', exact: true })).toBeVisible();
     await expect(page.locator('.notif-action')).not.toBeFocused();
     await page.locator('.notif-close').focus();
     await page.keyboard.press('Enter');
@@ -1124,6 +1126,8 @@ for (const locale of ['en', 'fa']) {
             }
             await post(page, { type: 'notification', id: 'restore-error', kind: 'error', valueKey: 'checkpointActionStale' });
             await expect(page.locator('.notif-error[role="alert"] .notif-copy')).toBeVisible();
+            setTestLocale(locale === 'en' ? 'en' : 'fa');
+            await expect(page.locator('.notif-error .notif-copy')).toHaveText(t('checkpointActionStale'));
             await page.screenshot({ path: testInfo.outputPath('error.png') });
             await page.locator('.notif-close').click();
             await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-error')?.action).toBe(null);

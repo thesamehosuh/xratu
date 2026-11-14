@@ -5412,6 +5412,7 @@ pre.tool-cmd {
 }
 
 .notif-icon {
+    align-self: center;
     display: inline-flex;
     align-items: center;
     justify-content: center;
