@@ -70,6 +70,8 @@ export default defineConfig({
     // blanket `retries` would also re-run real assertion failures and hide them.
     workers: process.platform === 'win32' ? 1 : 2,
     use: {
+        // Preserve the action timeline for CI failures, including test timeouts.
+        trace: process.env.CI ? 'retain-on-failure' : 'off',
         baseURL: `http://127.0.0.1:${PORT}`,
         viewport: { width: 900, height: 900 },
         ...(() => {

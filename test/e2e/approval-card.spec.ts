@@ -12,7 +12,7 @@
  * an empty approvable set must disable BOTH approve affordances, and a
  * decision must be reachable by keyboard alone.
  */
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
 async function host(page: Page, message: Record<string, unknown>): Promise<void> {
@@ -277,18 +277,44 @@ test('an expanded file row renders the diff with both add and remove styling', a
     await expect(page.locator('.approval-diff-wrap')).toHaveAttribute('dir', 'ltr');
 });
 
+async function basenameBox(base: Locator) {
+    return base.evaluate((el) => {
+        // Compare layout widths: boundingClientRect is affected by the
+        // containing message's entrance scale, but scrollWidth is not.
+        return { width: el.clientWidth, scroll: el.scrollWidth, clipped: el.scrollWidth > el.clientWidth + 1 };
+    });
+}
+
 test('a long path truncates the DIRECTORY, never the basename', async ({ page }) => {
     const long = 'webview-ui/src/components/settings/credentials/ProvidersSection.tsx';
     await open(page, { approvals: [fileItem('call-9', long, 4, 1)] });
     const base = page.locator('.approval-path .base');
     await expect(base).toHaveText('ProvidersSection.tsx');
     // The basename is never the shrinkable half: it must render at full width.
-    const box = await base.evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        return { width: r.width, scroll: el.scrollWidth, clipped: el.scrollWidth > Math.ceil(r.width) + 1 };
-    });
+    const box = await basenameBox(base);
     expect(box.clipped).toBe(false);
     expect(box.width).toBeGreaterThan(40);
+});
+
+test('basename clipping measurement remains accurate during message scaling', async ({ page }) => {
+    const long = 'webview-ui/src/components/settings/credentials/ProvidersSection.tsx';
+    await open(page, { approvals: [fileItem('call-scale', long, 4, 1)] });
+    const base = page.locator('.approval-path .base');
+    await expect(base).toHaveText('ProvidersSection.tsx');
+    // Freeze the message mid-entrance: xratu-rise scales the entire message.
+    await page.locator('.msg').evaluate((el: HTMLElement) => {
+        el.style.animation = 'none';
+        el.style.transform = 'scale(0.985)';
+    });
+    const box = await basenameBox(base);
+    expect(box.clipped).toBe(false);
+    expect(box.width).toBeGreaterThan(40);
+    // A genuinely constrained basename must still be detected as clipped.
+    await base.evaluate((el: HTMLElement) => {
+        el.style.flex = '0 0 50px';
+        el.style.overflow = 'hidden';
+    });
+    expect((await basenameBox(base)).clipped).toBe(true);
 });
 
 test('a batch with nothing approvable disables both approve affordances', async ({ page }) => {
