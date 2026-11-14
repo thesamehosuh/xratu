@@ -923,25 +923,39 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 .compose-dock:has(.attachment-menu-collapsed) > .git-status { visibility:hidden; height:0; min-height:0; padding-block:0; overflow:hidden; }
 
 /* Preserve editor tokens before deriving local contrast overrides. */
-body { --xratu-editor-ink:var(--vscode-foreground,#cccccc); --xratu-editor-muted:var(--vscode-descriptionForeground,#9d9d9d); --xratu-editor-sidebar:var(--vscode-sideBar-background,#181818); --xratu-editor-content:var(--vscode-editor-background,#1f1f1f); }
-.workbench { --contrast-base-ink:var(--xratu-editor-ink); --contrast-base-muted:var(--xratu-editor-muted); --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-base-canvas:var(--xratu-editor-sidebar); --contrast-base-inset:var(--xratu-editor-sidebar); --contrast-base-editor:var(--xratu-editor-content); --contrast-amount:var(--appearance-dark-contrast,0%); }
-body:is(.vscode-light,.vscode-high-contrast-light) .workbench { --contrast-target:#000000; --contrast-bg-target:#ffffff; --contrast-base-canvas:var(--xratu-editor-content); --contrast-amount:var(--appearance-light-contrast,0%); }
-body .workbench[data-color-scheme="dark"] { --contrast-base-ink:#d4d4d4; --contrast-base-muted:#9d9d9d; --contrast-base-canvas:#181818; --contrast-base-inset:#151515; --contrast-base-editor:#1f1f1f; --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-amount:var(--appearance-dark-contrast,0%); }
-body:not(.vscode-light,.vscode-high-contrast-light) .workbench[data-contrast-dark]:not([data-contrast-dark="0"]),
-body:is(.vscode-light,.vscode-high-contrast-light) .workbench:not([data-color-scheme="dark"])[data-contrast-light]:not([data-contrast-light="0"]),
-body .workbench[data-color-scheme="dark"][data-contrast-dark]:not([data-contrast-dark="0"]) {
-    --page-canvas:color-mix(in srgb,var(--contrast-base-canvas),var(--contrast-bg-target) var(--contrast-amount));
+body { --page-canvas:var(--vscode-sideBar-background); --page-surface:var(--page-canvas); --page-ink:var(--vscode-foreground); --page-muted:color-mix(in srgb,var(--page-canvas),var(--page-ink) 68%); --page-line:color-mix(in srgb,var(--page-canvas),var(--page-ink) 13%); --xratu-editor-ink:var(--vscode-foreground,#cccccc); --xratu-editor-muted:var(--vscode-descriptionForeground,#9d9d9d); --xratu-editor-sidebar:var(--vscode-sideBar-background,#181818); --xratu-editor-content:var(--vscode-editor-background,#1f1f1f); --xratu-editor-input:var(--vscode-input-background,#242424); --xratu-editor-widget:var(--vscode-editorWidget-background,#202020); --xratu-editor-code:var(--vscode-textCodeBlock-background,var(--vscode-editor-background,#1f1f1f)); }
+.workbench { --contrast-base-ink:var(--xratu-editor-ink); --contrast-base-muted:var(--xratu-editor-muted); --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-base-canvas:var(--xratu-editor-sidebar); --contrast-base-inset:color-mix(in srgb,var(--xratu-editor-sidebar) 80%,#000); --contrast-base-editor:var(--xratu-editor-content); --contrast-ink-amount:var(--appearance-light-contrast,0%); --contrast-bg-amount:var(--appearance-dark-contrast,0%); }
+body:is(.vscode-light,.vscode-high-contrast-light) .workbench { --contrast-target:#000000; --contrast-bg-target:#ffffff; --contrast-base-canvas:var(--xratu-editor-content); --contrast-base-inset:color-mix(in srgb,var(--xratu-editor-content) 94%,var(--xratu-editor-ink)); --contrast-ink-amount:var(--appearance-dark-contrast,0%); --contrast-bg-amount:var(--appearance-light-contrast,0%); }
+body.vscode-high-contrast-light .workbench { --contrast-base-inset:color-mix(in srgb,var(--xratu-editor-sidebar) 80%,#000); }
+body .workbench[data-color-scheme="dark"] { --contrast-base-ink:#d4d4d4; --contrast-base-muted:#9d9d9d; --contrast-base-canvas:#181818; --contrast-base-inset:#151515; --contrast-base-editor:#1f1f1f; --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-ink-amount:var(--appearance-light-contrast,0%); --contrast-bg-amount:var(--appearance-dark-contrast,0%); }
+body .workbench:is([data-contrast-dark]:not([data-contrast-dark="0"]),[data-contrast-light]:not([data-contrast-light="0"])) {
+    --page-canvas:color-mix(in srgb,var(--contrast-base-canvas),var(--contrast-bg-target) var(--contrast-bg-amount));
     --page-surface:var(--page-canvas);
     --xratu-shell:var(--page-canvas);
-    --xratu-surface-inset:color-mix(in srgb,var(--contrast-base-inset),var(--contrast-bg-target) var(--contrast-amount));
+    --xratu-surface-inset:color-mix(in srgb,var(--contrast-base-inset),var(--contrast-bg-target) var(--contrast-bg-amount));
     --xratu-input:var(--xratu-surface-inset);
     --vscode-sideBar-background:var(--page-canvas);
-    --vscode-editor-background:color-mix(in srgb,var(--contrast-base-editor),var(--contrast-bg-target) var(--contrast-amount));
-    --vscode-foreground:color-mix(in srgb,var(--contrast-base-ink),var(--contrast-target) var(--contrast-amount));
-    --vscode-descriptionForeground:color-mix(in srgb,var(--contrast-base-muted),var(--contrast-target) var(--contrast-amount));
+    --vscode-editor-background:color-mix(in srgb,var(--contrast-base-editor),var(--contrast-bg-target) var(--contrast-bg-amount));
+    --vscode-foreground:color-mix(in srgb,var(--contrast-base-ink),var(--contrast-target) var(--contrast-ink-amount));
+    --vscode-descriptionForeground:color-mix(in srgb,var(--contrast-base-muted),var(--contrast-target) var(--contrast-ink-amount));
     --page-ink:var(--vscode-foreground);
-    --page-muted:color-mix(in srgb,var(--page-canvas),var(--page-ink) calc(68% + var(--contrast-amount) * .25));
-    --page-line:color-mix(in srgb,var(--page-canvas),var(--page-ink) calc(13% + var(--contrast-amount) * .2));
+    --page-muted:color-mix(in srgb,color-mix(in srgb,var(--contrast-base-page-canvas,var(--xratu-editor-sidebar)),var(--contrast-base-ink) 68%),var(--contrast-target) var(--contrast-ink-amount));
+    --page-line:color-mix(in srgb,color-mix(in srgb,var(--contrast-base-page-canvas,var(--xratu-editor-sidebar)),var(--contrast-base-ink) 13%),color-mix(in srgb,var(--contrast-bg-target),var(--contrast-base-ink) 13%) var(--contrast-bg-amount));
+}
+body:not(.vscode-light,.vscode-high-contrast-light) .workbench:not([data-color-scheme="dark"])[data-contrast-dark]:not([data-contrast-dark="0"]) {
+    --vscode-input-background:color-mix(in srgb,var(--xratu-editor-input),#000 var(--contrast-bg-amount));
+    --vscode-editorWidget-background:color-mix(in srgb,var(--xratu-editor-widget),#000 var(--contrast-bg-amount));
+    --vscode-textCodeBlock-background:color-mix(in srgb,var(--xratu-editor-code),#000 var(--contrast-bg-amount));
+}
+body .workbench[data-color-scheme="dark"]:is([data-contrast-dark]:not([data-contrast-dark="0"]),[data-contrast-light]:not([data-contrast-light="0"])) {
+    --contrast-base-page-canvas:#181818;
+    --vscode-input-background:color-mix(in srgb,#242424,#000 var(--contrast-bg-amount));
+    --vscode-editorWidget-background:color-mix(in srgb,#202020,#000 var(--contrast-bg-amount));
+    --vscode-textCodeBlock-background:color-mix(in srgb,#1c1c1c,#000 var(--contrast-bg-amount));
+    --vscode-textBlockQuote-background:color-mix(in srgb,#252525,#000 var(--contrast-bg-amount));
+    --vscode-button-secondaryBackground:color-mix(in srgb,#2b2b2b,#000 var(--contrast-bg-amount));
+    --vscode-list-hoverBackground:color-mix(in srgb,#292929,#000 var(--contrast-bg-amount));
+    --vscode-toolbar-hoverBackground:color-mix(in srgb,#292929,#000 var(--contrast-bg-amount));
 }
 .appearance-range { display:flex; align-items:center; gap:10px; width:220px; max-width:100%; }
 .appearance-range input { width:100%; min-width:0; accent-color:var(--surface-accent); }

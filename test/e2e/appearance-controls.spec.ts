@@ -57,12 +57,12 @@ for (const theme of ['dark','light'] as const) for (const locale of ['en','fa'])
         await post({type:'openSettings'});
         const navigate=async(section:string)=>{await openPageNavigation(page);await page.locator(`[data-section=${section}]`).click();};
         await navigate('appearance');
-        const color=()=>page.locator('.appearance-page').evaluate(el=>getComputedStyle(el).color);
+        const color=()=>page.locator('.appearance-page').evaluate(el=>{const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d')!;ctx.fillStyle=getComputedStyle(el).color;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data];});
         const original=await color();
-        await page.locator(theme==='dark'?'#appearance-lightContrast':'#appearance-darkContrast').press('End');
-        expect(await color()).toBe(original);
         await page.locator(theme==='dark'?'#appearance-darkContrast':'#appearance-lightContrast').press('End');
-        expect(await color()).not.toBe(original);
+        expect(await color()).toEqual(original);
+        await page.locator(theme==='dark'?'#appearance-lightContrast':'#appearance-darkContrast').press('End');
+        expect(await color()).not.toEqual(original);
         await page.locator('.appearance-color-input').evaluate(el=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(el,'#cc2255');el.dispatchEvent(new Event('change',{bubbles:true}));});
         await expect(page.locator('.app')).toHaveAttribute('data-accent','custom');
         const custom = page.locator('.appearance-custom-swatch');
