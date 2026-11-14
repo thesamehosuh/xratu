@@ -175,10 +175,14 @@ const openReview = async (page: Page, prompt = 'Fix this') => {
     await post(page, { type: 'restoreUser', value: prompt, cp: sha });
     const request = await latest(page, 'changesGetState');
     await post(page, { ...request, type: 'changesState', files: changes });
-    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
-    await expect(page.locator('#surface-tab-changes')).toBeVisible();
-    if (page.viewportSize()!.width >= 860 && !await page.locator('#surface-tab-changes').isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
-    await page.locator('#surface-tab-changes').click();
+    const wide = page.viewportSize()!.width >= 860;
+    const tab = page.locator('#surface-tab-changes');
+    // The viewport resize can precede useDockLayout's matchMedia update. Wait
+    // for the rendered tab's layout, not merely the stale narrow tab's visibility.
+    await expect(tab).toHaveAttribute('draggable', String(wide));
+    if (wide && !await tab.isVisible()) await page.locator('.toolbar-tools button[aria-pressed]').nth(1).click();
+    await expect(tab).toBeVisible();
+    await tab.click();
     await replyFile(page);
     await expect(page.locator('.review-diff')).toBeVisible();
 };

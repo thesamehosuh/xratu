@@ -135,17 +135,56 @@ for (const locale of ['en', 'fa']) test(`composer collapses once and hidden tabs
     await input.focus();
     await input.evaluate(el => { (el as HTMLTextAreaElement).setSelectionRange(2, 7); });
     await expect(page.locator('.composer')).toHaveCSS('border-radius', '11px');
-    const frames = await input.evaluate(async el => {
+    const frames = await input.evaluate(el => new Promise<Array<{ height: number; settled: boolean }>>((resolve, reject) => {
         const card = el.closest('.input-bar')!.querySelector('.composer')!;
-        const samples: Array<{ time: number; height: number }> = [];
-        const start = performance.now();
+        const samples: Array<{ height: number; settled: boolean }> = [];
+        const active = new Map<EventTarget, Set<string>>();
+        let started = false;
+        let settledFrames = 0;
+        let frame = 0;
+        const cleanup = () => {
+            clearTimeout(timeout);
+            cancelAnimationFrame(frame);
+            card.removeEventListener('transitionrun', onRun);
+            card.removeEventListener('transitionend', onFinish);
+            card.removeEventListener('transitioncancel', onFinish);
+        };
+        const onRun = (event: Event) => {
+            const transition = event as TransitionEvent;
+            if (transition.pseudoElement) return;
+            started = true;
+            settledFrames = 0;
+            const properties = active.get(event.target!) ?? new Set<string>();
+            properties.add(transition.propertyName);
+            active.set(event.target!, properties);
+        };
+        const onFinish = (event: Event) => {
+            const transition = event as TransitionEvent;
+            if (transition.pseudoElement) return;
+            const properties = active.get(event.target!);
+            properties?.delete(transition.propertyName);
+            if (properties?.size === 0) active.delete(event.target!);
+        };
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error('Composer transitions did not start and settle within 3000ms'));
+        }, 3000);
+        card.addEventListener('transitionrun', onRun);
+        card.addEventListener('transitionend', onFinish);
+        card.addEventListener('transitioncancel', onFinish);
+        const sample = () => {
+            const settled = started && active.size === 0;
+            samples.push({ height: card.getBoundingClientRect().height, settled });
+            settledFrames = settled ? settledFrames + 1 : 0;
+            if (settledFrames === 3) { cleanup(); resolve(samples); }
+            else frame = requestAnimationFrame(sample);
+        };
         (el as HTMLTextAreaElement).blur();
-        while (performance.now() - start < 340) { await new Promise(requestAnimationFrame); samples.push({ time: performance.now() - start, height: card.getBoundingClientRect().height }); }
-        return samples;
-    });
+        frame = requestAnimationFrame(sample);
+    }));
     for (let i = 1; i < frames.length; i++) expect(frames[i].height).toBeLessThanOrEqual(frames[i - 1].height + .6);
     const final = frames.at(-1)!.height;
-    for (const sample of frames.filter(frame => frame.time >= 190)) expect(Math.abs(sample.height - final)).toBeLessThan(1);
+    for (const sample of frames.filter(frame => frame.settled)) expect(Math.abs(sample.height - final)).toBeLessThan(1);
     await input.focus();
     await expect(input).toHaveValue('Three lines\nof text\nremain intact');
     expect(await input.evaluate(el => [(el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd])).toEqual([2, 7]);
