@@ -118,7 +118,7 @@ test('the background tab lists live jobs and stops them', async ({ page }) => {
     expect(sent).toContainEqual({ type: 'killBackgroundJob', jobId: 'job-1' });
 });
 
-test('removing the last job hides the background tab', async ({ page }) => {
+test('removing the last job retains the opened background tab with its empty state', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, {
@@ -128,8 +128,10 @@ test('removing the last job hides the background tab', async ({ page }) => {
     await expect(page.locator('#surface-tab-background')).toHaveCount(1);
 
     await hostMessage(page, { type: 'backgroundJobs', jobs: [] });
-    await expect(page.locator('#surface-tab-background')).toHaveCount(0);
-    await expect(page.locator('.bg-jobs')).toBeHidden();
+    await expect(page.locator('#surface-tab-background')).toHaveCount(1);
+    await page.locator('#surface-tab-background').click();
+    await expect(page.locator('.bg-panel-empty')).toBeVisible();
+    await expect(page.locator('.bg-job')).toHaveCount(0);
 });
 
 test('the background tab respects English direction', async ({ page }) => {

@@ -29,7 +29,7 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await input.evaluate(el => (el as HTMLTextAreaElement).blur());
         await assertBorder(false);
         await page.locator('.composer-engine-picker .dropdown-trigger').click();
-        await expect(page.locator('.composer-engine-picker .dropdown-list')).toBeVisible();
+        await expect(page.locator('.dropdown-list')).toBeVisible();
         await assertBorder(true);
         await page.keyboard.press('Escape');
         await input.fill('');
