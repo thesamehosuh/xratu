@@ -219,7 +219,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(page.locator('#tx-detail')).toBeVisible();
         await page.screenshot({ path: info.outputPath(`settings-default-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('#tx-detail').click();
-        const menu = page.locator('.preferences-page .dropdown-list');
+        const menu = page.locator('.dropdown-list');
         await expect(menu).toBeVisible();
         expect(await menu.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
         const bounds = await menu.boundingBox();

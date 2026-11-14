@@ -89,8 +89,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             expect(snapshot.output).toContain('demo loaded');
             const beforePersistence = controller.getState();
             await post(page, { type: 'sessionState', id: 'persisted-browser-session', title: null, browserSessionId: 'browser-session' });
-            await expect(page.locator('#surface-tab-conversation')).toHaveAttribute('aria-selected', 'true');
-            await page.locator('#surface-tab-browser').click();
+            await expect(page.locator('#surface-tab-browser')).toHaveAttribute('aria-selected', 'true');
             controller.publish(); await settle();
             await expect(page.locator('.browser-viewport img')).toBeVisible();
             await expect(page.locator('.browser-address')).toHaveValue(beforePersistence.url);

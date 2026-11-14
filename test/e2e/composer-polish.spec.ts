@@ -13,7 +13,7 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await post({ type: 'locale', locale });
         await post({ type: 'showChat' });
         const engine = page.locator('.composer-engine-picker .dropdown-trigger');
-        const list = page.locator('.composer-engine-picker .dropdown-list');
+        const list = page.locator('.dropdown-list');
         const icon = engine.locator('svg');
         await expect(icon).toHaveCount(1);
         const iconBox = await icon.boundingBox();
