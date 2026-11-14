@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { installVscodeTheme } from './vscodeTheme';
-import { openWorkPanel } from './navigation';
+import { openPageNavigation, openWorkPanel } from './navigation';
 
 const post = (page: Page, message: object) => page.evaluate(value => window.postMessage(value, '*'), message);
 const navigation = async (page: Page) => {
@@ -107,6 +107,9 @@ for (const theme of ['dark', 'light', 'app-dark'] as const) for (const locale of
         }
         await openWorkPanel(page, 'conversation');
         await post(page, { type: 'openSettings' });
+        await expect(page.locator('.page-content')).toBeVisible();
+        // Desktop Settings opens navigation automatically; do not toggle it mid-transition.
+        if (width >= 860) await expect(page.locator('.page-sidebar')).toBeVisible();
         await post(page, { type: 'savedCredentials', credentials: [{ id: 'local', providerId: 'ollama', baseUrl: 'http://localhost:11434/v1', maskedKey: '', label: 'Ollama', active: true }] });
         await post(page, { type: 'usageState', providers: [{ host: 'local', label: 'Ollama', iranian: false, input: 100, output: 20, cached: 0, USD: 0, IRT: 0 }], rates: [], history: [{ day: '2026-11-12', cells: [{ model: 'test-model', host: 'local', input: 100, output: 20, cached: 0, USD: 0, IRT: 0 }] }], allTime: { input: 100, output: 20, cached: 0, USD: 0, IRT: 0 } });
         await post(page, { type: 'proxyState', mode: 'auto', proxyUrl: '', noProxy: 'localhost,127.0.0.1', resolvedUrl: 'http://127.0.0.1:7890', resolvedSource: 'system', webSearchUseProxy: true });
@@ -116,7 +119,7 @@ for (const theme of ['dark', 'light', 'app-dark'] as const) for (const locale of
         await post(page, { type: 'skillsState', skills: [{ id: 'review', name: 'review', description: 'Review project changes', dirPath: 'C:\\project\\.xratu\\skills\\review', source: 'project-xratu', enabled: true, bodyChars: 400 }] });
         await post(page, { type: 'mcpMarketplaceState', query: '', entries: [{ id: 'docs', source: 'curated', serverName: 'docs', name: 'Documentation', description: 'Search project documentation.', tags: [], install: { kind: 'stdio', command: 'npx', args: ['docs-server'], runtime: 'node' }, installConfidence: 'curated' }], sources: [], status: 'live', error: null, liveSearch: false });
         for (const section of ['providers', 'engines', 'mcp', 'marketplace', 'skills', 'agents', 'usage', 'proxy', 'appearance', 'settings']) {
-            await navigation(page);
+            await openPageNavigation(page);
             await page.locator(`.sidebar-item[data-section="${section}"]`).click();
             await expect(page.locator('.page-content h2').first()).toBeVisible();
             await expect(page.locator('.engine-scope')).toHaveCount(0);
