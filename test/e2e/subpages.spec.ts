@@ -62,14 +62,14 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
 
         const model = page.locator('.cost-filters .dropdown').first();
         await model.locator('.dropdown-trigger').click();
-        await model.getByRole('option', { name: 'model-a', exact: true }).click();
+        await page.getByRole('option', { name: 'model-a', exact: true }).click();
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(60));
         await expect(page.locator('.prov-row')).toHaveCount(1);
         await expect(page.locator('.cost-legend')).toContainText('model-a');
         await expect(page.locator('.cost-currencies')).toHaveCount(0);
         const host = page.locator('.cost-filters .dropdown').nth(1);
         await host.locator('.dropdown-trigger').click();
-        await host.getByRole('option', { name: 'Local gateway', exact: true }).click();
+        await page.getByRole('option', { name: 'Local gateway', exact: true }).click();
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(0));
         await expect(page.locator('.prov-row')).toHaveCount(0);
         await page.locator('.usage-clear-filters').click();

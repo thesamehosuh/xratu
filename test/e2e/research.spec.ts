@@ -47,8 +47,9 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await buttons.last().click();
         await expect(buttons.last()).toHaveAttribute('aria-pressed', 'true');
         await page.locator('.proxy-save-row .apply-btn').click();
-        expect(await sent(page)).toContainEqual({ type: 'proxySave', mode: 'auto', proxyUrl: state.proxyUrl, noProxy: state.noProxy, webSearchUseProxy: false });
-        await post(page, { ...state, webSearchUseProxy: false });
+        expect(await sent(page)).toContainEqual({ type: 'proxySave', requestId: expect.any(String), mode: 'auto', proxyUrl: state.proxyUrl, noProxy: state.noProxy, webSearchUseProxy: false });
+        const requestId = (await sent(page)).filter(message => message.type === 'proxySave').at(-1)!.requestId;
+        await post(page, { ...state, requestId, webSearchUseProxy: false });
         await expect(buttons.last()).toHaveAttribute('aria-pressed', 'true');
         expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
         await page.screenshot({ path: info.outputPath('search-routing.png') });

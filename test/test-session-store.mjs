@@ -113,12 +113,17 @@ try {
     await store.delete(notification.id);
 
     // History displays the saved engine before resume, including after index repair.
-    const native = await store.create(ws);
+    const native = await store.create(ws, 'opencode');
+    check('empty native session has engine identity', native.engineId, 'opencode');
+    check('empty native snapshot has engine identity', (await store.load(native.id)).engineSession.engineId, 'opencode');
     await store.save(native.id, { workspace: ws, model: 'provider/model', summary: null, localHistory: [], uiHistory: [], engineSession: { engineId: 'opencode', nativeSessionId: 'native-one', workspace: ws } });
     check('picker carries native engine identity', (await store.list(ws)).find(item => item.id === native.id).engineId, 'opencode');
     check('picker carries saved model', (await store.list(ws)).find(item => item.id === native.id).model, 'provider/model');
+    rmSync(join(root, 'sessions', '_index.json'));
     const historyRestart = new LocalSessionStore(root);
+    await historyRestart.reconcile(ws);
     check('reconciled picker retains engine identity', (await historyRestart.list(ws)).find(item => item.id === native.id).engineId, 'opencode');
+    check('reconciled picker retains model', (await historyRestart.list(ws)).find(item => item.id === native.id).model, 'provider/model');
     check('listing does not change native resume identity', (await store.load(native.id)).engineSession.nativeSessionId, 'native-one');
     await store.delete(native.id);
 

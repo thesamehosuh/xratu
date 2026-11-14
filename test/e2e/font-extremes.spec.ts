@@ -8,7 +8,7 @@ const post = (page: Page, value: object) => page.evaluate(message => window.post
 const choose = async (page: Page, id: string, index: number) => {
     const trigger = page.locator(`#appearance-${id}`);
     await trigger.click();
-    await trigger.locator('..').getByRole('option').nth(index).click();
+    await page.getByRole('option').nth(index).click();
 };
 const profiles = [
     { name: 'interface-small', font: 0, text: 0, code: 0, width: 0, density: 1 },
@@ -34,7 +34,7 @@ const controlsFit = async (page: Page) => {
             }
         }
         for (const element of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input:not([type=file]):not([type=checkbox]):not([type=range]),select')) {
-            if (!element.checkVisibility() || !element.clientHeight) continue;
+            if (element.type === 'color' || !element.checkVisibility() || !element.clientHeight) continue;
             const text = element instanceof HTMLSelectElement ? element.selectedOptions[0]?.textContent : element.value || element.placeholder;
             if (!text) continue;
             const css = getComputedStyle(element);

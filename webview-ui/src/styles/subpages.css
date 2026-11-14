@@ -165,7 +165,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .usage-metrics small { display:block; font-size:var(--xratu-fs-md); }
 .usage-api { display:flex; flex-direction:column; gap:22px; }
 .usage-page .settings-card-body { padding:12px; border:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 14%); border-radius:6px; background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 3%); }
-.usage-range { font-size:var(--xratu-fs-sm); padding:3px 6px; border-radius:4px; }
+.usage-range { line-height:1.8; font-size:var(--xratu-fs-sm); padding:3px 6px; border-radius:4px; }
 .usage-range.active { background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 16%); color:var(--vscode-foreground); border-color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 23%); }
 .cost-toolbar,.cost-filters { gap:7px; }
 .cost-toolbar { margin-block-end:8px; }
@@ -816,7 +816,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .account-connections .cred-oauth-account-card { border:1px solid var(--page-line); background:transparent; border-radius:7px; padding:10px; }
 .account-connections .cred-oauth-account-card.active { border-color:var(--page-line); background:transparent; }
 .account-connections .cred-oauth-avatar { background:transparent; color:var(--page-muted); border:0; }
-.account-connections .cred-oauth-account { color:var(--page-ink); }
+.account-connections .cred-oauth-account { flex:1 1 120px; max-inline-size:calc(100% - 36px); color:var(--page-ink); }
 .account-connections .cred-oauth-active { background:transparent; border:0; color:var(--surface-accent); }
 .account-connections .cred-oauth-browser,.account-connections .cred-oauth-device { padding:12px; margin-block-start:10px; border:1px solid var(--page-line); background:transparent; border-radius:8px; }
 .account-connections .cred-oauth-code { display:block; width:fit-content; margin:12px 0; padding:7px 12px; font-size:20px; letter-spacing:.12em; border:1px solid var(--page-line); border-radius:6px; background:var(--page-surface); color:var(--page-ink); }

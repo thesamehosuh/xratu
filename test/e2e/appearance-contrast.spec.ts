@@ -21,7 +21,7 @@ for (const editor of ['light', 'dark'] as const) for (const scheme of ['editor',
         await page.locator('[data-section=appearance]').click();
         if (scheme === 'dark') {
             await page.locator('#appearance-scheme').click();
-            await page.locator('#appearance-scheme').locator('..').getByRole('option').nth(1).click();
+            await page.getByRole('option').nth(1).click();
         }
         const dark = editor === 'dark' || scheme === 'dark';
         const colors = () => page.evaluate(() => {
@@ -98,7 +98,7 @@ for (const editor of ['light', 'dark'] as const) for (const scheme of ['editor',
         await page.evaluate(() => { window.postMessage({ type: 'locale', locale: 'en' }, '*'); window.postMessage({ type: 'showChat' }, '*'); window.postMessage({ type: 'openSettings' }, '*'); });
         await openPageNavigation(page);
         await page.locator('[data-section=appearance]').click();
-        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.locator('#appearance-scheme').locator('..').getByRole('option').nth(1).click(); }
+        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.getByRole('option').nth(1).click(); }
         await page.evaluate(() => { const el = document.createElement('div'); el.style.background = 'var(--xratu-surface-inset)'; el.id = 'contrast-inset-probe'; document.querySelector('.appearance-page')!.append(el); });
         const color = () => page.locator('#contrast-inset-probe').evaluate(el => {
             const ctx = document.createElement('canvas').getContext('2d')!; ctx.fillStyle = getComputedStyle(el).backgroundColor; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
@@ -123,7 +123,7 @@ for (const editor of ['light', 'dark'] as const) for (const scheme of ['editor',
         await page.evaluate(() => { window.postMessage({ type: 'locale', locale: 'en' }, '*'); window.postMessage({ type: 'showChat' }, '*'); window.postMessage({ type: 'openSettings' }, '*'); });
         await openPageNavigation(page);
         await page.locator('[data-section=appearance]').click();
-        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.locator('#appearance-scheme').locator('..').getByRole('option').nth(1).click(); }
+        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.getByRole('option').nth(1).click(); }
         const colors = () => page.evaluate(() => {
             const style = getComputedStyle(document.querySelector('.appearance-page')!); const ctx = document.createElement('canvas').getContext('2d')!;
             return ['--page-muted', '--page-line'].map(token => { ctx.fillStyle = style.getPropertyValue(token).trim(); ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3); });
@@ -149,7 +149,7 @@ for (const editor of ['light', 'dark'] as const) for (const scheme of ['editor',
         await page.evaluate(() => { window.postMessage({ type: 'locale', locale: 'en' }, '*'); window.postMessage({ type: 'showChat' }, '*'); window.postMessage({ type: 'openSettings' }, '*'); });
         await openPageNavigation(page);
         await page.locator('[data-section=appearance]').click();
-        await page.locator('#appearance-scheme').click(); await page.locator('#appearance-scheme').locator('..').getByRole('option').nth(1).click();
+        await page.locator('#appearance-scheme').click(); await page.getByRole('option').nth(1).click();
         const colors = () => page.evaluate(() => {
             const style = getComputedStyle(document.querySelector('.appearance-page')!);
             const ctx = document.createElement('canvas').getContext('2d')!;
@@ -171,7 +171,7 @@ for (const editor of ['light', 'dark'] as const) for (const scheme of ['editor',
         await page.evaluate(() => { window.postMessage({ type: 'locale', locale: 'en' }, '*'); window.postMessage({ type: 'showChat' }, '*'); window.postMessage({ type: 'openSettings' }, '*'); });
         await openPageNavigation(page);
         await page.locator('[data-section=appearance]').click();
-        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.locator('#appearance-scheme').locator('..').getByRole('option').nth(1).click(); }
+        if (scheme === 'dark') { await page.locator('#appearance-scheme').click(); await page.getByRole('option').nth(1).click(); }
         const slider = page.locator(editor === 'dark' || scheme === 'dark' ? '#appearance-darkContrast' : '#appearance-lightContrast');
         await slider.press('End');
         const difference = await page.evaluate(() => {

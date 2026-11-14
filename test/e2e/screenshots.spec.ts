@@ -452,6 +452,7 @@ async function usageScreen(page: Page, locale: Locale): Promise<Locator> {
     // The chart's month axis is built from the LEDGER, never from `new Date()`,
     // so 31 columns for the last (August) month is a fixed, reviewable state.
     await expect(page.locator('.cost-col')).toHaveCount(31);
+    await page.locator('.usage-breakdown-tabs button').last().click();
     await expect(page.locator('.prov-row')).toHaveCount(1);
     return view;
 }

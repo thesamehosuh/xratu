@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 /**
@@ -157,7 +158,7 @@ export function Dropdown({
                 <span className="dropdown-value" dir="auto">{current?.label ?? ''}</span>
                 {showCaret && <Caret size={12} className="dropdown-caret" aria-hidden="true" />}
             </button>
-            {open && (
+            {open && rootRef.current && createPortal(
                 <div
                     ref={listRef}
                     className="dropdown-list dropdown-portal"
@@ -193,7 +194,7 @@ export function Dropdown({
                             {option.label}
                         </button>
                     ))}
-                </div>
+                </div>, rootRef.current.closest('.app') ?? document.body
             )}
         </div>
     );

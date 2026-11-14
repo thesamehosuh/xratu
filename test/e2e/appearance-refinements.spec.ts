@@ -8,7 +8,7 @@ const post = (page: Page, message: object) => page.evaluate(value => window.post
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> => page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
 const choose = async (page: Page, id: string, index: number) => {
     await page.locator(`#${id}`).click();
-    await page.locator(`#${id}`).locator('..').getByRole('option').nth(index).click();
+    await page.getByRole('option').nth(index).click();
 };
 
 for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'] as const) for (const width of [420, 1440]) {

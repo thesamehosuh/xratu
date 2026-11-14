@@ -572,14 +572,15 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-input:not(.is-sizing) { height:var(--composer-resting-height)!important; min-height:var(--composer-resting-height); padding-block:calc((var(--composer-resting-height) - var(--xratu-fs-prose) * 1.75) / 2); padding-inline:2px; overflow:hidden; }
 .conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) :is(.attach-btn,.send-btn) { inset-block-start:50%; inset-block-end:auto; transform:translateY(-50%); }
 .conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-actions { height:0; min-height:0; padding:0; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-chips { visibility:hidden; opacity:0; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-chips > :not(.ctx-wrap) { visibility:hidden; opacity:0; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .ctx-wrap { position:absolute; inset-block-start:50%; inset-inline-end:37px; transform:translateY(-50%); }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer:has(.ctx-wrap) { direction:ltr; padding-inline-end:calc(37px + 5em); }
 .conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-prelude { height:0; min-height:0; margin:0; opacity:0; visibility:hidden; }
 .composer-attach { position:static; flex:0 0 0; }
 .composer-attach .attach-btn { position:absolute; inset-inline-start:10px; inset-block-end:9px; }
 .composer-buttons .send-btn { position:absolute; inset-inline-end:10px; inset-block-end:9px; }
 .composer-actions { padding-inline:37px; }
 .git-status { transition:height 160ms ease,padding 160ms ease; }
-.conversation-panel:not(.empty-conversation) .compose-dock:not(:focus-within):not(:has(.menu-open)) > .git-status { visibility:hidden; height:0; min-height:0; padding-block:0; overflow:hidden; }
 .msg.user { background:var(--xratu-input); }
 @media(max-width:859px) {
     .workbench.navigation-open { padding-inline-start:0; }
@@ -633,7 +634,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .workspace-sidebar .page-sidebar { flex:1; min-height:0; overflow:auto; }
 body:is(.vscode-light,.vscode-high-contrast-light) :is(.workbench:where(:not(.setting-up),[data-accent]:not([data-accent="teal"]),[data-accent-saturation]:not([data-accent-saturation="100"]))) { --xratu-accent:var(--appearance-accent-light,#007f70); --xratu-accent-strong:var(--appearance-accent-light,#007f70); --xratu-accent-ink:#fff; --page-canvas:var(--vscode-editor-background); --xratu-shell:var(--vscode-editor-background); }
 
-.workbench { --navigation-width:218px; }
+.workbench { --navigation-width:var(--navigation-desktop-width,218px); }
 .workbench.navigation-open .toolbar > .sidebar-toggle { position:fixed; inset-block-start:20px; inset-inline-start:calc(var(--navigation-width) - 44px); inset-inline-end:auto; z-index:100; }
 .workspace-sidebar .sidebar-group,.workspace-sidebar .page-sidebar :is(.sidebar-back,.sidebar-item) { width:100%; align-self:stretch; }
 @media(max-width:859px) { .workbench { --navigation-width:min(270px,85vw); } }
@@ -919,8 +920,6 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 }
 
 .app[dir="rtl"] .composer-policy[data-policy="mode"] > span { transform:translateY(.05em); }
-
-.compose-dock:has(.attachment-menu-collapsed) > .git-status { visibility:hidden; height:0; min-height:0; padding-block:0; overflow:hidden; }
 
 /* Preserve editor tokens before deriving local contrast overrides. */
 body { --page-canvas:var(--vscode-sideBar-background); --page-surface:var(--page-canvas); --page-ink:var(--vscode-foreground); --page-muted:color-mix(in srgb,var(--page-canvas),var(--page-ink) 68%); --page-line:color-mix(in srgb,var(--page-canvas),var(--page-ink) 13%); --xratu-editor-ink:var(--vscode-foreground,#cccccc); --xratu-editor-muted:var(--vscode-descriptionForeground,#9d9d9d); --xratu-editor-sidebar:var(--vscode-sideBar-background,#181818); --xratu-editor-content:var(--vscode-editor-background,#1f1f1f); --xratu-editor-input:var(--vscode-input-background,#242424); --xratu-editor-widget:var(--vscode-editorWidget-background,#202020); --xratu-editor-code:var(--vscode-textCodeBlock-background,var(--vscode-editor-background,#1f1f1f)); }

@@ -6863,6 +6863,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // untitled - otherwise the placeholder blocks first-message seeding
         // and is locked in as renamedTitle on the next save.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
+        this._sessionWorkspace = snapshot.workspace;
         if (!empty || (snapshot.engineSession?.engineId ?? 'xratu') === engine) this._restoreSessionConnection(snapshot);
         this._postEngineState();
         try {
@@ -6894,7 +6895,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return false;
         }
         let meta;
-        try { meta = await this._localSessionStore.create(workspace); }
+        try { meta = await this._localSessionStore.create(workspace, this._activeEngine); }
         catch { this.notifyBanner('warning', 'sessionCreateFailed'); return false; }
         if (epoch !== this._sessionEpoch || identity !== this._sessionWorkspaceIdentity()) {
             await this._localSessionStore.delete(meta.id);
@@ -7050,6 +7051,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._sessionSummary = snapshot.summary ?? null;
         // Same placeholder rule as _openSessionNow - see resolveSessionTitle.
         this._sessionTitle = resolveSessionTitle(snapshot.title, snapshot.renamed, snapshot.workspace, snapshot.uiHistory);
+        this._sessionWorkspace = snapshot.workspace;
         if (!empty || (snapshot.engineSession?.engineId ?? 'xratu') === engine) this._restoreSessionConnection(snapshot);
         if (snapshot.pendingTurn?.prompt) {
             // Crash mid-run: fold the interrupted turn into the ledgers
@@ -7145,7 +7147,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // last snapshot was cleared) - create one on demand or history
             // would never persist.
             try {
-                const meta = await this._localSessionStore.create(this._localWorkspaceKey());
+                const meta = await this._localSessionStore.create(this._localWorkspaceKey(), this._activeEngine);
                 if (epochAtEntry !== this._sessionEpoch) {
                     // The session was invalidated while creating (clear
                     // history / open session) - do not adopt the stray.

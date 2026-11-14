@@ -312,12 +312,11 @@ test('the verdict buttons match the approved prototype, not the theme CTA blue',
         const s = getComputedStyle(el);
         return { h: s.height, pad: s.paddingInlineStart, r: s.borderRadius, fs: s.fontSize, min: s.minWidth };
     });
-    // The prototype's button atom, verbatim. These are the numbers the design
-    // was approved on; a "close enough" refactor of them is a visual change.
-    expect(geo.h).toBe('24px');
+    // The button grows with typography while keeping the compact atom's minimum.
+    expect(parseFloat(geo.h)).toBeGreaterThanOrEqual(24);
     expect(geo.pad).toBe('10px');
     expect(geo.r).toBe('5px');          // --xratu-radius-xs
-    expect(geo.fs).toBe('12px');        // --xratu-fs-sm
+    expect(geo.fs).toBe('13px');        // --xratu-fs-sm
     expect(geo.min).toBe('92px');
 
     // The accent, NOT --vscode-button-background. In Dark Modern that token is
@@ -394,11 +393,11 @@ test('the ledger and the row table keep the approved metrics', async ({ page }) 
         page.locator(sel).first().evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
     expect(await read('.approval-head', 'min-height')).toBe('30px');
     expect(await read('.approval-item summary', 'min-height')).toBe('26px');
-    expect(await read('.approval-title', 'font-size')).toBe('13px');   // --xratu-fs-md
+    expect(await read('.approval-title', 'font-size')).toBe('14px');   // --xratu-fs-md
     expect(await read('.approval-title', 'font-weight')).toBe('650');
-    expect(await read('.approval-ledger', 'font-size')).toBe('11px'); // --xratu-fs-xs
-    expect(await read('.approval-path', 'font-size')).toBe('11px');
-    expect(await read('.approval-session', 'font-size')).toBe('11px');
+    expect(await read('.approval-ledger', 'font-size')).toBe('12px'); // --xratu-fs-xs
+    expect(await read('.approval-path', 'font-size')).toBe('12px');
+    expect(await read('.approval-session', 'font-size')).toBe('12px');
     // The ledger aligns like a diffstat.
     expect(await read('.approval-ledger .n', 'font-variant-numeric')).toContain('tabular-nums');
     // No nested chrome: the block is not a frame.

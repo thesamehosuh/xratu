@@ -89,7 +89,7 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await shot('proxy-hover');
         await navigate('appearance');
         await page.locator('#appearance-font').click();
-        await page.locator('#appearance-font').locator('..').getByRole('option').nth(1).click();
+        await page.getByRole('option').nth(1).click();
         await expect(page.locator('.page-content')).toHaveCSS('font-family', /Consolas/);
         await navigate('skills');
         await post(page, { type: 'skillsState', skills: [

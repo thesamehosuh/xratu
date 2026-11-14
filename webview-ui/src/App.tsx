@@ -741,6 +741,10 @@ export function App() {
             case 'usage': setScreen(usageReturnTo); return true;
             case 'proxy': setScreen(proxyReturnTo); return true;
             case 'settings':
+            case 'appearance':
+            case 'history':
+            case 'workspace':
+            case 'engines':
             case 'agents': setScreen('chat'); return true;
             default: return false;
         }
@@ -759,7 +763,8 @@ export function App() {
             if (gitPickerOpen) { e.preventDefault(); setGitPickerOpen(false); return; }
             const target = e.target as HTMLElement | null;
             if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
-            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .session-pop, .composer-policy-menu')) return;
+            if (document.querySelector('.model-pop, .ctx-menu, .attach-menu, .composer-policy-menu')) return;
+            if (sessionsOpen && !dock.wide) { e.preventDefault(); setSessionsOpen(false); return; }
             // A subpage owns Escape first: leaving it is the expected
             // meaning, and the run behind it must be left alone.
             if (backFromOverlay()) {
@@ -772,7 +777,7 @@ export function App() {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [send, backFromOverlay, taskChipOpen, gitPickerOpen]);
+    }, [send, backFromOverlay, taskChipOpen, gitPickerOpen, sessionsOpen, dock.wide]);
 
     useEffect(() => {
         send({ type: 'webviewReady' });
@@ -1660,7 +1665,7 @@ export function App() {
                 workNavigation={<nav className="workspace-views" aria-label={t('surfaceWorkspace')}>{dock.allPanels.filter(panel => !isNewTab(panel)).map(panel => {
                     if (isNewTab(panel)) return null;
                     const Icon = PANEL_ICONS[panel];
-                    return <button key={panel} type="button" className={surfaceTab === panel ? 'active' : ''} onClick={() => { showConversation(); setSurfaceTab(panel); if (!dock.wide) setSessionsOpen(false); }}><Icon size={15} /><span>{t(PANEL_LABELS[panel])}</span></button>;
+                    return <button key={panel} type="button" className={surfaceTab === panel ? 'active' : ''} onClick={() => { setScreen('chat'); showConversation(); setSurfaceTab(panel); if (!dock.wide) setSessionsOpen(false); }}><Icon size={15} /><span>{t(PANEL_LABELS[panel])}</span></button>;
                 })}</nav>}
                 conn={conn}
                 yolo={yolo}

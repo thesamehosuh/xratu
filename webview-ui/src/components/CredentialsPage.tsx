@@ -895,6 +895,7 @@ export function CredentialsPage({
                                         onClick={() => {
                                             setDeletingId(null);
                                             setConnectionSelection(credential.id);
+                                            if (embedded) onSelectCredential?.(credential.id);
                                         }}
                                         aria-pressed={inspected?.id === credential.id}
                                     >

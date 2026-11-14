@@ -37,7 +37,7 @@ async function harness() {
         const url = new URL(req.url, 'http://localhost'); const route = url.pathname;
         requests.push({ route, method: req.method, body, search: url.search });
         const json = value => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: value })); };
-        if (route === '/api/model') { json([]); return; }
+        if (route === '/api/model') { json([{ providerID: 'opencode', id: 'big-pickle', enabled: true, capabilities: { tools: true, output: ['text'] }, variants: [] }]); return; }
         if (route === '/api/event') { stream = res; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': heartbeat\n\n'); return; }
         if (route === '/api/session/active') { json(Object.fromEntries([...active].map(id => [id, {}]))); return; }
         if (route === '/api/session') { json(sessions.get('root')); return; }

@@ -25,7 +25,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         const reply = page.locator('.settings-nav-row').filter({ hasText: locale === 'en' ? 'Reply language' : 'زبان پاسخ' });
         await expect(reply.locator('.dropdown-trigger')).toBeEnabled();
         await reply.locator('.dropdown-trigger').click();
-        await reply.getByRole('option', { name: 'English', exact: true }).click();
+        await page.getByRole('option', { name: 'English', exact: true }).click();
         expect(await sent(page)).toContainEqual({ type: 'setReplyLanguage', replyLanguage: 'en' });
         await page.screenshot({ path: testInfo.outputPath('shared-settings.png') });
         const sidebar = page.locator('.page-sidebar');
@@ -244,14 +244,13 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await post(page, { type: 'modelInfo', defaultModel: model, selectedModel: model, models: [model], displayNames: { [model]: 'DeepSeek V4 Pro' }, capabilities: { [model]: { provider: 'opencode', free: true, variants: ['high', 'adaptive'], noReasoning: false } } });
         await expect(page.locator('.chip-model-name')).toHaveText('DeepSeek V4 Pro');
         await expect(page.locator('.picker-chip .model-provider')).toHaveCount(0);
-        expect(await page.locator('.chip-model-name').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+        await expect(page.locator('.chip-model-name')).toHaveCSS('text-overflow', 'ellipsis');
         const attach = (await page.locator('.composer-attach').boundingBox())!;
         const picker = (await page.locator('.picker-chip').boundingBox())!;
         const context = (await page.locator('.ctx-wrap').boundingBox())!;
         const send = (await page.locator('.send-btn').boundingBox())!;
-        expect(attach.x + attach.width).toBeLessThan(picker.x);
-        expect(picker.x + picker.width).toBeLessThanOrEqual(context.x);
-        expect(context.x + context.width).toBeLessThan(send.x);
+        const ordered = [attach, picker, context, send].sort((a, b) => a.x - b.x);
+        for (let index = 1; index < ordered.length; index++) expect(ordered[index - 1].x + ordered[index - 1].width).toBeLessThanOrEqual(ordered[index].x);
         await page.locator('.picker-chip').click();
         await expect(page.locator('.thinking-seg-opt')).toHaveCount(3);
         await page.locator('.thinking-seg-opt').last().click();

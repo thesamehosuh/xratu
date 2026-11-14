@@ -141,6 +141,7 @@ export function useDockLayout(agentsAvailable = false, backgroundAvailable = fal
         setRecentlyClosed(current => current.slice(0, -1));
         if (!isNewTab(last.tab)) setOpened(current => new Set(current).add(last.tab as SurfacePanel));
         movedTab.current = last.tab;
+        if (last.location === 'side') setSideOpen(true);
         setLayout(current => {
             const moved = movePanel(current, last.tab, last.location);
             return { ...moved, [last.location === 'main' ? 'mainActive' : 'sideActive']: last.tab };
