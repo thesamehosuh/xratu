@@ -549,13 +549,13 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     const modelFilter = page.locator('.cost-filters .dropdown').first();
     await page.getByLabel('ماه قبل').click();
     await modelFilter.locator('.dropdown-trigger').click();
-    await modelFilter.locator('.dropdown-option', { hasText: 'glm-5.3' }).click();
+    await page.getByRole('option', { name: 'glm-5.3', exact: true }).click();
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
 
     // Week mode: a 7-day axis with a range label, stepping by week.
     await modelFilter.locator('.dropdown-trigger').click();
-    await modelFilter.locator('.dropdown-option', { hasText: 'همه مدل ها' }).click();
+    await page.getByRole('option', { name: 'همه مدل ها', exact: true }).click();
     await page.locator('.cost-granularity .usage-range', { hasText: 'هفته' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(7);
     await expect(page.locator('.cost-granularity .usage-range.active')).toContainText('هفته');
