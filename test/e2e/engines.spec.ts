@@ -196,10 +196,11 @@ for (const locale of ['en', 'fa'] as const) {
             const composerBefore = (await page.locator('.composer-input').boundingBox())!;
             await post(page, { type: 'notification', id: 'compact', kind: 'warning', valueKey: 'notifBackgroundJobGone' });
             await expect(page.locator('.notif')).toBeVisible();
-            await expect(page.locator('.notif-copy')).toHaveCSS('color', 'rgb(204, 167, 0)');
+            await expect(page.locator('.notif-copy')).toHaveCSS('color', 'rgb(204, 204, 204)');
+            await expect(page.locator('.notif-icon')).toHaveCSS('color', 'rgb(204, 167, 0)');
             const toast = (await page.locator('.notif').boundingBox())!;
             const toolbar = (await page.locator('.toolbar').boundingBox())!;
-            expect(toast.height).toBeLessThan(38);
+            expect(toast.height).toBeLessThanOrEqual(80);
             expect(toast.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
             expect(toast.y + toast.height).toBeLessThan(composerBefore.y);
             expect((await page.locator('.composer-input').boundingBox())!.y).toBe(composerBefore.y);

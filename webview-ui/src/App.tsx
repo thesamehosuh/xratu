@@ -213,7 +213,7 @@ export function App() {
      *  each display (and never re-display an older one). */
     const [composerError, setComposerError] = useState<{ id: number; value: string; valueKey?: string; params?: Record<string, string> } | null>(null);
     /** In-app notification banners (replaces VS Code toasts). Queue order is
-     *  preserved; NotificationBanner shows the head. Confirm banners answer
+     *  preserved; NotificationBanner prioritizes confirms. Confirm banners answer
      *  the host with the picked action (null = dismissed/cancelled). */
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     /** UI language - mirrored from the host's persisted choice on ready. */

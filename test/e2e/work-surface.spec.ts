@@ -1,4 +1,5 @@
 import { openPageNavigation } from './navigation';
+import { setLocale as setTestLocale, t } from '../../webview-ui/src/i18n';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme, VSCODE_LIGHT_THEME_CSS } from './vscodeTheme';
 
@@ -6,6 +7,119 @@ const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const post = (page: Page, message: Record<string, unknown>) => page.evaluate((msg) => window.postMessage(msg, '*'), message);
 const sent = (page: Page): Promise<Array<Record<string, unknown>>> => page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
+
+test('action notifications bypass persistent banners in FIFO order without losing them', async ({ page }) => {
+    await post(page, { type: 'notification', id: 'warning', kind: 'warning', valueKey: 'warning before confirms' });
+    await post(page, { type: 'notification', id: 'error', kind: 'error', valueKey: 'error before confirms' });
+    await expect(page.locator('.notif-copy')).toHaveText('warning before confirms');
+    await post(page, { type: 'notification', id: 'first', kind: 'warning', valueKey: 'first confirm', actions: ['accept first'] });
+    await post(page, { type: 'notification', id: 'second', kind: 'error', valueKey: 'second confirm', actions: ['accept second'] });
+    await expect(page.locator('.notif-copy')).toHaveText('first confirm');
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.locator('.notif-action').focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'first', action: 'accept first' },
+    ]);
+    await expect(page.locator('.notif-copy')).toHaveText('second confirm');
+    await expect(page.getByRole('button', { name: 'accept second', exact: true })).toBeVisible();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.locator('.notif-close').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('warning before confirms');
+    await page.locator('.notif-close').click();
+    await expect(page.locator('.notif-copy')).toHaveText('error before confirms');
+    await page.locator('.notif-close').click();
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'first', action: 'accept first' },
+        { type: 'notificationAction', id: 'second', action: null },
+        { type: 'notificationAction', id: 'warning', action: null },
+        { type: 'notificationAction', id: 'error', action: null },
+    ]);
+    await expect(page.locator('.notif')).toHaveCount(0);
+});
+test('notification focus survives preemption and action dismissal without activating the next action', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'focus-warning', kind: 'warning', valueKey: 'focus warning' });
+    await expect(page.locator('.notif-copy')).toHaveText('focus warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').focus();
+    await post(page, { type: 'notification', id: 'focus-first', kind: 'warning', valueKey: 'focus first', actions: ['delete first'] });
+    await expect(page.locator('.notif-copy')).toHaveText('focus first');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await post(page, { type: 'notification', id: 'focus-second', kind: 'error', valueKey: 'focus second', actions: ['delete second'] });
+    await page.locator('.notif-action').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('focus second');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await expect(page.locator('.notif-action')).not.toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif-copy')).toHaveText('focus warning');
+    await expect(page.locator('.notif-close')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(background).toBeFocused();
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'focus-first', action: 'delete first' },
+        { type: 'notificationAction', id: 'focus-second', action: null },
+        { type: 'notificationAction', id: 'focus-warning', action: null },
+    ]);
+});
+
+test('notification changes do not steal focus from the background', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'background-warning', kind: 'warning', valueKey: 'background warning' });
+    await expect(page.locator('.notif-copy')).toHaveText('background warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').focus();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'background-confirm', kind: 'warning', valueKey: 'background confirm', actions: ['delete'] });
+    await expect(page.locator('.notif-copy')).toHaveText('background confirm');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').dispatchEvent('click');
+    await expect(page.locator('.notif-copy')).toHaveText('background warning');
+    await expect(background).toBeFocused();
+    await page.locator('.notif-close').dispatchEvent('click');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(background).toBeFocused();
+});
+
+test('notification dismissal recovers focus when the previous control is unavailable', async ({ page }) => {
+    const background = page.locator('button:visible').first();
+    await background.focus();
+    await post(page, { type: 'notification', id: 'missing-focus', kind: 'warning', valueKey: 'missing focus' });
+    await expect(page.locator('.notif-copy')).toHaveText('missing focus');
+    await page.locator('.notif-close').focus();
+    await background.evaluate((element: HTMLButtonElement) => { element.disabled = true; });
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect(page.locator('.app')).toBeFocused();
+});
+
+test('preempted info timer cannot dismiss a confirmation and restarts when shown', async ({ page }) => {
+    await page.clock.install();
+    await post(page, { type: 'notification', id: 'info', kind: 'info', valueKey: 'temporary information' });
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(3000);
+    await post(page, { type: 'notification', id: 'confirm', kind: 'info', valueKey: 'pending confirm', actions: ['proceed'] });
+    await expect(page.locator('.notif-copy')).toHaveText('pending confirm');
+    await page.clock.fastForward(10000);
+    await expect(page.locator('.notif-copy')).toHaveText('pending confirm');
+    expect((await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([]);
+    await page.locator('.notif-action').click();
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(5000);
+    await expect(page.locator('.notif-copy')).toHaveText('temporary information');
+    await page.clock.fastForward(1000);
+    await expect(page.locator('.notif')).toHaveCount(0);
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'notificationAction')).toEqual([
+        { type: 'notificationAction', id: 'confirm', action: 'proceed' },
+        { type: 'notificationAction', id: 'info', action: null },
+    ]);
+});
 const latest = async (page: Page, type: string, afterRequestId?: unknown) => {
     await expect.poll(async () => {
         const message = (await sent(page)).filter((m) => m.type === type).at(-1);
@@ -985,6 +1099,19 @@ for (const locale of ['en', 'fa']) {
             await expect(page.locator('.notif-copy')).toContainText(locale === 'en' ? 'whole workspace' : 'کل پوشه کاری');
             await expect(page.locator('.notif-action')).toHaveCount(3);
             await page.screenshot({ path: testInfo.outputPath('restore-confirm.png') });
+            // Confirmation copy must retain a readable line length rather than
+            // being squeezed by the action row (the sidebar regression).
+            const copyWidth = await page.locator('.notif-copy').evaluate(el => el.getBoundingClientRect().width);
+            const bannerWidth = await page.locator('.notif').evaluate(el => el.getBoundingClientRect().width);
+            expect(copyWidth).toBeGreaterThan(bannerWidth * 0.6);
+            const bounds = await page.locator('.notif').evaluate(el => {
+                const box = el.getBoundingClientRect();
+                return Array.from(el.querySelectorAll('button')).every(button => {
+                    const rect = button.getBoundingClientRect();
+                    return rect.left >= box.left && rect.right <= box.right && rect.bottom <= box.bottom;
+                });
+            });
+            expect(bounds).toBe(true);
             await page.locator('.notif-action').first().click();
             await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-confirm')?.action).toBe('checkpointScopeFiles');
             for (const [key, text] of [
@@ -997,6 +1124,13 @@ for (const locale of ['en', 'fa']) {
                 await page.screenshot({ path: testInfo.outputPath(`${key}.png`) });
                 await page.locator('.notif-close').click();
             }
+            await post(page, { type: 'notification', id: 'restore-error', kind: 'error', valueKey: 'checkpointActionStale' });
+            await expect(page.locator('.notif-error[role="alert"] .notif-copy')).toBeVisible();
+            setTestLocale(locale === 'en' ? 'en' : 'fa');
+            await expect(page.locator('.notif-error .notif-copy')).toHaveText(t('checkpointActionStale'));
+            await page.screenshot({ path: testInfo.outputPath('error.png') });
+            await page.locator('.notif-close').click();
+            await expect.poll(async () => (await sent(page)).find(m => m.type === 'notificationAction' && m.id === 'restore-error')?.action).toBe(null);
         });
     }
 }
