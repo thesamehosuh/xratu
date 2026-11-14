@@ -923,7 +923,7 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 .compose-dock:has(.attachment-menu-collapsed) > .git-status { visibility:hidden; height:0; min-height:0; padding-block:0; overflow:hidden; }
 
 /* Preserve editor tokens before deriving local contrast overrides. */
-:root { --xratu-editor-ink:var(--vscode-foreground,#cccccc); --xratu-editor-muted:var(--vscode-descriptionForeground,#9d9d9d); --xratu-editor-sidebar:var(--vscode-sideBar-background,#181818); --xratu-editor-content:var(--vscode-editor-background,#1f1f1f); }
+body { --xratu-editor-ink:var(--vscode-foreground,#cccccc); --xratu-editor-muted:var(--vscode-descriptionForeground,#9d9d9d); --xratu-editor-sidebar:var(--vscode-sideBar-background,#181818); --xratu-editor-content:var(--vscode-editor-background,#1f1f1f); }
 .workbench { --contrast-base-ink:var(--xratu-editor-ink); --contrast-base-muted:var(--xratu-editor-muted); --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-base-canvas:var(--xratu-editor-sidebar); --contrast-base-inset:var(--xratu-editor-sidebar); --contrast-base-editor:var(--xratu-editor-content); --contrast-amount:var(--appearance-dark-contrast,0%); }
 body:is(.vscode-light,.vscode-high-contrast-light) .workbench { --contrast-target:#000000; --contrast-bg-target:#ffffff; --contrast-base-canvas:var(--xratu-editor-content); --contrast-amount:var(--appearance-light-contrast,0%); }
 body .workbench[data-color-scheme="dark"] { --contrast-base-ink:#d4d4d4; --contrast-base-muted:#9d9d9d; --contrast-base-canvas:#181818; --contrast-base-inset:#151515; --contrast-base-editor:#1f1f1f; --contrast-target:#ffffff; --contrast-bg-target:#000000; --contrast-amount:var(--appearance-dark-contrast,0%); }
@@ -946,7 +946,7 @@ body .workbench[data-color-scheme="dark"][data-contrast-dark]:not([data-contrast
 .appearance-range { display:flex; align-items:center; gap:10px; width:220px; max-width:100%; }
 .appearance-range input { width:100%; min-width:0; accent-color:var(--surface-accent); }
 .appearance-range output { min-width:4ch; text-align:end; font-variant-numeric:tabular-nums; }
-.appearance-custom-swatch { background:conic-gradient(#f33,#fc0,#0d8,#0cf,#65f,#e3b,#f33); color:white; }
+.appearance-custom-swatch { width:32px; height:32px; flex-basis:32px; background:conic-gradient(#f33,#fc0,#0d8,#0cf,#65f,#e3b,#f33); color:white; }
 .appearance-custom-swatch svg { filter:drop-shadow(0 0 1px #000); }
 .appearance-color-input { position:absolute; inline-size:1px; block-size:1px; opacity:0; pointer-events:none; }
 
