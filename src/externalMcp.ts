@@ -545,8 +545,8 @@ export class ExternalMcpManager {
         const timeoutMs = cfg.timeoutMs === 0 ? 0 : (cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
 
         const stateRequest = this.getState(serverName, cfg, source);
-        const usedPromise = this._states.get(serverName);
         const state = await stateRequest;
+        const usedPromise = this._states.get(serverName);
         signal?.throwIfAborted();
         if (!state) {
             return textResult(`Error: MCP server '${serverName}' is not reachable`);
@@ -580,7 +580,7 @@ export class ExternalMcpManager {
             const msg = e instanceof Error ? e.message : String(e);
             const protocolError = e instanceof McpError;
             const connectionFailure = !protocolError || e.code === ErrorCode.ConnectionClosed;
-            if (connectionFailure && usedPromise && this._states.get(serverName) === usedPromise) {
+            if (connectionFailure && usedPromise && await usedPromise.catch(() => null) === state && this._states.get(serverName) === usedPromise) {
                 this._states.delete(serverName);
                 void usedPromise.then(state => closeState(state)).catch(() => undefined);
                 this._markStatus(serverName, { state: 'error', lastError: msg }, source);

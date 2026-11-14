@@ -228,7 +228,10 @@ export class OpenCodeEngine implements AgentEngine {
         turn.signal.throwIfAborted();
         // A read-only catalog request fences plugin activation before creating
         // sessions or changing native model, permissions and bridge state.
-        const catalog = await this.models(turn.workspace, turn.signal);
+        const catalog = await this.models(turn.workspace, turn.signal).catch(async (error) => {
+            if (turn.session?.nativeSessionId) await this.server.dispose();
+            throw error;
+        });
         await this.syncMcp(client, turn.workspace, turn.signal);
         const options = { signal: turn.signal };
         const catalogModel = turn.variant ? catalog.find((entry) => `${entry.providerID}/${entry.id}` === turn.model) : undefined;

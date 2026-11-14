@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 import { openPageNavigation } from './navigation';
 const post = (page: Page, value: object) => page.evaluate(message => window.postMessage(message, '*'), value);
-const sent = (page: Page) => page.evaluate(() => (window as unknown as { __xratuHostMessages: object[] }).__xratuHostMessages);
+const sent = (page: Page) => page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
 const openTool = async (page: Page, name: string) => {
     const group = page.locator('.transcript-pane .conversation-work-group').last();
     await group.locator(':scope > summary').click();
