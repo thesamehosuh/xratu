@@ -228,9 +228,11 @@ for (const theme of ['dark', 'light', 'app-dark'] as const) for (const locale of
                     ...(index === 0 ? [{ model: 'GPT-4.1', host: 'api.avalai.ir', input: 420000, output: 52000, cached: 0, USD: 0, IRT: 128400 }, { model: 'local-model', host: 'localhost', input: 88000, output: 12000, cached: 0, USD: 0, IRT: 0 }] : []),
                 ] })), allTime: { input: 2308000, output: 304000, cached: 0, USD: 4.82, IRT: 128400 } });
                 await page.locator('.cost-granularity .usage-range').first().click();
+                await page.locator('.usage-view-tabs button').last().click();
                 await page.locator('.cost-currencies .usage-range').last().click();
+                await page.locator('.usage-breakdown-tabs button').last().click();
                 await expect(page.locator('.usage-input-total')).toBeVisible();
-                await expect(page.locator('.usage-provider-table .prov-row')).toHaveCount(4);
+                await expect(page.locator('.usage-provider-list .prov-row')).toHaveCount(4);
                 await expect(page.locator('.cost-col-total').first()).toHaveText('$0.38');
                 await shot('page-usage');
             }

@@ -12,9 +12,9 @@ export function NavigationResize() {
     });
     useLayoutEffect(() => {
         const app = handle.current?.closest<HTMLElement>('.app');
-        app?.style.setProperty('--navigation-width', `${width}px`);
+        app?.style.setProperty('--navigation-desktop-width', `${width}px`);
         patchWebviewState({ navigationWidth: width });
-        return () => { app?.style.removeProperty('--navigation-width'); };
+        return () => { app?.style.removeProperty('--navigation-desktop-width'); };
     }, [width]);
     const sign = getLocale() === 'fa' ? -1 : 1;
     const choose = (value: number) => setWidth(Math.round(Math.max(MIN, Math.min(MAX, value))));

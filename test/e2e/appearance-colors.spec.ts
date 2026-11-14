@@ -8,7 +8,7 @@ const post = (page: Page, message: object) => page.evaluate(value => window.post
 const choose = async (page: Page, id: string, value: number) => {
     if (id === 'appearance-accent') { await page.locator('#appearance-accent').getByRole('radio').nth(value).click(); return; }
     await page.locator(`#${id}`).click();
-    await page.locator(`#${id}`).locator('..').getByRole('option').nth(value).click();
+    await page.getByRole('option').nth(value).click();
 };
 const actionContrast = (button: Locator) => button.evaluate(element => {
     const context = document.createElement('canvas').getContext('2d')!;

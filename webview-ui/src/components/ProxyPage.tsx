@@ -146,7 +146,7 @@ export function ProxyPage({
         || noProxy.trim() !== (state.noProxy ?? '').trim()
         || webSearchUseProxy !== (state.webSearchUseProxy !== false)
     );
-    const socksWarn = mode !== 'off' && serverDraft.scheme === 'socks5';
+    const socksWarn = mode === 'custom' && serverDraft.scheme === 'socks5';
     /** The save check marks a click, not the idle state - it drops again as
      *  soon as something new is drafted. */
     const [justSaved, setJustSaved] = useState(false);

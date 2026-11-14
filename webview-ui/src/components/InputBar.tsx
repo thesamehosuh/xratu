@@ -1188,7 +1188,7 @@ export function InputBar({
                         type="button"
                         className="attach-btn"
                         ref={attachBtnRef}
-                        onPointerDown={event => { if (event.button === 0) event.preventDefault(); }}
+                        onMouseDown={event => { if (event.button === 0) event.preventDefault(); }}
                         onClick={() => { setAttachMenuCollapsed((composerRef.current?.querySelector('.composer-actions')?.getBoundingClientRect().height ?? 36) < 2); setAttachMenuOpen((s) => !s); }}
                         aria-haspopup="menu"
                         aria-expanded={attachMenuOpen}
@@ -1357,6 +1357,7 @@ export function InputBar({
                         <button
                             type="button"
                             className={`send-btn${stopping ? ' is-stop' : ''}`}
+                            onMouseDown={event => { if (event.button === 0) event.preventDefault(); }}
                             onClick={stopping ? onCancel : submit}
                             disabled={!stopping && !canSend}
                             aria-label={stopping ? t('stopAria') : editDraft ? t('editSave') : t('sendAria')}

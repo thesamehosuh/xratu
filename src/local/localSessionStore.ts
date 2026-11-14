@@ -636,15 +636,15 @@ export class LocalSessionStore {
         return all.find(meta => meta.workspace === workspaceRoot) ?? null;
     }
 
-    async create(workspaceRoot: string): Promise<LocalSessionMeta> {
-        return this.enqueue(() => this._create(workspaceRoot));
+    async create(workspaceRoot: string, engineId?: 'xratu' | 'opencode'): Promise<LocalSessionMeta> {
+        return this.enqueue(() => this._create(workspaceRoot, engineId));
     }
 
-    private async _create(workspaceRoot: string): Promise<LocalSessionMeta> {
+    private async _create(workspaceRoot: string, engineId?: 'xratu' | 'opencode'): Promise<LocalSessionMeta> {
         const id = randomUUID();
         const now = Date.now();
-        const meta: LocalSessionMeta = { id, title: workspaceLabel(workspaceRoot), workspace: workspaceRoot, createdAt: now, updatedAt: now };
-        await this.writeMeta(meta, { model: null, summary: null, localHistory: [], uiHistory: [] });
+        const meta: LocalSessionMeta = { id, title: workspaceLabel(workspaceRoot), workspace: workspaceRoot, createdAt: now, updatedAt: now, engineId };
+        await this.writeMeta(meta, { model: null, summary: null, localHistory: [], uiHistory: [], engineSession: engineId ? { engineId, workspace: workspaceRoot } : undefined });
         return meta;
     }
 

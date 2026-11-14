@@ -1509,3 +1509,47 @@ test('automatic change refreshes only reload open files that changed', async ({ 
     await page.locator('.review-head .icon-btn').click();
     await expect.poll(async () => (await fileRequests('src/first.ts')).length).toBe(firstBefore + 1);
 });
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
+    test(`overlay Escape preserves a running response (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'chunk', value: 'Still running' });
+        for (const section of ['appearance', 'history', 'workspace']) {
+            if (section === 'appearance') {
+                await post(page, { type: 'openSettings' });
+                await openPageNavigation(page);
+                await page.locator('[data-section=appearance]').click();
+            } else {
+                if (!await page.locator('.workspace-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
+                await page.locator('.workspace-sidebar .workspace-views').first().locator('button').nth(section === 'workspace' ? 0 : 1).click();
+            }
+            await expect(page.locator('.page-content')).toBeVisible();
+            await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+            await page.keyboard.press('Escape');
+            await expect(page.locator('.page-content')).toHaveCount(0);
+            expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
+        }
+    });
+}
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
+    test(`resting composer retains context and git status (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
+        await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+        await post(page, { type: 'restoreUser', value: 'Keep the context visible' });
+        await post(page, { type: 'startResponse' });
+        await post(page, { type: 'fullResponse', persian: 'Done' });
+        await page.locator('.msg.user').click();
+        await expect(page.locator('.tok-meter')).toBeVisible();
+        await expect(page.locator('.git-status')).toBeVisible();
+        const ring = (await page.locator('.tok-meter').boundingBox())!;
+        const composer = (await page.locator('.composer').boundingBox())!;
+        expect(ring.y).toBeGreaterThanOrEqual(composer.y);
+        expect(ring.y + ring.height).toBeLessThanOrEqual(composer.y + composer.height);
+        await page.screenshot({ path: info.outputPath('resting-composer.png') });
+    });
+}

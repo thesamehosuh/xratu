@@ -78,7 +78,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
             const name = head.querySelector('.cred-oauth-account')!.getBoundingClientRect();
             return [...head.children].filter((el) => !el.matches('.cred-oauth-account')).some((el) => {
                 const box = el.getBoundingClientRect();
-                return name.left < box.right - 1 && name.right > box.left + 1;
+                return name.left < box.right - 1 && name.right > box.left + 1 && name.top < box.bottom - 1 && name.bottom > box.top + 1;
             });
         }));
         expect(overlap).toBe(false);

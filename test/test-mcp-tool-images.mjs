@@ -532,7 +532,8 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     assert.equal(attempts, 1, 'failed connections do not retry on every turn');
     retrying._inventory = [{ serverName: 'second', serverConfigHash: 'old-generation' }];
     await retrying.restart('first');
-    assert.equal(retrying._inventory.length, 0, 'restart withholds all stale generation bindings');
+    assert.equal(retrying._inventory.length, 1, 'restart retains unaffected server inventory for display');
+    assert.equal(retrying._inventory[0].serverName, 'second');
     assert.equal(attempts, 2, 'manual restart bypasses cooldown');
     await retrying.reload();
     await retrying.getState('first', {}, 'global');
@@ -641,6 +642,27 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     rejectOld(new Error('late failure from the old configuration'));
     assert.deepEqual(await listing, []);
     assert.equal((await manager.getServerStatuses())[0].state, 'unconfigured', 'stale discovery cannot overwrite a reloaded configuration with an old error');
+}
+
+// A changed config reconnects instead of relabeling tools from the old client.
+{
+    const manager = new ExternalMcpManager(async () => ({ servers: {}, sources: {} }));
+    let closed = 0, connects = 0;
+    const old = Promise.resolve({ name: 'changed', configHash: 'old-config', client: { close: async () => { closed++; } } });
+    manager._states.set('changed', old);
+    const fresh = { name: 'changed', client: {} };
+    manager.connect = (name, cfg, source) => {
+        connects++;
+        fresh.configHash = require('node:crypto').createHash('sha256').update(JSON.stringify([source, cfg, undefined])).digest('hex');
+        const pending = Promise.resolve(fresh);
+        manager._states.set(name, pending);
+        return pending;
+    };
+    const cfg = { url: 'https://changed.example/mcp' };
+    assert.equal(await manager.getState('changed', cfg, 'global'), fresh);
+    assert.equal(await manager.getState('changed', cfg, 'global'), fresh);
+    assert.equal(closed, 1);
+    assert.equal(connects, 1);
 }
 
 console.log(failed === 0
