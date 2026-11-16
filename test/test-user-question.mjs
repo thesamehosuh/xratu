@@ -39,10 +39,10 @@ check('tool name is stable', USER_QUESTION_TOOL_NAME, 'ask_user_question');
 // --- validation -------------------------------------------------------------
 check('missing question is rejected', parseError({}), 'Missing required argument: question');
 check('blank question is rejected', parseError({ question: '   ' }), 'Missing required argument: question');
-check('missing options is rejected', parseError({ question: 'Which?' }), 'ask_user_question requires at least 2 options with a non-empty label');
-check('one option is rejected', parseError({ question: 'Which?', options: [{ label: 'A', description: '' }] }), 'ask_user_question requires at least 2 options with a non-empty label');
-check('empty labels are dropped', parseError({ question: 'Which?', options: [{ label: '  ', description: '' }, { label: 'B', description: '' }] }), 'ask_user_question requires at least 2 options with a non-empty label');
-check('garbage options are rejected', parseError({ question: 'Which?', options: ['x', 'y'] }), 'ask_user_question requires at least 2 options with a non-empty label');
+check('missing options permits free text', parseError({ question: 'Which?' }), null);
+check('one option is rejected', parseError({ question: 'Which?', options: [{ label: 'A', description: '' }] }), 'ask_user_question requires either no options for free text, or at least 2 labeled options');
+check('empty labels are dropped', parseError({ question: 'Which?', options: [{ label: '  ', description: '' }, { label: 'B', description: '' }] }), 'ask_user_question requires either no options for free text, or at least 2 labeled options');
+check('garbage options are rejected', parseError({ question: 'Which?', options: ['x', 'y'] }), 'ask_user_question requires either no options for free text, or at least 2 labeled options');
 
 // --- happy path -------------------------------------------------------------
 const good = parseUserQuestionArgs({

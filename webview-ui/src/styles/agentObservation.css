@@ -1,23 +1,25 @@
 /* Child runs use the same quiet work surface, with teal reserved for live focus. */
 .agents-pane { min-width:0; min-height:0; container-type:inline-size; background:var(--page-canvas); }
 .agents-layout { height:100%; min-height:0; display:flex; flex-direction:column; max-width:1120px; margin-inline:auto; }
-.agent-run-list { display:flex; gap:7px; padding:12px; overflow:auto; flex-shrink:0; border-block-end:1px solid var(--page-line); scrollbar-width:thin; }
-.agent-run-card { display:flex; flex-direction:column; gap:3px; flex:0 0 180px; min-width:0; padding:4px; border:1px solid var(--page-line); border-radius:8px; background:transparent; color:var(--vscode-foreground); font:inherit; }
+.agent-roster { min-width:0; min-height:0; flex-shrink:0; border-block-end:1px solid var(--page-line); }
+.agent-roster-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px 0; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-xs); }
+.agent-run-list { display:flex; gap:8px; padding:10px 12px 12px; overflow:auto; scrollbar-width:thin; }
+.agent-run-card { display:flex; flex-direction:column; gap:3px; flex:0 0 200px; min-width:0; padding:4px; border:1px solid var(--page-line); border-radius:8px; background:transparent; color:var(--vscode-foreground); font:inherit; }
 .agent-run-card:hover { background:var(--vscode-list-hoverBackground); }
-.agent-run-card.selected { border-color:var(--page-line); background:transparent; font-weight:600; }
-.agent-run-select { display:flex; flex-direction:column; gap:7px; min-width:0; flex:1; padding:6px 7px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+.agent-run-card.selected { border-color:var(--surface-accent); background:var(--page-surface); }
+.agent-run-select { display:flex; flex-direction:column; align-items:stretch; gap:7px; min-width:0; flex:1; padding:6px 7px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
 .agent-run-stop { display:inline-flex; align-items:center; justify-content:center; gap:5px; align-self:flex-start; margin-inline:7px; margin-block-end:3px; padding:2px 7px; border:1px solid var(--page-line); border-radius:5px; background:transparent; color:var(--vscode-descriptionForeground); font:inherit; font-size:10px; line-height:1.7; }
 .agent-run-stop:is(:hover,:focus-visible) { color:var(--vscode-errorForeground); border-color:color-mix(in srgb,var(--vscode-errorForeground) 40%,var(--page-line)); background:var(--xratu-error-faint,transparent); }
 .agent-card-top { display:flex; align-items:center; gap:6px; font-size:var(--xratu-fs-sm); }
 .agent-card-top > svg { color:var(--surface-accent); flex-shrink:0; }
-.agent-card-top strong { font-weight:550; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.agent-card-top strong { font-weight:650; overflow-wrap:anywhere; line-height:1.6; flex:1; }
 .agent-run-status { display:inline-flex; align-items:center; justify-content:center; width:13px; height:13px; flex-shrink:0; color:var(--vscode-descriptionForeground); }
 .agent-run-status .spinner { width:10px; height:10px; }
 .agent-run-status:is(.running,.waiting) { color:var(--surface-accent); }
 .agent-run-status.done { color:var(--vscode-testing-iconPassed,#8bbaa6); }
 .agent-run-status:is(.error,.cancelled),.agent-state-text.error { color:var(--vscode-errorForeground); }
 .agent-status-dot { width:4px; height:4px; border-radius:50%; background:currentColor; }
-.agent-card-title { font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; min-height:35px; }
+.agent-card-title { font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; color:var(--vscode-descriptionForeground); }
 .agent-card-foot { display:flex; align-items:center; justify-content:space-between; gap:6px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-xs); }
 .agent-card-foot > span:last-child { display:inline-flex; align-items:center; gap:4px; }
 .agent-current-tool { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:transparent; padding:0; font-size:var(--xratu-fs-xs); color:var(--surface-accent); }
@@ -25,9 +27,11 @@
 .agent-run-view { height:100%; display:flex; flex-direction:column; min-height:0; }
 .agent-run-view.panel-hidden { display:none; }
 .agent-run-head { padding:14px 16px 10px; border-block-end:1px solid var(--page-line); }
-.agent-run-heading { display:flex; align-items:flex-start; gap:7px; font-size:var(--xratu-fs-base); line-height:1.6; }
+.agent-run-heading { display:flex; align-items:flex-start; gap:9px; font-size:var(--xratu-fs-lg); line-height:1.6; }
 .agent-run-heading > svg { flex-shrink:0; margin-block-start:3px; color:var(--surface-accent); }
-.agent-run-heading strong { font-weight:550; overflow-wrap:anywhere; }
+.agent-run-heading strong { font-weight:650; overflow-wrap:anywhere; }
+.agent-profile-label { display:flex; align-items:center; gap:5px; font-size:var(--xratu-fs-xs); color:var(--vscode-descriptionForeground); margin-block-start:6px; }
+.agent-profile-label > svg { flex-shrink:0; }
 .agent-run-meta { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:var(--xratu-fs-xs); color:var(--vscode-descriptionForeground); margin-block-start:7px; }
 .agent-metric,.agent-state-text { display:inline-flex; align-items:center; gap:5px; min-width:0; }
 .agent-run-meta code,.agent-brief code { font-size:var(--xratu-fs-xs); background:transparent; padding:0; border:0; overflow-wrap:anywhere; }
@@ -71,8 +75,9 @@
 .subagent-preview-report { margin-block:10px 6px; font-size:var(--xratu-fs-md); line-height:1.7; white-space:pre-wrap; max-height:250px; overflow:auto; }
 .subagent-legacy-live { font-size:var(--xratu-fs-xs); white-space:pre-wrap; max-height:220px; overflow:auto; }
 @container (min-width:720px) {
-    .agents-layout { display:grid; grid-template-columns:210px minmax(0,1fr); }
-    .agent-run-list { flex-direction:column; border-block-end:0; border-inline-end:1px solid var(--page-line); }
+    .agents-layout { display:grid; grid-template-columns:240px minmax(0,1fr); }
+    .agent-roster { display:flex; flex-direction:column; border-block-end:0; border-inline-end:1px solid var(--page-line); }
+    .agent-run-list { flex-direction:column; flex:1; min-height:0; }
     .agent-run-card { flex:0 0 auto; width:100%; }
 }
 /* Expanded pills show a useful artifact, not a stack of raw argument labels. */

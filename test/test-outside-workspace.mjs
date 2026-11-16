@@ -19,7 +19,7 @@ const workspace = path.join(base, 'workspace');
 const outside = path.join(base, 'outside');
 fs.mkdirSync(workspace); fs.mkdirSync(outside);
 const target = path.join(outside, 'file.txt');
-const call = { id: 'edit', name: 'edit_file', arguments: { path: target, mode: 'create', new_content: 'approved' } };
+const call = { id: 'edit', name: 'write_file', arguments: { path: target, mode: 'create', new_content: 'approved' } };
 let snapshots = 0;
 const executor = (approveOutsideWorkspace, extra = {}) => createLocalToolExecutor(workspace, async () => { snapshots++; }, undefined, undefined, undefined, undefined, { approveOutsideWorkspace, ...extra });
 try {
@@ -69,13 +69,6 @@ try {
     const controller = new AbortController();
     await assert.rejects(executor(async () => { controller.abort(); return true; }, { signal: controller.signal }).execute(next), /abort/i);
     assert.equal(fs.existsSync(next.arguments.path), false);
-    const source = path.join(workspace, 'source.txt'); fs.writeFileSync(source, 'keep');
-    const move = { id: 'move', name: 'move_file', arguments: { source, destination: path.join(outside, 'moved.txt') } };
-    assert.equal((await executor(async () => false).execute(move)).isError, true);
-    assert.equal(fs.readFileSync(source, 'utf8'), 'keep');
-    assert.equal((await executor(async () => true).execute(move)).isError, undefined);
-    assert.equal(fs.existsSync(source), false);
-    assert.equal(fs.readFileSync(move.arguments.destination, 'utf8'), 'keep');
     // A symlink changed while the approval card is open must not inherit the grant.
     const link = path.join(workspace, 'link');
     try { fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir'); }

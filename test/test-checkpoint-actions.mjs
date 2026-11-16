@@ -160,7 +160,7 @@ try {
     const rules = harness();
     Object.assign(rules.host, {
         _sessionTitle: 'T', _localSteerQueue: [], _pendingJobNotices: [],
-        _resetLiveSegments: () => {}, _discardQueuedSteers: () => {},
+        _resetLiveSegments: () => {}, _discardQueuedSteers: () => {}, _rejectQueuedSteers: () => {},
         _postEngineState: () => {}, _settleLocalRun: () => {},
         _localRulesContext: async () => { throw new Error('EISDIR: illegal operation on a directory, read'); },
         _runLocalAgent: async () => { throw new Error('the agent must not start without project rules'); },
@@ -180,7 +180,7 @@ try {
     for (const accepts of [false, true]) {
         const t = harness(); let committed = 0, acknowledged = false;
         Object.assign(t.host, { _sessionTitle: 'T', _localSteerQueue: [], _pendingJobNotices: [],
-            _resetLiveSegments: () => {}, _endLiveMarkdown: () => {}, _discardQueuedSteers: () => {},
+            _resetLiveSegments: () => {}, _endLiveMarkdown: () => {}, _discardQueuedSteers: () => {}, _rejectQueuedSteers: () => {},
             _postEngineState: () => {}, _settleLocalRun: () => {}, _commitUnfinishedLocalTurn: () => { committed++; },
             _runLocalAgent: async (_prompt, _rules, _files, _controller, _plan, _hidden, accept) => {
                 if (accepts) accept();

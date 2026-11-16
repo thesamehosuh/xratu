@@ -94,7 +94,8 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await expect(page.locator('.browser-viewport img')).toBeVisible();
             await expect(page.locator('.browser-address')).toHaveValue(beforePersistence.url);
             expect(controller.getState().browserId).toBe(beforePersistence.browserId);
-            expect((await controller.tool('browser-session', 'browser_type', { locator: 'role=textbox[name="Name"]', text: 'Xratu سلام' })).isError).toBeUndefined();
+            expect((await controller.tool('browser-session', 'browser_wait_for', { locator: 'role=textbox[name="Name"]', text: 'Save' })).isError).toBeUndefined();
+            expect((await controller.tool('browser-session', 'browser_fill', { locator: 'role=textbox[name="Name"]', text: 'Xratu سلام' })).isError).toBeUndefined();
             expect((await controller.tool('browser-session', 'browser_click', { locator: 'role=button[name="Save"]' })).isError).toBeUndefined();
             expect((await controller.tool('browser-session', 'browser_snapshot', {})).output).toContain('Saved Xratu سلام');
             const shot = await controller.tool('browser-session', 'browser_screenshot', {});

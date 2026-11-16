@@ -54,6 +54,9 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await expect(panel).toBeVisible(); await expect(panel.locator('.agent-run-card')).toHaveCount(2);
         await expect(panel.locator('.agent-run-view:not(.panel-hidden) .agent-run-heading')).toContainText('Trace session expiry');
         await expect(panel.locator('.agent-token-metric').first()).toContainText('1,234');
+        await expect(panel.locator('.agent-run-select').first().locator('strong')).toContainText('Trace session expiry');
+        await expect(panel.locator('.agent-profile-label').first()).toHaveText('explore');
+        if (process.env.XRATU_SCREENSHOTS) await page.screenshot({path:`/tmp/xratu-agents-main-${locale}-${width}.png`});
         await expect(panel).toContainText('Checking expiry before editing.');
         const read=panel.locator('.step').first(); await read.locator(':scope > summary').click();
         await expect(read.locator('.detail-line-number').first()).toHaveText('38');

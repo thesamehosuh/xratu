@@ -76,3 +76,11 @@ References: [OpenAI prompt caching](https://developers.openai.com/api/docs/guide
 [OpenAI reasoning context](https://developers.openai.com/api/docs/guides/reasoning),
 [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
 [Gemini context caching](https://ai.google.dev/gemini-api/docs/generate-content/caching).
+
+The latest recovered dogfooding snapshot (session ending in `35bbc1fd`) stores
+5,663,321 input tokens and 5,312,256 cached tokens: 93.8% aggregate cache reads.
+This includes delegated work and is a cumulative ledger, not a per-request
+measurement. The four-transport prefix and breakpoint regression suites pass
+on the resumed tree. Without recorded request-level miss diagnostics, these
+totals do not establish a new cache-continuity defect or explain individual
+misses; avoid changing provider wire behavior solely to raise this aggregate.

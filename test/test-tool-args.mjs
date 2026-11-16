@@ -159,15 +159,12 @@ eq('no path at all leaves args unchanged', withPathAlias({ other: 1 }).path, und
 }
 
 // --- tool-name resolution (live: "Unknown tool: write_file" dead ends)
-const { resolveToolName, TOOL_NAME_ALIASES } = require('../out/tooling/toolNames.js');
-const KNOWN = ['edit_file', 'read_file', 'apply_patch', 'run_terminal_command', 'grep_search'];
-
-eq('write_file resolves to edit_file', resolveToolName('write_file', KNOWN).name, 'edit_file');
-eq('alias reports its origin', resolveToolName('write_file', KNOWN).aliasedFrom, 'write_file');
-for (const alias of ['create_file', 'new_file', 'save_file']) {
-    eq(`alias ${alias} resolves`, resolveToolName(alias, KNOWN).name, TOOL_NAME_ALIASES[alias]);
+const { resolveToolName } = require('../out/tooling/toolNames.js');
+const KNOWN = ['edit_file', 'write_file', 'read_file', 'run_terminal_command', 'grep_search'];
+eq('writer retains its exact name', resolveToolName('write_file', KNOWN).name, 'write_file');
+for (const removed of ['create_file', 'new_file', 'save_file', 'apply_patch']) {
+    eq(`removed name ${removed} is not translated`, resolveToolName(removed, KNOWN).name, removed);
 }
-eq('canonical names pass through', resolveToolName('apply_patch', KNOWN).name, 'apply_patch');
 eq('near-miss suggests the tool', resolveToolName('edit_fiel', KNOWN).suggestion, 'edit_file');
 eq('unknown name suggests by containment', resolveToolName('file', KNOWN).suggestion, 'edit_file');
 eq('unrelated name gives no bad suggestion', resolveToolName('zzzzzzzzzzzz', KNOWN).suggestion, undefined);

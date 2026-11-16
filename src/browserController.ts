@@ -320,9 +320,9 @@ export class BrowserController {
         try {
             checkAbort(); signal?.addEventListener('abort', cancel, { once: true });
             if (name === 'browser_status') { this.current(sessionId); return { output: JSON.stringify(this.getState()) }; }
-            if (['browser_open', 'browser_navigate', 'browser_close', 'browser_resize', 'browser_press', 'browser_scroll'].includes(name)) {
+            if (['browser_open', 'browser_close', 'browser_resize', 'browser_press', 'browser_scroll'].includes(name)) {
                 let command: BrowserCommand;
-                if (name === 'browser_open' || name === 'browser_navigate') command = { action: 'navigate', url: boundedString(args.url) };
+                if (name === 'browser_open') command = { action: 'navigate', url: boundedString(args.url) };
                 else if (name === 'browser_resize') command = { action: 'resize', ...browserViewport(args.width, args.height) };
                 else if (name === 'browser_press') command = { action: 'press', key: boundedString(args.key, 128) };
                 else if (name === 'browser_scroll') command = { action: 'scroll', ...browserPoint(args.x ?? this.state.viewport.width / 2, args.y ?? this.state.viewport.height / 2, this.state.viewport), deltaX: this.delta(args.deltaX ?? 0), deltaY: this.delta(args.deltaY) };
@@ -336,6 +336,16 @@ export class BrowserController {
             }
             return await this.enqueue(sessionId, browserId, async () => {
                 checkAbort(); const page = this.requirePage();
+                if (name === 'browser_wait_for') {
+                    const timeout = Math.max(1, Math.min(60000, Number(args.timeout_ms) || 10000));
+                    if (![args.locator, args.text, args.url].some(value => typeof value === 'string' && value.length)) throw new Error('Provide locator, text, or URL.');
+                    await Promise.all([
+                        ...(args.locator ? [page.locator(boundedString(args.locator)).waitFor({ state: 'visible', timeout })] : []),
+                        ...(args.text ? [page.getByText(boundedString(args.text), { exact: false }).first().waitFor({ state: 'visible', timeout })] : []),
+                        ...(args.url ? [page.waitForURL(boundedString(args.url), { timeout })] : []),
+                    ]);
+                    return { output: JSON.stringify(this.getState()) };
+                }
                 if (name === 'browser_snapshot') {
                     const tree = await page.locator('body').ariaSnapshot({ timeout: TIMEOUT });
                     const text = await page.locator('body').innerText({ timeout: TIMEOUT });
@@ -349,7 +359,7 @@ export class BrowserController {
                 if (name === 'browser_click') {
                     if (args.locator !== undefined) await page.locator(boundedString(args.locator)).click();
                     else { const point = browserPoint(args.x, args.y, this.state.viewport); await page.mouse.click(point.x, point.y); }
-                } else if (name === 'browser_type') {
+                } else if (name === 'browser_fill') {
                     await page.locator(boundedString(args.locator)).fill(boundedString(args.text, 16000));
                 } else if (name === 'browser_evaluate') {
                     const expression = boundedString(args.expression, 32000);
@@ -365,7 +375,7 @@ export class BrowserController {
                         ]);
                     } finally { clearTimeout(timer); }
                     const output = JSON.stringify(result) ?? 'null';
-                    return { output: output.length > 64000 ? output.slice(0, 64000) + '\n[truncated]' : output };
+                    return { output: output.length > 64000 ? JSON.stringify({ truncated: true, preview: output.slice(0, 60000) }) : output };
                 } else throw new Error('Unknown browser tool.');
                 checkAbort(); await this.refresh(page);
                 return { output: JSON.stringify(this.getState()) };

@@ -51,7 +51,7 @@ const ok = (name, cond, detail = '') => {
     // The POSIX sample command must go; `</dev/null` may only appear as an
     // explicit "this does not exist here" warning.
     ok('windows description drops the POSIX sample command', !win.includes('wc -l') && !win.includes('cat data.csv'));
-    ok('windows description warns off </dev/null', /there is no `<\/dev\/null` here/.test(win));
+    ok('windows description documents portable piped input', win.includes('process_input') && win.includes('No PTY'));
 
     // `find.exe` EXISTS on Windows as a line filter. Listing it as "not
     // recognized" contradicted the find-misuse branch in terminalFailureHint
@@ -59,7 +59,7 @@ const ok = (name, cond, detail = '') => {
     ok('windows description drops find from the missing list', !win.includes('grep, find, head'));
     ok('windows description explains find.exe semantics', win.includes('`find` is different') && win.includes('line filter'));
     ok('windows description sends file search to glob_search', win.includes('use glob_search to find files'));
-    ok('windows description keeps the plan-mode note', win.includes('PLAN MODE'));
+    ok('windows description keeps the plan-mode note', win.includes('unavailable in Plan mode'));
     ok('windows description keeps the kill windows', win.includes('30-minute hard cap') && win.includes('10 minutes'));
 
     const posix = terminalToolDescription('linux');
@@ -68,8 +68,8 @@ const ok = (name, cond, detail = '') => {
     // host's shell.
     ok('posix description rules cmd.exe out', /cmd\.exe\/PowerShell commands[\s\S]*do not exist here/.test(posix));
     ok('posix description does not present cmd.exe as the shell', !posix.includes('via Windows cmd.exe'));
-    ok('posix description keeps the plan-mode example', posix.includes('ls/cat/grep/rg/find/jq'));
-    ok('posix description keeps stdin-EOF guidance', posix.includes('</dev/null'));
+    ok('posix description denies plan-mode execution', posix.includes('unavailable in Plan mode'));
+    ok('posix description explains default input closure', posix.includes('stdin closes') && posix.includes('interactive=true'));
 
     // The description is part of the cached prompt prefix: same platform must
     // produce the same bytes on every rebuild.

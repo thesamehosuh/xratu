@@ -1,3 +1,5 @@
+import { TOOL_POLICY, isAvailableTool } from './tooling/toolPolicy';
+import { filePage, fileHead } from './tooling/filePage';
 import * as vscode from 'vscode';
 import { abortable } from './oauth/refreshLock';
 import { DOWNLOAD_MUTATIONS, DOWNLOAD_TOOLS } from './downloads/tools';
@@ -11,7 +13,7 @@ import { PULL_REQUEST_TOOLS, PULL_REQUEST_MUTATIONS, type PullRequestToolExecuto
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { decodeUnicodeEscapes, looksBinary, parsePatchBlocks, repairPatchMarkers, sanitizePath as workspaceSanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
+import { looksBinary, sanitizePath as workspaceSanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
 import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
 import { resolveToolName } from './tooling/toolNames';
 import {
@@ -22,8 +24,8 @@ import { ExternalMcpManager, EXTERNAL_PREFIX } from './externalMcp';
 import { executeWebTool } from './webTools';
 import {
     XRATU_EXPANSION_TOOLS,
+    gitWorkspaceFiles,
     handleExpansionTool,
-    EXPANSION_MUTATING_TOOL_NAMES,
     type ExpansionToolRuntime,
 } from './xratu_mcp_tools';
 import {
@@ -68,25 +70,6 @@ import {
     type DiscoveredSkill,
     type SkillResolution,
 } from './skills';
-
-/** Tools that change workspace state - each execution is preceded by an
- *  automatic shadow-checkpoint snapshot (once per turn). */
-const MUTATING_TOOLS = new Set([
-    'edit_file', 'replace_in_file', 'apply_patch',
-    'run_terminal_command',
-    ...DOWNLOAD_MUTATIONS,
-    ...ARCHIVE_MUTATIONS,
-    ...EXPANSION_MUTATING_TOOL_NAMES,
-]);
-
-/**
- * Dropped in PLAN MODE without being approval-gated. A plan is a read-only
- * reconnaissance pass: it must not stop processes, and there can be no
- * background job to inspect anyway because the only tool that starts one is
- * itself dropped. Kept separate from MUTATING_TOOLS because `poll`/`log` on
- * `process` are reads and must not cost an approval prompt.
- */
-const PLAN_MODE_DENIED_TOOLS = new Set(['process']);
 
 /**
  * Target-triple directories VS Code uses inside `@vscode/ripgrep-universal/bin`.
@@ -220,13 +203,13 @@ function waitForDiagnosticsChange(uri: vscode.Uri, timeoutMs: number): Promise<b
 
 async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
     try {
-        const interesting = (d: readonly vscode.Diagnostic[]) =>
-            d.some((x) => x.severity <= vscode.DiagnosticSeverity.Warning);
         let diags: readonly vscode.Diagnostic[] = vscode.languages.getDiagnostics(uri);
         const deadline = Date.now() + DIAGNOSTICS_BUDGET_MS;
-        while (!interesting(diags) && Date.now() < deadline) {
+        let refreshed = false;
+        while (Date.now() < deadline) {
             const fired = await waitForDiagnosticsChange(uri, deadline - Date.now());
             if (!fired) break;
+            refreshed = true;
             // Settle briefly so a clear-then-set pair lands together, but never
             // past the budget: an event landing at the deadline must not push
             // the wait beyond the ceiling the comment above advertises.
@@ -234,6 +217,7 @@ async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
             if (settle > 0) await new Promise((r) => setTimeout(r, settle));
             diags = vscode.languages.getDiagnostics(uri);
         }
+        diags = vscode.languages.getDiagnostics(uri);
         const picked = diags.filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning);
         if (picked.length === 0) return '';
         const errors = picked.filter((d) => d.severity === vscode.DiagnosticSeverity.Error);
@@ -242,7 +226,7 @@ async function diagnosticsSummary(uri: vscode.Uri): Promise<string> {
             const kind = d.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning';
             return `  [${kind}] ${pos} ${d.message.split('\n')[0]}`;
         });
-        const head = `[Diagnostics] ${errors.length} error(s), ${picked.length - errors.length} warning(s) after this edit:`;
+        const head = `[Diagnostics] ${errors.length} error(s), ${picked.length - errors.length} warning(s) ${refreshed ? 'after this edit' : '(current snapshot; language server update not confirmed)'}:`;
         return '\n' + head + '\n' + lines.join('\n');
     } catch {
         return '';
@@ -260,12 +244,6 @@ function preserveEol(original: string, updated: string): string {
     return crlf ? updated.replace(/\r?\n/g, '\r\n') : updated.replace(/\r\n/g, '\n');
 }
 
-/** Read a file and strip per-line trailing \r so CRLF content looks the same
- *  to the model as LF content (it cannot see or emit \r reliably). */
-function readLines(fullPath: string): string[] {
-    return fs.readFileSync(fullPath, 'utf-8').split('\n').map((l) => l.replace(/\r$/, ''));
-}
-
 // ---------------------------------------------------------------------------
 // Local runtime adapter - exported for reuse by the local agent runtime.
 //
@@ -281,11 +259,13 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
     description: string;
     inputSchema: Record<string, unknown>;
 }> = [
+    { name: 'process_input', description: 'Write input to an interactive job started by this session. Requires approval because input can execute commands. Set end=true to close stdin. This is piped input, not a PTY.', inputSchema: { type: 'object', properties: { jobId: { type: 'string' }, text: { type: 'string', maxLength: 64000 }, end: { type: 'boolean' } }, required: ['jobId', 'text'] } },
+    { name: 'view_image', description: 'Inspect a local PNG, JPEG, GIF or WebP image (maximum 20 MiB). Returns image content to the model.', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
     {
-        name: 'edit_file',
+        name: 'write_file',
         description: [
             'Whole-file writer: mode="overwrite" (default) REPLACES ITS ENTIRE CONTENT with new_content; mode="create" fails if the file already exists; mode="append" adds new_content to the end. Practical per-call ceiling is roughly 8KB of new_content - model output limits truncate larger calls mid-JSON, so build big files in chunks: mode "create" with a skeleton, then mode "append" pieces.',
-            'To change PART of an existing file, do NOT use this tool - apply_patch (one or more SEARCH/REPLACE blocks) preserves the rest of the file.',
+            'To change PART of an existing file, use edit_file with structured replacements to preserve the rest of the file.',
             'Overwriting far less content than the file has requires confirm_overwrite: true (200+ lines shrunk to under half, or 20+ lines shrunk to under a quarter) - a guard against accidental whole-file replacement.',
         ].join(' '),
         inputSchema: {
@@ -306,10 +286,12 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
             type: 'object',
             properties: {
                 path: { type: 'string' },
-                start_line: { type: 'number', description: '1-based line to start from (default 1)' },
-                max_lines: { type: 'number', description: 'Max lines to return (default 1200, hard cap 2000)' }
+                files: { type: 'array', maxItems: 20, items: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, max_lines: { type: 'integer', minimum: 1, maximum: 2000 }, start_column: { type: 'integer', minimum: 0 } }, required: [] }, description: 'Optional batch of file requests with independent ranges; use instead of path.' },
+                start_column: { type: 'integer', minimum: 0, description: 'Character offset within start_line, from the continuation cursor.' },
+                start_line: { type: 'integer', minimum: 1, description: '1-based line to start from (default 1)' },
+                max_lines: { type: 'integer', minimum: 1, maximum: 2000, description: 'Max lines to return (default 1200, hard cap 2000)' }
             },
-            required: ['path']
+            required: []
         }
     },
     {
@@ -322,13 +304,16 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
             type: 'object',
             properties: {
                 command: { type: 'string', description: terminalCommandParamDescription(process.platform) },
+                cwd: { type: 'string', description: 'Workspace-relative working directory; defaults to workspace root.' },
+                timeout_seconds: { type: 'integer', minimum: 1, maximum: 3600 },
+                yield_ms: { type: 'integer', minimum: 0, maximum: 60000, description: 'Return a managed job handle after this wait if still running.' },
+                stdin: { type: 'string', description: 'Optional initial standard input.' },
+                interactive: { type: 'boolean', description: 'Keep piped stdin open; set yield_ms or background to obtain a job ID, then use process_input for further input. Does not allocate a PTY.' },
                 background: {
                     type: 'boolean',
                     description: 'Return immediately and let the command keep running (dev servers, file watchers, GUI apps like xdg-open). Skips both timeouts, so nothing will stop it later - not a cancel, not a turn ending - and it is your job to `process`-kill it when you are done. You get a job id back to poll, log or kill.'
                 },
-                // Deprecated alias, still accepted so an older session that
-                // learned `detach` keeps working instead of silently blocking.
-                detach: { type: 'boolean', description: 'Deprecated alias for background.' }
+
             },
             required: ['command']
         }
@@ -368,26 +353,31 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
         inputSchema: {
             type: 'object',
             properties: {
-                pattern: { type: 'string', description: 'Search pattern (supports regex)' },
+                pattern: { type: 'string', description: 'Search pattern (regex unless literal is true)' },
+                literal: { type: 'boolean' }, case_sensitive: { type: 'boolean' },
+                context_lines: { type: 'integer', minimum: 0, maximum: 20 },
+                output: { type: 'string', enum: ['content', 'files', 'count'] },
+                limit: { type: 'integer', minimum: 1, maximum: 2000 },
+                offset: { type: 'integer', minimum: 0 },
+                hidden: { type: 'boolean' },
                 path: { type: 'string', description: 'Directory or file to search in (relative to workspace root)' },
                 include: { type: 'string', description: 'File glob to filter (e.g. "*.py")' }
             },
             required: ['pattern']
         }
     },
-    // replace_in_file was MERGED into apply_patch: a single SEARCH/REPLACE
-    // block is exactly one replace, and apply_patch's matcher (exact →
-    // trimEnd → whitespace-normalized) already covered replace_in_file's
-    // fuzzy fallbacks. The dispatcher below still executes the legacy name
-    // so replayed history from older sessions never breaks.
-
     {
         name: 'list_files',
         description: 'Lists files and directories at a given path. Returns directory names, file names, and sizes.',
         inputSchema: {
             type: 'object',
             properties: {
-                path: { type: 'string', description: 'Directory path relative to workspace root. Defaults to workspace root.' }
+                path: { type: 'string', description: 'Workspace-relative directory; defaults to root.' },
+                hidden: { type: 'boolean', description: 'Include dot-prefixed entries (default true).' },
+                max_depth: { type: 'integer', minimum: 1, maximum: 12 },
+                include_ignored: { type: 'boolean', description: 'Include ignored paths in recursive listings (default false).' },
+                max_entries: { type: 'integer', minimum: 1, maximum: 5000 },
+                offset: { type: 'integer', minimum: 0 }
             },
             required: []
         }
@@ -398,57 +388,34 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
         inputSchema: {
             type: 'object',
             properties: {
-                pattern: { type: 'string', description: 'Glob pattern (e.g. "*.py", "src/**/*.ts", "**/*.test.*")' },
+                pattern: { type: 'string', description: 'File glob pattern' },
+                hidden: { type: 'boolean' }, limit: { type: 'integer', minimum: 1, maximum: 2000 }, offset: { type: 'integer', minimum: 0 },
                 path: { type: 'string', description: 'Directory to search in (relative to workspace root). Defaults to workspace root.' }
             },
             required: ['pattern']
         }
     },
     {
-        name: 'apply_patch',
-        description: [
-            'Edits ONE OR MORE places in an existing file using SEARCH/REPLACE blocks - the tool for ALL targeted edits (a single block replaces exactly one string; repeat blocks for multiple edits).',
-            'Format each block EXACTLY like this, repeating for every edit. Every marker goes ALONE on its own line:',
-            // Rendered with REAL newlines. This example used to be joined with
-            // spaces, so all five markers appeared INLINE on a single line while
-            // the parser requires a newline after each. A model imitating the
-            // description then emitted a one-line patch that could never parse,
-            // and the error blamed a missing separator it could not see. The
-            // example must match the grammar it documents.
-            ['<<<<<<< SEARCH', '<exact lines currently in the file>', '=======', '<replacement lines>', '>>>>>>> REPLACE'].join('\n'),
-            'SEARCH must match the current file (copy byte-exact from read_file output); leading indentation is auto-corrected and whitespace-normalized fallback matching applies.',
-            'To CREATE a new file, use one block with an EMPTY SEARCH section and the full file content as REPLACE.',
-            'Never include lines starting with <<<<<<<, =======, or >>>>>>> inside block content - the parser refuses such patches; edit those hunks with edit_file instead.',
-        ].join('\n'),
-        inputSchema: {
-            type: 'object',
-            properties: {
-                path: { type: 'string', description: 'File path relative to workspace root' },
-                patch: { type: 'string', description: 'One or more SEARCH/REPLACE blocks' }
-            },
-            required: ['path', 'patch']
-        }
+        name: 'edit_file',
+        description: 'Make atomic, targeted replacements in a text file. Every old_text must match exactly once; include surrounding context to disambiguate. All replacements are validated before the file is written. Use write_file to create or replace a whole file.',
+        inputSchema: { type: 'object', additionalProperties: false, properties: {
+            path: { type: 'string' },
+            edits: { type: 'array', minItems: 1, maxItems: 100, items: {
+                type: 'object', additionalProperties: false,
+                properties: { old_text: { type: 'string', minLength: 1 }, new_text: { type: 'string' } },
+                required: ['old_text', 'new_text'],
+            } },
+        }, required: ['path', 'edits'] },
     },
     {
-        name: 'list_code_definition_names',
-        description: 'Lists function, class, and method definitions in a file. Returns signatures without full bodies.',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                path: { type: 'string', description: 'File path relative to workspace root' }
-            },
-            required: ['path']
-        }
-    },
-    {
-        // NOT in MUTATING_TOOLS: the card is read-only and is itself the
+        // The card is itself the
         // user-interaction surface - gating it behind an approval card would
         // be circular. Available in plan mode like read_file.
         name: USER_QUESTION_TOOL_NAME,
         description: [
             'Present a decision card and wait for the user\'s pick.',
             'Use this INSTEAD of writing a multiple-choice question in prose when the answer is genuinely the user\'s call: preferences, tradeoffs, ambiguous direction, or choices with several defensible answers.',
-            'One question per call, with 2-4 mutually exclusive options that are complete, actionable answers (no placeholders). Mark at most one option recommended: true - the one you would choose.',
+            'One question per call; omit options for a free-text answer, or provide 2-4 mutually exclusive options that are complete, actionable answers (no placeholders). Mark at most one option recommended: true - the one you would choose.',
             'Do NOT add an "Other"/catch-all option: the card always offers a free-text answer automatically.',
             'In plan mode, resolve approach/scope choices with this tool BEFORE finalizing the plan - the user\'s pick shapes the task list.',
             'Never use it for permission requests or to ask whether to proceed - never ask what you can decide or verify yourself.',
@@ -461,7 +428,7 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
                 options: {
                     type: 'array',
                     description: '2-4 mutually exclusive choices for this question',
-                    minItems: 2,
+                    minItems: 0,
                     maxItems: 4,
                     items: {
                         type: 'object',
@@ -474,7 +441,7 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
                     }
                 }
             },
-            required: ['question', 'options']
+            required: ['question']
         }
     },
     ...XRATU_EXPANSION_TOOLS,
@@ -546,12 +513,12 @@ export function getLocalToolDefinitions(opts?: {
     const yolo = !!opts?.yolo;
     const plan = !!opts?.plan;
     const builtin = BUILTIN_TOOL_DEFINITIONS
-        .filter((tool) => !plan || (!MUTATING_TOOLS.has(tool.name) && !PLAN_MODE_DENIED_TOOLS.has(tool.name)))
+        .filter(tool => isAvailableTool(tool.name, plan))
         .map((tool) => ({
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
-            requiresApproval: yolo ? false : MUTATING_TOOLS.has(tool.name),
+            requiresApproval: yolo ? false : TOOL_POLICY[tool.name]?.effect === 'execute' || TOOL_POLICY[tool.name]?.effect === 'write',
         }));
     const web = (isOfflineMode() ? [] : WEB_TOOL_DEFINITIONS).map((tool) => ({
         name: tool.name,
@@ -602,15 +569,11 @@ export function getLocalToolDefinitions(opts?: {
             requiresApproval: false,
         });
     }
-    const browser = BROWSER_TOOL_DEFINITIONS
-        .filter(tool => !plan || !BROWSER_MUTATING_TOOLS.has(tool.name))
-        // Always reach the live gate: YOLO may be toggled after this snapshot.
+    const browser = BROWSER_TOOL_DEFINITIONS.filter(tool => isAvailableTool(tool.name, plan))
         .map(tool => ({ ...tool, requiresApproval: BROWSER_MUTATING_TOOLS.has(tool.name) }));
-    const pullRequests = PULL_REQUEST_TOOLS.filter(tool => (!plan || !PULL_REQUEST_MUTATIONS.has(tool.name))
-        && (!isOfflineMode() || !['get_pull_request', 'watch_pull_request'].includes(tool.name)));
-    const downloads = DOWNLOAD_TOOLS.filter(tool => !plan || !DOWNLOAD_MUTATIONS.has(tool.name))
-        .filter(tool => !isOfflineMode() || tool.name !== 'start_download');
-    const archives = ARCHIVE_TOOLS.filter(tool => !plan || !ARCHIVE_MUTATIONS.has(tool.name));
+    const downloads = DOWNLOAD_TOOLS.filter(tool => isAvailableTool(tool.name, plan) && (!isOfflineMode() || tool.name !== 'start_download'));
+    const archives = ARCHIVE_TOOLS.filter(tool => isAvailableTool(tool.name, plan));
+    const pullRequests = PULL_REQUEST_TOOLS.filter(tool => isAvailableTool(tool.name, plan) && (!isOfflineMode() || tool.name !== 'get_pull_request')).map(tool => isOfflineMode() && tool.name === 'watch_pull_request' ? { ...tool, description: 'Stop an existing PR watch while offline. Set enabled=false.', inputSchema: { ...tool.inputSchema, properties: { url: { type: 'string' }, enabled: { type: 'boolean', enum: [false] } }, required: ['url', 'enabled'] } } : tool);
     return [...builtin, ...web, ...browser, ...downloads, ...archives, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
 }
 
@@ -745,7 +708,7 @@ async function dispatchTool(
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean; research?: import('./web/types').ResearchEvidence }> {
     signal?.throwIfAborted();
     const sanitizePath = (input: string, root: string) => workspaceSanitizePath(input, root, approvedPaths);
-    if (name === 'edit_file') {
+    if (name === 'write_file') {
         // Resolve `mode` FIRST: an unknown value must fail loudly, before any
         // fs work and before a checkpoint is taken. This used to silently
         // become "overwrite", so a botched partial-edit call (mode:
@@ -759,7 +722,7 @@ async function dispatchTool(
         // into a resend loop on every large write.
         if (args && args[UNPARSED_ARGS_KEY]) {
             return {
-                content: [{ type: 'text', text: `Error: tool-call arguments arrived malformed or truncated and could not be parsed (received head: ${String(args[UNPARSED_ARGS_KEY])}). If the call was large, it was most likely cut off at the model's output token limit mid-JSON - do NOT resend it whole: write the file in chunks (create a skeleton with edit_file mode "create", then append or apply_patch the rest in smaller pieces). If it was small, resend it as a single plain-JSON arguments object.` }],
+                content: [{ type: 'text', text: `Error: tool-call arguments arrived malformed or truncated and could not be parsed (received head: ${String(args[UNPARSED_ARGS_KEY])}). If the call was large, it was most likely cut off at the model's output token limit mid-JSON - do NOT resend it whole: write the file in chunks (create a skeleton with write_file mode "create", then append or edit_file the rest in smaller pieces). If it was small, resend it as a single plain-JSON arguments object.` }],
                 isError: true,
             };
         }
@@ -791,14 +754,14 @@ async function dispatchTool(
         // absolute one (200+ lines shrunk below half) and a relative one
         // (20+ lines shrunk below a quarter) - the absolute cliff alone let a
         // 130-line file be clobbered down to 1 line in real dogfood use.
-        // replace_in_file / apply_patch remain the right tools for targeted edits.
+        // Targeted edits belong to edit_file.
         const prevLines = previous ? previous.split('\n').length : 0;
         const nextLines = next ? next.split('\n').length : 0;
         if (existed && mode === 'overwrite' && !args.confirm_overwrite
             && ((prevLines >= 200 && nextLines < prevLines / 2)
                 || (prevLines >= 20 && nextLines < prevLines / 4))) {
             return {
-                content: [{ type: 'text', text: `Error: refusing to overwrite ${args.path}: it has ${prevLines} lines and new_content would reduce it to ${nextLines}. If this is intentional, resend with confirm_overwrite: true (or use apply_patch for targeted edits).` }],
+                content: [{ type: 'text', text: `Error: refusing to overwrite ${args.path}: it has ${prevLines} lines and new_content would reduce it to ${nextLines}. If this is intentional, resend with confirm_overwrite: true (or use edit_file for targeted edits).` }],
                 isError: true
             };
         }
@@ -814,6 +777,21 @@ async function dispatchTool(
         const diag = mode === 'append' ? '' : await diagnosticsSummary(vscode.Uri.file(fullPath));
         return { content: [{ type: 'text', text: `Successfully ${verb} ${args.path}${stats}` + diag }] };
     } else if (name === 'read_file') {
+        if (Array.isArray(args.files)) {
+            const files = args.files;
+            if (!files.length || files.length > 20) throw new Error('Provide 1–20 file requests.');
+            const pages: string[] = []; let remaining = 80_000;
+            for (const request of files) {
+                if (remaining <= 0) { pages.push('Batch limit reached; read remaining paths separately.'); break; }
+                try {
+                    const file = sanitizePath(request.path, workspaceRoot);
+                    if (looksBinary(await fileHead(file))) throw new Error('Binary file; use view_image for supported images.');
+                    const page = await filePage(file, request.path, request.start_line, request.max_lines, request.start_column, remaining, signal);
+                    pages.push(page); remaining -= page.length;
+                } catch (error) { pages.push(`Error reading ${request.path}: ${String(error)}`); }
+            }
+            return { content: [{ type: 'text', text: pages.join('\n\n') }] };
+        }
         const fullPath = sanitizePath(args.path, workspaceRoot);
         if (!fs.existsSync(fullPath)) {
             return { content: [{ type: 'text', text: `Error: file not found: ${args.path}` }], isError: true };
@@ -822,34 +800,22 @@ async function dispatchTool(
             // Binary payloads (PNG, zips, executables) used to come back as
             // walls of mojibake that ate the context window (live: an 80KB
             // PNG "read" as text). Refuse with a next step instead.
-            const head = fs.readFileSync(fullPath).subarray(0, 8192);
+            const head = await fileHead(fullPath);
             if (looksBinary(Buffer.from(head))) {
                 const kb = Math.round(fs.statSync(fullPath).size / 1024);
                 return {
-                    content: [{ type: 'text', text: `Error: ${args.path} is a binary file (~${kb}KB) - text output cannot show it. This harness has no image/preview tool; verify rendered output via DOM/text assertions or a CLI dump (e.g. a headless-browser --dump-dom) instead.` }],
+                    content: [{ type: 'text', text: `Error: ${args.path} is a binary file (~${kb}KB) - text output cannot show it. Use view_image for a supported local image; other binary formats require an appropriate command-line reader.` }],
                     isError: true,
                 };
             }
         }
-        const MAX_LINES = 2000;
-        const allLines = readLines(fullPath);
-        const total = allLines.length;
-        const start = Math.max(1, Number(args.start_line) || 1);
-        const max = Math.min(MAX_LINES, Number(args.max_lines) || MAX_LINES);
-        const slice = allLines.slice(start - 1, start - 1 + max);
-        let body = slice.join('\n');
-        if (body.length > 80000) {
-            body = body.slice(0, 80000) + '\n… (output truncated at 80KB)';
-        }
-        const header = `[${args.path} - lines ${start}-${start + slice.length - 1} of ${total}]\n`;
-        const more = start + slice.length - 1 < total
-            ? `\n… (${total - (start + slice.length - 1)} more lines; call again with start_line=${start + slice.length})`
-            : '';
-        return { content: [{ type: 'text', text: header + body + more }] };
+        return { content: [{ type: 'text', text: await filePage(fullPath, args.path, args.start_line, args.max_lines, args.start_column, 80_000, signal) }] };
     } else if (name === 'run_terminal_command') {
         await ensureTurnSnapshot(workspaceRoot, 'before terminal command');
         signal?.throwIfAborted();
         const command = String(args.command ?? '').trim();
+        const commandRoot = sanitizePath(args.cwd || '.', workspaceRoot);
+        const jobOptions = { workspaceRoot: commandRoot, command, onOutput, callId, stdin: typeof args.stdin === 'string' ? args.stdin : undefined, interactive: args.interactive === true, ...(args.timeout_seconds ? { hardCapMs: Math.max(1000, Math.min(3600_000, Number(args.timeout_seconds) * 1000)) } : {}) };
         if (!command) {
             return { content: [{ type: 'text', text: 'Error: Empty command' }], isError: true };
         }
@@ -887,12 +853,7 @@ async function dispatchTool(
         // the call open until the timeout, and the kill took the launched app
         // down with it), and a shell-level `&`/`start /b` loses the output and
         // the handle entirely.
-        // `detach` was the old spelling and models in older sessions still
-        // send it. Without this alias it would be silently IGNORED (the schema
-        // has no additionalProperties:false), so a `xdg-open` would run in the
-        // foreground and sit on the 10-minute idle cap - exactly the regression
-        // the deleted detached branch existed to prevent.
-        if (args.background === true || args.detach === true) {
+        if (args.background === true) {
             // A child must not leave work running behind it. The job would
             // outlive the delegation, keep a port or a file handle open, and
             // report its completion into a conversation that has already
@@ -911,7 +872,7 @@ async function dispatchTool(
             // Throws when the background cap is reached - the reservation has
             // to happen before the spawn or the extra process is already
             // running with nothing pointing at it.
-            const job = spawnTerminalJob({ workspaceRoot, command, onOutput, background: true, callId });
+            const job = spawnTerminalJob({ ...jobOptions, background: true });
             return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
         }
         // The spawn/collect/kill lifecycle lives in backgroundJobs so the
@@ -920,10 +881,14 @@ async function dispatchTool(
         // process ends OR when the user releases the turn from the UI, and
         // waiting on `finished` alone is what used to hang a turn on a dev
         // server until the idle cap killed it.
-        const job = spawnTerminalJob({ workspaceRoot, command, onOutput, callId });
+        const job = spawnTerminalJob(jobOptions);
         const cancel = () => { if (!job.background && job.status === 'running') job.kill('cancelled by the user'); };
         signal?.addEventListener('abort', cancel, { once: true });
         try {
+            if (args.yield_ms !== undefined && !nested && !await waitForTerminalJob(job, Math.max(0, Math.min(60000, Number(args.yield_ms) || 0)))) {
+                signal?.throwIfAborted();
+                if (job.moveToBackground()) return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+            }
             if (await job.released === 'backgrounded') {
                 // The user can release the turn at the same moment the command
                 // exits. If it has already finished, hand back its REAL result -
@@ -937,6 +902,11 @@ async function dispatchTool(
             const result = await awaitTerminalJob(job, process.platform);
             return { content: [{ type: 'text', text: result.text }], isError: result.isError };
         } finally { signal?.removeEventListener('abort', cancel); }
+    } else if (name === 'process_input') {
+        const job = getTerminalJob(String(args.jobId ?? ''));
+        if (!job?.writeInput || typeof args.text !== 'string') throw new Error('No writable job with this ID.');
+        job.writeInput(args.text, args.end === true);
+        return { content: [{ type: 'text', text: 'Input delivered.' }] };
     } else if (name === 'process') {
         return await dispatchProcessTool(args);
     } else if (name === 'grep_search') {
@@ -949,7 +919,13 @@ async function dispatchTool(
         const include = args.include || '';
         const fullPath = sanitizePath(searchPath, workspaceRoot);
         return new Promise((resolve) => {
-            const rgArgs = ['-n', '--no-heading', '--color=never', '--max-columns=300', '-m', '50'];
+            const rgArgs = ['-n', '--no-heading', '--color=never', '--max-columns=300', '--sort=path'];
+            if (args.literal) rgArgs.push('-F');
+            if (args.case_sensitive === false) rgArgs.push('-i');
+            if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
+            if (args.output === 'files') rgArgs.push('-l');
+            else if (args.output === 'count') rgArgs.push('-c');
+            else if (args.context_lines) rgArgs.push('-C', String(Math.max(0, Math.min(20, Number(args.context_lines)))));
             if (include) {
                 rgArgs.push('-g', include);
             }
@@ -966,87 +942,58 @@ async function dispatchTool(
                         resolve({ content: [{ type: 'text', text: `Error: ${msg}` }], isError: true });
                     }
                 } else {
-                    const output = (stdout || '').trim();
-                    resolve({ content: [{ type: 'text', text: output || 'No matches found.' }] });
+                    const lines = (stdout || '').trim().split('\n').filter(Boolean);
+                    const offset = Math.max(0, Number(args.offset) || 0); const limit = Math.max(1, Math.min(2000, Number(args.limit) || 200));
+                    const truncated = !!error || lines.length > offset + limit;
+                    resolve({ content: [{ type: 'text', text: JSON.stringify({ results: lines.slice(offset, offset + limit).map(line => line.replace(workspaceRoot + path.sep, '')), truncated, next_offset: !error && truncated ? offset + limit : null, ...(error ? { notice: 'Search exceeded its output budget; narrow pattern or path before continuing.' } : {}) }) }], isError: !!error });
                 }
             });
         });
-    } else if (name === 'replace_in_file') {
-        await ensureTurnSnapshot(workspaceRoot, 'before edit');
+    } else if (name === 'edit_file') {
         const fullPath = sanitizePath(args.path, workspaceRoot);
-        if (!fs.existsSync(fullPath)) {
-            return { content: [{ type: 'text', text: `Error: file not found: ${args.path}` }], isError: true };
+        const raw = await fs.promises.readFile(fullPath, 'utf8');
+        const edits = args.edits;
+        if (!Array.isArray(edits) || !edits.length || edits.length > 100) throw new Error('Provide 1–100 replacements.');
+        let content = raw.replace(/\r\n/g, '\n');
+        for (const edit of edits) {
+            if (typeof edit.old_text !== 'string' || !edit.old_text || typeof edit.new_text !== 'string') throw new Error('Each replacement requires nonempty old_text and string new_text.');
+            const oldText = edit.old_text.replace(/\r\n/g, '\n');
+            if (content.split(oldText).length !== 2) throw new Error('old_text must match exactly once; no changes were written.');
+            content = content.replace(oldText, () => edit.new_text.replace(/\r\n/g, '\n'));
         }
-        const oldStr = args.old_str;
-        const newStr = args.new_str;
-        if (!oldStr) {
-            return { content: [{ type: 'text', text: 'Error: old_str cannot be empty' }], isError: true };
-        }
-        const raw = fs.readFileSync(fullPath, 'utf-8');
-        // LF-normalized view for matching; the write re-encodes to the
-        // original EOL style via preserveEol.
-        let content = readLines(fullPath).join('\n');
-        const count = content.split(oldStr).length - 1;
-        if (count === 0) {
-            const strip = (l: string) => l.replace(/\s+/g, ' ').trim();
-            const oLines = oldStr.split('\n').map(strip);
-            const cLines = content.split('\n');
-            const candidates: number[] = [];
-            for (let i = 0; i <= cLines.length - oLines.length; i++) {
-                let match = true;
-                for (let j = 0; j < oLines.length; j++) {
-                    if (strip(cLines[i + j]) !== oLines[j]) { match = false; break; }
-                }
-                if (match) candidates.push(i);
-            }
-            if (candidates.length === 1) {
-                const at = candidates[0];
-                const nLines = newStr.split('\n');
-                cLines.splice(at, oLines.length, ...nLines);
-                fs.writeFileSync(fullPath, preserveEol(raw, cLines.join('\n')), 'utf-8');
-                return { content: [{ type: 'text', text: `Successfully replaced in ${args.path} (whitespace-normalized match)` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
-            }
-            return {
-                content: [{ type: 'text', text: `Error: old_str not found in ${args.path}${candidates.length > 1 ? ` (matched ${candidates.length} times after whitespace normalization - add surrounding lines to make it unique)` : ''}. ` + 'Copy the exact lines from read_file output, including indentation.' }], isError: true };
-        }
-        if (count > 1) {
-            return { content: [{ type: 'text', text: `Error: old_str found ${count} times in ${args.path}. Include more surrounding lines to make it unique.` }], isError: true };
-        }
-        // Replacer function: with a string replacement, `$&`/`` $` ``/`$'`
-        // sequences in newStr are EXPANDED by String.replace - a model writing
-        // legit JS containing '$&' would silently corrupt the file.
-        content = content.replace(oldStr, () => newStr);
-        fs.writeFileSync(fullPath, preserveEol(raw, content), 'utf-8');
-        return { content: [{ type: 'text', text: `Successfully replaced in ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
+        await ensureTurnSnapshot(workspaceRoot, 'before edit');
+        // Do not overwrite intervening edits from the user or another agent.
+        if (await fs.promises.readFile(fullPath, 'utf8') !== raw) throw new Error('File changed during editing; read it again.');
+        await fs.promises.writeFile(fullPath, preserveEol(raw, content), 'utf8');
+        return { content: [{ type: 'text', text: `Applied ${edits.length} replacements to ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
     } else if (name === 'list_files') {
-        const searchPath = args.path || '.';
-        const fullPath = sanitizePath(searchPath, workspaceRoot);
-        if (!fs.existsSync(fullPath)) {
-            return { content: [{ type: 'text', text: `Error: directory not found: ${searchPath}` }], isError: true };
-        }
-        const stat = fs.statSync(fullPath);
-        if (!stat.isDirectory()) {
-            return { content: [{ type: 'text', text: `Error: not a directory: ${searchPath}` }], isError: true };
-        }
-        try {
-            const entries = fs.readdirSync(fullPath, { withFileTypes: true });
-            const lines: string[] = [];
-            for (const entry of entries.slice(0, 200)) {
-                if (entry.name.startsWith('.')) continue;
-                if (entry.isDirectory()) {
-                    lines.push(`  ${entry.name}/`);
-                } else {
-                    const size = fs.statSync(path.join(fullPath, entry.name)).size;
-                    lines.push(`  ${entry.name}  (${size} bytes)`);
+        const root = sanitizePath(args.path || '.', workspaceRoot);
+        const depth = Math.max(1, Math.min(12, Number(args.max_depth) || 1));
+        const limit = Math.max(1, Math.min(5000, Number(args.max_entries) || 200));
+        const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
+        const rows: string[] = []; let seen = 0; let more = false;
+        const kept = depth > 1 && args.include_ignored !== true ? await gitWorkspaceFiles(workspaceRoot) : new Set<string>();
+        const directories = new Set<string>();
+        for (const file of kept) { const parts = file.split('/'); for (let index = 1; index < parts.length; index++) directories.add(parts.slice(0, index).join('/')); }
+        const heavy = new Set(['node_modules', 'dist', 'build', 'out', 'target', '.venv', 'venv', '__pycache__', '.cache']);
+        const walk = async (dir: string, level: number): Promise<void> => {
+            const entries = (await fs.promises.readdir(dir, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+            for (const entry of entries) {
+                signal?.throwIfAborted();
+                if (entry.name === '.git' || args.hidden === false && entry.name.startsWith('.')) continue;
+                if (rows.length >= limit) { more = true; return; }
+                const file = path.join(dir, entry.name);
+                if (depth > 1 && args.include_ignored !== true) {
+                    const relative = path.relative(workspaceRoot, file).replace(/\\/g, '/');
+                    if (kept.size ? !(kept.has(relative) || directories.has(relative)) : entry.isDirectory() && heavy.has(entry.name)) continue;
                 }
+                if (seen++ >= offset) rows.push(path.relative(root, file) + (entry.isDirectory() ? '/' : ''));
+                if (entry.isDirectory() && level < depth) await walk(file, level + 1);
+                if (more) return;
             }
-            if (entries.length > 200) {
-                lines.push(`  ... (${entries.length - 200} more entries)`);
-            }
-            return { content: [{ type: 'text', text: lines.join('\n') || 'Empty directory.' }] };
-        } catch (err: any) {
-            return { content: [{ type: 'text', text: `Error reading directory: ${err.message}` }], isError: true };
-        }
+        };
+        await walk(root, 1);
+        return { content: [{ type: 'text', text: JSON.stringify({ entries: rows, truncated: more, next_offset: more ? offset + rows.length : null }) }] };
     } else if (name === 'glob_search') {
         const rg = await findRipgrep();
         if (!rg) {
@@ -1059,7 +1006,9 @@ async function dispatchTool(
             return { content: [{ type: 'text', text: `Error: path not found: ${searchPath}` }], isError: true };
         }
         return new Promise((resolve) => {
-            const rgArgs = ['--files', '--glob', pattern, fullPath];
+            const rgArgs = ['--files', '--glob', pattern];
+            if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
+            rgArgs.push('--', fullPath);
             cp.execFile(rg, rgArgs, { cwd: workspaceRoot, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
                 if (error && !stdout) {
                     const msg = stderr || error.message;
@@ -1076,231 +1025,12 @@ async function dispatchTool(
                         .map((l) => l.trim())
                         .filter(Boolean)
                         .map((p) => (p.startsWith(rootWithSep) ? p.slice(rootWithSep.length) : p))
-                        .join('\n');
-                    resolve({ content: [{ type: 'text', text: output || 'No matching files found.' }] });
+                        .sort();
+                    const offset = Math.max(0, Number(args.offset) || 0); const limit = Math.max(1, Math.min(2000, Number(args.limit) || 200));
+                    resolve({ content: [{ type: 'text', text: JSON.stringify({ paths: output.slice(offset, offset + limit), truncated: !!error || output.length > offset + limit, next_offset: !error && output.length > offset + limit ? offset + limit : null }) }], isError: !!error });
                 }
             });
         });
-    } else if (name === 'apply_patch') {
-        await ensureTurnSnapshot(workspaceRoot, 'before edit');
-        const fullPath = sanitizePath(args.path, workspaceRoot);
-        const rawPatch = args.patch;
-        if (!rawPatch) {
-            return { content: [{ type: 'text', text: 'Error: patch cannot be empty' }], isError: true };
-        }
-        // Repair the ONE unambiguous marker loss (a dropped final closing
-        // marker) before parsing, and keep the note: silently auto-closing a
-        // possibly-truncated replacement would hide a partial edit behind a
-        // success message, so the model is told to verify that hunk.
-        const { patch, repairs } = repairPatchMarkers(String(rawPatch));
-        const repairNote = repairs.length ? `\n\nNote: ${repairs.join(' ')}` : '';
-        if (!fs.existsSync(fullPath)) {
-            // New-file creation: a patch whose SEARCH blocks are all empty
-            // defines the new file's contents (Cline-style idiom).
-            const blocks = parsePatchBlocks(patch);
-            if (blocks.length >= 1 && blocks.every((b) => !b.search && b.replace)) {
-                fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-                fs.writeFileSync(fullPath, blocks.map((b) => b.replace).join('\n'), 'utf-8');
-                return { content: [{ type: 'text', text: `Successfully created ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) + repairNote }] };
-            }
-            return { content: [{ type: 'text', text: `Error: file not found: ${args.path}. To create a new file use a single block with an EMPTY SEARCH section, or call edit_file with new_content.` }], isError: true };
-        }
-        try {
-            const raw = fs.readFileSync(fullPath, 'utf-8');
-            // LF-normalized in-memory view; preserveEol restores CRLF on write.
-            let content = readLines(fullPath).join('\n');
-            const blocks = parsePatchBlocks(patch);
-            if (blocks.length === 0) {
-                return { content: [{ type: 'text', text: 'Error: no valid SEARCH/REPLACE blocks found. Use <<<<<<< SEARCH / ======= / >>>>>>> REPLACE markers.' }], isError: true };
-            }
-            let applied = 0;
-            const errors: string[] = [];
-            const notes: string[] = [];
-            for (let bi = 0; bi < blocks.length; bi++) {
-                const { search, replace } = blocks[bi];
-                const tag = `#${bi + 1}`;
-                if (!search) {
-                    errors.push(`Empty search block`);
-                    continue;
-                }
-                let count = content.split(search).length - 1;
-                if (count > 1) {
-                    notes.push(`${tag} matched ${count} identical spots - applied the FIRST; make SEARCH unique`);
-                }
-                if (count === 1) {
-                    const at = content.indexOf(search);
-                    content = content.replace(search, () => replace);
-                    notes.push(`${tag} @ line ${content.slice(0, at).split('\n').length}`);
-                    applied++;
-                    continue;
-                }
-                const searchLines = search.split('\n');
-                const contentLines = content.split('\n');
-                let foundAt = -1;
-                for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
-                    let match = true;
-                    for (let j = 0; j < searchLines.length; j++) {
-                        if (contentLines[i + j].trimEnd() !== searchLines[j].trimEnd()) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        foundAt = i;
-                        break;
-                    }
-                }
-                if (foundAt >= 0) {
-                    notes.push(`${tag} @ line ${foundAt + 1} (whitespace-tolerant match)`);
-                    const replaceLines = replace.split('\n');
-                    const baseIndentRe = /^[ \t]*/;
-                    const searchIndent = (searchLines[0].match(baseIndentRe)?.[0] ?? '');
-                    const contentIndent = (contentLines[foundAt].match(baseIndentRe)?.[0] ?? '');
-                    let out = replaceLines;
-                    if (searchIndent !== contentIndent && searchLines.length > 0) {
-                        out = replaceLines.map((l) => {
-                            if (!l.trim()) return l;
-                            const m2 = l.match(baseIndentRe);
-                            const rel = l.slice((m2?.[0] ?? '').length);
-                            return contentIndent + rel;
-                        });
-                    }
-                    contentLines.splice(foundAt, searchLines.length, ...out);
-                    content = contentLines.join('\n');
-                    applied++;
-                    continue;
-                }
-                const strip = (l: string) => l.replace(/\s+/g, ' ').trim();
-                const sNorm = searchLines.map(strip);
-                for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
-                    let match = true;
-                    for (let j = 0; j < searchLines.length; j++) {
-                        if (strip(contentLines[i + j]) !== sNorm[j]) { match = false; break; }
-                    }
-                    if (match) {
-                        foundAt = i;
-                        break;
-                    }
-                }
-                if (foundAt >= 0) {
-                    notes.push(`${tag} @ line ${foundAt + 1} (whitespace-normalized match)`);
-                    const replaceLines = replace.split('\n');
-                    contentLines.splice(foundAt, searchLines.length, ...replaceLines);
-                    content = contentLines.join('\n');
-                    applied++;
-                    continue;
-                }
-                if (searchLines.length >= 2) {
-                    const firstLine = searchLines[0].trimEnd();
-                    const lastLine = searchLines[searchLines.length - 1].trimEnd();
-                    const startIdx = contentLines.findIndex((l: string) => l.trimEnd() === firstLine);
-                    if (startIdx >= 0) {
-                        for (let i = startIdx + 1; i <= contentLines.length - searchLines.length + 1; i++) {
-                            if (contentLines[i + searchLines.length - 2]?.trimEnd() === lastLine) {
-                                let middleMatch = true;
-                                for (let j = 1; j < searchLines.length - 1; j++) {
-                                    if (contentLines[i + j - 1].trimEnd() !== searchLines[j].trimEnd()) {
-                                        middleMatch = false;
-                                        break;
-                                    }
-                                }
-                                if (middleMatch) {
-                                    notes.push(`${tag} @ line ${i + 1} (edge-line match)`);
-                                    const replaceLines = replace.split('\n');
-                                    contentLines.splice(i, searchLines.length, ...replaceLines);
-                                    content = contentLines.join('\n');
-                                    foundAt = i;
-                                    applied++;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                if (foundAt < 0) {
-                    // Last resort: the SEARCH may describe the same line with
-                    // `\uXXXX` escapes decoded (or encoded) relative to the
-                    // file bytes - one more pass with the decoded form.
-                    const decoded = decodeUnicodeEscapes(search);
-                    if (decoded !== search) {
-                        const dCount = content.split(decoded).length - 1;
-                        if (dCount === 1) {
-                            const at = content.indexOf(decoded);
-                            content = content.replace(decoded, () => replace);
-                            notes.push(`${tag} @ line ${content.slice(0, at).split('\n').length} (matched after decoding \\uXXXX escapes)`);
-                            applied++;
-                            continue;
-                        }
-                        if (dCount > 1) {
-                            notes.push(`${tag} matched ${dCount} spots after decoding \\uXXXX escapes - applied none; make SEARCH unique`);
-                        }
-                    }
-                    const escapeHint = /\\u[0-9a-fA-F]{4}/.test(search) || decoded !== search
-                        ? ' Note: the SEARCH contains \\uXXXX escape text - it must match the FILE bytes exactly (literal backslash-u text in the file vs the real characters are different bytes). Copy the line from read_file output verbatim.'
-                        : '';
-                    errors.push(`Could not find: "${search.slice(0, 80)}..."${escapeHint}`);
-                }
-            }
-            if (applied > 0) {
-                fs.writeFileSync(fullPath, preserveEol(raw, content), 'utf-8');
-            }
-            const noteStr = notes.length ? ` (${notes.slice(0, 12).join('; ')})` : '';
-            const msg = errors.length > 0
-                ? [
-                      `Applied ${applied}/${blocks.length} blocks to ${args.path}${noteStr}.`,
-                      ...errors,
-                      applied > 0
-                          ? 'The other blocks were applied successfully - do NOT re-send them.'
-                          : '',
-                  ].filter(Boolean).join('\n')
-                : `Successfully applied ${applied} patch blocks to ${args.path}${noteStr}`;
-            const diag = applied > 0 ? await diagnosticsSummary(vscode.Uri.file(fullPath)) : '';
-            return { content: [{ type: 'text', text: msg + diag + repairNote }], isError: errors.length > 0 && applied === 0 };
-        } catch (e) {
-            return { content: [{ type: 'text', text: `Error applying patch: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
-        }
-    } else if (name === 'list_code_definition_names') {
-        const fullPath = sanitizePath(args.path, workspaceRoot);
-        if (!fs.existsSync(fullPath)) {
-            return { content: [{ type: 'text', text: `Error: file not found: ${args.path}` }], isError: true };
-        }
-        const fileContent = fs.readFileSync(fullPath, 'utf-8');
-        const ext = path.extname(fullPath).toLowerCase();
-        const defs: string[] = [];
-        if (ext === '.py') {
-            const classRe = /^(class\s+(\w+).*:)/gm;
-            const funcRe = /^(?:    )?(async\s+)?def\s+(\w+)\s*\([^)]*\)\s*(?:->[^:]*)?:/gm;
-            let m;
-            while ((m = classRe.exec(fileContent)) !== null) {
-                defs.push(m[1]);
-            }
-            while ((m = funcRe.exec(fileContent)) !== null) {
-                const indent = fileContent.substring(m.index, m.index + m[0].indexOf('def')).length;
-                const prefix = indent >= 8 ? '        ' : indent >= 4 ? '    ' : '';
-                defs.push(prefix + m[0].trim());
-            }
-        } else if (ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx') {
-            const classRe = /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+\w+/gm;
-            const funcRe = /^(?:export\s+)?(?:async\s+)?function\s+\w+/gm;
-            const arrowRe = /^(?:export\s+)?(?:const|let|var)\s+\w+(?::\s*[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/gm;
-            const methodRe = /^\s+(?:public|private|protected|static|readonly|\s)*\b(?:async\s+)?(?!(?:if|for|while|switch|catch|return)\b)\w+\s*\([^)]*\)\s*(?::\s*[^{=]+)?\{/gm;
-            let m;
-            while ((m = classRe.exec(fileContent)) !== null) {
-                defs.push(m[0]);
-            }
-            while ((m = funcRe.exec(fileContent)) !== null) {
-                defs.push(m[0]);
-            }
-            while ((m = arrowRe.exec(fileContent)) !== null) {
-                defs.push(m[0] + ' …');
-            }
-            while ((m = methodRe.exec(fileContent)) !== null) {
-                defs.push(m[0].trim());
-            }
-        } else {
-            return { content: [{ type: 'text', text: `Unsupported file type: ${ext}. Only .py, .ts, .tsx, .js, .jsx supported.` }] };
-        }
-        return { content: [{ type: 'text', text: defs.length > 0 ? defs.join('\n') : 'No definitions found.' }] };
     } else if (name === 'skill') {
         // Agent Skills: progressive disclosure - return the SKILL.md body
         // (read-only, like read_file; available in plan mode). Bundled files
@@ -1398,7 +1128,7 @@ async function dispatchTool(
     }
     const hint = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
     const aliasNote = /^(write|create|new|save)_file$/.test(name)
-        ? ` For whole-file writes use edit_file (mode "create" for new files, "overwrite" to replace, "append" to add to the end).`
+        ? ` For whole-file writes use write_file (mode "create" for new files, "overwrite" to replace, "append" to add to the end).`
         : '';
     return {
         content: [{
@@ -1412,7 +1142,7 @@ async function dispatchTool(
 /** Canonical file operands requiring a separate outside-workspace grant. */
 export function getOutsideWorkspacePaths(workspaceRoot: string, name: string, args: Record<string, unknown>): string[] {
     const named = resolveToolName(name, getLocalToolDefinitions().map(tool => tool.name)).name;
-    if (!['edit_file', 'replace_in_file', 'apply_patch', 'delete_file', 'move_file', 'copy_file'].includes(named)) return [];
+    if (!['write_file', 'edit_file'].includes(named)) return [];
     const normalized = withPathAlias(args);
     const paths = new Set<string>();
     for (const key of ['path', 'source', 'destination']) {
@@ -1447,6 +1177,7 @@ export async function executeLocalTool(
 ): Promise<LocalToolResult> {
     try {
         signal?.throwIfAborted();
+        if (!name.startsWith(EXTERNAL_PREFIX) && !Object.hasOwn(TOOL_POLICY, resolveToolName(name, Object.keys(TOOL_POLICY)).name)) return { output: 'Error: this tool has been removed. Use the current tool catalog.', isError: true };
         if (isOfflineMode() && (name === 'web_search' || name === 'fetch_url' || name.startsWith(EXTERNAL_PREFIX))) {
             return { output: 'Error: this network tool is disabled in offline mode.', isError: true };
         }
@@ -1457,7 +1188,19 @@ export async function executeLocalTool(
             const r = await externalMcp.callTool(name, args ?? {}, signal);
             return { output: r.text, isError: r.isError, ...(r.structuredContent ? { structuredContent: r.structuredContent } : {}), ...(r.research ? { research: r.research } : {}), ...(r.images.length ? { images: r.images } : {}) };
         }
-        // Resolve model-drift tool NAMES first (write_file -> edit_file etc.),
+        if (name === 'view_image') {
+            const file = workspaceSanitizePath(String(args.path ?? ''), workspaceRoot);
+            const stat = await fs.promises.stat(file);
+            if (!stat.isFile() || stat.size > 20 * 1024 * 1024) throw new Error('Image must be a regular file no larger than 20 MiB.');
+            const bytes = await fs.promises.readFile(file);
+            const mimeType = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? 'image/png'
+                : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? 'image/jpeg'
+                : bytes.subarray(0, 6).toString().match(/^GIF8[79]a$/) ? 'image/gif'
+                : bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : undefined;
+            if (!mimeType) throw new Error('Supported images: PNG, JPEG, GIF, WebP.');
+            return { output: String(args.path), images: [{ mimeType, dataBase64: bytes.toString('base64') }] };
+        }
+        // Admit exact tool names, then normalize file path argument spelling.
         // then fill `path` from known aliases: a model that sends `file_path`
         // used to hit a raw Node TypeError deep in sanitizePath.
         const named = resolveToolName(name, getLocalToolDefinitions().map((t) => t.name));
@@ -1495,6 +1238,7 @@ export function createLocalToolExecutor(
         opts?.signal?.throwIfAborted();
     };
     const execute: import('./local/localTypes').LocalToolExecutor['execute'] = async (call, onOutput) => {
+        if (!call.name.startsWith(EXTERNAL_PREFIX) && !isAvailableTool(resolveToolName(call.name, Object.keys(TOOL_POLICY)).name, !!opts?.plan)) return { output: 'Error: this tool is unavailable. Use the current tool catalog.', isError: true };
         if (opts?.plan && call.name.startsWith(EXTERNAL_PREFIX)) {
             return { output: 'Error: external MCP tools are disabled in plan mode.', isError: true };
         }
@@ -1520,7 +1264,8 @@ export function createLocalToolExecutor(
             if (!opts?.browser || !opts.sessionId) return { output: 'Error: browser is not available in this session.', isError: true };
             return opts.browser.tool(opts.sessionId, call.name, call.arguments, opts.signal);
         }
-        if (opts?.plan && MUTATING_TOOLS.has(resolveToolName(call.name, getLocalToolDefinitions().map(tool => tool.name)).name)) return { output: 'Error: mutating tools are disabled in plan mode.', isError: true };
+        if (opts?.plan && (call.name === 'process' || call.name === 'task')) return { output: 'Error: process control and delegation are disabled in plan mode.', isError: true };
+        if (opts?.plan && !isAvailableTool(resolveToolName(call.name, Object.keys(TOOL_POLICY)).name, true)) return { output: 'Error: mutating tools are disabled in plan mode.', isError: true };
         return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths) : undefined);
     };
     return {

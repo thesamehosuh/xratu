@@ -36,13 +36,15 @@ const RunView = memo(function RunView({ run, visible, onConversation, prefs, loc
     const pending = run.status === 'waiting';
     return <section className={`agent-run-view${visible ? '' : ' panel-hidden'}`} aria-hidden={!visible || undefined}>
         <header className="agent-run-head"><div className="agent-run-heading"><Bot size={15} /><strong dir="auto">{run.title || run.profile}</strong></div>
-            <div className="agent-run-meta"><span className={`agent-state-text ${run.status}`}><RunStatus status={run.status} pendingTools={trace?.pendingTools} />{agentStatusLabel(run.status, trace?.pendingTools)}</span><RunClock run={run} />
+            <div className="agent-run-meta"><span className={`agent-state-text ${run.status}`}><RunStatus status={run.status} pendingTools={trace?.pendingTools} /><span>{agentStatusLabel(run.status, trace?.pendingTools)}</span></span><RunClock run={run} />
                 {trace?.resumed && <span title={t('agentResumed')}><GitBranch size={12} /></span>}
             </div>
+            <div className="agent-profile-label"><Bot size={12} /><span dir="auto">{run.profile}</span></div>
             {trace && <div className="agent-run-meta technical"><span className="agent-metric"><Cpu size={12} /><code dir="ltr">{trace.model}</code></span>{trace.effort && <span className="agent-metric"><Gauge size={12} /><span dir="ltr">{trace.effort}</span></span>}
                 <span className="agent-token-metric" title={t('agentTokens')} dir="ltr">{trace.inputTokens.toLocaleString('en-US')} ↓ &nbsp; {trace.outputTokens.toLocaleString('en-US')} ↑</span>
             </div>}
-            <details className="agent-brief"><summary><ChevronDown size={11} /><span>{t('agentTask')}</span><code dir="ltr">{trace?.taskId ?? run.profile}</code></summary>
+            <details className="agent-brief"><summary><ChevronDown size={11} /><span>{t('agentTask')}</span></summary>
+                {trace?.taskId && <code dir="ltr">{trace.taskId}</code>}
                 <p dir="auto">{trace?.prompt ?? String(toolArgs(run.call.text).prompt ?? '')}</p>
                 {trace?.tools.length ? <div className="agent-capabilities" aria-label={t('agentAvailableTools')}>{trace.tools.map(tool => <code dir="ltr" key={tool}>{tool}</code>)}</div> : null}
             </details>
@@ -80,7 +82,7 @@ export function SubagentsPanel({ runs, selectedId, onSelect, onStop, visible, pa
                 <button type="button" className="secondary-btn" onClick={onConversation}>{t('surfaceBackToConversation')}</button>
             </div>
         ) : (
-            <div className="agents-layout"><nav className="agent-run-list" aria-label={t('surfaceAgentRuns')}>{runs.map(run => {
+            <div className="agents-layout"><div className="agent-roster"><header className="agent-roster-head"><span>{t('surfaceAgentRuns')}</span><span dir="ltr">{runs.length}</span></header><nav className="agent-run-list" aria-label={t('surfaceAgentRuns')}>{runs.map(run => {
                 const current = run.trace?.entries.filter(entry => entry.kind === 'tool').at(-1);
                 const live = ['running', 'waiting'].includes(run.status);
                 // Stop is addressed by the parent `task` call id only; a row id
@@ -88,14 +90,14 @@ export function SubagentsPanel({ runs, selectedId, onSelect, onStop, visible, pa
                 const stopId = run.call.callId;
                 return <div className={`agent-run-card${run.id === selected?.id ? ' selected' : ''}`} key={run.id}>
                     <button type="button" className="agent-run-select" aria-pressed={run.id === selected?.id} onClick={() => onSelect(run.id)}>
-                        <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.profile}</strong><RunStatus status={run.status} pendingTools={run.trace?.pendingTools} /></span>
-                        <span className="agent-card-title" dir="auto">{run.title}</span>
+                        <span className="agent-card-top"><Bot size={14} /><strong dir="auto">{run.title || run.profile}</strong><RunStatus status={run.status} pendingTools={run.trace?.pendingTools} /></span>
+                        <span className="agent-card-title" dir="auto">{run.profile}</span>
                         <span className="agent-card-foot"><span>{agentStatusLabel(run.status, run.trace?.pendingTools)}</span><span dir="ltr">{run.trace?.toolCalls ?? 0}<List size={10} /></span></span>
                         {current && live && <code className="agent-current-tool" dir="ltr">{current.tool}</code>}
                     </button>
                     {live && stopId && <button type="button" className="agent-run-stop" title={t('agentStop')} aria-label={t('agentStop')} onClick={() => onStop(stopId)}><Square size={10} /><span>{t('agentStop')}</span></button>}
                 </div>;
-            })}</nav><div className="agent-run-detail">{runs.filter(run => mounted.has(run.id)).map(run => <RunView key={run.id} run={run} visible={visible && selected?.id === run.id} onConversation={onConversation} prefs={prefs} locale={locale} />)}</div></div>
+            })}</nav></div><div className="agent-run-detail">{runs.filter(run => mounted.has(run.id)).map(run => <RunView key={run.id} run={run} visible={visible && selected?.id === run.id} onConversation={onConversation} prefs={prefs} locale={locale} />)}</div></div>
         )}
     </div>;
 }

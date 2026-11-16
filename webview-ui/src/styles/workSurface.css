@@ -559,6 +559,8 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .composer-welcome { font-size:calc(var(--interface-size,14px) + 4px); font-weight:600; line-height:1.5; text-align:center; margin:0 0 18px; }
 .composer { background:var(--xratu-input); border-radius:11px; }
 .composer:focus-within { border-color:var(--surface-accent); }
+.composer:hover { border-color:color-mix(in srgb,var(--vscode-foreground) 45%,var(--vscode-input-border)); }
+.composer:focus-within:hover { border-color:var(--surface-accent); }
 .composer.has-draft:not(:focus-within) { border-color:var(--page-line); }
 .input-bar.menu-open .composer { border-color:var(--surface-accent); }
 /* Both rows and the original textarea remain mounted throughout the resize. */
@@ -568,15 +570,26 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .composer-input.is-sizing { transition:none; }
 .composer-prelude { transition:height 160ms cubic-bezier(.2,.8,.2,1),margin 160ms ease,opacity 100ms ease; height:29px; }
 .composer-actions { transition:height 160ms cubic-bezier(.2,.8,.2,1),padding 160ms ease; height:36px; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer { border-radius:24px; padding:5px 37px; gap:0; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-input:not(.is-sizing) { height:var(--composer-resting-height)!important; min-height:var(--composer-resting-height); padding-block:calc((var(--composer-resting-height) - var(--xratu-fs-prose) * 1.75) / 2); padding-inline:2px; overflow:hidden; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) :is(.attach-btn,.send-btn) { inset-block-start:50%; inset-block-end:auto; transform:translateY(-50%); }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-actions { height:0; min-height:0; padding:0; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-chips > :not(.ctx-wrap) { visibility:hidden; opacity:0; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) :is(.tok-text,.tok-pct) { display:none; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .ctx-wrap { position:absolute; inset-block-start:50%; inset-inline-end:37px; transform:translateY(-50%); }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer:has(.ctx-wrap) { direction:ltr; padding-inline-end:70px; }
-.conversation-panel:not(.empty-conversation) .input-bar:is(:not(:focus-within):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-prelude { height:0; min-height:0; margin:0; opacity:0; visibility:hidden; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer { border-radius:24px; padding:5px 37px; gap:0; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-input:not(.is-sizing) { height:var(--composer-resting-height)!important; min-height:var(--composer-resting-height); padding-block:calc((var(--composer-resting-height) - var(--xratu-fs-prose) * 1.75) / 2); padding-inline:2px; overflow:hidden; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) :is(.attach-btn,.send-btn) { inset-block-start:50%; inset-block-end:auto; transform:translateY(-50%); }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-actions { height:0; min-height:0; padding:0; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-chips > :not(.ctx-wrap) { visibility:hidden; opacity:0; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) :is(.tok-text,.tok-pct) { display:none; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .ctx-wrap { position:absolute; inset-block-start:50%; inset-inline-end:37px; transform:translateY(-50%); }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer:has(.ctx-wrap) { direction:ltr; padding-inline-end:70px; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) .composer-prelude { height:0; min-height:0; margin:0; opacity:0; visibility:hidden; }
+/* Match the card's resting selector, including the attachment-menu exception:
+   no JS focus state to drift from the actual expanded/collapsed surface. */
+.composer-summary { display:none; max-width:var(--conversation-width,700px); margin:0 auto; padding:8px 4px 4px; gap:8px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-xs); line-height:var(--xratu-line-ui); }
+.composer-summary-item { display:flex; align-items:center; gap:4px; min-width:0; max-inline-size:100%; min-height:22px; flex-shrink:0; }
+.composer-summary-item > svg { flex-shrink:0; opacity:.8; }
+.composer-summary-item:first-child { color:var(--vscode-foreground); }
+.composer-summary-item:nth-child(3) { margin-inline-start:auto; }
+.composer-summary dd { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.composer-summary-model { flex:0 1 auto; max-inline-size:240px; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) > .composer-summary { display:flex; flex-wrap:nowrap; align-items:center; }
+.conversation-panel:not(.empty-conversation) .input-bar:is(:not(.compose-dock:focus-within .input-bar):not(.menu-open),.attachment-menu-collapsed):not(:has(.has-attachments,.is-editing,.composer-edit-banner)) ~ .git-status { display:none; }
 .composer-attach { position:static; flex:0 0 0; }
 .composer-attach .attach-btn { position:absolute; inset-inline-start:10px; inset-block-end:9px; }
 .composer-buttons .send-btn { position:absolute; inset-inline-end:10px; inset-block-end:9px; }

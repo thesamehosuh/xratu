@@ -23,7 +23,7 @@ assert.ok(prompt(false).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
 assert.ok(!prompt(true).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
 assert.ok(!buildSubagentSystemPrompt({ agentPrompt: 'Review', rulesContext: '', planMode: false }).includes(PULL_REQUEST_AGENT_INSTRUCTIONS));
 const watchTool = PULL_REQUEST_TOOLS.find(tool => tool.name === 'watch_pull_request');
-assert.ok(PULL_REQUEST_AGENT_INSTRUCTIONS.includes('unwatch_pull_request only when the PR task is finished or the user asks you to stop'));
+assert.ok(PULL_REQUEST_AGENT_INSTRUCTIONS.includes('watch_pull_request with enabled=false only when the PR task is finished or the user asks you to stop'));
 assert.ok(!PULL_REQUEST_AGENT_INSTRUCTIONS.includes('Before handing the work back, call unwatch_pull_request.'));
 assert.ok(!watchTool.description.includes('Stop watching before handing work back.'));
 for (const tool of PULL_REQUEST_TOOLS) assert.ok(names({}).has(tool.name));
@@ -35,7 +35,8 @@ assert.ok(names({ plan: true }).has('list_thread_pull_requests'));
 assert.ok(names({ plan: true }).has('get_pull_request'));
 try {
     setOfflineMode(true);
-    assert.equal(names({}).has('watch_pull_request'), false);
+    assert.equal(names({}).has('watch_pull_request'), true);
+    assert.deepEqual(getLocalToolDefinitions().find(tool => tool.name === 'watch_pull_request').inputSchema.properties.enabled.enum, [false]);
     assert.equal(names({}).has('get_pull_request'), false);
     assert.ok(names({}).has('list_thread_pull_requests'));
 } finally { setOfflineMode(false); }

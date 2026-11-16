@@ -604,7 +604,7 @@ test('watching starts notification-only when the execution context cannot be res
 test('the wake prompt keeps the watch across turns and only unwatches when the task is done', () => {
     const prompt = pullRequestEventPrompt([{ id: 'event', key: 'github.com/example/repo#42', url: target, number: 42, createdAt: new Date().toISOString(), headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }]);
     assert.match(prompt, /watch outlives this turn/);
-    assert.match(prompt, /unwatch_pull_request only when the PR task is finished or the user asks you to stop/);
+    assert.match(prompt, /watch_pull_request with enabled=false only when the PR task is finished or the user asks you to stop/);
     assert.ok(!prompt.includes('Before handing work back'));
 });
 
