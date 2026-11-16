@@ -46,6 +46,43 @@ try {
             assert.equal(queued.length, 0);
         }
     }
+    // Text-only completion is a delivery boundary too (not just tool rounds).
+    // Instant steering aborts only the provider request, discards partial tool
+    // arguments, and keeps the parent/children cancellation signal untouched.
+    for (const instant of [false, true]) {
+        const bodies = [], queued = [], events = [], parent = new AbortController();
+        let interrupt;
+        globalThis.fetch = async (_url, init) => {
+            bodies.push(JSON.parse(init.body));
+            if (bodies.length > 1) return new Response('data: {"choices":[{"delta":{"content":"Corrected"}}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+            return new Response(new ReadableStream({ start(controller) {
+                const delta = { content: 'Old answer', ...(instant ? { tool_calls: [{ index: 0, id: 'partial', function: { name: 'task', arguments: '{' } }] } : {}) };
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`));
+                if (instant) init.signal.addEventListener('abort', () => controller.error(new DOMException('Interrupted', 'AbortError')), { once: true });
+                else { controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n')); controller.close(); }
+            } }), { headers: { 'content-type': 'text/event-stream' } });
+        };
+        for await (const event of runLocalAgent({
+            baseUrl: 'http://127.0.0.1:11434/v1', apiKey: null, model: 'test', systemPrompt: 'test', userText: 'Original',
+            tools: [], maxRounds: 3, signal: parent.signal,
+        }, { execute: async () => { throw Error('Partial tool must never execute'); } }, { requestApproval: async () => ({}) }, {
+            drain: () => queued.splice(0), setInterrupt: callback => { interrupt = callback; },
+        })) {
+            events.push(event);
+            if (event.type === 'chunk' && event.value === 'Old answer') {
+                queued.push({ text: 'Change direction', steerId: 'late-final' });
+                if (instant) { assert.equal(typeof interrupt, 'function'); interrupt(); }
+            }
+        }
+        assert.equal(bodies.length, 2);
+        assert.equal(parent.signal.aborted, false, 'steering does not cancel parent or children');
+        assert.equal(interrupt, undefined, 'request interrupt registration is cleaned up');
+        assert.equal(events.filter(event => event.type === 'steer').length, 1);
+        assert.equal(events.some(event => event.type === 'toolCall'), false);
+        assert.ok(bodies[1].messages.some(message => message.role === 'assistant' && message.content === 'Old answer'));
+        assert.ok(bodies[1].messages.some(message => message.role === 'user' && message.content.includes('Change direction')));
+        assert.ok(!JSON.stringify(bodies[1]).includes('partial'), 'no dangling tool carrier is replayed');
+    }
     for (const parallel of [false, true]) {
         for (const name of ['mcp__remote__mutate', 'write_file', 'task']) {
             const result = await scenario(name, [{ name: 'read_file', description: '', inputSchema: {} }], { parallel });
@@ -54,10 +91,10 @@ try {
         }
         const definitions = [{ name: 'edit_file', description: '', inputSchema: {}, requiresApproval: true }];
         const denied = await scenario('write_file', definitions, { parallel });
-        assert.deepEqual(denied.approved, ['edit_file'], 'an alias must request the canonical permission');
+        assert.deepEqual(denied.approved, [], 'unavailable old names never request permission');
         assert.deepEqual(denied.executed, []);
         const allowed = await scenario('write_file', definitions, { parallel, allow: true });
-        assert.deepEqual(allowed.executed, ['edit_file']);
+        assert.deepEqual(allowed.executed, [], 'unavailable names cannot execute even when approvals are granted');
         assert.equal(allowed.bodies[1].messages.find(m => m.tool_calls)?.tool_calls[0].function.name, 'write_file', 'provider replay retains the original spelling');
     }
     console.log('tool-admission: serial/parallel allowlists, alias approvals and provider replay passed');

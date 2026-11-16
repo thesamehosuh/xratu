@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url), ts = require('typescript');
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-const names = ['_handleSteer', '_degradeSteerToTurn', '_confirmSteer'];
+const names = ['_handleSteer', '_degradeSteerToTurn', '_confirmSteer', '_handleSteerNow', '_preparingSteers', '_steerNowIds', '_rejectQueuedSteers'];
 const sandbox = { Error, resolveReferenceAttachments: async () => null, validateHostAttachments: () => null,
     extractPdfAttachments: async attachments => ({ attachments, error: null }), isImageAttachment: () => false, buildLocalUserText: text => text };
 vm.runInNewContext(ts.transpileModule(`class Host { ${cls.members.filter(node => names.includes(node.name?.getText(file))).map(node => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
@@ -49,6 +49,26 @@ for (const accepts of [false, true]) {
     assert.equal(!!rejected, !accepts);
     if (rejected) { assert.equal(rejected.requestId, 'late'); assert.equal(rejected.prompt, 'late correction'); assert.equal(rejected.attachments, attachments); }
 }
+const immediate = fixture(), preparing = deferred();
+sandbox.extractPdfAttachments = () => preparing.promise;
+let interrupted = 0;
+immediate.host._localSteerInterrupt = () => interrupted++;
+const admitting = immediate.host._handleSteer('urgent correction', [], 'urgent');
+immediate.host._handleSteerNow('unknown');
+assert.equal(interrupted, 0, 'unknown controls cannot interrupt a request');
+immediate.host._handleSteerNow('urgent');
+assert.equal(interrupted, 0, 'attachment admission must finish before interruption');
+preparing.resolve({ attachments: [], error: null }); await admitting;
+assert.equal(interrupted, 1, 'an instant request during attachment preparation is not lost');
+immediate.host._handleSteerNow('urgent');
+assert.equal(interrupted, 2, 'an admitted queued prompt can interrupt the current reply');
+immediate.host._activeEngine = 'opencode'; immediate.host._handleSteerNow('urgent');
+assert.equal(interrupted, 2, 'native steering stays on the native inbox rail');
+immediate.host._rejectQueuedSteers();
+assert.equal(immediate.host._localSteerQueue.length, 0, 'failed/cancelled runs cannot leak corrections into the next run');
+assert.equal(immediate.messages.at(-1).type, 'composerError');
+assert.equal(immediate.messages.at(-1).steerId, 'urgent', 'the held draft is recoverable');
+sandbox.extractPdfAttachments = async attachments => ({ attachments, error: null });
 const thrown = fixture(); sandbox.resolveReferenceAttachments = async () => { throw Error('read failed'); };
 await thrown.host._handleSteer('retain me', [], 'throw');
 assert.equal(thrown.messages.at(-1).type, 'composerError');

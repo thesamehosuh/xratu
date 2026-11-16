@@ -119,6 +119,8 @@ export interface TerminalJob {
     /** Pid + kernel start token captured at spawn. Needed to write a
      *  checkpoint that is safe to act on after a restart. */
     readonly identity?: ProcessIdentity;
+    /** Input is available only for a live job launched with interactive=true. */
+    writeInput?(text: string, end: boolean): void;
     /** Request a tree kill. False means identity is temporarily unverifiable:
      * nothing was signalled and the live recovery record must be retained. */
     kill(why: string): void | false;
@@ -165,6 +167,8 @@ export interface BackgroundJobRecord {
 }
 
 export interface SpawnTerminalJobOptions {
+    stdin?: string;
+    interactive?: boolean;
     workspaceRoot: string;
     command: string;
     /** Called per raw chunk so the webview can render live output. */
@@ -443,7 +447,9 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         windowsHide: true,
         windowsVerbatimArguments,
     });
-    child.stdin.end();
+    child.stdin.on('error', () => { /* A process can close stdin before consuming input. */ });
+    if (options.interactive) { if (options.stdin) child.stdin.write(options.stdin); }
+    else child.stdin.end(options.stdin);
     // Deliberately empty for a FOREGROUND command, and on Windows even for a
     // background one: `processStartToken` needs a subprocess there, and
     // capturing it synchronously froze the extension host for the whole probe
@@ -471,6 +477,11 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
     const job: TerminalJob = {
         id,
         command,
+        writeInput(text: string, end: boolean) {
+            if (!options.interactive || status !== 'running' || child.stdin.destroyed) throw new Error('This job has no writable input.');
+            if (text.length > 64000) throw new Error('Input is limited to 64000 characters.');
+            if (end) child.stdin.end(text); else child.stdin.write(text);
+        },
         cwd: workspaceRoot,
         pid: child.pid,
         startedAt,

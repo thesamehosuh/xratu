@@ -4,6 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { AggregatedTool, ExternalMcpManager } from '../../externalMcp';
+import { PULL_REQUEST_MUTATIONS } from '../../pullRequests/tools';
 import { isNativePlanTool } from './services';
 import { readResearchEvidence, type ResearchEvidence } from '../../web/types';
 import { abortable } from '../../oauth/refreshLock';
@@ -73,7 +74,7 @@ export class OpenCodeMcpBridge {
                 const sessionID = call.params._meta?.['ai.opencode/sessionID'];
                 const session = typeof sessionID === 'string' ? this.sessions.get(sessionID) : undefined;
                 const tool = this.wireTools.get(call.params.name);
-                const parentControl = tool?.serverName === 'xratu' && ['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(tool.originalName);
+                const parentControl = tool?.serverName === 'xratu' && (['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(tool.originalName) || PULL_REQUEST_MUTATIONS.has(tool.originalName));
                 if (!session || session.signal.aborted || !tool || (session.rootSessionID && parentControl) || (session.plan && !this.planSafe(tool))) {
                     return { isError: true, content: [{ type: 'text', text: 'Xratu MCP call is not allowed in this session.' }] };
                 }

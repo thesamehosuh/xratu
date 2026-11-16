@@ -90,7 +90,7 @@ const WINDOWS_MISSING: Record<string, ShellAdvice> = {
     zsh: {},
     jq: {},
     nano: {},
-    vim: { note: 'Edit the file with the edit_file / apply_patch tools rather than a terminal editor.' },
+    vim: { note: 'Edit the file with the write_file / edit_file tools rather than a terminal editor.' },
 };
 
 /** cmd.exe / PowerShell commands missing from bash. */
@@ -250,25 +250,20 @@ export function terminalToolDescription(platform: NodeJS.Platform): string {
             + 'exist here. For reading and searching files the built-in read_file / grep_search / glob_search / '
             + 'list_files tools are available too.';
 
-    const stdinEof = win
-        ? 'stdin is closed (immediate EOF) - the command must not wait for interactive input; pass flags like `-y` instead (there is no `</dev/null` here; NUL is the null device).'
-        : 'stdin is closed (immediate EOF) - the command must not wait for interactive input; use flags like `yes`/`-y` or `</dev/null` semantics instead.';
+    const stdinEof = 'By default stdin closes after optional initial input. Set interactive=true with yield_ms or background to keep piped input open, then use process_input (separately approved). No PTY is allocated.';
 
     const watch = win
         ? 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for a dev server, watcher or anything that does not exit on its own, pass background=true so the turn is released and the process is tracked (a shell-level `start /b` loses the output and the handle).'
         : 'Killed after 10 minutes without output or at a 30-minute hard cap - quiet-but-working builds survive the idle window; for a dev server, watcher or anything that does not exit on its own, pass background=true so the turn is released and the process is tracked (a trailing `&` loses the output and the handle).';
 
-    const probes = win
-        ? 'dir/type/findstr/where'
-        : 'ls/cat/grep/rg/find/jq';
 
     return [
-        `Runs one shell command in the workspace root via ${shell}.`,
+        `Runs one shell command in the selected workspace directory via ${shell}.`,
         dialect,
-        'Pipes, redirection and chaining work; each call starts fresh at the workspace root.',
+        'Pipes, redirection and chaining work; each call starts fresh; cwd selects a workspace-relative directory. timeout_seconds overrides the hard cap, and yield_ms can return a managed job handle.',
         stdinEof,
         watch,
-        `In PLAN MODE only read-only enumeration commands are allowed (version probes like \`python --version && pip --version\`, git status/log/diff/show/blame, ${probes}) - everything that can mutate the workspace is blocked server-side; inspect files with read_file/grep_search/glob_search/list_files instead, and use run_tests for test runs.`,
+        'Terminal execution is unavailable in Plan mode. Inspect files with read_file/grep_search/glob_search/list_files. Run repository test commands in normal mode.',
     ].join(' ');
 }
 

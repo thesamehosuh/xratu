@@ -979,7 +979,7 @@ function childContext(extra = {}) {
         const mutationController = new AbortController();
         let releaseSnapshot;
         const mutationExecutor = createLocalToolExecutor(root, () => new Promise(resolve => { releaseSnapshot = resolve; }), undefined, undefined, undefined, undefined, { nested: true, signal: mutationController.signal });
-        const mutation = mutationExecutor.execute({ id: 'late-write', name: 'edit_file', arguments: { path: 'late.txt', mode: 'create', content: 'must not be written' }, argumentsJson: '{}' }).catch(error => error.name);
+        const mutation = mutationExecutor.execute({ id: 'late-write', name: 'write_file', arguments: { path: 'late.txt', mode: 'create', content: 'must not be written' }, argumentsJson: '{}' }).catch(error => error.name);
         await until(() => !!releaseSnapshot);
         mutationController.abort(); releaseSnapshot();
         check('Stop settles a mutation waiting for its checkpoint', await mutation, 'AbortError');

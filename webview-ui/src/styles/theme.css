@@ -4056,6 +4056,22 @@ pre.tool-cmd {
     opacity: 0.85;
 }
 
+.queued-steer-now {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    font: inherit;
+    cursor: pointer;
+}
+
+.queued-steer-now:hover { background: var(--vscode-toolbar-hoverBackground); }
+.queued-steer-now:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+
 .queued-steer-text {
     min-width: 0;
     max-width: 42ch;

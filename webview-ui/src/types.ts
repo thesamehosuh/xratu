@@ -1,3 +1,4 @@
+import type { AppearancePrefs } from '../../src/appearancePrefs';
 import type { ResearchEvidence } from '../../src/web/types';
 export type { ResearchEvidence } from '../../src/web/types';
 export type { SetupEngine } from '../../src/engines/setup';
@@ -80,6 +81,7 @@ export type ToExtensionMessage =
      *  the in-flight tool call finishes), so the timeline is never split while
      *  the model is still busy. */
     | { type: 'steerRun'; value: string; attachments?: ComposerAttachment[]; steerId?: string }
+    | { type: 'steerNow'; steerId: string }
     | { type: 'toggleYolo' }
     | { type: 'togglePlanMode' }
     | { type: 'clearHistory' }
@@ -196,6 +198,7 @@ export type ToExtensionMessage =
     /** Settings page: flip one auto-expand switch (diffs / commands /
      *  thinking). The host merges it into its opaque prefs blob and echoes
      *  transcriptPrefs. */
+    | { type: 'appearanceSet'; prefs: AppearancePrefs }
     | { type: 'transcriptSet'; id: string; enabled: boolean }
     | { type: 'transcriptOptionsSet'; options: Partial<TranscriptOptions> }
     | { type: 'transcriptReset' }
@@ -551,6 +554,7 @@ export type FromExtensionMessage =
     /** Transcript display prefs - echoed on webviewReady and after every
      *  transcriptSet, so the transcript and the Settings switches can never
      *  disagree. An empty blob means "all defaults" (webview-owned). */
+    | { type: 'appearancePrefs'; prefs?: AppearancePrefs }
     | { type: 'transcriptPrefs'; prefs: TranscriptPrefs }
     /** The file open in the active editor (workspace-relative, null when
      *  none) - lets suggestion workflows name the user's actual file. */

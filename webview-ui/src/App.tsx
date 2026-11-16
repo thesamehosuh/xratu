@@ -1062,6 +1062,10 @@ export function App() {
                 case 'replyLanguage':
                     setReplyLanguageState(msg.replyLanguage);
                     break;
+                case 'appearancePrefs':
+                    if (msg.prefs) setAppearance(readAppearance(msg.prefs));
+                    else send({ type: 'appearanceSet', prefs: readAppearance(getWebviewState().surfaceAppearance) });
+                    break;
                 case 'transcriptPrefs':
                     setTranscriptPrefs(coerceTranscriptPrefs(msg.prefs));
                     break;
@@ -1352,7 +1356,7 @@ export function App() {
         } else setScreen(section);
     };
     let overlay: JSX.Element | null = null;
-    if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={setAppearance} onTheme={() => send({ type: 'selectColorTheme' })} />;
+    if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={prefs => { setAppearance(prefs); send({ type: 'appearanceSet', prefs }); }} onTheme={() => send({ type: 'selectColorTheme' })} />;
     if (screen === 'history' || screen === 'workspace') overlay = <SessionPages history={screen === 'history'} sessions={sessionQuery.trim() ? sessionResults ?? [] : sessions} loading={sessionsLoading || !!sessionQuery.trim() && sessionResults === null} query={sessionQuery} onQuery={setSessionQuery}
         onOpen={id => { setScreen('chat'); if (id !== currentSessionId) { setEditDraft(null); send({ type: 'openSession', id }); } }} onNew={() => { setEditDraft(null); showConversation(); send({ type: 'newSession' }); }}
         onConversation={() => { setScreen('chat'); showConversation(); }} onAgents={() => { setScreen('chat'); setSurfaceTab('agents'); }} onBackground={() => { setScreen('chat'); setSurfaceTab('background'); }}
@@ -1841,6 +1845,13 @@ export function App() {
                             <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
                             <span className="queued-steer-label">{t('steerQueued')}</span>
                             <span className="queued-steer-text" dir="auto">{s.label}</span>
+                            {engineState?.active !== 'opencode' && (
+                                <button type="button" className="queued-steer-now" title={t('steerNowTitle')}
+                                    onMouseDown={event => event.preventDefault()}
+                                    onClick={() => send({ type: 'steerNow', steerId: s.id })}>
+                                    <span>{t('steerNow')}</span>
+                                </button>
+                            )}
                         </span>
                     ))}
                 </div>

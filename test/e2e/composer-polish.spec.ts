@@ -43,6 +43,12 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await input.evaluate(el => { Object.assign(window, { originalInput: el }); (el as HTMLTextAreaElement).setSelectionRange(2, 6); });
         await page.locator('.msg.user').click();
         await expect(page.locator('.composer-actions')).toHaveCSS('height', '0px');
+        const composer = page.locator('.composer');
+        const resting = await composer.boundingBox();
+        await page.mouse.move(resting!.x + resting!.width / 2, resting!.y + resting!.height - 3);
+        await expect.poll(() => composer.evaluate(el => el.matches(':hover'))).toBe(true);
+        await page.mouse.click(resting!.x + resting!.width / 2, resting!.y + resting!.height - 3);
+        await expect(input).toBeFocused();
         await input.focus();
         await engine.click();
         await expect(page.locator('.input-bar')).toHaveClass(/menu-open/);

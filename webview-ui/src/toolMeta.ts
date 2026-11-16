@@ -33,6 +33,8 @@ import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^(start_download|control_download|list_downloads)$/, icon: Download },
+    { re: /^view_image$/, icon: FileText },
+    { re: /^symbols$/, icon: CodeXml },
     { re: /^verify_file$/, icon: ShieldCheck },
     { re: /^(inspect_archive|extract_archive)$/, icon: Package },
     { re: /^(link|unlink|watch|unwatch|get)_pull_request$|^list_thread_pull_requests$/, icon: GitPullRequest },
@@ -47,6 +49,7 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /terminal|command/, icon: SquareTerminal },
     // Before the generic fallbacks: `process` shares no substring with any
     // other family, so without its own row it rendered as a bare wrench.
+    { re: /^process_input$/, icon: SquareTerminal },
     { re: /^process$/, icon: Cpu },
     { re: /grep/, icon: Search },
     { re: /glob/, icon: Search },
@@ -79,6 +82,8 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^start_download$/, key: 'toolStartDownload' },
+    { re: /^view_image$/, key: 'toolViewImage' },
+    { re: /^symbols$/, key: 'toolDefinitions' },
     { re: /^verify_file$/, key: 'toolVerifyFile' },
     { re: /^inspect_archive$/, key: 'toolInspectArchive' },
     { re: /^extract_archive$/, key: 'toolExtractArchive' },
@@ -94,6 +99,7 @@ const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^opencode_/, key: 'toolOpenCode' },
     { re: /^browser_/, key: 'toolBrowser' },
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
+    { re: /^process_input$/, key: 'toolTerminal' },
     { re: /^process$/, key: 'toolProcess' },
     { re: /^ask_user_question$/, key: 'toolAskUserQuestion' },
     { re: /^task$/, key: 'toolTask' },

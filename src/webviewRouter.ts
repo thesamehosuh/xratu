@@ -1,3 +1,4 @@
+import { readAppearance } from './appearancePrefs';
 /**
  * The webview -> host message router: every `onDidReceiveMessage` case for
  * the chat view, extracted from extension.ts's `resolveWebviewView`. The
@@ -92,6 +93,7 @@ export interface WebviewMessageHost {
     _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string, editIndex?: number): Promise<void>;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
     _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void>;
+    _handleSteerNow(steerId: string): void;
     _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove?: boolean, _retryCount?: number): Promise<void>;
     _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void;
     _history: HistoryMessage[];
@@ -251,6 +253,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // pills at the wrong default.
                     host._sendRuntimePreferences();
                     host._sendDownloads();
+                    host._view?.webview.postMessage({ type: 'appearancePrefs', prefs: host._globalState.get('xratu.appearance') });
                     host._sendTranscriptPrefs();
                     host._startConnectionPolling();
                     // Re-echo the policy toggles: a webview reload
@@ -316,6 +319,12 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'setReplyLanguage':
                     void host._globalState.update('xratu.replyLanguage', data.replyLanguage);
                     break;
+                case 'appearanceSet': {
+                    const prefs = readAppearance(data.prefs);
+                    await host._globalState.update('xratu.appearance', prefs);
+                    host._view?.webview.postMessage({ type: 'appearancePrefs', prefs });
+                    break;
+                }
                 case 'transcriptSet': {
                     // The persisted blob is opaque to the host (the
                     // webview owns the row schema); only the SHAPE is
@@ -339,6 +348,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         // before the try) must still release the held
                         // bubble, or its chip sticks forever.
                         .catch(() => host._confirmSteer(data.steerId, 'drop'));
+                    break;
+                case 'steerNow':
+                    if (typeof data.steerId === 'string') host._handleSteerNow(data.steerId);
                     break;
                 case 'requestFileList':
                     void host._pushFileList();

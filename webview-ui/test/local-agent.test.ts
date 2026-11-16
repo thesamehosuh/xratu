@@ -865,6 +865,7 @@ async function testMidRunCompactionFromServerUsage() {
 
 
 async function testSteerJoinsBeforeNextRound() {
+    const queued: Array<{ text: string; steerId: string }> = [];
     const responses = [
         sse(toolCallSse('read_file', JSON.stringify({ path: 'a.txt' }), 'call-1')),
         sse(textSse(['post-steer ', 'reply'])),
@@ -886,13 +887,13 @@ async function testSteerJoinsBeforeNextRound() {
                     inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
                 }],
             }), {
-                execute: async () => ({ output: 'file contents' }),
+                execute: async () => { queued.push({ text: 'also check b.txt', steerId: 'steer-7' }); return { output: 'file contents' }; },
             }, {
                 requestApproval: async () => ({}),
             }, {
-                // Queued while round 1 was streaming; must drain at the round
-                // boundary - AFTER the tool result, BEFORE round 2's request.
-                drain: () => [{ text: 'also check b.txt', steerId: 'steer-7' }],
+                // A real feed atomically empties itself; later boundaries must
+                // not re-inject the same correction.
+                drain: () => queued.splice(0),
             })
         );
 

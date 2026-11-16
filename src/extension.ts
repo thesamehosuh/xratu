@@ -21,7 +21,7 @@ import { getLocalToolDefinitions, createLocalToolExecutor, getOutsideWorkspacePa
 import { BrowserController } from './browserController';
 import { PullRequestController, type PullRequestAction } from './pullRequests/controller';
 import { PullRequestError, executionMatches, type PullRequestExecution } from './pullRequests/types';
-import { PULL_REQUEST_TOOLS } from './pullRequests/tools';
+import { PULL_REQUEST_TOOLS, PULL_REQUEST_MUTATIONS } from './pullRequests/tools';
 import { GitHubPullRequests, runGitHubCommand } from './pullRequests/github';
 import type { BrowserCommand } from './browserTypes';
 import {
@@ -78,7 +78,7 @@ import { _sanitizeHtml } from './sanitizeHtml';
 import { collectProjectRules } from './projectRules';
 import { closeStaleSkillEditors, isDir, isKnownSkillsPath } from './skillsHost';
 import { classifyWorkspace } from './workspaceKind';
-import { applyMarkerPatch, computeDiffHunks, editDiffFromArgs, hunkSummaries } from './editDiff';
+import { computeDiffHunks, editDiffFromArgs, hunkSummaries } from './editDiff';
 import { routeWebviewMessage, type WebviewMessageHost } from './webviewRouter';
 import { getOAuthProvider, listOAuthProviders } from './oauth/providerAuthRegistry';
 import './oauth/providers/register';
@@ -317,7 +317,7 @@ interface UsageRateRow {
 }
 
 /** Edit-family tools whose file target the "open diff" button serves. */
-const EDIT_DIFF_TOOLS = new Set(['edit_file', 'apply_patch', 'replace_in_file', 'write_file', 'create_file']);
+const EDIT_DIFF_TOOLS = new Set(['write_file', 'edit_file']);
 /** Per-side cap for captured edit snapshots. Larger files would hold two
  *  giant strings per edit in memory; they fall back to the args-derived diff. */
 const EDIT_SNAPSHOT_MAX_CHARS = 200_000;
@@ -343,9 +343,9 @@ interface CheckpointActionContext {
 class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessageHost {
     private _nativeToolContext?: { sessionID: string; workspace: string; plan: boolean; signal: AbortSignal; executor: ReturnType<typeof createLocalToolExecutor> };
 
-    private _nativeServiceDefinitions() {
+    private _nativeServiceDefinitions(plan = this._nativeToolContext?.plan ?? this._planMode) {
         const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        return nativeServiceTools(getLocalToolDefinitions({ skills: this._discoverSkillsForRun(workspace) }));
+        return nativeServiceTools(getLocalToolDefinitions({ plan, skills: this._discoverSkillsForRun(workspace) }));
     }
 
     private async _approveOutsideWorkspace(call: import('./local/localTypes').LocalToolCall, paths: string[], signal?: AbortSignal, source?: SubagentApprovalSource): Promise<boolean> {
@@ -846,7 +846,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 callTool: async (name, args, signal, context) => {
                     const active = this._nativeToolContext;
                     if (!active || active.sessionID !== (context.rootSessionID ?? context.sessionID) || active.plan !== context.plan || active.signal !== (context.rootSignal ?? signal) || signal.aborted
-                        || (context.rootSessionID && ['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(name))
+                        || (context.rootSessionID && (['task', 'update_task_list', 'exit_plan_mode', 'ask_user_question'].includes(name) || PULL_REQUEST_MUTATIONS.has(name)))
                         || (context.plan && !isNativePlanTool(name))) {
                         return { text: 'Xratu service is unavailable in this turn.', images: [], isError: true };
                     }
@@ -4296,12 +4296,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  validation, PDF extraction) and queue it for the loop's next round
      *  boundary. With no live run (race: the turn settled first) it
      *  degrades to an ordinary send. */
+    private _localSteerInterrupt?: () => void;
+    private _preparingSteers = new Set<string>();
+    private _steerNowIds = new Set<string>();
+
+    /** Interrupt only a built-in model request. A tool batch (including
+     * children and approvals) must settle before its parent can read a steer. */
+    _handleSteerNow(steerId: string): void {
+        if (!this._localRunActive || this._activeEngine !== 'xratu') return;
+        if (this._preparingSteers.has(steerId)) { this._steerNowIds.add(steerId); return; }
+        if (this._localSteerQueue.some(entry => entry.steerId === steerId)) this._localSteerInterrupt?.();
+    }
+
     async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
         const view = this._view, sessionEpochAtEntry = this._sessionEpoch;
         const current = () => view === this._view && sessionEpochAtEntry === this._sessionEpoch;
         const reject = (valueKey = 'engineSteerCancelled', error?: unknown) => {
             if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : '', valueKey: error instanceof Error ? undefined : valueKey, ...(steerId ? { steerId } : {}) });
         };
+        if (steerId) this._preparingSteers.add(steerId);
         try {
             const text = value.trim();
             if (!text && !(attachments && attachments.length > 0)) {
@@ -4383,7 +4396,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 } : {}),
                 ...(steerId ? { steerId } : {}),
             });
+            if (steerId && this._steerNowIds.delete(steerId)) this._localSteerInterrupt?.();
         } catch (error) { reject('engineSteerCancelled', error); }
+        finally {
+            if (steerId) { this._preparingSteers.delete(steerId); this._steerNowIds.delete(steerId); }
+        }
     }
 
     /** A late correction becomes a normal turn, but its raw draft remains
@@ -4555,6 +4572,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         if (fromIndex <= 0) this._localSteerQueue.length = 0;
         else this._localSteerQueue.splice(fromIndex);
+    }
+
+    /** A stopped/failed run must not leave corrections for an unrelated next
+     * turn to consume. Return held drafts instead of silently dropping them. */
+    private _rejectQueuedSteers(): void {
+        for (const entry of this._localSteerQueue.splice(0)) {
+            if (entry.steerId) this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId: entry.steerId });
+        }
     }
 
     /** Bind opaque replay state to the connection/model that produced it. */
@@ -5012,6 +5037,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 { executor,
                 // Shared with nested subagent runs (same live YOLO check).
                 approvals: localApprovalGate, questions: decisionGate, steer: {
+                    setInterrupt: (interrupt) => { this._localSteerInterrupt = interrupt; },
                     // Mid-run steering: the loop drains this at every round
                     // boundary (after tool results, before the next model
                     // request), so steered messages join the conversation
@@ -5107,7 +5133,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const executor = this._nativeServiceExecutor(workspace, controller.signal, runPlanMode);
             // Same catalog the bridge registers for this session, so the prompt
             // never names a bridged tool that is not actually exposed (skill).
-            const bridgedTools = this._nativeServiceDefinitions();
+            const bridgedTools = this._nativeServiceDefinitions(runPlanMode);
             this._activeRunTaskList = this._currentTaskList();
             this._nativeTurnActive = true;
             researchSession(this._sessionId ?? (this._ephemeralSessionId ??= `xratu-${crypto.randomUUID()}`), this._researchConversationId);
@@ -7921,6 +7947,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // CONCURRENT second turn.
                 if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
                 else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
+                else this._rejectQueuedSteers();
                 if (!opts?.steerCarry) {
                     this._localRunActive = false;
                     this._settleLocalRun();
@@ -8059,20 +8086,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const stat = await vscode.workspace.fs.stat(fileUri).then((s) => s, () => null);
             let oldContent = '';
             let newContent: string;
-            if (!stat && toolName === 'edit_file') {
+            if (!stat && toolName === 'write_file') {
                 newContent = args.new_content || '';
-            } else if (toolName === 'apply_patch') {
-                // Simulate the SEARCH/REPLACE blocks in memory so the card
-                // shows a real unified diff instead of raw markers.
+            } else if (toolName === 'edit_file') {
                 oldContent = stat ? (await vscode.workspace.openTextDocument(fileUri)).getText() : '';
-                const patched = applyMarkerPatch(oldContent, String(args.patch ?? ''));
-                if (patched === null) return null;
-                newContent = patched;
+                newContent = oldContent.replace(/\r\n/g, '\n');
+                const edits = args.edits;
+                if (!Array.isArray(edits)) return null;
+                for (const edit of edits) {
+                    const oldText = typeof edit.old_text === 'string' ? edit.old_text.replace(/\r\n/g, '\n') : '';
+                    if (!oldText || typeof edit.new_text !== 'string' || newContent.split(oldText).length !== 2) return null;
+                    newContent = newContent.replace(oldText, () => edit.new_text.replace(/\r\n/g, '\n'));
+                }
             } else {
                 const doc = await vscode.workspace.openTextDocument(fileUri);
                 oldContent = doc.getText();
-                newContent = toolName === 'edit_file'
-                    ? (args.new_content || '')
+                newContent = toolName === 'write_file'
+                    ? (args.mode === 'append' ? oldContent + (oldContent && !oldContent.endsWith('\n') ? '\n' : '') + (args.new_content || '') : (args.new_content || ''))
                     : oldContent.replace(args.old_str ?? '', () => (args.new_str ?? ''));
             }
             const hunks = computeDiffHunks(oldContent, newContent);
@@ -8115,7 +8145,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // reverse direction of the root-trust rule above).
             const kind = parsed.source ? null : sessionApprovalKind(toolName, args ?? {});
 
-            if (toolName === 'edit_file') {
+            if (toolName === 'write_file') {
                 // Deny an unknown mode BEFORE the preview: otherwise the card
                 // shows an overwrite-style diff for a call that can only fail
                 // at dispatch. Mirrors dispatchTool's check.
@@ -8128,7 +8158,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     continue;
                 }
             }
-            if (toolName === 'edit_file' || toolName === 'replace_in_file' || toolName === 'apply_patch') {
+            if (toolName === 'write_file' || toolName === 'edit_file') {
                 try {
                     sanitizePath(approval.args?.path || '', workspaceRoot);
                 } catch (error) {

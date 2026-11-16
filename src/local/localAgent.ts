@@ -439,6 +439,8 @@ export async function* runLocalAgent(
     yield { type: 'status', value: 'connecting' };
 
     for (let round = 0; round < rounds; round++) {
+        // Admission/compaction can take time before the first model request.
+        yield* applySteers();
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
         // Transient-network retry state for THIS round. A round is retried
@@ -507,8 +509,17 @@ export async function* runLocalAgent(
         // for a stalled UI (mirrors the host's cloud retry protocol).
         if (roundRetries > 0) yield { type: 'attempting' };
 
+        const modelController = new AbortController();
+        const cancelModel = () => modelController.abort();
+        request.signal?.addEventListener('abort', cancelModel, { once: true });
+        if (request.signal?.aborted) modelController.abort();
+        let interrupted = false;
+        steerFeed?.setInterrupt?.(() => {
+            interrupted = true;
+            modelController.abort();
+        });
         requestPromise = requestStreamingCompletion(
-            request,
+            { ...request, signal: modelController.signal },
             continuationMessages ?? messages,
             continuationMessages ? '' : contextNote,
             (delta) => {
@@ -520,7 +531,11 @@ export async function* runLocalAgent(
         )
             .then((value) => { result = value; return value; })
             .catch((err) => { requestError = err; return null; })
-            .finally(() => queue.close());
+            .finally(() => {
+                steerFeed?.setInterrupt?.(undefined);
+                request.signal?.removeEventListener('abort', cancelModel);
+                queue.close();
+            });
 
         while (result === null && requestError === null) {
             const delta = await queue.pop();
@@ -545,6 +560,14 @@ export async function* runLocalAgent(
             yield { type: 'chunk', value: delta.value };
         }
         await requestPromise;
+        request.signal?.throwIfAborted();
+        if (interrupted) {
+            // Partial tool arguments were never admitted or executed. Preserve
+            // visible prose, but do not manufacture a tool call/result pair.
+            result = { text: resumedText + attemptText, toolCalls: [], usage: null };
+            requestError = null;
+            break;
+        }
 
         if (!requestError) {
             // Splice the failed attempts' text back in front of the resumed
@@ -769,6 +792,16 @@ export async function* runLocalAgent(
                     ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
                 };
             }
+            // A correction arriving during a final text-only response used to
+            // be silently discarded when this branch returned. Commit that
+            // response before injecting corrections, then reason again.
+            messages.push({ role: 'assistant', content: finalResult.text || '', contextNote,
+                ...(finalResult.providerBlocks?.length ? { providerBlocks: finalResult.providerBlocks } : {}),
+                ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
+            });
+            let corrected = false;
+            for (const event of applySteers()) { corrected = true; yield event; }
+            if (corrected) continue;
             yield { type: 'status', value: 'done' };
             return;
         }

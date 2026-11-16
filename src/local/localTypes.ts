@@ -406,4 +406,7 @@ export interface LocalSteerMessage {
  *  request). `drain` must atomically empty the queue. */
 export interface LocalSteerFeed {
     drain(): LocalSteerMessage[];
+    /** Register an interrupt for ONLY the current model request. Tools,
+     * approvals and delegated children must never share this controller. */
+    setInterrupt?(interrupt: (() => void) | undefined): void;
 }
