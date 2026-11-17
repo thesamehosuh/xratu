@@ -284,7 +284,11 @@ Format is Cline-compatible: `command`/`args`/`env` for stdio, `url` for
 remote. Tools surface to the agent as `mcp__<server>__<tool>` and follow the
 same approval flow as built-ins.
 
-Fresh installs include DuckDuckGo. Add **[Digikala](https://github.com/sepehr071/digikala-mcp),
+Fresh installs enable the official [Zarinpal documentation MCP](https://www.zarinpal.com/docs/mcpDocs/)
+for payment integration docs and error lookup. It needs no API key and only
+reads public documentation. Existing MCP configuration is preserved; existing
+users can add Zarinpal from the curated marketplace. Web research is built in.
+Add **[Digikala](https://github.com/sepehr071/digikala-mcp),
 [Torob](https://github.com/mmdju/torob-mcp) and
 [Divar](https://github.com/mmdju/divar-mcp)** from the marketplace when you want them.
 These integrations require explicit opt-in before connecting or running local code. Iranian
@@ -352,7 +356,7 @@ Enable/disable skills in Settings → Servers & skills → Skills.
 
 ### First-party skills
 
-Xratu ships seven skills, seeded to `~/.agents/skills` when first introduced (so
+Xratu ships eight skills, seeded to `~/.agents/skills` when first introduced (so
 Claude Code, OpenCode, and the other agent tools see them too), editable
 like any skill, and switchable per skill in Settings → Servers & skills →
 Skills:
@@ -362,12 +366,13 @@ and deleted skills stay deleted.
 
 | Skill | What it does |
 |-------|--------------|
-| `natural-farsi` | Writes Persian the way Iranian developers actually type - colloquial register (رو not را), no half-spaces, technical terms left in English. Preloaded automatically when reply language is Persian. |
+| `natural-farsi` | Writes Persian in the chosen formal or informal register, with shared house orthography and technical vocabulary. Preloaded when reply language is Persian. |
 | `finglish-normalize` | Reads Finglish (Persian in Latin script) as Persian and matches the reply language and script to you. |
 | `jalali-dates` | Jalali (Shamsi) dates in prose; machine-readable dates stay ISO. |
-| `iran-dev-access` | What works from Iran and what to use instead - domestic gateways, local models, Iranian PaaS. |
-| `iran-connectivity-fallback` | A provider timing out repeatedly? Offers the alternatives already configured on your machine - no circumvention guides. |
+| `iran-dev-access` | Research service availability, payment options, and alternatives from Iran. |
+| `iran-connectivity-fallback` | Diagnose repeated provider connection failures and explore appropriate alternatives and network fixes. |
 | `local-llm-low-ram` | Honest sizing math for running models locally on small machines. |
+| `native-downloads` | Managed downloads, route selection, verification, and recovery without discarding saved progress. |
 | `iranian-marketplaces` | Chooses Digikala, Torob or Divar tools for shopping and classifieds; compares sellers, variants and prices in Toman, and handles rental deposits and placeholder prices. |
 
 ## Subagents
@@ -375,45 +380,61 @@ and deleted skills stay deleted.
 The profile format below applies to the built-in engine. OpenCode uses its own
 native agent definitions; Xratu displays those as a read-only inventory.
 
-A subagent is a named agent profile the main agent can hand a
-self-contained task to with the `task` tool. The subagent runs a full agent
-loop in a **fresh context** - it cannot see your conversation - and only its
-final report comes back. That keeps a long search or a multi-file sweep out
-of your chat window, and lets the parent keep working while it runs.
+A subagent is a child conversation with its own history, assignment and model.
+The built-in coordinator stores child sessions on disk, so follow-ups and
+continuations reuse the same child after a window reload. A profile supplies
+the starting instructions and capabilities; changing its file does not rewrite
+children that already exist.
 
-Two profiles are built in:
+| Profile | Capabilities |
+| --- | --- |
+| `explore` | Reads and searches files and web evidence; no shell or editing tools. |
+| `verify` | Runs approval-gated tests and commands; commands can write build artifacts. |
+| `general` | Inspects, edits, runs commands and verifies results. |
 
-| Profile | What it is for |
-|---------|----------------|
-| `explore` | Research. Reads, searches, and runs **read-only commands** (build, type-check, tests, linters, `git log`) to verify what it reports. It has no editing tools, so it cannot change anything. |
-| `general` | Multi-step work: inspect, edit, run commands, verify. |
+`xratu.maxParallelSubagents` (default 4) bounds active child executions. Extra
+assignments queue without being discarded. Mutation-capable children hold a
+shared-checkout writer lease; parent mutations wait for that lease too.
+Read-only exploration can run concurrently. This coordination is not a shell
+sandbox or file isolation; separate Git worktrees are not created automatically.
 
-When the model needs several delegations in one message they run
-concurrently - `xratu.maxParallelSubagents` (default 4) caps how many at
-once, because each one is a whole agent loop with its own context and budget.
-Exceeding the cap is not an error: the rest start in order as slots free up.
+### Working with child conversations
 
-### Watching delegated work
+Open **Agents** to choose a conversation. At sidebar width the list opens into
+a full-height child conversation; wide panels show both. Drafts survive child
+switches and are saved through VS Code's local webview state.
 
-The **Agents** tab appears when a task is delegated. Pick a run to see its
-Conversation or tool-only Activity, actual model and effort, elapsed time,
-and reported token usage. Expand tools for file content with line numbers,
-search matches, terminal output, diffs, and complete arguments. The task pill's
-**Observe run** button opens that same run. Agents can move to the sidebar
-alongside the parent conversation; switching runs preserves opened details.
+- Send instructions directly to a running child; they are delivered at the next
+  safe model boundary. The parent can send follow-ups too.
+- Stop one child without stopping siblings. Continue the same conversation
+  after its execution settles.
+- Answer a child's scoped question or approval in its conversation. The same
+  decision can also appear in the parent, with one authoritative resolution.
+- Change its model, reasoning effort or round limit between executions.
+- Use **Report to parent** to hand back a manually launched investigation.
+  Delivery status records the handoff separately from execution completion.
 
-Child approvals identify their profile and task in Conversation. The child
-view stays read-only and links back to the real approval card. Queued tasks,
-waiting approvals, failures, and interruptions have distinct states. Saved
-sessions retain bounded text traces (120 entries / 48,000 characters per run);
-older run detail is reclaimed when the session trace budget fills. Unfinished
-restored runs show as interrupted. Older sessions keep their
-original reports. Only the final report enters the parent's model context.
+**Agent profiles** can launch a fresh child from an assignment or open a custom
+profile's source file. The parent has `spawn_agent`, `send_agent`,
+`inspect_agents`, `wait_agents` and `stop_agent`; `task` remains the foreground
+compatibility tool. Background launch returns immediately. Required results
+should be received with `wait_agents`, without polling the inspector.
 
-Background processes have a movable **Background** tab with live output,
-per-process stop controls, elapsed time, and recent exit results. Log following
-pauses when you scroll up. Output keeps streaming after the agent finishes;
-processes recovered after a VS Code reload show when their output pipe is gone.
+OpenCode keeps its native sessions, permissions and report inbox. The redesigned
+view supports native observations, attributed decisions and individual Stop.
+While a verified native child is running, direct messages enter its native
+inbox. Once the native tree settles, further work is delegated through the
+parent. Native history observations remain bounded, and built-in model/limit
+controls are not presented as native settings.
+
+A reload interrupts built-in execution rather than silently repeating tool
+calls. Committed child history and reports survive. A tool with an interrupted
+result is treated as having uncertain effects. Old traces remain readable;
+a trace without a saved child ledger is not offered as a resumable conversation.
+Checkpoint restore invalidates the discarded child's future context.
+
+Background processes still use the **Background** tab. Child executors cannot
+start unowned background jobs or control another session's processes.
 
 ### Writing an agent file
 
@@ -446,7 +467,7 @@ with a file path and line number, most severe first.
 |-------|---------|
 | `name` | Optional; must match the file name (lowercase, digits, single hyphens). |
 | `description` | **Required.** When to delegate to this agent - the model picks profiles from this line. |
-| `tools` | Optional allow-list of tool names. Omit it for everything except `task` and `ask_user_question`, which a subagent never gets. |
+| `tools` | Optional allow-list of tool names. Omit it for the child toolset. Parent orchestration, parent-session controls, `ask_user_question` and shared process control are always removed. Use `ask_session_question` for an attributed child question. |
 | `model` | Optional. Run this profile on a specific model (its context window and output cap follow that model). Default: the parent session's model. |
 | `reasoning_effort` | Optional: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `max_rounds` | Optional loop budget for this profile (default 50). |
@@ -459,13 +480,12 @@ files written for other tools spell them `Read`, `Grep`, `Bash`. Run
 **Xratu: Agent Files** (or look in the **Xratu** output channel) to see
 these.
 
-A built-in subagent keeps its own context, cannot delegate further, cannot ask you
-anything mid-run, and its own edits and commands go through the same
-approval gate as yours. Its run is reported back with a `task_id`: pass that
-id back in a later `task` call to continue the same subagent with its
-context intact instead of restarting the work. A `task_id` lives as long as
-the chat stays open in the same VS Code window - reloading the window ends
-it.
+Built-in children cannot delegate recursively or change the parent's task list
+or mode. Their writes and commands keep real approval gates. Agent tool
+restrictions must use the supported comma-separated syntax; unsupported YAML
+restriction forms are rejected rather than treated as unrestricted access.
+Child history does not contain provider keys; credentials remain in VS Code
+secret storage, and native credentials stay native.
 
 ## Proxy
 

@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "3.0.2",
+  "version": "3.1.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -331,7 +331,8 @@
     "test:tool-admission": "node test/test-tool-admission.mjs",
     "test:attachment-session": "node test/test-attachment-session.mjs",
     "test:archives": "node test/test-archives.mjs",
-    "test:web-research": "node test/test-web-research.mjs"
+    "test:web-research": "node test/test-web-research.mjs",
+    "test:session-coordinator": "node test/test-session-coordinator.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [

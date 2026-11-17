@@ -48,7 +48,7 @@ export const SUBAGENT_TOOL_NAME = 'task';
  *  A nested run must not reach them even if a profile allow-lists them -
  *  the checklist is the parent's plan artifact and plan mode is the user's
  *  gate, both meaningless (and dangerous) one level down. */
-export const SESSION_CONTROL_TOOLS = new Set(['update_task_list', 'exit_plan_mode', 'link_pull_request', 'watch_pull_request']);
+export const SESSION_CONTROL_TOOLS = new Set(['update_task_list', 'exit_plan_mode', 'link_pull_request', 'watch_pull_request', 'spawn_agent', 'send_agent', 'inspect_agents', 'wait_agents', 'stop_agent', 'process', 'process_input']);
 
 /** Default child loop budget. The parent loop is unlimited by design; a
  *  delegated task must be FINITE - a runaway child cannot be steered or
@@ -108,6 +108,7 @@ export interface SubagentRunRequest {
     description: string;
     prompt: string;
     taskId?: string;
+    background?: boolean;
     onOutput?: (chunk: string) => void;
     /** Host identity of the parent task call, never a model argument. */
     parentCallId?: string;
@@ -118,29 +119,39 @@ export interface SubagentRunRequest {
  *  structural recursion deny (see local/subagentRunner.ts). */
 export interface SubagentRunner {
     run(request: SubagentRunRequest): Promise<{ output: string; isError?: boolean }>;
+    create?(profile: string, prompt: string, receipt: string): Promise<string>;
+    configureChild?(sessionId: string, patch: {model?: string; effort?: string; rounds: number; revision: number}): Promise<void>;
+    report?(sessionId: string): Promise<import('./sessions/types').SessionResult>;
+    acknowledgeCommitted?(ids: string[]): Promise<void>;
+    wait?(sessionIds: string[], signal?: AbortSignal): Promise<import('./sessions/types').ChildSession[]>;
+    sessions?(): Promise<import('./sessions/types').ChildSession[]>;
+    send?(sessionId: string, text: string, receipt: string): Promise<void>;
+    stop?(sessionId: string): Promise<void>;
+    stopAll?(): Promise<void>;
 }
 
 export function builtinSubagents(): SubagentDefinition[] {
     return [
         {
             name: 'explore',
-            description: 'Read-only codebase research. Reads, searches and inspects the workspace (including running read-only commands to check a claim) and reports findings with file references; never changes a file.',
+            description: 'Strictly read-only codebase research using file search and web evidence. Reports findings with file references. No shell, writes, or external mutation tools.',
             prompt: [
                 'You are a codebase research subagent. Investigate the workspace and answer the task you were given with evidence: file paths and line numbers for every claim.',
                 'You do not modify the workspace: no edits, no writes, no installs, no commits. Gather facts from files, searches and (if needed) the web, then report.',
-                'You MAY run commands in the terminal, and you should when a claim needs verifying (build, type-check, tests, linters, `git log`, `--help` output). Use read-only invocations only, expect a normal approval prompt for each one, and never run something that writes to the workspace.',
+                'You cannot run shell commands. Ask the parent to use the verify profile when a finding requires executing tests or commands.',
                 'Prefer targeted searches over reading whole files.',
             ].join(' '),
             tools: [
                 'read_file', 'grep_search', 'glob_search', 'list_files',
-                'symbols', 'web_search', 'fetch_url', 'skill',
-                // Terminal for VERIFICATION (build/test/lint/`--help`), not for
-                // changing anything: the tool still passes the parent's approval
-                // gate, and the profile has no editing tools at all. Without it
-                // the subagent can only ever report what it read, never what it
-                // confirmed - which is what made it useless for real research.
-                'run_terminal_command',
+                'symbols', 'web_search', 'fetch_url', 'skill', 'ask_session_question',
             ],
+            source: 'builtin',
+        },
+        {
+            name: 'verify',
+            description: 'Verify findings with tests, builds and commands. Commands remain approval-gated and may write build artifacts. Holds the shared workspace writer slot.',
+            prompt: 'Verify the assigned claims using targeted tests and commands. Report exact outcomes and limitations. Do not change product source or expand the task.',
+            tools: ['read_file','grep_search','glob_search','list_files','run_terminal_command','symbols','ask_session_question'],
             source: 'builtin',
         },
         {
@@ -156,6 +167,7 @@ export function builtinSubagents(): SubagentDefinition[] {
 }
 
 export interface ParsedSubagentMd {
+    error?: string;
     name?: string;
     description?: string;
     tools?: string[];
@@ -192,6 +204,10 @@ export function parseSubagentDefinition(raw: string): ParsedSubagentMd {
         if (!m) continue;
         const key = m[1];
         let value = m[2].trim();
+        if (key === 'tools' && (!value || /^[>|&*!%@`\[\{]/.test(value))) {
+            parsed.error = 'tools: use a nonempty comma-separated list of supported tool names';
+            continue;
+        }
         if (value.length >= 2
             && ((value.startsWith('"') && value.endsWith('"'))
                 || (value.startsWith("'") && value.endsWith("'")))) {
@@ -305,6 +321,7 @@ function buildFileDefinition(
     }
     const warning = warnings.length > 0 ? warnings.join('; ') : undefined;
     const error = nameError
+        ?? parsed.error
         ?? (description ? undefined : 'description is missing')
         ?? (description.length > MAX_DESCRIPTION_CHARS
             ? `description exceeds ${MAX_DESCRIPTION_CHARS} characters`
@@ -530,9 +547,9 @@ function typeLines(defs: readonly SubagentDefinition[]): string[] {
 export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): string {
     return [
         'Delegates a self-contained task to a specialized subagent. The subagent runs in a FRESH context - it cannot see this conversation - and returns only its final report (its intermediate tool calls stay private).',
-        'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The subagent cannot ask questions mid-run. Do not delegate what needs the user\'s decision.',
+        'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The child can ask scoped questions through ask_session_question when its profile permits it; do not delegate an unresolved user choice without the necessary context.',
         'Every run reports a task_id. If a run was interrupted, failed, or needs follow-up work, pass that task_id to CONTINUE the same subagent with its context restored - never relaunch the same work from scratch.',
-        'A task_id lives only as long as this chat does in this VS Code window: reloading the window or clearing the history drops it, and the run must then be started again with subagent_type.',
+        'Built-in child session IDs are durable. Continue an existing child with task_id after a reload; never invent an ID or assume a legacy observation contains resumable history.',
         'Several task calls in ONE message run CONCURRENTLY as independent subagents (the rest start as slots free up). They cannot coordinate with each other; one task = one coherent piece of work.',
         'Subagent types (for subagent_type):',
         ...typeLines(defs),
@@ -555,7 +572,7 @@ export function buildTaskToolSchema(defs: readonly SubagentDefinition[]): Record
             },
             task_id: {
                 type: 'string',
-                description: 'Continue a previous subagent run of this chat by its task_id (reported in every result) instead of starting over: its context is restored, so interrupted runs resume where they stopped and follow-up work builds on what it already did. Valid only while the same chat stays open in the same window.',
+                description: 'Continue a previous subagent run of this chat by its task_id (reported in every result) instead of starting over: its context is restored, so interrupted runs resume where they stopped and follow-up work builds on what it already did. The child belongs to this parent conversation and can be restored with its committed history.',
             },
         },
         required: ['prompt'],

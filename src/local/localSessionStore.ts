@@ -1,3 +1,4 @@
+import {removeChildFamily} from '../sessions/ownership';
 import { readResearchEvidence } from '../web/types';
 import { boundSubagentEvents, readSubagentTrace } from '../subagentObservation';
 import type { EngineSessionRef } from '../engines/types';
@@ -44,6 +45,7 @@ export interface LocalSessionSnapshot {
     connectionId?: string;
     /** Random per-chat research ID, unrelated to paths or native session IDs. */
     researchConversationId?: string;
+    childFamilyIds?: string[];
     engineSession?: EngineSessionRef;
     /** Workspace folder path the session belongs to (list filtering). */
     workspace?: string;
@@ -484,7 +486,7 @@ export class LocalSessionStore {
         return run;
     }
 
-    constructor(storageRoot: string) {
+    constructor(private readonly storageRoot: string) {
         this.rootDir = path.join(storageRoot, 'sessions');
         this.legacyPath = path.join(storageRoot, 'local-sessions.json');
     }
@@ -663,6 +665,7 @@ export class LocalSessionStore {
                 model: parsed?.model ?? null,
                 engineSession: readEngineSession(parsed?.engineSession),
                 researchConversationId: typeof parsed.researchConversationId === 'string' && /^[a-f0-9-]{36}$/i.test(parsed.researchConversationId) ? parsed.researchConversationId : undefined,
+                childFamilyIds: Array.isArray(parsed.childFamilyIds) ? parsed.childFamilyIds.filter((id: unknown): id is string=>typeof id==='string' && /^[a-f0-9-]{36}$/i.test(id)) : undefined,
                 summary: parsed?.summary ?? null,
                 localHistory: parsed?.localHistory ?? [],
                 replayUserTurns: typeof parsed?.replayUserTurns === 'number' && Number.isFinite(parsed.replayUserTurns)
@@ -775,8 +778,23 @@ export class LocalSessionStore {
         return this.enqueue(() => this._delete(id));
     }
 
+    async clearChildFamilies(): Promise<number> {
+        const directory=path.join(this.storageRoot,'children');
+        let files: string[];
+        try{files=await fs.readdir(directory);}
+        catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return 0;throw error;}
+        let failed=0;
+        for(const file of files.filter(name=>/^[a-f0-9-]{36}\.json$/i.test(name))){
+            try{await removeChildFamily(path.join(directory,file));}catch{failed++;}
+        }
+        return failed;
+    }
+
     private async _delete(id: string): Promise<boolean> {
         try {
+            const snapshot=await this.load(id);
+            const families=new Set([...(snapshot?.childFamilyIds??[]),...(snapshot?.researchConversationId?[snapshot.researchConversationId]:[])]);
+            for(const family of families) await removeChildFamily(path.join(this.storageRoot,'children',`${family}.json`));
             await fs.rm(this.sessionDir(id), { recursive: true, force: true });
         } catch {
             // A real removal failure (e.g. EBUSY on Windows with an open

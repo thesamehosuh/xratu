@@ -112,7 +112,8 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onCount, onFi
                 setLoading(false);
                 listLoaded.current = true;
                 setErrorKey(message.errorKey ?? null);
-                setFiles(message.files);
+                const sorted = [...message.files].sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
+                setFiles(sorted);
                 const previous = new Map(previousFiles.current.map(file => [file.path, file]));
                 const changed = message.files.filter(file => {
                     const old = previous.get(file.path);
@@ -122,6 +123,7 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onCount, onFi
                 const next = !previous.size && initialPath && message.files.some(file => file.path === initialPath) ? initialPath
                     : !toSha && newest ? newest : message.files.some(file => file.path === selected) ? selected : message.files[0]?.path ?? null;
                 setSelected(next);
+                if (next) setVisibleFiles(count => Math.max(count, sorted.findIndex(file => file.path === next) + 1));
                 setOpened(open => {
                     const retained = open.filter(path => message.files.some(file => file.path === path));
                     if (next && (!previous.size || (!toSha && newest) || next !== selected) && !retained.includes(next)) retained.push(next);
@@ -181,10 +183,11 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onCount, onFi
             {errorKey && <div role="alert" className="review-empty"><TriangleAlert size={14} /><span>{tOrRaw(errorKey)}</span><button type="button" onClick={refresh}>{t('surfaceRefresh')}</button></div>}
             {!errorKey && !files.length && (loading ? <p className="review-empty" role="status">{t('working')}</p> : <div className="surface-empty-state" role="status"><span className="surface-empty-icon" aria-hidden="true"><CodeXml size={22} /></span><strong>{t(sha ? 'surfaceNoChanges' : 'surfaceNoChangesTitle')}</strong></div>)}
             {!!files.length && <>
-                <div className="review-files">{files.slice(0, visibleFiles).map((change) => <button type="button" key={change.path} className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={opened.includes(change.path)} aria-expanded={opened.includes(change.path)} onClick={() => { setSelected(change.path); setOpened(current => current.includes(change.path) ? current.filter(path => path !== change.path) : [...current, change.path]); }}>
+                <div className="review-files">{files.slice(0, visibleFiles).map((change) => <div className="review-file-group" key={change.path}><button type="button" className={`review-file${selected === change.path ? ' selected' : ''}`} aria-pressed={opened.includes(change.path)} aria-expanded={opened.includes(change.path)} onClick={() => { setSelected(change.path); setOpened(current => current.includes(change.path) ? current.filter(path => path !== change.path) : [...current, change.path]); }}>
                     <ChevronDown size={12} className={`review-file-chevron${opened.includes(change.path) ? ' open' : ''}`} /><code dir="ltr">{change.path}</code><span className="review-stat" dir="ltr">{change.untracked ? t('surfaceNewFile') : change.binary ? t('surfaceBinary') : <>+{change.added} <span className="minus">−{change.removed}</span></>}</span>
-                </button>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>
-                {sha && files.filter(change => opened.includes(change.path)).map(change => <OpenFileDiff key={`${sessionKey}-${sha}-${change.path}`} sha={sha} toSha={toSha} path={change.path} expanded={expanded} revision={`${fileRevision}:${change.modifiedAt ?? ''}:${change.added}:${change.removed}:${change.binary}:${change.untracked}`} />)}
+                </button>
+                    {sha && opened.includes(change.path) && <OpenFileDiff sha={sha} toSha={toSha} path={change.path} expanded={expanded} revision={`${fileRevision}:${change.modifiedAt ?? ''}:${change.added}:${change.removed}:${change.binary}:${change.untracked}`} />}
+                </div>)}{files.length > visibleFiles && <button type="button" className="review-more" onClick={() => setVisibleFiles((count) => count + 80)}>{tf('surfaceMoreFiles', { count: String(files.length - visibleFiles) })}</button>}</div>
             </>}
         </div>
     </section>;
@@ -214,7 +217,6 @@ function OpenFileDiff({ sha, toSha, path, expanded, revision }: { sha: string; t
         return () => { window.clearTimeout(timer); window.removeEventListener('message', handler); };
     }, [sha, toSha, path, expanded, revision, id]);
     return <section className="review-open-file">
-        <div className="review-diff-head"><code dir="ltr">{path}</code></div>
         {loading ? <span className="step-status spinner" aria-label={t('working')} /> : error ? <p role="alert">{tOrRaw(error)}</p> : file ? <>
             {file.kind === 'text' && file.hunks ? <ReviewDiff file={file} /> : <p className="review-empty">{t(file.kind === 'binary' ? 'surfaceBinary' : 'surfaceDiffUnavailable')}</p>}
             <div className="review-footer"><button type="button" className="settings-ghost-action" onClick={() => postMessage({ type: 'changeFileOpen', sha, toSha, path })}><ExternalLink size={12} /><span>{t('surfaceOpenEditor')}</span></button>

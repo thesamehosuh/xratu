@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
  * check-register.mjs — machine-checkable register/orthography/language lint
- * for the natural-farsi skill (level-3 colloquial Persian).
+ * for the natural-farsi skill (formal or informal Persian).
  *
  * Usage:
  *   node check-register.mjs draft.txt [more.txt ...]   # lint files
  *   cat draft.txt | node check-register.mjs            # lint stdin
  *   node check-register.mjs --selftest                 # verify the rules
+ *   node check-register.mjs --register=formal letter.txt # shared checks only
+ *   node check-register.mjs --register=informal draft.txt # default register
  *   node check-register.mjs --allow-no-persian en.txt  # English source being
  *                                                       # translated FROM:
  *                                                       # skip the
@@ -281,7 +283,8 @@ function lintText(text, label, opts = {}) {
     // half-spaced spellings match; the half-space itself is already reported
     // by the char rule.
     const stripped = raw.split(ZWNJ).join('');
-    WORD_RULES.forEach(([id, re, fix]) => {
+    const wordRules = opts.register === 'formal' ? [] : WORD_RULES;
+    wordRules.forEach(([id, re, fix]) => {
       for (const m of stripped.matchAll(new RegExp(re, 'g'))) {
         findings.push({ label, lineNo, col: m.index + 1, id, got: m[0], fix });
       }
@@ -325,6 +328,17 @@ function selftest() {
     console.error(`FAIL: boundary false positives: ${JSON.stringify(falsePositives)}`);
   }
   checkLanguageSelftest(state);
+  langCheck(state, 'formal wording accepted',
+    'فایل را ذخیره کنید. این بخش مهم است و همان نکته را نشان میدهد.',
+    [], { register: 'formal' });
+  langCheck(state, 'formal mode keeps orthography checks',
+    `فایل را ذخیره کنید. می${ZWNJ}شود.`, ['zwnj'], { register: 'formal' });
+  langCheck(state, 'formal mode keeps vocabulary checks',
+    'این schema مهم است.', ['latin-word'], { register: 'formal' });
+  langCheck(state, 'formal mode keeps language checks',
+    'فایل را ذخیره کنید.\nNow save the file.', ['en-sentence'], { register: 'formal' });
+  langCheck(state, 'explicit informal mode keeps colloquial checks',
+    'فایل ساده است.', ['copula'], { register: 'informal' });
   console.log(failed === 0 ? 'selftest: all rules pass' : `selftest: ${failed} failure(s)`);
   return failed === 0;
 }
@@ -380,9 +394,12 @@ function main() {
   // Validate BEFORE the --selftest early exit, so a typo fails in every mode:
   // a misspelled `--allow-no-persian` silently lints an English source as a
   // Persian reply and reports no-persian against the translator's own input.
-  const unknown = argv.filter((a) => a.startsWith('--') && a !== '--selftest' && a !== '--allow-no-persian');
-  if (unknown.length) {
-    console.error(`check-register: unknown option(s): ${unknown.join(' ')}\n  usage: check-register.mjs [--allow-no-persian] [--selftest] [file.txt ...]`);
+  const registerArgs = argv.filter((a) => a.startsWith('--register='));
+  const unknown = argv.filter((a) => a.startsWith('--') && ![
+    '--selftest', '--allow-no-persian', '--register=formal', '--register=informal',
+  ].includes(a));
+  if (unknown.length || registerArgs.length > 1) {
+    console.error(`check-register: invalid option(s): ${unknown.length ? unknown.join(' ') : 'choose one --register'}\n  usage: check-register.mjs [--register=formal|informal] [--allow-no-persian] [--selftest] [file.txt ...]`);
     process.exit(2);
   }
   if (argv.includes('--selftest')) {
@@ -390,7 +407,7 @@ function main() {
   }
   const allowNoPersian = argv.includes('--allow-no-persian');
   const files = argv.filter((a) => !a.startsWith('--'));
-  const opts = { allowNoPersian };
+  const opts = { allowNoPersian, register: registerArgs[0]?.slice('--register='.length) ?? 'informal' };
   const inputs = files.length
     ? files.map((f) => ({ label: f, text: readFileSync(f, 'utf-8') }))
     : [{ label: '<stdin>', text: readFileSync(0, 'utf-8') }];

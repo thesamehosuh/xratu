@@ -5,6 +5,7 @@
  *  (extension.ts `UserQuestionGate` implementation). */
 
 export const USER_QUESTION_TOOL_NAME = 'ask_user_question';
+export const SESSION_QUESTION_TOOL_NAME = 'ask_session_question';
 
 export interface UserQuestionOption {
     label: string;

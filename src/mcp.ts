@@ -1,3 +1,4 @@
+import { SESSION_TOOLS, sessionToolDefinitions, executeSessionTool } from './sessions/tools';
 import { TOOL_POLICY, isAvailableTool } from './tooling/toolPolicy';
 import { filePage, fileHead } from './tooling/filePage';
 import * as vscode from 'vscode';
@@ -45,6 +46,7 @@ import {
 } from './tooling/backgroundJobs';
 import {
     USER_QUESTION_TOOL_NAME,
+    SESSION_QUESTION_TOOL_NAME,
     formatUserQuestionResult,
     parseUserQuestionArgs,
     type UserQuestionGate,
@@ -509,6 +511,7 @@ export function getLocalToolDefinitions(opts?: {
     external?: import('./externalMcp').AggregatedTool[];
     skills?: DiscoveredSkill[];
     subagents?: SubagentDefinition[];
+    sessionQuestions?: boolean;
 }): LocalToolDefinition[] {
     const yolo = !!opts?.yolo;
     const plan = !!opts?.plan;
@@ -544,6 +547,8 @@ export function getLocalToolDefinitions(opts?: {
         .sort((a, b) => a.name.localeCompare(b.name)
             || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const skillDefs: LocalToolDefinition[] = [];
+    const childQuestions = opts?.sessionQuestions ? builtin.filter(tool => tool.name === USER_QUESTION_TOOL_NAME)
+        .map(tool => ({...tool,name:SESSION_QUESTION_TOOL_NAME,description:'Ask a question in this child conversation. The user can answer it directly; this never changes parent permissions or session controls.'})) : [];
     const skills = listableSkills(opts?.skills ?? []);
     if (skills.length > 0) {
         skillDefs.push({
@@ -562,6 +567,7 @@ export function getLocalToolDefinitions(opts?: {
     const taskDefs: LocalToolDefinition[] = [];
     const subagents = opts?.subagents;
     if (!plan && subagents && listableSubagents(subagents).length > 0) {
+        taskDefs.push(...sessionToolDefinitions(subagents));
         taskDefs.push({
             name: SUBAGENT_TOOL_NAME,
             description: buildTaskToolDescription(subagents),
@@ -574,7 +580,7 @@ export function getLocalToolDefinitions(opts?: {
     const downloads = DOWNLOAD_TOOLS.filter(tool => isAvailableTool(tool.name, plan) && (!isOfflineMode() || tool.name !== 'start_download'));
     const archives = ARCHIVE_TOOLS.filter(tool => isAvailableTool(tool.name, plan));
     const pullRequests = PULL_REQUEST_TOOLS.filter(tool => isAvailableTool(tool.name, plan) && (!isOfflineMode() || tool.name !== 'get_pull_request')).map(tool => isOfflineMode() && tool.name === 'watch_pull_request' ? { ...tool, description: 'Stop an existing PR watch while offline. Set enabled=false.', inputSchema: { ...tool.inputSchema, properties: { url: { type: 'string' }, enabled: { type: 'boolean', enum: [false] } }, required: ['url', 'enabled'] } } : tool);
-    return [...builtin, ...web, ...browser, ...downloads, ...archives, ...pullRequests, ...taskDefs, ...skillDefs, ...external];
+    return [...builtin, ...web, ...browser, ...downloads, ...archives, ...pullRequests, ...taskDefs, ...skillDefs, ...childQuestions, ...external];
 }
 
 /**
@@ -1071,7 +1077,10 @@ async function dispatchTool(
         const header = `Skill: ${skillName}`
             + (displayPath ? `\nDirectory: ${displayPath} (relative to the workspace root)` : '');
         return { content: [{ type: 'text', text: `${header}\n\n${body}` }] };
-    } else if (name === SUBAGENT_TOOL_NAME) {
+    } else if (SESSION_TOOLS.has(name) && name !== 'spawn_agent') {
+        const result = await executeSessionTool(name,args ?? {},subagentRunner,callId,signal);
+        return {content:[{type:'text',text:result.output}],isError:result.isError};
+    } else if (name === SUBAGENT_TOOL_NAME || name === 'spawn_agent') {
         // Local-runtime delegation tool (never advertised over the MCP
         // bridge and absent from child toolsets). Without a runner there is
         // no nested model to drive - fail loudly rather than silently.
@@ -1082,9 +1091,10 @@ async function dispatchTool(
         if (!parsed.ok) {
             return { content: [{ type: 'text', text: parsed.error }], isError: true };
         }
-        const result = await subagentRunner.run({ ...parsed.value, parentCallId: callId, ...(onOutput ? { onOutput } : {}) });
+        const result = await subagentRunner.run({ ...parsed.value, background: name === 'spawn_agent', parentCallId: callId, ...(onOutput ? { onOutput } : {}) });
         return { content: [{ type: 'text', text: result.output }], isError: result.isError };
-    } else if (name === USER_QUESTION_TOOL_NAME) {
+    } else if (name === USER_QUESTION_TOOL_NAME || name === SESSION_QUESTION_TOOL_NAME) {
+        if (name === SESSION_QUESTION_TOOL_NAME && !nested) return {content:[{type:'text',text:'Child questions require an owned child session.'}],isError:true};
         const parsed = parseUserQuestionArgs(args ?? {});
         if (!parsed.ok) {
             return { content: [{ type: 'text', text: parsed.error }], isError: true };

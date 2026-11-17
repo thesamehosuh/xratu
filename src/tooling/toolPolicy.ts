@@ -21,10 +21,17 @@ export const TOOL_POLICY: Record<string, { effect: 'read' | 'write' | 'execute' 
     find_references: { effect: 'read', plan: true },
     symbols: { effect: 'read', plan: true },
     ask_user_question: { effect: 'session', plan: true },
+    ask_session_question: { effect: 'session', plan: true },
     update_task_list: { effect: 'session', plan: true },
     exit_plan_mode: { effect: 'session', plan: true },
     skill: { effect: 'read', plan: true },
     task: { effect: 'execute', plan: false },
+    spawn_agent: { effect: 'session', plan: false },
+    send_agent: { effect: 'session', plan: false },
+    inspect_agents: { effect: 'session', plan: false },
+    wait_agents: { effect: 'session', plan: false },
+    stop_agent: { effect: 'session', plan: false },
+
     web_search: { effect: 'read', plan: true },
     fetch_url: { effect: 'read', plan: true },
 };

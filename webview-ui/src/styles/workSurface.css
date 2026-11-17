@@ -498,7 +498,9 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .activity-jump .jump-btn { position:relative; inset:auto; transform:translateY(-40px); }
 
 .compaction-status { display:flex; align-items:center; gap:8px; padding:8px 12px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); }
-.review-open-file + .review-open-file { margin-block-start:18px; border-block-start:1px solid var(--page-line); }
+.review-file-group { min-width:0; border-block-end:1px solid var(--page-line); }
+.review-file-group .review-open-file { padding:10px 7px 14px; }
+.review-file-group .review-footer { margin-block-start:10px; }
 
 .review-file-chevron { flex-shrink:0; transform:rotate(-90deg); }
 .review-file-chevron.open { transform:none; }

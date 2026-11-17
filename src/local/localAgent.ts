@@ -343,9 +343,9 @@ export async function* runLocalAgent(
     let messages: LocalAgentMessage[] = buildMessages();
     // Both serial and parallel rounds deliver corrections after the complete
     // tool batch and before another model request (including wrap-up).
-    function* applySteers(): Generator<LocalAgentEvent> {
+    async function* applySteers(): AsyncGenerator<LocalAgentEvent> {
         request.signal?.throwIfAborted();
-        for (const steer of steerFeed?.drain() ?? []) {
+        for (const steer of await steerFeed?.drain() ?? []) {
             const text = steer.text.trim();
             if (!text && !steer.attachments?.length) continue;
             messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
@@ -800,7 +800,7 @@ export async function* runLocalAgent(
                 ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
             });
             let corrected = false;
-            for (const event of applySteers()) { corrected = true; yield event; }
+            for await (const event of applySteers()) { corrected = true; yield event; }
             if (corrected) continue;
             yield { type: 'status', value: 'done' };
             return;

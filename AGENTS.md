@@ -51,8 +51,11 @@ assets/         brand assets (assets/brand) + bundled skills (assets/skills)
 ## Subagents (agent files)
 
 `src/subagents.ts` is the pure loader (discovery, frontmatter, validation);
-`src/local/subagentRunner.ts` drives the nested loop. The `task` tool is how
-the parent delegates; `subagents: SubagentDefinition[]` on
+`src/local/subagentRunner.ts` drives the nested loop. `src/sessions/` owns
+durable child identities, serialized admission, instruction receipts, reports,
+recovery, and workspace writer ownership. `task` delegates in the foreground;
+`spawn_agent`, `send_agent`, `inspect_agents`, `wait_agents`, and `stop_agent`
+provide background coordination; `subagents: SubagentDefinition[]` on
 `getLocalToolDefinitions` adds it, and `SubagentHostContext.baseRequest(def)`
 is what lets a profile pick its own model/effort (its caps and context window
 must then be computed for THAT model, not the parent's).
@@ -71,13 +74,19 @@ Rules that exist because their absence was a real failure mode:
 - **Strips hold structurally, not by prompt**: `task`,
   `update_task_list`, `exit_plan_mode`, `ask_user_question` never reach a
   child (`filterToolsForSubagent` + `wrapRestrictedExecutor`), even when a
-  profile allow-lists them.
+  profile allow-lists them. New orchestration tools and process controls are
+  stripped too. `ask_session_question` is the attributed child-only question gate.
 - **Approvals stay real for children.** Do NOT "fix" child prompts by
   auto-approving them (goose/hermes do; that is a deliberate difference).
-  `task_id` is chat-scoped and the note says so — a persisted id must never
-  outlive its in-memory registry.
-- Parallel delegations run in WAVES (`xratu.maxParallelSubagents`, default 4);
-  each one is a full loop with its own context and budget.
+  `task_id` identifies a durable child within its saved conversation family.
+  Parent snapshots retain all associated child-family IDs for privacy deletion.
+- The coordinator admits up to `xratu.maxParallelSubagents` executions (default
+  4), one per child. Mutation-capable children lease the shared workspace;
+  strict Explore children can overlap. Unknown tools count as writers. A live
+  owner never expires by age. Reload interrupts work without replaying effects.
+- Coordinator changes require `test:session-coordinator` plus loader, runner,
+  observation, and work-surface suites. Child views are actionable and localized;
+  display traces never enter the parent model ledger.
 - Agent-file changes need BOTH `test:subagents` (loader/validation) and
   `test:subagent-runner` (the real nested loop) green, plus a README section
   in en + fa (the feature is user-facing, and Persian strings must pass
@@ -149,8 +158,8 @@ mounted across page changes so drafts and scroll positions survive.
   Keep approval source attribution, call identity across steers/parallel waves,
   immutable snapshots, and interrupted states on restore. Per-agent stop is
   keyed by the parent `task` call id — address it through `run.call.callId`,
-  never the row's generated `id`. Agents uses the same docking registry and
-  remains read-only otherwise. Run `test:subagent-observation` and the
+  never the row's generated `id`. Agents uses the same docking registry; child conversations route instructions,
+  scoped decisions, model settings, and explicit reports through the coordinator. Run `test:subagent-observation` and the
   loader/runner suites for this pipeline.
 - Completed tool calls fold into `CompactSteps`; `ActivityTimeline` retains
   detailed outputs as a read-only view. Intermediate assistant prose stays in

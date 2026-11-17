@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'ut
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
 const provider = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
 const members = provider.members.filter(n => ['_composerReceipts', '_handleComposerSend', '_persistLocalSession', '_draftWorkspaceIdentity'].includes(n.name?.getText(file)));
-const sandbox = { contentCapForWindow: () => 24000, process: { platform: process.platform } };
+const sandbox = { committedChildResults: () => [], contentCapForWindow: () => 24000, process: { platform: process.platform } };
 vm.runInNewContext(ts.transpileModule(`class Host { ${members.map(n => n.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, sandbox);
 function fixture() {
     const host = new sandbox.Host(), messages = [];
@@ -49,7 +49,7 @@ switched.host._sessionEpoch++; waiting.resolve(); await previous;
 assert.equal(switched.messages.length, 0, 'an old request cannot post receipts into the replacement chat');
 const persisted = fixture();
 Object.assign(persisted.host, {
-    _sessionId: null, _sessionTitle: 'Already seeded', _history: [], _localHistory: [],
+    _childFamilyIds: new Set(), _sessionId: null, _sessionTitle: 'Already seeded', _history: [], _localHistory: [],
     _sessionCost: { USD: 0, IRT: 0 }, _sessionUsage: { input: 0, output: 0, cached: 0 }, _sessionUsageByHost: {},
     _trimLocalHistory: () => {}, _contextWindowHint: () => null, _localWorkspaceKey: () => '/project',
     _downloads: { bindSession: async () => {} }, _lastSessionStateKey: () => 'last',
@@ -64,4 +64,18 @@ sandbox.process.platform = 'linux';
 assert.equal(persisted.host._draftWorkspaceIdentity(), '/Physical/Root');
 sandbox.process.platform = 'win32';
 assert.equal(persisted.host._draftWorkspaceIdentity(), '/physical/root');
+// Reports are acknowledged only after the parent snapshot succeeds.
+const acknowledged = [];
+sandbox.committedChildResults = () => ['durable-report'];
+sandbox.EngineError = Error;
+Object.assign(persisted.host, {
+    _researchConversationId: 'family', _childRunnerRoot: 'family',
+    _childRunner: { acknowledgeCommitted: async ids => acknowledged.push(...ids) },
+});
+persisted.host._localSessionStore.save = async () => false;
+await assert.rejects(persisted.host._persistLocalSession(), /sessionSaveFailed/);
+assert.equal(acknowledged.length, 0, 'failed parent persistence keeps child reports pending');
+persisted.host._localSessionStore.save = async () => ({meta:{title:'Saved'}});
+await persisted.host._persistLocalSession();
+assert.deepEqual(acknowledged, ['durable-report']);
 console.log('send-receipts: idempotent admission, accepted/rejected and stale-session boundaries passed');

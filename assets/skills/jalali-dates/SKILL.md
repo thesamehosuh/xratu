@@ -34,7 +34,12 @@ corrupt data the user didn't ask you to touch.
    current date wrong; run `date` (or `node -e "console.log(new
    Date().toISOString())"`) and convert that. Only trust your memory of the
    date when the user has just told you what it is.
-2. Convert Gregorian → Jalali for the human-facing text only. Format:
+2. Resolve the intended timezone before converting an instant to a date.
+   Use the user's stated location or timezone; Persian language alone does not
+   imply residence in Iran. For dates in Iran, pass `timeZone: 'Asia/Tehran'`
+   explicitly; a remote machine's default can give yesterday near midnight.
+   Preserve date-only values as calendar dates rather than shifting them
+   through UTC. Convert Gregorian → Jalali for the human-facing text only. Format:
    - **Running prose:** month names read better than numbers — «۱۸ شهریور»,
      «۲۹ شهریور ۱۴۰۵».
    - **Structured text** (tables, UI strings, changelog version headers):
@@ -45,8 +50,8 @@ corrupt data the user didn't ask you to touch.
    give the exact Jalali date when precision matters.
 3. Prefer a trusted conversion over hand arithmetic:
    - Zero dependency, good enough for display: the platform formatter —
-     `new Intl.DateTimeFormat('fa-IR-u-ca-persian').format(date)` (this is
-     exactly what Xratu itself uses for its Jalali dates).
+     `new Intl.DateTimeFormat('fa-IR-u-ca-persian', { timeZone: 'Asia/Tehran' }).format(date)` (example for dates
+     in Iran; use the intended timezone elsewhere).
    - In a JS project that needs parsing/maths: `jalaali-js` or
      `dayjs-jalali`. Jalali's leap-year rule is not a simple modulo and is
      easy to get subtly wrong at century boundaries - do not hand-roll it.
@@ -64,5 +69,5 @@ corrupt data the user didn't ask you to touch.
 ## Register
 
 Any Persian wording around the date (month names, «تاریخ»، explanations)
-follows `natural-farsi`: colloquial register (رو/همون/میخوای style
-morphology), its orthography rules, Persian digits.
+follows `natural-farsi`: the chosen formal or informal register, its
+orthography rules, and Persian digits.

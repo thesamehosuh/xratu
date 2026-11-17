@@ -271,7 +271,7 @@ function childContext(extra = {}) {
     check('child starts with system + user only (fresh context)', messages.length, 2);
     ok('child system prompt carries the agent body', String(messages[0].content).includes(EXPLORE.prompt.slice(0, 40)));
     ok('child system prompt carries the delegation contract',
-        String(messages[0].content).includes('delegated subagent'));
+        String(messages[0].content).includes('child conversation inside a larger session'));
     ok('child user message is the task prompt (plus the volatile tail note)',
         String(messages[1].content).startsWith('Find where foo is defined. Self-contained task.'),
         JSON.stringify(messages[1].content));
@@ -995,4 +995,29 @@ function childContext(extra = {}) {
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
+// Child-owned questions retain attribution and wait in the child's trace.
+{
+    const {ctx} = childContext();
+    const observations = [];
+    let attributed;
+    ctx.tools = def => filterToolsForSubagent([...ALL_TOOLS, {
+        name:'ask_session_question', description:'Ask the user', requiresApproval:false,
+        inputSchema:{type:'object'},
+    }], def);
+    ctx.onObservation = (_id, trace) => observations.push(trace);
+    ctx.executor = (signal, source) => ({execute:async call => {
+        attributed = source;
+        ok('scoped question receives the live execution signal', !signal.aborted);
+        check('child executes the scoped question tool',call.name,'ask_session_question');
+        return {output:'Use the existing API.'};
+    }});
+    const {result} = await withMockFetch([
+        () => toolReply('ask_session_question',{question:'Which API?'}),
+        () => textReply('I will use the existing API.'),
+    ], () => runSubagentTask(ctx,DEFS,{subagentType:'general',parentCallId:'question-parent',description:'Choose API',prompt:'Ask which API to use.'},new Map()));
+    check('scoped question preserves the parent call identity',attributed?.parentCallId,'question-parent');
+    ok('scoped question is visible as waiting',observations.some(trace=>trace.status==='waiting' && trace.pendingTools?.includes('ask_session_question')));
+    ok('scoped question resumes the child',result.output.includes('existing API'));
+}
+
 process.exit(failed === 0 ? 0 : 1);

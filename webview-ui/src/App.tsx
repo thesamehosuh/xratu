@@ -1,3 +1,7 @@
+import { nativeChildSessions } from './nativeChildSessions';
+import { MessageItem } from './components/MessageItem';
+import { ChildSessionsPanel } from './components/ChildSessionsPanel';
+import type { ChildSessionView } from '../../src/sessions/view';
 import { NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
@@ -231,7 +235,10 @@ export function App() {
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
     const [taskChipOpen, setTaskChipOpen] = useState(false);
+    const [childReceipt, setChildReceipt] = useState<{sessionId: string; receipt?: string; accepted: boolean} | null>(null);
+    const [childSessions, setChildSessions] = useState<{rootId: string; sessions: ChildSessionView[]} | null>(null);
     const agentRuns = useMemo(() => collectAgentRuns(chat.messages), [chat.messages]);
+    const nativeChildren = useMemo(() => nativeChildSessions(agentRuns), [agentRuns]);
     const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
     const [changeCount, setChangeCount] = useState(0);
     const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
@@ -255,7 +262,7 @@ export function App() {
     const pullRequests = usePullRequests(currentSessionId);
     const downloads = useDownloads();
     const [browserAvailable, setBrowserAvailable] = useState(false);
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, pullRequests.state.links.length > 0, hasActivity(chat.messages), downloads.downloads.length > 0, browserAvailable);
+    const dock = useDockLayout(agentRuns.length > 0 || !!childSessions?.sessions.length, chat.backgroundJobs.length > 0, changeCount > 0, pullRequests.state.links.length > 0, hasActivity(chat.messages), downloads.downloads.length > 0, browserAvailable);
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
@@ -804,6 +811,7 @@ export function App() {
                     setScreen('welcome');
                     break;
                 case 'resetConversation':
+                    setChildSessions(null);
                     dispatch(msg);
                     pendingSteers.current.clear();
                     setQueuedSteers([]);
@@ -819,14 +827,40 @@ export function App() {
                     setSelectedModel(null);
                     break;
                 case 'showChat':
+                    send({type:'childSessionsGet'});
                     setScreen('chat');
                     if (msg.workspaceKind) setWorkspaceKind(msg.workspaceKind);
+                    break;
+                case 'subagentState': {
+                    dispatch(msg);
+                    const trace=msg.trace;
+                    setChildSessions(current=>current?{...current,sessions:current.sessions.map(child=>{
+                        if(child.id!==trace.taskId || child.generation!==trace.generation || (child.displayRevision??0)>(trace.sequence??trace.updatedAt) || !['running','waiting_for_approval','waiting_for_answer'].includes(child.state))return child;
+                        const active=trace.entries.slice().reverse().find(entry=>entry.kind==='tool'&&!entry.endedAt);
+                        return {...child,displayRevision:trace.sequence??trace.updatedAt,
+                            state:trace.status==='waiting'?(trace.pendingTools?.includes('ask_session_question')?'waiting_for_answer':'waiting_for_approval'):child.state==='waiting_for_approval'||child.state==='waiting_for_answer'?'running':child.state,
+                            activeTool:active?{name:active.tool??'',live:active.live}:undefined,
+                            liveText:trace.entries.slice().reverse().find(entry=>entry.kind==='text'&&!entry.endedAt)?.text};
+                    })}:current);
+                    break;
+                }
+                case 'childSessionReceipt':
+                    setChildReceipt({sessionId: msg.sessionId, receipt: msg.receipt, accepted: msg.accepted});
+                    break;
+                case 'childSessions':
+                    setChildSessions(current=>({rootId:msg.rootId,sessions:msg.sessions.map(child=>{
+                        const previous=current?.rootId===msg.rootId?current.sessions.find(item=>item.id===child.id):undefined;
+                        return previous && previous.generation===child.generation && (previous?.displayRevision??0)>(child.displayRevision??0) && ['running','waiting_for_approval','waiting_for_answer'].includes(child.state)
+                            ? {...child,displayRevision:previous.displayRevision,liveText:previous.liveText,activeTool:previous.activeTool,state:previous.state}
+                            : child;
+                    })}));
                     break;
                 case 'agentsState':
                     setAgentProfiles(msg.profiles);
                     setAgentsError(msg.errorKey);
                     break;
                 case 'sessionState': {
+                    send({type:'childSessionsGet'});
                     const previous = draftIdentity.current;
                     const key = composerDraftKey(msg.workspace ?? '', msg.id);
                     const live = msg.browserSessionId ?? msg.id;
@@ -1364,7 +1398,7 @@ export function App() {
     if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { settingsScopeInitialized.current = true; setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
-        overlay = <AgentsPage profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
+        overlay = <AgentsPage canLaunch={engineState?.active !== 'opencode'} onLaunch={(profile, prompt) => { send({type:'childSessionAction',rootId:childSessions?.rootId ?? '',sessionId:profile.name,action:'create',text:prompt,receipt:crypto.randomUUID()});setScreen('chat');dock.activate('agents'); }} profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
     }
 
     const renderCredentials = (embedded?: 'provider' | 'local') => (
@@ -1755,7 +1789,7 @@ export function App() {
                     if (panel !== dock.dragging) return;
                     event.preventDefault(); dock.move(dock.dragging, (event.target as Element).closest('.panel-side,.dock-sidebar') ? 'side' : 'main');
                 }}>
-            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
+            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={childSessions?.sessions.length ?? agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
             {[...dock.layout.main, ...dock.layout.side].filter(isNewTab).map(tab => <NewTabPanel key={tab} tab={tab} panelClass={dock.position(tab)} openPanels={dock.allPanels} onChoose={panel => dock.open(panel, dock.layout.side.includes(tab) ? 'side' : 'main', tab)} />)}
             <div className={`conversation-panel${chat.messages.length === 0 ? ' empty-conversation' : ''} ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
             <div className="chat-stage">
@@ -1963,7 +1997,7 @@ export function App() {
             </div>
             </div>
             {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={() => { setScreen('chat'); showConversation(); }} prefs={transcriptPrefs} sessionKey={currentSessionId} />
+            {(childSessions?.sessions.length || engineState?.active === 'opencode' && nativeChildren.length) ? <ChildSessionsPanel onNew={() => setScreen('agents')} decisions={callId => chat.messages.filter(message => message.approval?.source?.parentCallId === callId && !message.approval.resolution || message.decisions?.some(decision => decision.source?.parentCallId === callId && !decision.answered)).map(message => <MessageItem key={message.id} message={{...message, text:'', steps:[], decisions:message.decisions?.filter(decision => decision.source?.parentCallId === callId && !decision.answered), approval:message.approval?.source?.parentCallId === callId ? message.approval : undefined}} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} />)} receipt={childReceipt} sessions={engineState?.active === 'opencode' ? nativeChildren : childSessions!.sessions} rootId={childSessions?.rootId ?? currentSessionId ?? ''} visible={agentsVisible} panelClass={dock.position('agents')} onAction={(rootId, sessionId, action, text, receipt) => {if (engineState?.active === 'opencode') {const callId=nativeChildren.find(child=>child.id===sessionId)?.parentCallId;if(callId && action==='stop')send({type:'stopAgent',callId});else if(callId && action==='send' && text && receipt)send({type:'nativeChildInstruction',rootId,sessionId,callId,text,receipt});} else send({type:'childSessionAction', rootId, sessionId, action, text, receipt});}} onParent={() => { setScreen('chat'); showConversation(); }} /> : <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={() => { setScreen('chat'); showConversation(); }} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={() => { setScreen('chat'); showConversation(); }} />
             <DownloadsPanel {...downloads} visible={dock.mainActive === 'downloads' || dock.sideActive === 'downloads'} panelClass={dock.position('downloads')} />
             <BrowserPanel onAvailable={setBrowserAvailable} visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
@@ -1973,7 +2007,7 @@ export function App() {
                 return <button key={panel} type="button" className="icon-btn" title={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} aria-label={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} onClick={() => setSurfaceTab(panel)}><Icon size={15} /></button>;
             })}</nav>}
             <DockSidebar active={dock.wide && dock.sideOpen} dragging={!!dock.dragging}>
-                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
+                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={childSessions?.sessions.length ?? agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
                 {dock.sidePanels.length === 0 && <div className="dock-empty"><button type="button" className="settings-ghost-action" onClick={() => dock.add('side')}><span>{t('surfaceAddTab')}</span></button></div>}
             </DockSidebar>
             <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onCount={setChangeCount} onFiles={setReviewFiles} onTurnFiles={recordTurnFiles} /></div>
