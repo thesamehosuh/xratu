@@ -197,6 +197,33 @@ console.log('Session coordinator real-loop integration and cross-window ownershi
   await closeSubagentRunner(registry);
  } finally {globalThis.fetch=original;}
 }
+// Parent Stop cancels its foreground wait, not the durable execution.
+// Streaming text is published to the child surface before a final checkpoint.
+{
+ const {createSubagentRunner,closeSubagentRunner}=require('../out/local/subagentRunner.js');
+ const {builtinSubagents}=require('../out/subagents.js');
+ const {childSessionView}=require('../out/sessions/view.js');
+ const parent=new AbortController(),seen=deferred(),finish=deferred();const registry=new Map();let childSignal;
+ const original=globalThis.fetch;let runner;
+ try {
+  globalThis.fetch=async(_url,init)=>{
+   childSignal=init.signal;let sent=false;
+   return new Response(new ReadableStream({async pull(controller){
+    if(!sent){sent=true;controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Live child output"}}]}\n\n'));return;}
+    await finish.promise;controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));controller.close();
+   }}),{headers:{'content-type':'text/event-stream'}});
+  };
+  runner=createSubagentRunner({store:memory(),parentSessionId:'root',baseRequest:()=>({baseUrl:'https://example.invalid/v1',model:'test',signal:parent.signal}),
+   tools:()=>[],systemPrompt:()=> 'Work',executor:()=>({execute:async()=>({output:'ok'})}),approvalGate:{requestApproval:async()=>({})},
+   onSessions:sessions=>{if(sessions.some(child=>childSessionView(child).liveText?.includes('Live child output')))seen.resolve();}},builtinSubagents(),registry);
+  const waiting=runner.run({subagentType:'general',description:'Independent child',prompt:'Work',parentCallId:'foreground'});
+  let timer;await Promise.race([seen.promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Child streaming output never reached its surface')),3000);})]).finally(()=>clearTimeout(timer));
+  parent.abort();assert.equal((await waiting).isError,true);
+  assert.equal(childSignal.aborted,false,'the child retains its own controller');
+  const child=(await runner.sessions())[0];assert.equal(child.executions.at(-1).state,'running');
+  finish.resolve();assert.equal((await runner.wait([child.id]))[0].executions.at(-1).state,'completed');
+ } finally {finish.resolve();await closeSubagentRunner(registry);globalThis.fetch=original;}
+}
 console.log('Parent background launch, active follow-up, event-driven wait, and structural tool gates passed');
 
 // A writer waiting on another window can be cancelled, without blocking later work.
@@ -248,3 +275,15 @@ console.log('Shared workspace writer arbitration and cancellation passed');
  } finally {await rm(dir,{recursive:true,force:true});}
 }
 console.log('Parent deletion, orphan cleanup, and child-storage path guards passed');
+
+// Display projection keeps bounded tool identity, never provider replay carriers.
+{
+ const { childSessionView } = require('../out/sessions/view.js');
+ const view = childSessionView({id:'child',title:'Display',profile:'explore',revision:1,generation:1,executions:[],messages:[],results:[],checkpoint:{rows:[
+  {role:'assistant',content:'Inspecting',providerBlocks:{secretReplay:true},tool_calls:[{id:'call-1',function:{name:'read_file',arguments:'{"path":"sample.txt"}'}}]},
+  {role:'tool',tool_call_id:'call-1',content:'Contents',isError:false},
+ ]}});
+ assert.equal(view.messages[0].toolCalls[0].name,'read_file');
+ assert.equal(view.messages[1].toolCallId,'call-1');
+ assert.equal(JSON.stringify(view).includes('secretReplay'),false);
+}

@@ -70,6 +70,7 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent, cap = IN_ME
             ...(event.contextNote ? { contextNote: event.contextNote } : {}),
         };
     }
+    if (event.type === 'compactionCheckpoint') return { type: 'compaction_checkpoint', content: event.value, compactedToolCalls: event.compactedToolCalls };
     if (event.type === 'toolResult') {
         return {
             type: 'tool_result',
@@ -131,6 +132,7 @@ function toolImageMeta(image: any): ToolImageMeta {
  */
 export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | null {
     if (!event || typeof event !== 'object') return null;
+    if (event.type === 'compaction_checkpoint') return { role: 'assistant', content: event.content, compactedToolCalls: event.compactedToolCalls };
     if (event.type === 'assistant_message') {
         return {
             role: 'assistant',
@@ -192,6 +194,16 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
         declared.clear();
     };
     for (const row of rows) {
+        if (row.role === 'assistant' && Array.isArray(row.compactedToolCalls)) {
+            const ids = new Set(row.compactedToolCalls);
+            for (let i = out.length - 1; i >= 0; i--) {
+                const previous = out[i];
+                if (previous.role === 'tool' && ids.has(previous.tool_call_id ?? '')
+                    || previous.role === 'assistant' && (previous.tool_calls?.some(call => ids.has(call.id))
+                        || previous.compactedToolCalls?.some(id => ids.has(id)))) out.splice(i, 1);
+            }
+            declared.clear();
+        }
         if (row.role === 'tool') {
             if (row.tool_call_id == null || !declared.has(row.tool_call_id)) continue;
             out.push({
@@ -224,6 +236,7 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
             ...(row.isError != null ? { isError: row.isError } : {}),
             ...(row.providerBlocks ? { providerBlocks: row.providerBlocks } : {}),
             ...(row.reasoningContent ? { reasoningContent: row.reasoningContent } : {}),
+            ...(row.compactedToolCalls ? { compactedToolCalls: row.compactedToolCalls } : {}),
             ...(row.role === 'assistant' && typeof row.contextNote === 'string' && row.contextNote ? { contextNote: row.contextNote } : {}),
         });
     }

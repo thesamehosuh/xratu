@@ -29,8 +29,8 @@ try {
     assert.equal(completedOnly.result.toolCalls.length, 1, 'completed output can recover a coalesced tool call');
     await assert.rejects(read([{ type: 'response.completed', response: { output: [call, { ...call, id: 'fc_2' }] } }]), /duplicate tool call IDs/, 'ambiguous call identities must never reach execution');
     await assert.rejects(read([added, { type: 'response.function_call_arguments.delta', item_id: call.id, delta: call.arguments }]), /without response.completed/, 'an unfinished Responses stream cannot authorize tool execution');
-    const cancelledCall = await read([added, { type: 'response.completed', response: { output: [] } }]);
-    assert.equal(cancelledCall.result.toolCalls.length, 0, 'a partial call omitted from completed output must not execute');
+    await assert.rejects(read([added, { type: 'response.completed', response: { output: [] } }]),
+        /unfinished output items/, 'a partial call omitted from completed output must not execute');
     for (const content of [[{ type: 'output_text', text: 'Final text' }], [{ type: 'refusal', refusal: 'Cannot complete this request' }]]) {
         const { result, deltas } = await read([{ type: 'response.completed', response: { output: [{ type: 'message', content }] } }]);
         const expected = content[0].text ?? content[0].refusal;

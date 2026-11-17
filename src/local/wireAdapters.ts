@@ -115,7 +115,7 @@ export interface CompletionResult {
     /** Captured reasoning text for transports that replay it as a top-level
      *  field instead of content blocks (Chat Completions `reasoning_content`). */
     reasoningContent?: string;
-    cacheDiagnostic?: { type?: string; reason?: string; reasoningContext?: string };
+    cacheDiagnostic?: { type?: string; reason?: string; reasoningContext?: string; outputTypes?: string[] };
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
@@ -254,7 +254,7 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
             return stripLocalImageFields(wire);
         }
         if (m.role === 'assistant') {
-            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, ...wire } = m;
+            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, compactedToolCalls: _compactedToolCalls, ...wire } = m;
             return stripLocalImageFields(wire);
         }
         return stripLocalImageFields(m);
@@ -1428,8 +1428,16 @@ async function requestResponsesCompletion(
             if (call?.arguments) item.arguments = call.arguments;
         }
     }
-    const providerBlocks = completedItems
-        ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    // Some OpenAI subscription streams send complete output_item.done events
+    // but leave completed.output empty. Do not erase those finalized calls
+    // (or reasoning replay carriers) with the empty terminal snapshot. Never
+    // promote an unfinished streamed item into an executable call, though.
+    const terminalItems = completedItems as Record<string, unknown>[] | null;
+    if (terminalItems?.length === 0 && [...itemsByIndex.keys()].some(index => !closedItems.has(index))) {
+        throw new ModelStreamError('Model completion omitted unfinished output items; no tools were executed.', 'modelStreamIncomplete');
+    }
+    const providerBlocks = terminalItems?.length ? terminalItems
+        : [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
     // Finalized items are authoritative for execution as well as replay.
     // Relays may coalesce deltas, and an interrupted argument delta must not
     // replace the complete JSON that the final item actually approved.
@@ -1454,6 +1462,8 @@ async function requestResponsesCompletion(
         if (finalText.startsWith(text) && finalText.length > text.length) onDelta(finalText.slice(text.length));
         text = finalText;
     }
+    cacheDiagnostic = { ...cacheDiagnostic, outputTypes: providerBlocks.slice(0, 16)
+        .map(item => String(item?.type ?? 'unknown').slice(0, 80)) };
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks, cacheDiagnostic };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the

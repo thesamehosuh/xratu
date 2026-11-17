@@ -165,7 +165,9 @@ function responsesTool(name, args, id, callId, n, reasoning) {
         frame({ type: 'response.output_item.added', output_index: index, item: { ...call, arguments: '' } }),
         frame({ type: 'response.function_call_arguments.delta', item_id: id, delta: args }),
         frame({ type: 'response.output_item.done', output_index: index, item: call }),
-        frame({ type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 5 }, output: items } }),
+        // Subscription streams can omit the terminal snapshot after done
+        // events. Exercise that shape across the real persistence boundary.
+        frame({ type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 5 }, output: [] } }),
     );
     return out;
 }

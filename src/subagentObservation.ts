@@ -151,6 +151,8 @@ export class SubagentTraceCollector {
         const now = this.now();
         const last = trace.entries.at(-1);
         const sameSource = !sourceId || last?.id.startsWith(`${sourceId}:`);
+        const firstDelta = event.type === 'chunk' && (last?.kind !== 'text' || !!last.endedAt || !sameSource)
+            || event.type === 'thinking' && (last?.kind !== 'thinking' || !!last.endedAt || !sameSource);
         switch (event.type) {
             case 'chunk':
                 if (last?.kind === 'thinking' && !last.endedAt) last.endedAt = now;
@@ -193,7 +195,7 @@ export class SubagentTraceCollector {
         }
         if (['chunk', 'thinking', 'assistantMessage'].includes(event.type) && trace.entries.some(entry => entry.text.length >= 12_000)) trace.truncated = true;
         if (trace.entries.length > TRACE_ENTRIES) { trace.entries = trace.entries.slice(-TRACE_ENTRIES); trace.truncated = true; }
-        this.emit(['toolCall', 'toolResult', 'needsApproval', 'assistantMessage', 'error', 'usage'].includes(event.type));
+        this.emit(firstDelta || ['toolCall', 'toolResult', 'needsApproval', 'assistantMessage', 'error', 'usage'].includes(event.type));
     }
     finish(status: SubagentTrace['status'], report?: string) {
         this.trace.status = status; this.trace.report = report; this.trace.endedAt = this.now(); this.trace.pendingTools = undefined;

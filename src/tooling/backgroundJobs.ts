@@ -935,7 +935,7 @@ export function formatJobCompletion(notice: JobCompletionNotice): string {
             : notice.status === 'exited' && notice.exitCode === 0
                 ? 'completed successfully'
                 : `exited with code ${notice.exitCode}`;
-    const tail = notice.output.trim();
+    const tail = notice.output.trim().slice(-2000);
     return [
         `[background job ${notice.jobId} ${outcome}]`,
         `Command: ${notice.command}`,

@@ -35,6 +35,7 @@ import {
     boundHistory,
     carryCompactionSummary,
     compactWithSummary,
+    compactActiveTurn,
     isHistoryTruncationMarker,
 } from './compaction';
 import type {
@@ -281,6 +282,9 @@ export async function* runLocalAgent(
     // mid-run gate, the pre-request compaction and the context hints so all
     // three agree on when the window counts as "full".
     const compactRatio = request.autoCompactRatio ?? AUTO_COMPACT_RATIO;
+    const budget = request.compactionTokenBudget;
+    const compactionWindow = windowTokens && typeof budget === 'number' && Number.isFinite(budget) && budget >= 4096
+        ? Math.min(windowTokens, budget / compactRatio) : windowTokens;
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
     const toolTokens = estimateToolTokens(request.tools);
@@ -398,7 +402,7 @@ export async function* runLocalAgent(
     // double-failure window a separate ceiling pass would open (first
     // summarizer fails, second succeeds, first pass's drops never summarized).
     const preSummary = await compactWithSummary(
-        messages, request, windowTokens, undefined, sessionSummary, toolTokens, turnStartIndex(),
+        messages, request, compactionWindow, undefined, sessionSummary, toolTokens, turnStartIndex(),
         Math.min(request.autoCompactRatio ?? AUTO_COMPACT_RATIO, HISTORY_BOUND_RATIO),
     );
     for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
@@ -438,9 +442,20 @@ export async function* runLocalAgent(
 
     yield { type: 'status', value: 'connecting' };
 
+    let lastActiveCompactionRound = -8;
     for (let round = 0; round < rounds; round++) {
         // Admission/compaction can take time before the first model request.
         yield* applySteers();
+        if (messages.slice(messages.indexOf(currentTurnMessage) + 1).reduce((n, row) => n + (row.tool_calls?.length ?? 0), 0) >= 8
+            && round - lastActiveCompactionRound >= 8 && compactionWindow && request.compactionTokenBudget && Math.max(noteUsed, estimateUsed()) >= compactionWindow * compactRatio) {
+            lastActiveCompactionRound = round;
+            const checkpoint = await compactActiveTurn(messages, request, currentTurnMessage, windowTokens);
+            for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
+            if (checkpoint) {
+                yield { type: 'compactionCheckpoint', value: String(checkpoint.content), compactedToolCalls: checkpoint.compactedToolCalls! };
+                noteUsed = estimateUsed();
+            }
+        }
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
         // Transient-network retry state for THIS round. A round is retried
@@ -758,20 +773,24 @@ export async function* runLocalAgent(
         // NOW instead of failing the next request outright.
         if (finalResult.usage?.promptTokens != null) {
             let used = finalResult.usage.promptTokens + (finalResult.usage.completionTokens ?? 0);
-            if (windowTokens && used >= windowTokens * compactRatio) {
+            if (windowTokens && used >= (compactionWindow ?? windowTokens) * compactRatio) {
+                const beforeCompaction = estimateUsed();
                 const summary = await compactWithSummary(
                     // `used` is the server-reported prompt size and already
                     // includes the tool schemas, so toolTokens stays 0 here
                     // (passing it would double-count). `turnStartIndex()` keeps
                     // the steering-safe boundary.
-                    messages, request, windowTokens, used, sessionSummary, 0, turnStartIndex(),
+                    messages, request, compactionWindow, used, sessionSummary, 0, turnStartIndex(),
                 );
                 for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
                 if (summary) {
                     sessionSummary = summary;
                     yield { type: 'compactionSummary', value: summary, droppedUserTurns: compactedUserTurns() };
                 }
-                used = Math.min(used, estimateUsed());
+                // Preserve server ground truth when compaction cannot reclaim
+                // anything (notably a protected live turn). Only subtract
+                // the history that was actually removed.
+                used = Math.max(0, used - Math.max(0, beforeCompaction - estimateUsed()));
             }
             // Update the trailing note's occupancy for the NEXT round; the
             // system message itself is left untouched so the prompt prefix
@@ -845,174 +864,195 @@ export async function* runLocalAgent(
         }));
         // Keep original names in assistantMessage/provider history above. Only
         // permission checks and execution use the canonical spelling.
-        const approvalCalls = executionCalls.filter((call) => availableTools.has(call.name) && toolRequiresApproval(call.name, request.tools));
-        let decisions: Record<string, boolean> = {};
-        if (approvalCalls.length) {
-            const approvalId = `local-${cryptoRandomId()}`;
-            yield {
-                type: 'needsApproval',
-                approvalId,
-                approvals: approvalCalls.map((call) => ({
-                    tool_call_id: call.id,
-                    tool_name: call.name,
-                    args: call.arguments,
-                })),
-            };
-            yield { type: 'status', value: 'waitingApproval' };
-            decisions = await approvalGate.requestApproval(approvalId, approvalCalls);
-        }
-
-        // Parallel group (e.g. multiple subagent delegations in one round):
-        // calls to `parallelTools` run CONCURRENTLY with each other while the
-        // round's other calls keep the serial in-order path - both started at
-        // once so a long delegation never delays the rest. Results stream as
-        // each call settles and land in the ledger in completion order (the
-        // replayed history stores the same order, so cache prefixes match).
-        // Rounds without a parallel-tool call take the untouched serial path
-        // below.
-        const parallelNames = new Set((request.parallelTools ?? []).map(name => resolveToolName(name, toolNames).name));
-        const parallelCalls = parallelNames.size
-            ? executionCalls.filter((call) => parallelNames.has(call.name))
-            : [];
-        if (parallelCalls.length) {
-            for (const call of executionCalls) {
-                yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
+        const batchController = new AbortController();
+        const batchSignal = request.signal ? AbortSignal.any([request.signal, batchController.signal]) : batchController.signal;
+        const interruptBatch = () => batchController.abort();
+        steerFeed?.setInterrupt?.(interruptBatch);
+        const executeCall: LocalToolExecutor['execute'] = async (call, onOutput) => {
+            if (batchSignal.aborted) return { output: 'Tool execution skipped after interruption.', isError: true };
+            try {
+                return await executor.execute(call, onOutput, batchSignal);
+            } catch (error) {
+                if (!batchSignal.aborted) throw error;
+                return { output: 'Tool execution interrupted. Effects may already have occurred; inspect current state before repeating this action.', isError: true };
             }
-            const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
-            // The queue closes EXACTLY once, when EVERY call of the round has
-            // settled: a denied call settles inside the same try/finally (it
-            // used to return early and leak the count, hanging the round), and
-            // the serial tail never observes a premature zero between two of
-            // its own awaits (which would drop the rest of its results).
-            let remaining = executionCalls.length;
-            let execError: unknown = null;
-            const runOne = async (call: LocalToolCall): Promise<void> => {
-                try {
-                    const available = availableTools.has(call.name);
-                    const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
-                    if (!approved) {
-                        const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
-                        messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
-                        eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
-                        return;
-                    }
-                    const result = await executor.execute(call, (chunk) =>
-                        eventQueue.push({ type: 'toolOutput', id: call.id, value: chunk }));
-                    if (!result) throw new Error('Tool executor returned no result.');
-                    messages.push({
-                        role: 'tool',
+        };
+        try {
+            const approvalCalls = executionCalls.filter((call) => availableTools.has(call.name) && toolRequiresApproval(call.name, request.tools));
+            let decisions: Record<string, boolean> = {};
+            if (approvalCalls.length) {
+                const approvalId = `local-${cryptoRandomId()}`;
+                yield {
+                    type: 'needsApproval',
+                    approvalId,
+                    approvals: approvalCalls.map((call) => ({
                         tool_call_id: call.id,
-                        content: result.output,
-                        isError: result.isError === true,
-                    });
-                    eventQueue.push({
-                        type: 'toolResult',
-                        id: call.id,
-                        tool: call.name,
-                        output: result.output,
-                        isError: result.isError,
-                ...(result.research ? { research: result.research } : {}),
-                ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
-                    });
-                } catch (e) {
-                    execError = execError ?? e;
-                } finally {
-                    if (--remaining === 0) eventQueue.close();
+                        tool_name: call.name,
+                        args: call.arguments,
+                    })),
+                };
+                yield { type: 'status', value: 'waitingApproval' };
+                try {
+                    decisions = await approvalGate.requestApproval(approvalId, approvalCalls, undefined, batchSignal);
+                } catch (error) {
+                    if (!batchSignal.aborted) throw error;
                 }
-            };
-            // Wave-limited launch: a group larger than the cap runs in fixed-size
-            // waves, so N delegations cost N-at-a-time rather than N at once.
-            // Workers are completion-driven, NOT batched: a queued call starts
-            // the moment ANY slot frees, which is what the setting, the README
-            // and the task-tool description all promise. Results still stream
-            // into the same queue as each call settles (the drain below is
-            // unchanged), and `runOne` never rejects, so a worker cannot fail
-            // the round.
-            const limit = Math.max(1, Math.floor(request.parallelToolLimit ?? parallelCalls.length) || parallelCalls.length);
-            void (async () => {
-                let next = 0;
-                await Promise.all(Array.from(
-                    { length: Math.min(limit, parallelCalls.length) },
-                    async () => {
-                        while (next < parallelCalls.length) {
-                            const call = parallelCalls[next++];
-                            if (call === undefined) break;
-                            await runOne(call);
-                        }
-                    },
-                ));
-            })();
-            void (async () => {
-                for (const call of executionCalls) {
-                    if (parallelNames.has(call.name)) continue;
-                    await runOne(call);
-                }
-            })();
-            while (true) {
-                const event = await eventQueue.pop();
-                if (event === null) break;
-                yield event;
             }
-            if (execError) throw execError;
-            yield* applySteers();
-            continue;
-        }
 
-        for (const call of executionCalls) {
-            const available = availableTools.has(call.name);
-            const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
-            yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
-
-            if (!approved) {
-                const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
-                messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
-                yield { type: 'toolResult', id: call.id, tool: call.name, output, isError: true };
+            // Parallel group (e.g. multiple subagent delegations in one round):
+            // calls to `parallelTools` run CONCURRENTLY with each other while the
+            // round's other calls keep the serial in-order path - both started at
+            // once so a long delegation never delays the rest. Results stream as
+            // each call settles and land in the ledger in completion order (the
+            // replayed history stores the same order, so cache prefixes match).
+            // Rounds without a parallel-tool call take the untouched serial path
+            // below.
+            const parallelNames = new Set((request.parallelTools ?? []).map(name => resolveToolName(name, toolNames).name));
+            const parallelCalls = parallelNames.size
+                ? executionCalls.filter((call) => parallelNames.has(call.name))
+                : [];
+            if (parallelCalls.length) {
+                for (const call of executionCalls) {
+                    yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
+                }
+                const eventQueue = new AsyncPushQueue<LocalAgentEvent>();
+                // The queue closes EXACTLY once, when EVERY call of the round has
+                // settled: a denied call settles inside the same try/finally (it
+                // used to return early and leak the count, hanging the round), and
+                // the serial tail never observes a premature zero between two of
+                // its own awaits (which would drop the rest of its results).
+                let remaining = executionCalls.length;
+                let execError: unknown = null;
+                const runOne = async (call: LocalToolCall): Promise<void> => {
+                    try {
+                        const available = availableTools.has(call.name);
+                        const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
+                        if (!approved) {
+                            const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
+                            messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
+                            eventQueue.push({ type: 'toolResult', id: call.id, tool: call.name, output, isError: true });
+                            return;
+                        }
+                        const result = await executeCall(call, (chunk) =>
+                            eventQueue.push({ type: 'toolOutput', id: call.id, value: chunk }));
+                        if (!result) throw new Error('Tool executor returned no result.');
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: call.id,
+                            content: result.output,
+                            isError: result.isError === true,
+                        });
+                        eventQueue.push({
+                            type: 'toolResult',
+                            id: call.id,
+                            tool: call.name,
+                            output: result.output,
+                            isError: result.isError,
+                    ...(result.research ? { research: result.research } : {}),
+                    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+                        });
+                    } catch (e) {
+                        execError = execError ?? e;
+                    } finally {
+                        if (--remaining === 0) eventQueue.close();
+                    }
+                };
+                // Wave-limited launch: a group larger than the cap runs in fixed-size
+                // waves, so N delegations cost N-at-a-time rather than N at once.
+                // Workers are completion-driven, NOT batched: a queued call starts
+                // the moment ANY slot frees, which is what the setting, the README
+                // and the task-tool description all promise. Results still stream
+                // into the same queue as each call settles (the drain below is
+                // unchanged), and `runOne` never rejects, so a worker cannot fail
+                // the round.
+                const limit = Math.max(1, Math.floor(request.parallelToolLimit ?? parallelCalls.length) || parallelCalls.length);
+                void (async () => {
+                    let next = 0;
+                    await Promise.all(Array.from(
+                        { length: Math.min(limit, parallelCalls.length) },
+                        async () => {
+                            while (next < parallelCalls.length) {
+                                const call = parallelCalls[next++];
+                                if (call === undefined) break;
+                                await runOne(call);
+                            }
+                        },
+                    ));
+                })();
+                void (async () => {
+                    for (const call of executionCalls) {
+                        if (parallelNames.has(call.name)) continue;
+                        await runOne(call);
+                    }
+                })();
+                while (true) {
+                    const event = await eventQueue.pop();
+                    if (event === null) break;
+                    yield event;
+                }
+                if (execError) throw execError;
+                yield* applySteers();
                 continue;
             }
 
-            // Stream long-running tool output (terminal commands) as it is
-            // produced. The queue lets us yield while execute() is still
-            // pending - a callback cannot yield into this generator directly.
-            const toolQueue = new AsyncPushQueue<string>();
-            let execResult: { output: string; isError?: boolean } | null = null;
-            let execError: unknown = null;
-            const execPromise = executor
-                .execute(call, (chunk) => toolQueue.push(chunk))
-                .then((r) => { execResult = r; return r; })
-                .catch((e) => { execError = e; return null; })
-                .finally(() => toolQueue.close());
+            for (const call of executionCalls) {
+                const available = availableTools.has(call.name);
+                const approved = available && (!toolRequiresApproval(call.name, request.tools) || decisions[call.id] === true);
+                yield { type: 'toolCall', id: call.id, tool: call.name, args: call.arguments };
 
-            while (execResult === null && execError === null) {
-                const chunk = await toolQueue.pop();
-                if (chunk !== null) yield { type: 'toolOutput', id: call.id, value: chunk };
-            }
-            while (true) {
-                const chunk = await toolQueue.pop();
-                if (chunk === null) break;
-                yield { type: 'toolOutput', id: call.id, value: chunk };
-            }
-            // Await the promise for the settled value (the closure assignment
-            // above is invisible to TS's control-flow analysis).
-            const result = await execPromise;
-            if (execError) throw execError;
-            if (!result) throw new Error('Tool executor returned no result.');
+                if (!approved) {
+                    const output = available ? 'Tool execution denied by the user.' : `Tool '${call.name.slice(0, 200)}' is not available in this run.`;
+                    messages.push({ role: 'tool', tool_call_id: call.id, content: output, isError: true });
+                    yield { type: 'toolResult', id: call.id, tool: call.name, output, isError: true };
+                    continue;
+                }
 
-            messages.push({
-                role: 'tool',
-                tool_call_id: call.id,
-                content: toolResultContent(result.output, result.images, imageFormat),
-                isError: result.isError === true,
-            });
-            yield {
-                type: 'toolResult',
-                id: call.id,
-                tool: call.name,
-                output: result.output,
-                isError: result.isError,
-                ...(result.research ? { research: result.research } : {}),
-                ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
-                ...(result.images?.length ? { images: result.images } : {}),
-            };
+                // Stream long-running tool output (terminal commands) as it is
+                // produced. The queue lets us yield while execute() is still
+                // pending - a callback cannot yield into this generator directly.
+                const toolQueue = new AsyncPushQueue<string>();
+                let execResult: { output: string; isError?: boolean } | null = null;
+                let execError: unknown = null;
+                const execPromise = executeCall(call, (chunk) => toolQueue.push(chunk))
+                    .then((r) => { execResult = r; return r; })
+                    .catch((e) => { execError = e; return null; })
+                    .finally(() => toolQueue.close());
+
+                while (execResult === null && execError === null) {
+                    const chunk = await toolQueue.pop();
+                    if (chunk !== null) yield { type: 'toolOutput', id: call.id, value: chunk };
+                }
+                while (true) {
+                    const chunk = await toolQueue.pop();
+                    if (chunk === null) break;
+                    yield { type: 'toolOutput', id: call.id, value: chunk };
+                }
+                // Await the promise for the settled value (the closure assignment
+                // above is invisible to TS's control-flow analysis).
+                const result = await execPromise;
+                if (execError) throw execError;
+                if (!result) throw new Error('Tool executor returned no result.');
+
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: call.id,
+                    content: toolResultContent(result.output, result.images, imageFormat),
+                    isError: result.isError === true,
+                });
+                yield {
+                    type: 'toolResult',
+                    id: call.id,
+                    tool: call.name,
+                    output: result.output,
+                    isError: result.isError,
+                    ...(result.research ? { research: result.research } : {}),
+                    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+                    ...(result.images?.length ? { images: result.images } : {}),
+                };
+            }
+
+        } finally {
+            steerFeed?.setInterrupt?.(undefined);
         }
 
         // Steering: user messages typed while the run streams join the

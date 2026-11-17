@@ -39,13 +39,11 @@ const RunView = memo(function RunView({ run, visible, onConversation, onStop, pr
             <div className="agent-run-meta"><span className={`agent-state-text ${run.status}`}><RunStatus status={run.status} pendingTools={trace?.pendingTools} /><span>{agentStatusLabel(run.status, trace?.pendingTools)}</span></span><RunClock run={run} /><span className="agent-profile-label" dir="auto">{run.profile}</span>
                 {trace?.resumed && <span title={t('agentResumed')}><GitBranch size={12} /></span>}
             </div>
+            {trace && <div className="child-model-summary"><span title={t('surfaceModel')}><Cpu size={13} aria-label={t('surfaceModel')} /><b dir="ltr">{trace.model || '—'}</b></span><span title={t('childEffort')}><Gauge size={13} aria-label={t('childEffort')} /><b dir="ltr">{trace.effort || '—'}</b></span></div>}
             <details className="agent-brief"><summary><ChevronDown size={11} /><span>{t('agentRunDetails')}</span></summary>
                 {trace?.taskId && <code dir="ltr">{trace.taskId}</code>}
                 <p dir="auto">{trace?.prompt ?? String(toolArgs(run.call.text).prompt ?? '')}</p>
-                {trace?.tools.length ? <div className="agent-capabilities" aria-label={t('agentAvailableTools')}>{trace.tools.map(tool => <code dir="ltr" key={tool}>{tool}</code>)}</div> : null}
-                {trace && <div className="agent-run-meta technical"><span className="agent-metric"><Cpu size={12} /><code dir="ltr">{trace.model}</code></span>{trace.effort && <span className="agent-metric"><Gauge size={12} /><span dir="ltr">{trace.effort}</span></span>}
-                    <span className="agent-token-metric" title={t('agentTokens')} dir="ltr">{trace.inputTokens.toLocaleString('en-US')} ↓ &nbsp; {trace.outputTokens.toLocaleString('en-US')} ↑</span>
-                </div>}
+                {trace && <div className="agent-run-meta technical"><span className="agent-token-metric" title={t('agentTokens')} dir="ltr">{trace.inputTokens.toLocaleString('en-US')} ↓ &nbsp; {trace.outputTokens.toLocaleString('en-US')} ↑</span></div>}
             </details>
         </header>
         <div className="agent-view-tabs" role="tablist" aria-label={t('agentViews')}>

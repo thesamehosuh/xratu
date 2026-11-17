@@ -188,6 +188,30 @@ for (const options of [
 }
 console.log('ok Responses gates new cache controls by host/model and preserves subscription routing');
 
+// Terra must use the same stateless reasoning continuity and cache boundaries
+// as Sol, on both API-key and subscription routes. Replaying a finalized item
+// must preserve its encrypted content, namespace and position byte-for-byte.
+for (const subscription of [false, true]) {
+    const req = request('responses', { model: 'gpt-6.1-terra', subscription, reasoningEffort: 'medium' });
+    const first = (await capture(req, [sys, user], 'status 1')).body;
+    assert.deepEqual(first.reasoning, { effort: 'medium', context: 'all_turns' });
+    assert.deepEqual(first.include, ['reasoning.encrypted_content']);
+    assert.equal(first.store, false);
+    const items = freeze([
+        { id: 'reason', type: 'reasoning', encrypted_content: 'opaque', summary: [] },
+        { id: 'fc', type: 'function_call', call_id: 'a', name: 'read_file', arguments: '{"path":"source.ts"}',
+            ...(subscription ? { namespace: 'xratu' } : {}) },
+    ]);
+    const second = (await capture(req, [sys, user,
+        { ...call('a'), contextNote: 'status 1', providerBlocks: items }, tool('a')], 'status 2')).body;
+    const written = boundaries(first, 'responses').filter(p => p.marked).at(-1).prefix;
+    assert.equal(reusableWrittenPrefix(first, second, 'responses'), written.length);
+    assert.deepEqual(second.input.slice(2, 4), items);
+    assert.deepEqual(second.tools, first.tools);
+    assert.equal(second.reasoning.effort, first.reasoning.effort);
+}
+console.log('ok Terra preserves reasoning replay and reusable cache boundaries on both OpenAI routes');
+
 // Match native Codex continuity on supported OpenAI routes, including the
 // legacy subscription endpoint that rejects the newer cache options.
 {

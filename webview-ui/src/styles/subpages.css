@@ -80,9 +80,6 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .mp-row .mcp-row-meta { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-block:7px; font-size:var(--xratu-fs-md); line-height:1.6; }
 .mp-cmd { display:none; }
 .mp-row .mcp-row-actions { align-self:flex-end; }
-.mp-row:has(.mp-confirm) { grid-column:1/-1; }
-.mp-confirm { margin-block-start:6px; font-size:var(--xratu-fs-md); }
-.mp-confirm pre { font-size:var(--xratu-fs-md); }
 .page-drawer-backdrop { position:absolute; inset:0; z-index:30; background:#0007; display:flex; justify-content:flex-end; }
 .connection-drawer,.server-drawer { width:min(440px,100%); height:100%; background:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 4%); border-inline-start:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 24%); display:flex; flex-direction:column; box-shadow:-12px 0 30px #0003; min-width:0; }
 .drawer-head { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-block-end:1px solid color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 17%); flex-shrink:0; }
@@ -319,7 +316,6 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .usage-api > .page-help { display:none; }
 .catalog-grid > div { min-width:0; display:flex; flex-direction:column; }
 .catalog-grid > div > .mp-row { flex:1; }
-.catalog-grid > div:has(.mp-confirm) { grid-column:1/-1; }
 .iranian-providers { padding-block:10px; border-block:1px solid #343b36; }
 .iranian-providers .runtime-heading { gap:8px; }
 .iranian-providers .cred-provider-section-label { font-size:var(--xratu-fs-md); font-weight:500; color:#b4d1c0; }
@@ -549,7 +545,12 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .page-content .mcp-row-main { display:flex; align-items:flex-start; justify-content:center; text-align:start; flex:1; background:transparent; border:0; padding:0; }
 .page-content .mcp-row-title { justify-content:flex-start; }
 .page-content .mcp-row-meta { text-align:start; }
-.page-content .inventory-split .settings-card-body { border:1px solid var(--page-line); border-radius:12px; overflow:hidden; }
+.page-content .inventory-split .settings-card-body { border:1px solid var(--page-line); border-radius:12px; overflow:visible; }
+.page-content .inventory-split .mcp-row { margin:0; padding-inline:12px; }
+.page-content .inventory-split .mcp-row:last-child { border-end-start-radius:12px; border-end-end-radius:12px; }
+.page-content .inventory-split .mcp-row:hover { background:var(--vscode-list-hoverBackground); }
+.page-content .inventory-split .settings-nav-row { padding-inline:12px; }
+.mcp-raw-settings { margin-block-start:8px; }
 .page-content .inventory-inspector { align-self:start; }
 .page-content .settings-configure-proxy { display:flex; width:100%; justify-content:space-between; color:var(--vscode-foreground); background:transparent; }
 .page-content .settings-configure-proxy > span:last-child { padding:6px 12px; border:1px solid var(--page-line); border-radius:8px; }
@@ -561,7 +562,7 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 
 /* The approved connection form is a compact, centered dialog. */
 .compact-dialog-backdrop { position:fixed; align-items:center; justify-content:center; padding:20px; z-index:120; background:#0008; }
-.compact-dialog:is(.connection-drawer,.server-drawer,.history-confirm) { width:440px; max-width:100%; height:auto; max-height:90dvh; border:1px solid var(--page-line); border-radius:15px; padding:25px; box-shadow:0 30px 80px #0005; background:var(--page-canvas); }
+.compact-dialog:is(.connection-drawer,.server-drawer,.history-confirm,.market-confirm) { width:440px; max-width:100%; height:auto; max-height:90dvh; border:1px solid var(--page-line); border-radius:15px; padding:25px; box-shadow:0 30px 80px #0005; background:var(--page-canvas); }
 .compact-dialog .drawer-head { padding:0; border:0; margin-block-end:20px; min-height:0; }
 .compact-dialog .drawer-head h3 { font-size:calc(var(--interface-size,14px) + 3px); font-weight:600; }
 .compact-dialog .drawer-scroll { display:block; padding:0; overflow:auto; }
@@ -633,6 +634,14 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .history-confirm-body p { margin:4px 0 24px; font-size:var(--xratu-fs-sm); line-height:1.7; color:var(--page-muted); }
 .history-confirm-body .settings-confirm-actions { display:flex; justify-content:flex-end; gap:9px; }
 .history-confirm-body button { min-height:32px; padding-inline:12px; }
+
+/* Catalog install confirmation: the exact mcp.json payload is the thing being
+   approved, so it gets a readable, scrollable code block. */
+.compact-dialog.market-confirm { width:520px; }
+.market-confirm-body { display:flex; flex-direction:column; gap:18px; }
+.market-confirm-json { margin:0; padding:12px 14px; max-height:40dvh; overflow:auto; border:1px solid var(--page-line); border-radius:8px; background:var(--vscode-textCodeBlock-background,color-mix(in srgb,var(--page-canvas),var(--vscode-foreground) 4%)); font:var(--xratu-fs-code)/1.7 var(--vscode-editor-font-family,monospace); white-space:pre; overflow-wrap:normal; }
+.market-confirm-body .settings-confirm-actions { display:flex; justify-content:flex-end; gap:9px; }
+.market-confirm-body .settings-confirm-actions button { min-height:32px; padding-inline:12px; }
 @container settings-page (max-width:450px) {
     .preferences-page .settings-scroll { gap:23px; }
     .preferences-page .preference-group { padding-inline:12px; }

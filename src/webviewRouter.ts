@@ -16,7 +16,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { killForegroundJobs } from './tooling/backgroundJobs';
 import type { ComposerAttachment, HistoryMessage } from './chatViewTypes';
 import { setUiLocale } from './uiStrings';
 import type { ExternalMcpManager } from './externalMcp';
@@ -74,7 +73,7 @@ export interface WebviewMessageHost {
     _openAgentFile(name: string, source: string): Promise<void>;
     manageAgentFiles(): Promise<void>;
     _backgroundTerminalCall(callId: string | undefined): void;
-    _cancelActiveRequests(): void;
+    _cancelActiveRequests(stopChildren?: boolean): void;
     _stopSubagent(callId: string): void;
     _childSessionAction(rootId: string, sessionId: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string): Promise<void>;
     _clearAllSessions(): Promise<void>;
@@ -392,12 +391,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'cancelRequest':
                     void host._stopPullRequestWatches?.();
-                    // Stop a running terminal command NOW. The loop's
-                    // abort only takes effect at a round boundary, so
-                    // without this a long command keeps running (and
-                    // keeps holding its ports/files) until the idle cap.
-                    killForegroundJobs();
-                    host._cancelActiveRequests();
+                    // Per-call cancellation stops the parent's foreground
+                    // command without killing a child's process tree.
+                    host._cancelActiveRequests(false);
                     break;
                 case 'restoreCheckpoint':
                     if (typeof data.sha === 'string' && data.sha) {

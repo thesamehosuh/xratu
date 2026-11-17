@@ -638,8 +638,12 @@ async function dispatchProcessTool(args: any): Promise<{
         return Number.isFinite(n) ? n : fallback;
     };
 
+    const outputOptions = {
+        ...(args?.offset === undefined ? {} : { offset: numberArg(args.offset, 0) }),
+        limit: numberArg(args?.limit, DEFAULT_LOG_LINES),
+    };
     if (action === 'poll') {
-        return text(`${describeTerminalJob(job)}\n\n${readJobOutput(job)}`);
+        return text(`${describeTerminalJob(job)}\n\n${readJobOutput(job, outputOptions)}`);
     }
     if (action === 'log') {
         // The model now holds the transcript, so a later completion notice
@@ -659,10 +663,10 @@ async function dispatchProcessTool(args: any): Promise<{
         const capped = Math.min(Math.max(seconds, 0), MAX_WAIT_MS / 1000);
         const ended = await waitForTerminalJob(job, capped * 1000);
         if (!ended) {
-            return text(`${describeTerminalJob(job)}\n\nStill running after ${capped}s - it did NOT finish. Its output so far:\n\n${readJobOutput(job)}`);
+            return text(`${describeTerminalJob(job)}\n\nStill running after ${capped}s - it did NOT finish. Its output so far:\n\n${readJobOutput(job, outputOptions)}`);
         }
         markCompletionConsumed(job.id);
-        return text(finishedJobReport(job));
+        return text(`${describeTerminalJob(job)}\n\n${readJobOutput(job, outputOptions)}`, job.status !== 'exited' || job.exitCode !== 0);
     }
     // kill
     if (job.status !== 'running') {
@@ -783,7 +787,7 @@ async function dispatchTool(
         const diag = mode === 'append' ? '' : await diagnosticsSummary(vscode.Uri.file(fullPath));
         return { content: [{ type: 'text', text: `Successfully ${verb} ${args.path}${stats}` + diag }] };
     } else if (name === 'read_file') {
-        if (Array.isArray(args.files)) {
+        if (Array.isArray(args.files) && (args.files.length || !args.path)) {
             const files = args.files;
             if (!files.length || files.length > 20) throw new Error('Provide 1–20 file requests.');
             const pages: string[] = []; let remaining = 80_000;
@@ -1106,7 +1110,7 @@ async function dispatchTool(
             };
         }
         try {
-            const outcome = await decisionGate.ask(parsed.value);
+            const outcome = await decisionGate.ask(parsed.value, signal);
             return { content: [{ type: 'text', text: formatUserQuestionResult(outcome) }] };
         } catch (err: any) {
             // Cancelled while the card was open: a model-visible error row
@@ -1240,7 +1244,7 @@ export function createLocalToolExecutor(
     subagentRunner?: SubagentRunner,
     decisionGate?: UserQuestionGate,
     /** Marks this executor as a delegated child's. */
-    opts?: { nested?: boolean; browser?: BrowserController; downloads?: DownloadManager; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor; approveOutsideWorkspace?: (call: import('./local/localTypes').LocalToolCall, paths: string[]) => Promise<boolean> },
+    opts?: { nested?: boolean; browser?: BrowserController; downloads?: DownloadManager; sessionId?: string; signal?: AbortSignal; plan?: boolean; pullRequests?: PullRequestToolExecutor; approveOutsideWorkspace?: (call: import('./local/localTypes').LocalToolCall, paths: string[], signal?: AbortSignal) => Promise<boolean> },
 ): import('./local/localAgent').LocalToolExecutor {
     const snapshot = async (root: string, reason: string) => {
         opts?.signal?.throwIfAborted();
@@ -1276,13 +1280,23 @@ export function createLocalToolExecutor(
         }
         if (opts?.plan && (call.name === 'process' || call.name === 'task')) return { output: 'Error: process control and delegation are disabled in plan mode.', isError: true };
         if (opts?.plan && !isAvailableTool(resolveToolName(call.name, Object.keys(TOOL_POLICY)).name, true)) return { output: 'Error: mutating tools are disabled in plan mode.', isError: true };
-        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths) : undefined);
+        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths, opts.signal) : undefined);
     };
     return {
-        execute: (call, onOutput) => {
+        execute: (call, onOutput, signal) => {
+            if (signal && signal !== opts?.signal) {
+                const combined = opts?.signal ? AbortSignal.any([opts.signal, signal]) : signal;
+                return createLocalToolExecutor(workspaceRoot, ensureTurnSnapshot, externalMcp, skillResolver,
+                    subagentRunner, decisionGate, { ...opts, signal: combined }).execute(call, onOutput);
+            }
             opts?.signal?.throwIfAborted();
             const work = execute(call, onOutput);
-            return opts?.signal ? abortable(work, opts.signal) : work;
+            // A local writer must unwind before its caller releases the workspace
+            // lease. Racing its promise against abort can admit the next
+            // writer while the cancelled filesystem operation still runs.
+            const effect = TOOL_POLICY[call.name]?.effect;
+            const writer = call.name !== 'task' && (effect === 'write' || effect === 'execute');
+            return opts?.signal && !writer ? abortable(work, opts.signal) : work;
         },
     };
 }

@@ -23,6 +23,7 @@ export interface LocalSessionHistoryMessage {
     /** Chat Completions `reasoning_content` replay carrier (same rationale). */
     reasoningContent?: string;
     contextNote?: string;
+    compactedToolCalls?: string[];
     /** Tool-row failure flag. The Messages transport maps it to `is_error`;
      *  persisting it keeps the replayed tool row byte-stable. */
     isError?: boolean;

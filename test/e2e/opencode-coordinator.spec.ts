@@ -36,7 +36,7 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         await expect(page.locator('.agents-pane')).toContainText(locale === 'en' ? 'Answer question' : 'پاسخ به سوال');
         // One agent, one stop: the live run exposes its own control and the
         // click carries that call's identity (never the whole turn).
-        const stop = page.locator('.agent-run-stop');
+        const stop = page.locator('.agent-run-list .agent-run-stop');
         await expect(stop).toBeVisible();
         await expect(stop).toHaveText(locale === 'en' ? 'Stop agent' : 'توقف ایجنت');
         await stop.click();

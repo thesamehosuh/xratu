@@ -4310,8 +4310,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _preparingSteers = new Set<string>();
     private _steerNowIds = new Set<string>();
 
-    /** Interrupt only a built-in model request. A tool batch (including
-     * children and approvals) must settle before its parent can read a steer. */
+    /** Interrupt the current model request or tool batch; children retain their own lifetime. */
     _handleSteerNow(steerId: string): void {
         if (!this._localRunActive || this._activeEngine !== 'xratu') return;
         if (this._preparingSteers.has(steerId)) { this._steerNowIds.add(steerId); return; }
@@ -4781,7 +4780,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // interactive questions stay at the root thread (filterToolsForSubagent
         // strips the tool from their toolsets too).
         const decisionGate: UserQuestionGate = {
-            ask: (question) => this._requestLocalDecision(question),
+            ask: (question, signal) => this._requestLocalDecision(question, signal),
         };
 
         // Subagent delegation (the `task` tool): named agent profiles, run as
@@ -4844,6 +4843,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         signal: controller.signal,
                         maxOutputLimit: this._maxOutputLimitFor(childModel, active.baseUrl),
                         reasoningEffort: childEffort,
+                        compactionTokenBudget: vscode.workspace.getConfiguration('xratu').get<number>('compactionTokenBudget', 120_000),
                         autoCompactRatio: resolveCompactRatio(
                             vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
                         contextWindow: this._contextWindowHint(childModel) ?? LOCAL_DEFAULT_CONTEXT_WINDOW,
@@ -4851,7 +4851,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         apiStyle: resolveApiStyle(active.baseUrl, childModel, auth.apiStyle),
                         ...(isOpenCodeHost(active.baseUrl) ? { sessionId: subagentConversationId } : {}),
                         cacheKey: subagentConversationId,
-                        onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${subagentConversationId}): ${JSON.stringify(diagnostic)}`),
+                        onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${subagentConversationId}): ${JSON.stringify({...diagnostic, connectionId:active.id, scope:'child'})}`),
                     };
                 },
                 tools: (def) => filterToolsForSubagent(
@@ -4897,7 +4897,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._view?.webview.postMessage({ type: 'subagentState', callId, trace: ['running', 'waiting'].includes(trace.status) ? trace : this._subagentDisplayTrace(trace) });
                     this._scheduleLocalPartialPersist();
                 },
-                onUsage: (usage, usageModel) => {
+                onUsage: (usage, usageModel, source) => {
                     const price = priceForModel(usageModel, this._modelPriceOverrides(), this._priceLookupFor(active.baseUrl, usageModel));
                     const cost = auth.subscription ? null : usage.costUsd !== undefined
                         ? {amount: usage.costUsd, currency: 'USD' as const} : price ? costForUsage(price, usage) : null;
@@ -4914,7 +4914,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         void this._persistLocalSession().catch(error => diagnosticsChannel?.appendLine(`Child usage persistence: ${String(error)}`));
                     }
                     void this._recordUsage({ts:Date.now(),sessionId:current ? this._sessionId : null,host:baseUrlHost(active.baseUrl) ?? '',
-                        engine:'xratu',model:usageModel,...(auth.subscription ? {billing:'chatgpt-plan' as const}:{}),
+                        engine:'xratu',model:usageModel,connectionId:active.id,scope:'child',...(source ? {source} : {}),...(auth.subscription ? {billing:'chatgpt-plan' as const}:{}),
                         input:usage.promptTokens ?? 0,output:usage.completionTokens ?? 0,cached:usage.cachedTokens ?? 0,
                         cacheWrite:usage.cacheWriteTokens ?? 0,amount:cost?.amount ?? null,currency:cost?.currency ?? null});
                 },
@@ -4949,7 +4949,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ),
             subagentRunner,
             decisionGate,
-            { browser: this._browser, downloads: this._downloads, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, controller.signal) },
+            { browser: this._browser, downloads: this._downloads, sessionId: browserSessionId, signal: controller.signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths, signal) => approveOutsideWorkspace(call, paths, signal ?? controller.signal) },
         );
 
         // The git line under the composer must not wait for the whole run to
@@ -4957,15 +4957,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // command run through the terminal). Wrapped generically so the
         // executor's own signature stays the single source of truth.
         const executor: typeof rawExecutor = {
-            execute: async (call, onOutput) => {
+            execute: async (call, onOutput, signal) => {
                 // Snapshot file state around edit-family calls so the
                 // webview's "open diff" button can show the exact before/after
                 // of THIS call later (restored sessions fall back to args).
                 const snap = this._beginEditSnapshot(call, workspaceRoot);
                 try {
                     const result = mutatesWorkspace(call.name)
-                        ? await workspaceWriter!.run(controller.signal, () => rawExecutor.execute(call, onOutput))
-                        : await rawExecutor.execute(call, onOutput);
+                        ? await workspaceWriter!.run(signal ?? controller.signal, () => rawExecutor.execute(call, onOutput, signal))
+                        : await rawExecutor.execute(call, onOutput, signal);
                     if (snap && !result.isError) this._endEditSnapshot(call.id, snap);
                     return result;
                 } finally {
@@ -5051,6 +5051,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // Compaction threshold: the user's policy rather than a
                     // constant. Read per run so a change applies to the next
                     // turn without a reload.
+                    compactionTokenBudget: vscode.workspace.getConfiguration('xratu').get<number>('compactionTokenBudget', 120_000),
                     autoCompactRatio: resolveCompactRatio(
                         vscode.workspace.getConfiguration('xratu').get('autoCompactThreshold')),
                     // Window for compaction/budget math. Prefer the probed or
@@ -5079,7 +5080,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // Sent as `prompt_cache_key` on hosts that accept it; the
                     // transport decides (see supportsPromptCacheKey).
                     cacheKey: conversationId,
-                    onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${conversationId}): ${JSON.stringify(diagnostic)}`),
+                    onCacheDiagnostic: diagnostic => diagnosticsChannel?.appendLine(`Prompt cache (${conversationId}): ${JSON.stringify({...diagnostic, connectionId:active.id, scope:'parent'})}`),
                     // Several `task` calls in one message run as concurrent
                     // subagents - that is the point of delegation - but each
                     // one is a full agent loop with its own context and round
@@ -5403,6 +5404,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         sessionId: this._sessionId,
                         host: nativeProvider ?? baseUrlHost(this._runBaseUrl ?? '') ?? '',
                         engine: this._runNativeProvider ? 'opencode' : 'xratu',
+                        connectionId: this._sessionConnectionId ?? undefined,
+                        scope: 'parent',
+                        ...(event.source === 'compaction' ? {source:'compaction' as const} : {}),
                         ...(this._runNativeProvider ? { costSource: event.usage.costUsd === undefined ? 'unknown' as const : 'reported' as const } : {}),
                         model: event.model ?? this._runModel ?? this._selectedModel ?? '',
                         ...(this._runSubscription ? { billing: 'chatgpt-plan' as const } : {}),
@@ -5426,6 +5430,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         cost: this._localCostFor(this._localTurnUsage),
                     } : null,
                 });
+                break;
+            case 'compactionCheckpoint':
+                outcome.events.push(persistedEventFromAgentEvent(event));
+                this._scheduleLocalPartialPersist();
                 break;
             case 'compactionSummary': {
                 // Local compaction summarized the dropped turns with the
@@ -7432,8 +7440,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._liveSeg = '';
     }
 
-    _cancelActiveRequests() {
-        if (this._childRunnerRoot === this._researchConversationId) {
+    _cancelActiveRequests(stopChildren = true) {
+        stopChildren = stopChildren || this._activeEngine === 'opencode';
+        if (stopChildren && this._childRunnerRoot === this._researchConversationId) {
             this._childrenSettled = this._childRunner?.stopAll?.();
             void this._childrenSettled?.catch(error => diagnosticsChannel?.appendLine(`Child settlement: ${String(error)}`));
         }
@@ -7442,9 +7451,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             controller.abort();
         }
         this._abortControllers.clear();
-        this._agentStops.clear();
-        this._rejectPendingLocalApprovals();
-        this._rejectPendingLocalDecisions();
+        if (stopChildren) {
+            this._agentStops.clear();
+            this._rejectPendingLocalApprovals();
+            this._rejectPendingLocalDecisions();
+        }
     }
     /** Stop ONE delegated agent from the Agents surface. The parent turn and
      *  sibling agents keep running; a built-in child settles as a cancelled

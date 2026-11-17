@@ -1,10 +1,13 @@
 import {toolLabel} from '../toolMeta';
 import {composerDraftKey,readComposerDraft,saveComposerDraft} from '../composerDrafts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Bot, CornerDownLeft, Search, Square, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Bot, CornerDownLeft, Cpu, Gauge, Search, Square, Plus } from 'lucide-react';
 import type { ChildSessionView } from '../../../src/sessions/view';
 import { getLocale, t } from '../i18n';
 import { RenderedMarkdown } from './RenderedMarkdown';
+import { MessageItem } from './MessageItem';
+import { ActivityPanel } from './ActivityPanel';
+import { childTranscript } from '../childTranscript';
 
 const statusKeys = { idle: 'childIdle', queued: 'agentQueued', running: 'agentRunning', stopping: 'childStopping', waiting_for_workspace: 'childWaitingWorkspace', waiting_for_approval: 'agentWaiting', waiting_for_answer: 'agentWaitingQuestion', completed: 'agentDone', failed: 'agentFailed', cancelled: 'agentCancelled', interrupted: 'agentInterrupted' } as const;
 
@@ -17,6 +20,7 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
     onNew: () => void;
 }) {
     const [selected, setSelected] = useState<string | null>(null);
+    const initialSelection = useRef(false);
     const [query, setQuery] = useState('');
     const [drafts, setDrafts] = useState<Record<string, string>>({});
     const [activity, setActivity] = useState(false);
@@ -34,7 +38,7 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
     const pane = useRef<HTMLDivElement>(null);
     const following = useRef(true);
     const scroll = useRef<Record<string, number>>({});
-    useEffect(() => { setSelected(null); setDrafts({}); setPending({}); setSendError(null); scroll.current = {}; }, [rootId]);
+    useEffect(() => { initialSelection.current = false; setSelected(null); setDrafts({}); setPending({}); setSendError(null); scroll.current = {}; }, [rootId]);
     const child = sessions.find(session => session.id === selected);
     useEffect(() => {
         if (!child) return;
@@ -46,6 +50,7 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
         }
     }, [child, pending]);
     const live = child && ['queued', 'running', 'waiting_for_workspace', 'stopping', 'waiting_for_approval', 'waiting_for_answer'].includes(child.state);
+    const transcript = child ? childTranscript(child) : [];
     useEffect(() => {
         if (pane.current && visible) pane.current.scrollTop = following.current ? pane.current.scrollHeight : scroll.current[selected ?? ''] ?? 0;
     }, [child?.revision, child?.displayRevision, selected, visible, activity]);
@@ -55,6 +60,14 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
         if (id && drafts[id] === undefined) setDrafts(current => ({...current,[id]:readComposerDraft(composerDraftKey(`child:${rootId}`,id)).text}));
         setSelected(id);
     };
+    useEffect(() => {
+        if (!visible || initialSelection.current || !sessions.length) return;
+        initialSelection.current = true;
+        const active = sessions.filter(session => ['queued', 'running', 'waiting_for_workspace', 'stopping', 'waiting_for_approval', 'waiting_for_answer'].includes(session.state));
+        setSelected((active.at(-1) ?? sessions.at(-1))!.id);
+        setActivity(false);
+        setSendError(null);
+    }, [visible, sessions, rootId]);
     const Back = getLocale() === 'fa' ? ArrowRight : ArrowLeft;
     return <div className={`agents-pane child-sessions ${panelClass}${child ? ' child-open' : ''}`} id="surface-panel-agents" role="tabpanel" aria-labelledby="surface-tab-agents" aria-hidden={!visible || undefined}>
         <aside className="child-session-list">
@@ -66,8 +79,9 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
                         .filter(session => `${session.title} ${session.profile}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
                     return list.length > 0 && <section key={group}><h3>{t(group === 'active' ? 'agentActiveRuns' : 'agentFinishedRuns')}</h3>
                         {list.map(session => <button type="button" key={session.id} className={`child-session-row${selected === session.id ? ' selected' : ''}`} aria-pressed={selected === session.id} onClick={() => choose(session.id)}>
-                            <span className="child-row-title"><Bot size={14} /><strong dir="auto">{session.title || session.profile}</strong></span>
-                            <span className="child-row-state"><span>{t(statusKeys[session.state])}</span><span dir="auto">{session.profile}</span></span>
+                            <span className="child-row-title"><span className={`child-state-dot ${session.state}`} role="img" aria-label={t(statusKeys[session.state])} title={t(statusKeys[session.state])} /><strong dir="auto">{session.title || session.profile}</strong></span>
+                            <span className="child-row-state"><span dir="auto">{session.profile}</span></span>
+                            <span className="child-row-model"><Cpu size={12} aria-label={t('surfaceModel')} /><span dir="ltr">{session.model || '—'}</span><Gauge size={12} aria-label={t('childEffort')} /><span dir="auto">{session.effort || (session.configurable === false ? '—' : t('childInherit'))}</span></span>
                         </button>)}
                     </section>;
                 })}
@@ -77,30 +91,25 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
         <section className="child-conversation">
             {child ? <>
                 <header className="child-conversation-header"><button type="button" className="icon-btn child-back" aria-label={t('childSessions')} onClick={() => choose(null)}><Back size={16} /></button>
-                    <div><strong dir="auto">{child.title || child.profile}</strong><span role="status">{t(statusKeys[child.state])}{child.queued > 0 ? ` · ${t('childInstructionQueued')}` : ''}</span></div>
+                    <div><strong dir="auto">{child.title || child.profile}</strong>
+                        <div className="child-model-summary"><span role="status">{t(statusKeys[child.state])}{child.queued > 0 ? ` · ${t('childInstructionQueued')}` : ''}</span><span title={t('surfaceModel')}><Cpu size={13} aria-label={t('surfaceModel')} /><b dir="ltr">{child.model || '—'}</b></span><span title={t('childEffort')}><Gauge size={13} aria-label={t('childEffort')} /><b dir="auto">{child.effort || (child.configurable === false ? '—' : t('childInherit'))}</b></span></div>
+                    </div>
                     {live && <button type="button" className="agent-run-stop" aria-label={t('agentStop')} disabled={child.state === 'stopping'} onClick={() => onAction(rootId, child.id, 'stop')}><Square size={13} /><span>{t('agentStop')}</span></button>}
                 </header>
-                {!child.readOnly && child.configurable!==false && <details className="child-settings" key={`settings-${child.id}`}><summary>{t('childConfiguration')}</summary>
-                    <form onSubmit={event => {event.preventDefault();const data=new FormData(event.currentTarget);onAction(rootId,child.id,'configure',JSON.stringify({model:String(data.get('model')??''),effort:String(data.get('effort')??''),rounds:Number(data.get('rounds')),revision:child.revision}),crypto.randomUUID());}}>
-                        <label>{t('surfaceModel')}<input name="model" dir="ltr" maxLength={300} defaultValue={child.model??''} disabled={!!live} /></label>
-                        <label>{t('childEffort')}<select name="effort" dir="ltr" defaultValue={child.effort??''} disabled={!!live}>{['','none','minimal','low','medium','high','xhigh','max'].map(value=><option key={value} value={value}>{value||t('childInherit')}</option>)}</select></label>
-                        <label>{t('childRoundLimit')}<input name="rounds" type="number" dir="ltr" min={1} max={500} defaultValue={child.rounds??50} disabled={!!live} /></label>
-                        <button type="submit" className="secondary-btn" disabled={!!live}>{t('childSaveConfiguration')}</button>
-                    </form>
-                </details>}
                 <div className="child-view-switch"><button type="button" aria-pressed={!activity} onClick={() => setActivity(false)}>{t('surfaceConversation')}</button><button type="button" aria-pressed={activity} onClick={() => setActivity(true)}>{t('surfaceActivity')}</button></div>
                 {!child.readOnly && child.reportState && !live && <div className="child-result-toolbar"><span>{t(child.reportState==='delivered'?'childReported':'childResultReady')}</span>
                     {child.reportState==='pending' && <button type="button" className="secondary-btn" onClick={()=>onAction(rootId,child.id,'report',undefined,crypto.randomUUID())}>{t('childReport')}</button>}
                 </div>}
-                <div ref={pane} className="child-messages" role="log" aria-label={t('childConversation')} onScroll={() => {
+                {activity && <ActivityPanel embedded sessionKey={child.id} visible={visible} panelClass="child-activity" messages={transcript} transcriptPrefs={{expand:{}, options:{timestamps:false}}} />}
+                <div ref={pane} className="child-messages" role="log" aria-label={t('childConversation')} hidden={activity} onScroll={() => {
                     if (!pane.current) return;
                     following.current = pane.current.scrollHeight - pane.current.scrollTop - pane.current.clientHeight < 48;
                     scroll.current[child.id] = pane.current.scrollTop;
                 }}>
                     {child.limited && <p className="agent-history-note">{t('agentTraceLimited')}</p>}
-                    {child.messages.filter(message => activity || message.role !== 'tool').map(message => <article key={message.id} className={`child-message ${message.role}${message.source==='parent'?' parent-instruction':''}`}>
+                    {child.messages.filter(message => message.role !== 'tool').map(message => message.role === 'assistant' ? <MessageItem key={message.id} message={transcript.find(item => item.id === message.id)!} observation transcriptPrefs={{expand:{}, options:{timestamps:false}}} /> : <article key={message.id} className={`child-message user${message.source==='parent'?' parent-instruction':''}`}>
                         {message.source==='parent' && <span className="child-source-label">{t('childParentSender')}</span>}
-                        {message.role === 'tool' ? <details><summary>{t('childToolOutput')}</summary><pre dir="auto">{message.content}</pre></details> : message.html ? <RenderedMarkdown html={message.html} /> : <div className="child-message-text" dir="auto">{message.content}</div>}
+                        {message.html ? <RenderedMarkdown html={message.html} /> : <div className="child-message-text" dir="auto">{message.content}</div>}
                     </article>)}
                     {child.activeTool && <details className="child-message tool"><summary>{toolLabel(child.activeTool.name).fa}</summary><pre dir="auto">{child.activeTool.live}</pre></details>}
                     {child.liveText && <article className="child-message assistant" dir="auto">{child.liveText}</article>}
@@ -111,9 +120,9 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
                 {child.parentCallId && <div className="child-decisions">{decisions(child.parentCallId)}</div>}
                 {!child.readOnly && <form className="child-composer" onSubmit={event => { event.preventDefault(); const text = drafts[child.id]?.trim(); if (!text) return; setSendError(null); const receipt = crypto.randomUUID(); setPending(current => ({...current, [child.id]: {receipt, text}})); onAction(rootId, child.id, 'send', text, receipt); }}>
                     {sendError === child.id && <p role="alert">{t('childActionFailed')}</p>}
-                    <label htmlFor={`child-input-${child.id}`}>{t('childMessageTo')} <strong dir="auto">{child.title || child.profile}</strong></label>
-                    <textarea id={`child-input-${child.id}`} dir="auto" rows={3} value={drafts[child.id] ?? ''} onChange={event => {const text=event.target.value;saveComposerDraft(composerDraftKey(`child:${rootId}`,child.id),text,[]);setDrafts(current => ({ ...current, [child.id]: text }));}} placeholder={t(live ? 'childQueueInstruction' : 'childContinueInstruction')} />
-                    <button type="submit" className="secondary-btn" disabled={!drafts[child.id]?.trim() || child.state === 'stopping' || !!pending[child.id]}><CornerDownLeft size={14} /><span>{t(live ? 'childQueue' : 'childSend')}</span></button>
+                    <label className="sr-only" htmlFor={`child-input-${child.id}`}>{t('childMessageTo')} {child.title || child.profile}</label>
+                    <textarea id={`child-input-${child.id}`} dir="auto" rows={1} value={drafts[child.id] ?? ''} onChange={event => {const text=event.target.value;saveComposerDraft(composerDraftKey(`child:${rootId}`,child.id),text,[]);setDrafts(current => ({ ...current, [child.id]: text }));}} placeholder={t(live ? 'childQueueInstruction' : 'childContinueInstruction')} />
+                    <button type="submit" className="icon-btn" title={t(live ? 'childQueue' : 'childSend')} aria-label={t(live ? 'childQueue' : 'childSend')} disabled={!drafts[child.id]?.trim() || child.state === 'stopping' || !!pending[child.id]}><CornerDownLeft size={16} /></button>
                 </form>}
             </> : <div className="child-empty"><Bot size={28} /><strong>{t('childChooseSession')}</strong><button type="button" className="secondary-btn" onClick={onParent}>{t('surfaceBackToConversation')}</button></div>}
         </section>

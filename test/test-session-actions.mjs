@@ -12,7 +12,7 @@ const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest,
 const cls = file.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'XratuChatViewProvider');
 const names = ['_sessionWorkspaceMatches', '_restoreSessionConnection', '_settleLocalRun', '_sessionWorkspaceIdentity', '_restoreLocalSession', '_restoreLocalSessionNow', '_showStartScreen', '_setupComplete', '_cancelSetup', '_deleteSession', '_deleteSessionNow', '_clearAllSessions', '_clearAllSessionsNow', 'clearHistory', '_clearHistoryNow', '_waitForSessionSettlement', '_openSession', '_openSessionNow', '_loadSessionForAdoption', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_gitCheckout', '_handleChatRequest'];
 names.push('_renameSession', '_reloadWebviewChat');
-names.push('_killBackgroundJob');
+names.push('_killBackgroundJob', '_cancelActiveRequests');
 const members = cls.members.filter(n => n.name && names.includes(n.name.getText(file)));
 const timers = new Map();
 let nextTimer = 0, checkouts = [];
@@ -30,6 +30,14 @@ for (const history of [[], [{ role: 'user' }, { role: 'assistant' }], [{ role: '
     const rewinds = [];
     sandbox.routeWebviewMessage({ _history: history, _rewindAndResend: async index => rewinds.push(index) }, { type: 'regenerate' }, {});
     assert.deepEqual(rewinds, history.length ? [history.filter(row => row.role === 'user').length - 1] : []);
+}
+for(const [engine,stopTree,expected] of [['xratu',false,0],['xratu',true,1],['opencode',false,1]]) {
+ const host=new sandbox.Host();let stops=0,rejections=0,aborts=0;
+ Object.assign(host,{_activeEngine:engine,_researchConversationId:'root',_childRunnerRoot:'root',_childRunner:{stopAll:()=>{stops++;return Promise.resolve();}},
+  _cancelModelPings:()=>{},_abortControllers:new Map([['chat',{abort:()=>{aborts++;}}]]),_agentStops:new Map([['child',()=>{}]]),
+  _rejectPendingLocalApprovals:()=>{rejections++;},_rejectPendingLocalDecisions:()=>{rejections++;}});
+ host._cancelActiveRequests(stopTree);assert.equal(stops,expected);assert.equal(aborts,1);assert.equal(rejections,expected*2);
+ assert.equal(host._agentStops.size,expected?0:1);
 }
 const snapshot = id => ({ sessionId: id, model: 'target-model', summary: null, title: id, workspace: path.resolve('workspace'), renamed: false, localHistory: [{ role: 'user', content: id }], uiHistory: [{ role: 'user', content: id }], totalCostUsd: 3 });
 function harness() {

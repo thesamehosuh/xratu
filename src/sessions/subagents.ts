@@ -84,6 +84,10 @@ export class CoordinatedSubagents implements SubagentRunner {
                 onObservation: (callId, trace) => {
                     latestTrace = trace;
                     this.host.onObservation?.(callId, trace);
+                    // Streaming display traces must reach durable child views
+                    // before the next model/tool checkpoint is committed.
+                    this.host.onSessions?.(coordinator.list().map(child => child.id === session.id
+                        ? { ...child, checkpoint: { ...latestRecord, trace } } : child));
                 },
                 baseRequest: (definition, conversationId) => ({ ...this.host.baseRequest(definition, conversationId), signal: execution.signal }),
                 onCheckpoint: async (_id, record) => {
@@ -122,17 +126,16 @@ export class CoordinatedSubagents implements SubagentRunner {
             if (!definition) return { output: 'Child profile is unavailable.', isError: true };
             const parentSignal = this.host.baseRequest(definition, session.id).signal;
             const stop = () => { void coordinator.stop(session!.id).catch(() => undefined); };
-            parentSignal?.addEventListener('abort', stop, { once: true });
+
             try {
                 if (parentSignal?.aborted) return { output: 'Parent execution cancelled.', isError: true };
                 await coordinator.send(session.id, request.prompt, 'parent', request.parentCallId);
                 this.host.onControl?.(request.parentCallId, stop);
                 if (request.background) return {output:JSON.stringify({session_id:session.id,state:'queued',instruction:'Use send_agent for follow-ups and wait_agents for the report.'})};
-                const settled = await coordinator.wait(session.id);
+                const settled = await coordinator.wait(session.id, parentSignal);
                 const execution = settled.executions.at(-1)!;
                 return { output: `${settled.results.at(-1)?.text ?? 'Child execution cancelled.'}\n[child_result: ${execution.id}]`, isError: execution.state !== 'completed' };
             } finally {
-                parentSignal?.removeEventListener('abort', stop);
                 this.host.onControl?.(request.parentCallId, undefined);
             }
         } catch (error) { return { output: error instanceof Error ? error.message : String(error), isError: true }; }

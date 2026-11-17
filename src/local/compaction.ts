@@ -510,6 +510,36 @@ export async function compactWithSummary(
     return summary;
 }
 
+/** Summarize settled rounds within a long live turn. Keep every user row,
+ * including steers, and never split a tool batch or repeat its effects. The
+ * checkpoint names exactly the calls replaced so replay can fold them too. */
+export async function compactActiveTurn(
+    messages: LocalAgentMessage[], request: LocalAgentRequest,
+    opener: LocalAgentMessage, windowTokens?: number | null,
+): Promise<LocalAgentMessage | null> {
+    const start = messages.indexOf(opener);
+    if (start < 1) return null;
+    const tail = messages.slice(start + 1);
+    const calls = tail.flatMap(row => row.tool_calls ?? []);
+    if (calls.length < 8) return null;
+    const results = new Set(tail.filter(row => row.role === 'tool').map(row => row.tool_call_id));
+    if (calls.some(call => !results.has(call.id))) return null;
+    const oldCheckpoint = tail.find(row => row.compactedToolCalls?.length);
+    const dropped = tail.filter(row => row.role !== 'user' && row !== oldCheckpoint);
+    const previous = typeof oldCheckpoint?.content === 'string' ? oldCheckpoint.content : null;
+    const summary = await summarizeDroppedTurns(request, dropped, previous, windowTokens);
+    if (!summary || request.signal?.aborted) return null;
+    const checkpoint: LocalAgentMessage = { role: 'assistant', content: summary,
+        compactedToolCalls: [...new Set([...(oldCheckpoint?.compactedToolCalls ?? []), ...calls.map(call => call.id)])] };
+    // Avoid repeated cache-invalidating summaries when fixed instructions or
+    // a very large summary leave too little reclaimable space.
+    const retained = tail.filter(row => row.role === 'user');
+    if (estimateMessageTokens(checkpoint) + retained.reduce((n, row) => n + estimateMessageTokens(row), 0)
+        >= tail.reduce((n, row) => n + estimateMessageTokens(row), 0) * 0.8) return null;
+    messages.splice(start + 1, tail.length, ...retained, checkpoint);
+    return checkpoint;
+}
+
 export function boundHistory(
     history: LocalAgentMessage[],
     contextWindow?: number | null,

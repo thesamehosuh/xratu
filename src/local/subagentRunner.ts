@@ -78,7 +78,7 @@ export interface SubagentHostContext {
     executor(signal: AbortSignal, source?: SubagentApprovalSource): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
-    onUsage?(usage: LocalUsage, model: string): void;
+    onUsage?(usage: LocalUsage, model: string, source?: 'compaction'): void;
     onObservation?(parentCallId: string, trace: SubagentTrace): void;
     /** Registers (or clears, with `undefined`) the stop control for ONE live
      *  task call. The host keeps it keyed by the parent call id so the Agents
@@ -398,7 +398,7 @@ export async function runSubagentTask(
                 case 'usage':
                     // Estimates stay display-only; the authoritative
                     // round-end copy is what cost ledgers count.
-                    if (!event.estimated) ctx.onUsage?.(event.usage, event.model ?? request.model);
+                    if (!event.estimated) ctx.onUsage?.(event.usage, event.model ?? request.model, event.source === 'compaction' ? 'compaction' : undefined);
                     break;
                 case 'compactionSummary':
                     record.summary = event.value;

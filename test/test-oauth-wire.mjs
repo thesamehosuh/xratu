@@ -239,7 +239,7 @@ for (const [style, baseUrl, model, extraPath] of [
     check('public subscription groups local tools', call.body.tools[0].type, 'namespace');
     check('namespaced function preserves executor name', call.body.tools[0].tools[0].name, 'read_file');
 }
-{
+for (const terminalOutput of ['populated', 'empty', 'omitted']) {
     const captured = [];
     const original = globalThis.fetch;
     let executions = 0;
@@ -253,7 +253,8 @@ for (const [style, baseUrl, model, extraPath] of [
             frame({ type: 'response.output_item.added', output_index: 0, item: { ...functionCall, arguments: '' } }),
             frame({ type: 'response.function_call_arguments.delta', item_id: 'fc_item_1', delta: '{"path":"README.md"}' }),
             frame({ type: 'response.output_item.done', output_index: 0, item: functionCall }),
-            frame({ type: 'response.completed', response: { output: [functionCall] } }),
+            frame({ type: 'response.completed', response: terminalOutput === 'omitted' ? {}
+                : { output: terminalOutput === 'empty' ? [] : [functionCall] } }),
         ]);
         return sse([
             frame({ type: 'response.output_text.delta', delta: 'Read complete.' }),

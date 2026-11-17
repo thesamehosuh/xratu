@@ -67,6 +67,11 @@ try {
     assert.match(await filePage(file, 'sample.txt', 1, 1), /start_line=2, start_column=0/);
     assert.ok((await filePage(file, 'sample.txt', 2, 2)).includes('b\nc'));
     assert.equal((await run('read_file', { path: '.' })).isError, true);
+    const singleWithEmptyBatch = await run('read_file', {path: 'sample.txt', files: [], max_lines: 1});
+    assert.equal(singleWithEmptyBatch.isError, undefined);
+    assert.ok(singleWithEmptyBatch.output.includes('sample.txt'));
+    assert.equal((await run('read_file', {files: []})).isError, true);
+    console.log('ok single-path reads tolerate generated empty optional batches');
     console.log('ok bounded reads retain continuation across long lines and CRLF');
     const plan = createLocalToolExecutor(ws, async () => {}, undefined, undefined, undefined, undefined, { plan: true });
     for (const name of ['task', 'process']) assert.equal((await plan.execute({ id: name, name, arguments: {} })).isError, true);
@@ -75,6 +80,16 @@ try {
     assert.equal(edit.isError, undefined);
     assert.ok(publications > 0);
     assert.ok(!edit.output.includes('stale error'));
+    let releaseSnapshot, enteredSnapshot;
+    const snapshotStarted=new Promise(resolve=>{enteredSnapshot=resolve;});
+    const snapshotGate=new Promise(resolve=>{releaseSnapshot=resolve;});
+    const controller=new AbortController();let settled=false;
+    const cancellable=createLocalToolExecutor(ws,async()=>{enteredSnapshot();await snapshotGate;});
+    const mutation=cancellable.execute({id:'cancel-write',name:'write_file',arguments:{path:'cancelled.txt',new_content:'must not write'}},undefined,controller.signal).finally(()=>{settled=true;});
+    await snapshotStarted;controller.abort();await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(settled,false,'writer ownership remains held until mutation cleanup settles');
+    releaseSnapshot();await mutation.catch(()=>{});
+    assert.equal(fs.existsSync(path.join(ws,'cancelled.txt')),false);
     console.log('ok edits wait for fresh diagnostics even with preexisting errors');
     const references = await run('find_references', { path: 'sample.txt', line: 1, character: 1, include_declaration: false });
     assert.equal(references.isError, undefined);
