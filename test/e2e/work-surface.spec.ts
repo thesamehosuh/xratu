@@ -1206,7 +1206,7 @@ test('live changes follow the latest edited file and preserve a manual selection
     await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
     const secondRequest = (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === 'src/second.ts').at(-1)!;
     await post(page, { ...secondRequest, type: 'changeFileState', file: { path: 'src/second.ts', kind: 'text', before: 'old', after: 'second changed again', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: ['second changed again'] }] } });
-    await expect(page.locator('.review-open-file').filter({ has: page.locator('.review-diff-head', { hasText: 'src/second.ts' }) })).toContainText('second changed again');
+    await expect(page.locator('.review-file-group').filter({ has: page.locator('.review-file', { hasText: 'src/second.ts' }) }).locator('.review-open-file')).toContainText('second changed again');
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
@@ -1625,3 +1625,34 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`appear
     await page.getByRole('option', { name: '12 px', exact: true }).click();
     await expect.poll(async () => (await sent(page)).filter(m => m.type === 'appearanceSet').at(-1)).toMatchObject({ type: 'appearanceSet', prefs: { accent: 'violet', interfaceSize: 12 } });
 });
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`file diffs stay beneath their names and newest files lead (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        const previous = await latest(page, 'changesGetState');
+        await page.locator('.review-head .icon-btn').click();
+        const request = await latest(page, 'changesGetState', previous.requestId);
+        await post(page, { ...request, type: 'changesState', files: changes.map((file, i) => ({ ...file, modifiedAt: i + 1 })) });
+        const replyPath = async (path: string, content: string, previousId?: unknown) => {
+            await expect.poll(async () => (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === path && m.requestId !== previousId).length).toBeGreaterThan(0);
+            const fileRequest = (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === path && m.requestId !== previousId).at(-1)!;
+            await post(page, { ...fileRequest, type: 'changeFileState', file: { path, kind: 'text', before: 'old', after: content, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: [content] }] } });
+        };
+        await replyPath('src/second.ts', 'newest content');
+        const groups = page.locator('.review-current .review-file-group');
+        await expect(groups.first().locator('.review-file code')).toHaveText('src/second.ts');
+        await expect(groups.first().locator('.review-diff')).toContainText('newest content');
+        await expect(groups.nth(1).locator('.review-file code')).toHaveText('src/first.ts');
+        // Opening another file leaves each diff inside its own file group.
+        const firstFile = groups.nth(1).locator('.review-file');
+        if (await firstFile.getAttribute('aria-expanded') === 'true') await firstFile.click();
+        const previousFile = (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === 'src/first.ts').at(-1);
+        await firstFile.click();
+        await replyPath('src/first.ts', 'older content', previousFile?.requestId);
+        await expect(groups.nth(1).locator('.review-diff')).toContainText('older content');
+        await expect(groups.first().locator('.review-diff')).toContainText('newest content');
+        await page.screenshot({ path: info.outputPath('inline-newest-changes.png') });
+    });
+}

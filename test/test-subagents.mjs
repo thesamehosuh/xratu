@@ -76,7 +76,7 @@ const ok = (name, cond, detail = '') => {
     ok('builtins include general', builtins.some((d) => d.name === 'general'));
     const explore = builtins.find((d) => d.name === 'explore');
     ok('explore allow-list cannot edit', !explore.tools.includes('edit_file') && !explore.tools.includes('apply_patch'));
-    ok('explore can run commands to verify claims', explore.tools.includes('run_terminal_command'));
+    ok('explore cannot execute arbitrary shell', !explore.tools.includes('run_terminal_command'));
     const general = builtins.find((d) => d.name === 'general');
     check('general has no allow-list (all minus task)', general.tools, undefined);
     check('round budget default exported', DEFAULT_SUBAGENT_ROUNDS, 50);
@@ -287,7 +287,7 @@ fs.writeFileSync(
     ok('description excludes invalid defs', !description.includes('mismatch'));
     ok('description states the fresh-context contract', description.includes('FRESH context'));
     ok('description leaves delegation choice to the agent', !description.includes('When to delegate'));
-    ok('description retains the user-decision boundary', description.includes("Do not delegate what needs the user's decision"));
+    ok('description retains the user-decision boundary', description.includes("ask_session_question"));
     ok('description does not promote delegation for research', !description.includes('tours'));
     const schema = buildTaskToolSchema(defs);
     check('schema requires prompt (type comes from subagent_type or task_id)', JSON.stringify(schema.required), JSON.stringify(['prompt']));

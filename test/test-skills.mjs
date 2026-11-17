@@ -6,6 +6,7 @@
  * Run (after `npx tsc -p . --outDir out`):  node test/test-skills.mjs
  */
 import { createRequire } from 'module';
+import spawn from 'cross-spawn';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -20,6 +21,7 @@ const {
     resolveSkill,
     readSkillResource,
     ensureBundledSkill,
+    syncBundledSkillResource,
     updateBundledSkillIfUntouched,
     sha256Hex,
     skillDirectoryDisplayPath,
@@ -426,6 +428,60 @@ const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the 
     }
     try { await updateBundledSkillIfUntouched(root, '../evil', mdV2, 'x'); } catch { threw = true; }
     check('update: invalid dirName throws', threw, true);
+}
+
+// --- bundled resources: executable delivery, independent ownership, deletion ---
+{
+    const root = path.join(tmpRoot, 'resource-seed');
+    const skillName = 'natural-farsi';
+    const md = fs.readFileSync(new URL('../assets/skills/natural-farsi/SKILL.md', import.meta.url), 'utf8');
+    const checker = fs.readFileSync(new URL('../assets/skills/natural-farsi/check-register.mjs', import.meta.url), 'utf8');
+    await ensureBundledSkill(root, skillName, md);
+    const target = path.join(root, skillName, 'check-register.mjs');
+    check('resource seed: checker delivered', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker), 'created');
+    const execution = spawn.sync(process.execPath, [target, '--selftest'], { encoding: 'utf8' });
+    check('resource seed: installed checker actually runs', execution.status, 0);
+    check('resource seed: same bytes skipped', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker, sha256Hex(checker)), 'skipped');
+    check('resource seed: untouched checker updates', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker + '\n', sha256Hex(checker)), 'updated');
+    fs.writeFileSync(target, '// user checker');
+    check('resource seed: edited checker preserved', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker, sha256Hex(checker + '\n')), 'skipped');
+    check('resource seed: pre-existing checker preserved', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker), 'skipped');
+    check('resource seed: user bytes retained', fs.readFileSync(target, 'utf8'), '// user checker');
+    fs.unlinkSync(target);
+    check('resource seed: deleted checker stays deleted', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker, sha256Hex(checker)), 'skipped');
+    check('resource seed: foreign checker stays deleted', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker, 'foreign'), 'skipped');
+    for (const fileName of ['../escape.mjs', 'nested/check.mjs', 'SKILL.md', 'skill.md']) {
+        let rejected = false;
+        try { await syncBundledSkillResource(root, skillName, fileName, checker); } catch { rejected = true; }
+        check(`resource seed: rejects ${fileName}`, rejected, true);
+    }
+    const outside = path.join(tmpRoot, 'outside-checker.mjs');
+    fs.writeFileSync(outside, '// outside');
+    let symlinksOk = true;
+    try { fs.symlinkSync(outside, target); } catch (err) {
+        if (['EPERM', 'EOPNOTSUPP', 'ENOSYS', 'EINVAL'].includes(err.code)) symlinksOk = false;
+        else throw err;
+    }
+    if (symlinksOk) {
+        check('resource seed: symlink file is user-owned', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker), 'skipped');
+        check('resource seed: symlink escape update refused', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker, sha256Hex('// outside')), 'skipped');
+        check('resource seed: outside bytes preserved', fs.readFileSync(outside, 'utf8'), '// outside');
+        fs.unlinkSync(target);
+        const inside = path.join(root, skillName, 'user-resource.mjs');
+        fs.writeFileSync(inside, checker);
+        fs.symlinkSync(inside, target);
+        check('resource seed: in-directory symlink update refused', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker + '\n', sha256Hex(checker)), 'skipped');
+        check('resource seed: in-directory target preserved', fs.readFileSync(inside, 'utf8'), checker);
+        const linkedName = 'linked-resource';
+        fs.symlinkSync(path.join(root, skillName), path.join(root, linkedName), 'dir');
+        check('resource seed: symlink directory refused', await syncBundledSkillResource(root, linkedName, 'other.mjs', checker), 'skipped');
+        check('resource seed: no file through directory link', fs.existsSync(path.join(root, skillName, 'other.mjs')), false);
+    }
+    fs.unlinkSync(path.join(root, skillName, 'SKILL.md'));
+    check('resource seed: deleted entrypoint stays deleted', await syncBundledSkillResource(root, skillName, 'new.mjs', checker), 'skipped');
+    check('resource seed: no resource added to deleted entrypoint', fs.existsSync(path.join(root, skillName, 'new.mjs')), false);
+    fs.rmSync(path.join(root, skillName), { recursive: true, force: true });
+    check('resource seed: deleted skill stays deleted', await syncBundledSkillResource(root, skillName, 'check-register.mjs', checker), 'skipped');
 }
 
 fs.rmSync(tmpRoot, { recursive: true, force: true });

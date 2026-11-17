@@ -1,88 +1,46 @@
 ---
 name: iran-dev-access
-description: Use when the user asks which AI or developer services work from Iran, what to use instead of a blocked service (OpenAI, Anthropic, Vercel, Netlify, international payments), how to pay in rial, or when a signup/checkout for an international service fails — answers with working alternatives (domestic gateways, local models, Iranian PaaS) and probes reachability instead of guessing.
+description: Research availability, payment options, and alternatives for AI and developer services from Iran, or diagnose signup and access problems.
 ---
 
-# Developer services from Iran: what works and what to use instead
+# Developer services from Iran
 
-## The shape of the answer
+Evaluate the service the user asks about and practical alternatives using current evidence rather than a fixed provider list.
 
-For every "can I use X from Iran?" question, deliver **working
-alternatives**, not circumvention:
+- Separate network reachability, API functionality, signup, regional eligibility, payment support, pricing, and data handling. Success at one does not prove the others. Check current official provider documentation and terms; use relevant independent evidence where helpful.
+- When useful and authorized, run a bounded connection or API probe. State what was tested, from which network, and what the result establishes. An HTTP response alone does not establish signup, payment, or authenticated API access; an error alone does not identify its cause.
+- Compare options against the user's needs, including existing services, domestic providers, local models, hosting, and payment methods where relevant. Verify current model availability, costs, and features; distinguish unverified options from confirmed ones.
+- If diagnosing access, consider DNS, VPN, proxy, firewall, routing, provider status, and account errors as relevant. Respect the user's setup and avoid assumptions about their network or product configuration.
+- Preserve the user's stated location and account details accurately. Do not suggest misrepresenting identity or eligibility. Explain meaningful service or payment limitations with sources rather than guessing.
 
-1. **Probe before claiming.** Reachability changes and differs per network -
-   verify with a lightweight request (`curl -sI https://service.example`)
-   before telling the user a service works or doesn't. Report what you
-   measured ("the endpoint didn't answer from this machine"), never a
-   confident "X is banned in Iran" - policy, outage, and ISP issues are
-   indistinguishable from inside the extension host.
-2. **Prefer what already works over what is blocked.** The practical path
-   everyone actually uses is domestic services and local models - that is
-   what this skill maps.
-3. **No circumvention.** No VPN/proxy/DNS setup guides, no account-creation
-   tricks, no payment workarounds that misrepresent the user's country or
-   identity. If the only way to use a service is to fake something, name
-   the alternative instead.
+## Dependencies and model files
 
-## AI models and APIs
+For failed `npm install`, `pip install`, `docker pull`, or model downloads,
+identify the exact package, image, revision, and failing host. Registry metadata,
+artifact storage, authentication, and redirects can take different routes;
+a successful homepage or package search does not establish a working download.
 
-- International first-party APIs (OpenAI, Anthropic, Gemini) are generally
-  not reachable or not signable-up from Iranian networks - verify per
-  network before asserting.
-- **Domestic gateways are the practical answer** and Xratu has first-class
-  presets for them (Settings -> API keys, Iranian providers group). The
-  preset list is Xratu's current offering (Kaya AI, Avalai, Metis AI, Liara
-  AI, ArvanCloud AI, Navaan, GapGPT), not a live status board - treat it as
-  "these are wired in and take rial", and let the user's own probe decide
-  which is up today. They serve frontier models over OpenAI-compatible
-  endpoints and need no VPN. Their pricing is tracked in Toman in the Usage
-  page.
-- **Local models are the zero-dependency answer** - see the
-  `local-llm-low-ram` skill. Anything a 7-8B model can do works fully
-  offline.
+- Inspect current project/user registry and proxy configuration first. Keep
+  private registry scopes and credentials on their intended hosts. Prefer a
+  per-command override or scoped project setting over a global change; record
+  how to restore any changed value. Never print tokens from config files.
+- Look up current publisher or mirror documentation. Domestic mirrors are
+  candidates to test from the affected network, not guaranteed substitutes.
+  [Liara](https://docs.liara.ir/mirrors/about/) documents npm, PyPI, and
+  container mirrors. [Shecan](https://shecan.ir/) describes selective DNS-based
+  routing; DNS routing does not establish account or payment eligibility.
+- Distinguish Docker Desktop, a local daemon, and a remote Docker context.
+  Shell proxy variables do not prove the daemon uses that route; Docker
+  Desktop ignores daemon.json proxy settings. Use its own proxy controls.
+  See [Docker proxy configuration](https://docs.docker.com/engine/daemon/proxy/).
+- Preserve versions, lockfile integrity hashes, TLS verification, and image
+  digests. Do not disable certificate verification or add untrusted package
+  indexes to make a download succeed. A mirror may lack a version or artifact;
+  report that instead of silently substituting a different dependency.
+- Retry the actual failing operation once after an evidence-based change.
+  Reuse saved model-download progress through `native-downloads` when available.
+  Before preparing an offline bundle, identify the target OS, architecture,
+  runtime version, and required artifacts, then verify it without network
+  access. A warm cache alone is not proof of an offline-ready project.
 
-## Hosting and deploy
-
-- Vercel/Netlify/Render signups commonly fail from Iranian networks
-  (payment and signup checks) - don't fight them; the alternatives are
-  first-class:
-  - Iranian PaaS: **Liara**, **ArvanCloud** (same accounts already used for
-    their AI gateways).
-  - **GitHub Pages** and **Cloudflare Pages** for static front-ends - probe
-    before promising.
-  - Your own VPS anywhere that accepts the user's payment method.
-
-## Registries and package managers (the "can I docker pull?" question)
-
-No blanket claims - probe, and know the failure modes:
-
-- **Docker Hub** restricts sanctioned regions in its terms, and pulls from
-  Iranian networks are exactly where users hit 403s and timeouts. The
-  working answer is a pull-through mirror: many teams run an internal
-  registry mirror, and Iranian cloud providers (e.g. ArvanCloud) offer
-  registry mirroring. Configure the mirror in the Docker daemon; don't
-  document workarounds that misrepresent the account or region.
-- **npm, PyPI, GitHub** are often reachable but intermittently throttled or
-  filtered - worth a probe when the user reports trouble. For npm/PyPI,
-  point at the org's configured mirror if the public registry fails; don't
-  invent mirror URLs, use whatever the user's team already runs.
-
-## Payments
-
-- International cards and payment processors don't work with Iranian
-  accounts - the answer is the rial-priced domestic route (gateways above,
-  Iranian PaaS) or self-hosting, never disguising where a payment comes
-  from.
-
-## Tone and register
-
-Practical and neutral, same as `iran-connectivity-fallback` - you are
-mapping the working roads, not commenting on the roadblocks. Never speculate
-about policy, sanctions, or geography as the cause of a failure. If the
-answer is in Persian, it follows `natural-farsi` (colloquial register).
-
-## Sibling skill
-
-A configured provider failing mid-session with timeouts/network errors is
-`iran-connectivity-fallback`'s job (fallback to what's already configured).
-This skill is for "what should I use instead" questions up front.
+For repeated failures of a configured model provider, use `iran-connectivity-fallback` when available.

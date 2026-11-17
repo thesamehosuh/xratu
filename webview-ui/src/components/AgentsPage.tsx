@@ -3,7 +3,9 @@ import { Bot, Check, ChevronDown, FolderOpen, RefreshCw, Search, TriangleAlert, 
 import { t } from '../i18n';
 import type { AgentProfileView } from '../types';
 
-export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: {
+export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen, onLaunch, canLaunch }: {
+    canLaunch: boolean;
+    onLaunch: (profile: AgentProfileView, prompt: string) => void;
     profiles: AgentProfileView[] | null;
     errorKey?: string;
     onRefresh: () => void;
@@ -11,6 +13,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
     onOpen: (profile: AgentProfileView) => void;
 }) {
     const [query, setQuery] = useState('');
+    const [assignment, setAssignment] = useState('');
     const [source, setSource] = useState('all');
     const sourceLabel = (value: AgentProfileView['source']) => t(value === 'builtin' ? 'surfaceBuiltIn' : value === 'project-xratu' ? 'skillsSourceXratu' : value === 'project-agents' ? 'skillsSourceAgents' : value === 'project-claude' ? 'skillsSourceClaudeProject' : value === 'global-claude' ? 'skillsSourceClaudeGlobal' : 'skillsSourceGlobal');
     const [expanded, setExpanded] = useState<string | null>(null);
@@ -19,7 +22,7 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
     useEffect(() => { onRefresh(); }, [onRefresh]);
     return (
         <section className="settings-page agents-page">
-            <header className="settings-head"><h2>{t('surfaceAgents')}</h2>
+            <header className="settings-head"><h2>{t('childProfiles')}</h2>
                 <button type="button" className="page-add" onClick={onManage}><FolderOpen size={12} /><span>{t('surfaceManage')}</span></button>
                 <button type="button" className="icon-btn" onClick={onRefresh} aria-label={t('surfaceRefresh')}><RefreshCw size={12} /></button>
             </header>
@@ -60,6 +63,11 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen }: 
                     <p dir="auto">{selected.description}</p>
                     {selected.model && <code dir="ltr">{selected.model}{selected.reasoningEffort ? ` · ${selected.reasoningEffort}` : ''}</code>}
                     {selected.tools && <div className="agent-tools" aria-label={t('surfaceTools')}>{selected.tools.map(tool => <code dir="ltr" key={tool}>{tool}</code>)}</div>}
+                    {canLaunch && !selected.error && <form className="child-launch" onSubmit={event => { event.preventDefault(); if (assignment.trim()) {onLaunch(selected, assignment.trim());setAssignment('');} }}>
+                        <label htmlFor="child-assignment">{t('childAssignment')}</label>
+                        <textarea id="child-assignment" dir="auto" rows={4} maxLength={100000} value={assignment} onChange={event => setAssignment(event.target.value)} />
+                        <button type="submit" className="secondary-btn" disabled={!assignment.trim()}>{t('childLaunch')}</button>
+                    </form>}
                     {selected.editable && <button type="button" className="settings-ghost-action" onClick={() => onOpen(selected)}><FolderOpen size={12} /><span>{t('surfaceOpenFile')}</span></button>}
                 </aside>}
                 </div>

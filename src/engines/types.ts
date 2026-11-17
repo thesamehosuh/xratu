@@ -46,6 +46,7 @@ export interface EngineHost {
     steer?: LocalSteerFeed;
     onSession?: (session: EngineSessionRef) => Promise<void>;
     onSteerRejected?: (steerId: string | undefined) => void;
+    onChildInstructionReceipt?: (sessionId: string, receipt: string | undefined, accepted: boolean) => void;
     onObservation?: (callId: string, trace: SubagentTrace) => void;
 }
 export interface AgentEngine {

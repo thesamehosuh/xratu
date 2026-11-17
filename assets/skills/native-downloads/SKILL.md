@@ -43,9 +43,11 @@ names through the Xratu MCP bridge; use the names in the current catalog.
   "resume"`, and the new route. Preserve progress. Try each relevant route
   once per recovery decision; report the failure if both fail. Never bypass
   an explicit proxy-only privacy requirement without the user's permission.
-- HTTP 401/403 usually means an expired signed link or authentication issue;
-  do not assume censorship. Obtain a fresh authorized URL and resume the
-  same ID with `url`. HTTP 404, insufficient disk space, checksum mismatch,
+- Diagnose HTTP 401/403 from the response and source: authentication, signed
+  link expiry, regional restrictions, or an upstream refusal need different
+  recovery. Refresh an expired authorized URL on the same ID with `url`;
+  do not repeatedly refresh a link for an unrelated refusal.
+  HTTP 404, insufficient disk space, checksum mismatch,
   and changed file validators are not proxy problems. HTTP 429/503 already
   receive bounded automatic retries, including Retry-After.
 
@@ -72,5 +74,5 @@ Servers without a usable ETag/Last-Modified or range support may require a
 restart; never repeatedly attempt unsafe append. `cancel` removes only the
 partial file, leaving completed destination files intact.
 
-Approvals follow the normal Xratu permission gate. All transfer controls
-belong to the agent; users only see status in Downloads.
+Approvals follow the normal Xratu permission gate. Users can control existing
+transfers in Downloads; the agent uses the managed download tools.

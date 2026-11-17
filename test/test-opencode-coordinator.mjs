@@ -524,4 +524,33 @@ try {
         } finally { await test.close(); }
     }
 
+
+    {
+        const test=await harness();const receipts=[];
+        try {
+            const done=test.run({onChildInstructionReceipt:(...args)=>receipts.push(args)});
+            await test.ready();test.emit('session.execution.started','root');
+            test.child('root','live-child-call','child',true);test.result('root','live-child-call','child',true);
+            await until(()=>test.observations.some(value=>value.trace.canSend));
+            assert.equal(await test.engine.sendSubagent('missing',{text:'Do not send'}),false);
+            assert.equal(await test.engine.sendSubagent('live-child-call',{text:'Do not misroute'},'foreign'),false);
+            assert.equal(await test.engine.sendSubagent('live-child-call',{text:'Also inspect Windows',steerId:'ui-receipt'},'child'),true);
+            const queued=test.requests.find(request=>request.route==='/api/session/child/prompt');
+            assert.equal(queued.body.text,'Also inspect Windows');assert.equal(queued.body.delivery,'steer');
+            test.emit('session.execution.succeeded','root');test.emit('session.execution.succeeded','child');
+            await tick();assert.equal(test.outcome(),undefined,'an instruction awaiting delivery still owns the tree');
+            test.emit('session.inbox.delivered','child',{inboxID:queued.body.id});
+            test.emit('session.execution.started','child');test.emit('session.text.delta','child',{delta:'Windows checked'});
+            test.emit('session.execution.succeeded','child');test.report('root','followup-report','child');
+            test.emit('session.inbox.delivered','root',{inboxID:'followup-report'});
+            test.emit('session.execution.started','root');test.emit('session.text.delta','root',{delta:'Parent synthesis'});
+            test.emit('session.execution.succeeded','root');await done;
+            assert.equal(test.outcome(),'done');assert.ok(receipts.some(([child,id,accepted])=>child==='child'&&id==='ui-receipt'&&accepted));
+            assert.ok(test.observations.some(value=>value.trace.entries.some(entry=>entry.kind==='user'&&entry.text==='Also inspect Windows')));
+            assert.ok(!test.events.some(event=>event.type==='chunk'&&event.value==='Windows checked'));
+            assert.equal(await test.engine.sendSubagent('live-child-call',{text:'Too late'}),false,'finished native runs cannot silently restart a child');
+            console.log('ok direct native child instruction preserves ownership through delivery, completion, and parent report');
+        } finally {await test.close();}
+    }
+
 } finally { await rm(root, { recursive: true, force: true }); }

@@ -162,9 +162,7 @@ export class McpConfigStore {
         };
     }
 
-    /** First-run default: ship with the default-enabled curated servers
-     *  available as opt-in presets; built-in research needs no external MCP runtime. Seeds the global
-     *  config file
+    /** First-run default: enable the default-enabled curated servers. Seeds the global config file
      *  only when it does not exist yet - exclusive create, never clobbers an
      *  existing or concurrently created file. An emptied-but-present file is
      *  a user decision and is respected. Upgrades whose servers still live

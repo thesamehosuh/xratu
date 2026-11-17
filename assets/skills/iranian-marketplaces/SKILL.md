@@ -60,6 +60,8 @@ prices as current or install/reconfigure servers as part of a shopping task.
   offers. Exclude unavailable offers from buyable recommendations and
   preserve `price_unreliable` warnings.
 - Use `shop_profile` for seller evidence and `price_history` for trends.
+  Read the vote count with the score: `shop_score: 5` with `shop_votes: 0`
+  means no votes, not a five-star reputation.
   Include stated postage when available; missing postage does not mean
   free shipping. State the age of in-person shelf prices when reported.
 

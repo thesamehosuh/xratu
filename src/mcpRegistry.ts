@@ -73,6 +73,20 @@ export const MCP_REGISTRY: McpRegistryEntry[] = [
         },
     },
     {
+        id: 'zarinpal',
+        nameKey: 'mcpRegZarinpalName',
+        descKey: 'mcpRegZarinpalDesc',
+        docsUrl: 'https://www.zarinpal.com/docs/mcpDocs/',
+        tags: ['iranian'],
+        defaultEnabled: true,
+        server: {
+            name: 'zarinpal',
+            url: 'https://www.zarinpal.com/docs/mcp',
+            // Official public documentation only; no merchant account or payments.
+            autoApprove: ['list_docs', 'search_docs', 'get_doc', 'get_error_code'],
+        },
+    },
+    {
         id: 'context7',
         nameKey: 'mcpRegContext7Name',
         descKey: 'mcpRegContext7Desc',

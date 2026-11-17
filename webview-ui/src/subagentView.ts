@@ -16,7 +16,7 @@ export function collectAgentRuns(messages: ChatMessage[]): AgentRun[] {
 export function agentMessage(run: AgentRun): ChatMessage {
     const trace = run.trace;
     const steps: Step[] = trace?.entries.map(entry => ({
-        id: `${run.id}:${entry.id}`, kind: entry.kind === 'tool' ? 'toolCall' : entry.kind,
+        id: `${run.id}:${entry.id}`, kind: entry.kind === 'tool' ? 'toolCall' : entry.kind === 'user' ? 'text' : entry.kind,
         tool: entry.tool, text: entry.text, html: entry.html, startedAt: entry.startedAt, endedAt: entry.endedAt,
         callId: entry.kind === 'tool' ? `${run.id}:${entry.id}` : undefined, result: entry.output,
         live: entry.live, isError: entry.isError, research: entry.research, structuredContent: entry.structuredContent,

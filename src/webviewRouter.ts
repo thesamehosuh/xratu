@@ -69,11 +69,14 @@ export interface WebviewMessageHost {
     _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void>;
     _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean, toSha?: string): Promise<void>;
     _sendAgentsState(): Promise<void>;
+    _sendChildSessions(): Promise<void>;
+    _nativeChildInstruction(rootId: string, sessionId: string, callId: string, text: string, receipt: string): Promise<void>;
     _openAgentFile(name: string, source: string): Promise<void>;
     manageAgentFiles(): Promise<void>;
     _backgroundTerminalCall(callId: string | undefined): void;
     _cancelActiveRequests(): void;
     _stopSubagent(callId: string): void;
+    _childSessionAction(rootId: string, sessionId: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string): Promise<void>;
     _clearAllSessions(): Promise<void>;
     _confirmSteer(steerId: string | undefined, mode?: 'steer' | 'turn' | 'drop'): void;
     _createSkillScaffold(): Promise<string | null>;
@@ -372,6 +375,17 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     break;
                 case 'killBackgroundJob':
                     void host._killBackgroundJob(data.jobId);
+                    break;
+                case 'nativeChildInstruction':
+                    if([data.rootId,data.sessionId,data.callId,data.text,data.receipt].every(value=>typeof value==='string')) await host._nativeChildInstruction(data.rootId,data.sessionId,data.callId,data.text,data.receipt);
+                    break;
+                case 'childSessionsGet':
+                    await host._sendChildSessions();
+                    break;
+                case 'childSessionAction':
+                    if (typeof data.rootId === 'string' && typeof data.sessionId === 'string' && (data.action === 'send' || data.action === 'stop' || data.action === 'create' || data.action === 'configure' || data.action === 'report')) {
+                        await host._childSessionAction(data.rootId, data.sessionId, data.action, data.text, data.receipt);
+                    }
                     break;
                 case 'stopAgent':
                     if (typeof data.callId === 'string' && data.callId) host._stopSubagent(data.callId);

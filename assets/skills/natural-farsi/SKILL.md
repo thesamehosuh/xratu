@@ -1,14 +1,40 @@
 ---
 name: natural-farsi
-description: How to write natural, informal Persian (Farsi) like a real person typing — the colloquial chat register (رو not را, همون not همان, میخوای not میخواهی), the "no half-space, no diacritics" orthography, conversational tone, and correct handling of mixed Persian/technical (RTL/LTR) content, plus which technical terms stay in English. Use this skill whenever writing, editing, or translating anything into Farsi: READMEs, docs, UI strings, chat replies, social posts, or emails — even when the user just asks to "write it in Persian" or "translate this to Farsi" without mentioning style. Also use it to review or fix existing Farsi text that reads stiff or formal, mixes registers, uses half-spaces or Arabic diacritics, translates technical terms that should stay English, or renders scrambled when Persian is mixed with URLs, paths, code, or identifiers in UI.
+description: Write, edit, or translate natural Persian (Farsi) in the user's chosen formal or informal register. Use for Persian chat replies, docs, UI strings, posts, and emails, or to fix mixed registers, awkward technical vocabulary, and scrambled RTL/LTR content. Includes Xratu's no-half-space, no-diacritics house style; informal is the default for chat.
 ---
 
-# Natural, informal Farsi writing
+# Natural Farsi writing
 
-Write Persian the way a real Persian speaker types in 2026: informal but
-polished, zero half-spaces, zero Arabic diacritics. The result should read
-like a good tech blog post or a smart friend explaining something — not like
-a formal letter, and not like translated text.
+Write clear Persian in the user's chosen register. Both modes keep this
+skill's house orthography: zero half-spaces, zero Arabic diacritics.
+
+## Choose formal or informal
+
+- Follow an explicit choice first: `formal` / رسمی or `informal` / محاوره ای.
+  Keep that choice for the current document or conversation until changed.
+- For a new writing or translation task with no established register, offer
+  **Formal / Informal** once, using the host's question tool when available.
+  Do not ask again for each paragraph, revision, or coding reply.
+- For ordinary chat and coding help, default to informal. Preserve an existing
+  document's register when editing unless the user asks to change it.
+- A formal document can sit inside an informal conversation; keep the
+  document formal without changing the surrounding chat's register.
+
+**Formal:** standard written Persian (level 2): را، همان، آن، یک، است، میشود،
+میتوانید. Use شما and complete verb endings when addressing the reader.
+Prefer direct phrasing such as «فایل را ذخیره کنید» over bureaucratic padding.
+Do not apply the informal substitution tables or checklist bans to this mode.
+
+**Informal:** polished colloquial Persian (level 3): رو، همون، اون، یه، میشه،
+میتونی. Address the reader as تو; follow the detailed tables below.
+
+| Intent | Formal | Informal |
+|---|---|---|
+| Save a file | فایل را ذخیره کنید. | فایل رو ذخیره کن. |
+| Explain an error | این خطا به تنظیمات مربوط است. | این خطا به تنظیمات مربوطه. |
+
+Orthography, technical vocabulary, date handling, and RTL/LTR guidance apply
+in both modes. Register does not choose the reply language.
 
 ## The one-language rule
 
@@ -31,7 +57,8 @@ the user reads is the reply and is Persian.
 
 ### When these rules apply
 
-These rules govern the Persian text you produce. Preloaded into a
+These language rules govern the Persian text you produce; the selected
+register still controls formal versus informal wording. Preloaded into a
 Persian-locale session they govern your WHOLE reply, and there is no
 exception: no English sentence, ever, in any message.
 
@@ -40,7 +67,7 @@ answering questions ABOUT Persian — they govern only the Persian you write,
 and your explanation stays in whatever language the user is using. That is the
 only case where the one-language rule is limited to the reply itself.
 
-## The register: colloquial morphology (the half everyone forgets)
+## Informal mode: colloquial morphology (the half everyone forgets)
 
 Persian has a register continuum. Name the target explicitly and never
 drift off it:
@@ -48,8 +75,8 @@ drift off it:
 | Level | What it is | Sample 3sg | Status |
 |---|---|---|---|
 | 1 | Literary/administrative (ادبی/اداری) | می‌باشد، می‌گردد | banned |
-| 2 | Standard written (کتابی/معیار) | است، میشود، میدهد، را، همان | banned |
-| 3 | **Colloquial written (محاوره‌ایِ نوشته‌شده)** | ـه، میشه، میده، رو، همون | **THE TARGET** |
+| 2 | Standard written (کتابی/معیار) | است، میشود، میدهد، را، همان | formal mode |
+| 3 | **Colloquial written (محاوره‌ایِ نوشته‌شده)** | ـه، میشه، میده، رو، همون | informal mode |
 | 4 | Chat slang | دمت گرم، خفن | banned |
 
 Level 3 is how Iranians type in chats, Telegram, blogs and tech posts:
@@ -63,9 +90,9 @@ long explainers, not in bullet lists, not in change reports, not in UI
 strings, not in code comments. Mixing «هر کدوم رو جواب بدهی، من سوال بعدی
 را میپرسم» is the #1 failure mode. Pick level 3 and hold it.
 
-Formal (level 2) is allowed ONLY when the user writes formal Persian
-themselves or explicitly asks for a formal text — and even then level 1
-bureaucratic style is never right.
+The tables from Function words through What stays as-is apply only to
+informal mode. In formal mode, keep standard words and complete endings;
+do not convert them to colloquial forms.
 
 ### Function words
 
@@ -267,8 +294,8 @@ Orthography and morphology are mechanical; rhythm is what makes it human.
 
 - Short sentences. One idea per sentence. Long ezafe chains are the #1
   giveaway of stiff Farsi — break them up.
-- Second person is the implicit تو (see above); the stiff third-person
-  passive ("انجام می‌گردد") is never right.
+- Match the selected address: تو in informal mode, شما in formal mode.
+  Prefer direct verbs over the stiff third-person passive ("انجام می‌گردد").
 - Dashes, colons, and short bullet lists are natural; nested formal clauses
   are not.
 - Do not invent Persian jargon. Technical terms follow the vocabulary list
@@ -395,8 +422,10 @@ paths, commands, model names, API keys, code. Bidi rendering of mixed
 content is where Persian UIs break. Rules:
 
 **In prose and docs:** rely on the bidi algorithm, but put every URL, path,
-command, or identifier in code formatting (backticks in markdown). That
-isolates the run and prevents reordering — no extra work needed.
+command, or identifier in code formatting (backticks in markdown). Backticks
+mark code but do not guarantee directional isolation in every renderer.
+Check the rendered line; in HTML use isolated spans or `bdi` with the
+appropriate direction when neighboring punctuation or text reorders.
 
 **In UI code (webview/CSS):**
 
@@ -410,12 +439,12 @@ isolates the run and prevents reordering — no extra work needed.
   visually relocated by the bidi algorithm and the line scrambles. Wrap the
   Persian label in its own `dir="auto"` span and the URL in its own
   `dir="ltr"` span.
-- Knobs, dots, and switches positioned with logical properties
-  (`inset-inline-start`) flip when you flip a container's direction. Inside
-  an LTR island, prefer physical `left`/`right` plus a physical
-  `translateX`, and delete any `[dir='rtl']` overrides that target elements
-  now living inside LTR islands — ancestor `[dir='rtl']` selectors still
-  match through the root and will fight the island.
+- Knobs, dots, and switches use logical properties (`inset-inline-start`)
+  relative to their own container direction. Keep technical islands LTR
+  and compute transforms for that local direction. Do not introduce physical
+  `left`/`right` positioning to work around RTL. Review ancestor `[dir='rtl']`
+  overrides: they still match descendants inside LTR islands and can fight
+  the island's direction.
 - One `$direction` mistake to avoid: `dir="ltr"` on a row changes
   `text-align: start` to left for every child. That is usually what you
   want; if a Persian description inside the island must stay right-aligned,
@@ -425,7 +454,7 @@ isolates the run and prevents reordering — no extra work needed.
 character, in both directions. If the separator dot lands on the wrong side
 of the URL or a Persian word order inverts, a run is not isolated.
 
-## Before / after
+## Informal examples: before / after
 
 **Example 1 — README intro**
 
@@ -521,25 +550,33 @@ inside longer words like راست / استفاده / پرداخت).
    (exclusion list respected)
 2. No harakat, no Arabic hamza carriers (check ً ِ ُ َ ٔ ء أ إ ؤ), no Arabic
    ي/ك — ئ is fine, it is a Persian letter
-3. Zero standalone را (رو only), zero همان/آن (همون/اون)
-4. Zero written verb endings: میدهد|میکند|میشود|دارد|میخواند|میداند|
+3. Informal only: zero standalone را (رو only), zero همان/آن (همون/اون)
+4. Informal only: zero written verb endings: میدهد|میکند|میشود|دارد|میخواند|میداند|
    میتواند|میگوید|میگذارد|میآید|میرود|می‌خواهی|می‌توانی|می‌دانی and
    کنید|بگویید|بیایید|بخوانید|بدانید (کنین/بگید/بیاین/بخونید/بدونید)
-5. Zero standalone است (use ـه or هست), zero می‌باشد/میگردد
+5. Informal only: zero standalone است (use ـه or هست), zero می‌باشد/میگردد
+   Formal: keep standard words/endings and check consistency by reading.
 6. Every Latin word outside backticks is tier A, an acronym, or a literal
    code symbol — everything else is in Persian script
 7. No sentence and no message without Persian letters
 8. Every mixed Persian/URL/path line rendered and read both ways; runs
    isolated
-9. Read it aloud in your head — if it sounds like a government letter OR a
-   translated textbook, rewrite it
+9. Read it aloud in the chosen register — remove bureaucratic padding and
+   translated-textbook phrasing in either mode
 
-The bundled `check-register.mjs` runs checks 1-7 mechanically:
+The bundled `check-register.mjs` checks shared orthography/language in both
+modes, plus colloquial word rules in informal mode (the default). Formal
+register consistency still needs a human-style read:
 
-```bash
-node ~/.agents/skills/natural-farsi/check-register.mjs draft.txt
-# or: pbpaste | node ~/.agents/skills/natural-farsi/check-register.mjs
+Resolve the checker beside the discovered `SKILL.md` and pass its absolute
+path; do not rely on shell `~` expansion or a platform-specific clipboard tool.
+
+```text
+node "<absolute-path-to-check-register.mjs>" --register=informal draft.txt
+node "<absolute-path-to-check-register.mjs>" --register=formal letter.txt
 ```
+
+Omit the input filename to read from standard input.
 
 Run it on the FINAL Persian output only — quoted source text in a
 translation task is exempt (it is supposed to look wrong), and a document

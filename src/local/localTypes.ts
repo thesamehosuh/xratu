@@ -405,7 +405,7 @@ export interface LocalSteerMessage {
  *  messages at round boundaries (after tool results, before the next model
  *  request). `drain` must atomically empty the queue. */
 export interface LocalSteerFeed {
-    drain(): LocalSteerMessage[];
+    drain(): LocalSteerMessage[] | Promise<LocalSteerMessage[]>;
     /** Register an interrupt for ONLY the current model request. Tools,
      * approvals and delegated children must never share this controller. */
     setInterrupt?(interrupt: (() => void) | undefined): void;

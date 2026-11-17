@@ -390,8 +390,9 @@ for (const locale of ['en', 'fa'] as const) {
             const tags = page.getByRole('group', { name: locale === 'fa' ? 'برچسب ها' : 'Tags' });
             await expect(tags.getByRole('button').first()).toHaveText(locale === 'fa' ? 'ایرانی' : 'Iranian');
             await tags.getByRole('button').first().click();
-            await expect(page.locator('.mp-row')).toHaveCount(3);
+            await expect(page.locator('.mp-row')).toHaveCount(4);
             await expect(page.locator('.mp-row')).toContainText([
+                locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
@@ -399,4 +400,28 @@ for (const locale of ['en', 'fa'] as const) {
             expect((await sentMessages(page)).some((m) => m.type === 'mcpSaveServers')).toBe(false);
         });
     }
+}
+
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 900]) {
+    test(`Zarinpal official docs can be added in ${locale} at ${width}px`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 900 });
+        await openMarketplace(page, locale);
+        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-before.png`) });
+        await hostMessage(page, { ...MARKET_STATE, entries: curatedMarketplaceEntries() });
+        const row = page.locator('.mp-row').filter({ hasText: locale === 'fa' ? 'مستندات زرین پال' : 'Zarinpal Docs' });
+        await expect(row).toBeVisible();
+        await row.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-catalog.png`) });
+        await row.getByRole('button', { name: locale === 'fa' ? 'افزودن' : 'Add', exact: true }).click();
+        await expect(page.locator('.mp-confirm-json')).toContainText('https://www.zarinpal.com/docs/mcp');
+        const confirm = page.getByRole('button', { name: locale === 'fa' ? 'تایید و افزودن' : 'Confirm and add', exact: true });
+        await confirm.scrollIntoViewIfNeeded();
+        await expect(page.locator('.settings-page')).toBeVisible();
+        expect(await page.locator('.settings-page').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        expect((await sentMessages(page)).some(m => m.type === 'mcpSave')).toBe(false);
+        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-confirm.png`) });
+        await confirm.click();
+        const save = (await sentMessages(page)).find(m => m.type === 'mcpSave');
+        expect(save).toMatchObject({ target: 'global', servers: [{ name: 'zarinpal', url: 'https://www.zarinpal.com/docs/mcp' }] });
+    });
 }

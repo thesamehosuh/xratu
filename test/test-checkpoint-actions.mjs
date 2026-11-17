@@ -15,7 +15,7 @@ const names = ['_gitCheckout', '_forgetSubagentRuns', '_rewindAndResend', '_bind
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
 const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
-    AbortController, console,
+    AbortController, console, crypto: require('node:crypto'), closeSubagentRunner: async () => {},
     // Turn preflight in _handleChatRequest resolves these module helpers before
     // the rules step; the suite stubs their results through them.
     resolveReferenceAttachments: async () => null,
@@ -28,7 +28,7 @@ const sha = 'a'.repeat(40);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function harness() {
     const host = new sandbox.Host();
-    Object.assign(host, { _sessionEpoch: 10, _sessionId: 'A', _ephemeralSessionId: null, _activeEngine: 'builtin', _abortControllers: new Map(), _localRunActive: false, _history: [{ role: 'user', content: 'A', cp: sha.slice(0, 12) }], _approvalCloseItems: {} });
+    Object.assign(host, { _sessionEpoch: 10, _sessionId: 'A', _researchConversationId: 'family-A', _ephemeralSessionId: null, _activeEngine: 'builtin', _abortControllers: new Map(), _localRunActive: false, _history: [{ role: 'user', content: 'A', cp: sha.slice(0, 12) }], _approvalCloseItems: {} });
     const notices = [], messages = [], restores = [], truncations = [];
     host._view = { webview: { postMessage: msg => messages.push(msg) } };
     host.notifyBanner = (...args) => notices.push(args);
@@ -39,7 +39,7 @@ function harness() {
     host._prepareLocalRun = async () => ({ active: { id: 'fixture' }, model: 'fixture', auth: { apiKey: null } });
     host._localRulesContext = async () => '';
     host._localHistory = [];
-    host._subagentRunsByChat = new Map([['A', new Map([['future-child', { rows: [{ role: 'assistant', content: 'future work completed' }] }]])]]);
+    host._subagentRunsByChat = new Map([['family-A', new Map([['future-child', { rows: [{ role: 'assistant', content: 'future work completed' }] }]])]]);
     const confirm = deferred(), shown = deferred();
     host.confirmBanner = (...args) => { shown.resolve(args); return confirm.promise; };
     return { host, notices, messages, restores, truncations, confirm, shown };
@@ -117,7 +117,7 @@ try {
             assert.equal(t.restores.length, choice === 'notifCancel' ? 0 : 1);
             assert.equal(t.truncations.length, choice === 'checkpointScopeFilesAndChat' ? 1 : 0);
             assert.equal(t.host._history.length, choice === 'checkpointScopeFilesAndChat' ? 0 : 1);
-            assert.equal(t.host._subagentRunsByChat.has('A'), choice === 'notifCancel' || empty && choice === 'checkpointScopeFiles', 'successful restore invalidates child context from the discarded future');
+            assert.equal(t.host._subagentRunsByChat.has('family-A'), choice === 'notifCancel' || empty && choice === 'checkpointScopeFiles', 'successful restore invalidates child context from the discarded future');
             if (!empty && choice !== 'notifCancel') {
                 assert.equal(t.restores[0][1], sha, 'restore uses the resolved full SHA');
                 assert.equal(t.notices.find(n => n[1] === 'notifRestored')[2].safety, 'safe');
@@ -293,7 +293,7 @@ try {
         assert.equal(accepted, false);
         assert.equal(sends, 0);
         assert.equal(t.host._history, original, `${mode} must retain the original transcript`);
-        assert.equal(t.host._subagentRunsByChat.has('A'), true, `${mode}: rejected edits retain resumable children`);
+        assert.equal(t.host._subagentRunsByChat.has('family-A'), true, `${mode}: rejected edits retain resumable children`);
         assert.ok(!t.messages.some(message => message.type === 'truncateFromUser'));
         assert.equal(t.restores.length, ['save-failure', 'rules-failure'].includes(mode) ? 2 : 0, `${mode} must either avoid writes or roll back to its safety snapshot`);
         assert.equal(t.host._abortControllers.size, 0);
@@ -308,7 +308,7 @@ try {
         assert.equal(durable.host._localAccumulatedText, '', 'an edited pending turn cannot inherit the previous answer');
         assert.equal(durable.host._localAccumulatedThinking, '');
     };
-    durable.host._handleChatRequest = async () => { assert.ok(acknowledged); assert.equal(durable.host._subagentRunsByChat.has('A'), false, 'resend cannot reuse a future child'); };
+    durable.host._handleChatRequest = async () => { assert.ok(acknowledged); assert.equal(durable.host._subagentRunsByChat.has('family-A'), false, 'resend cannot reuse a future child'); };
     await durable.host._rewindAndResend(0, 'Durable edit', [], () => { assert.equal(snapshot, 'Durable edit'); acknowledged = true; });
     assert.ok(acknowledged);
     console.log('ok edit preflight failures retain history; storage/rules failures restore files; acceptance follows durable revised text');
@@ -331,7 +331,7 @@ try {
     assert.equal(rejectedRestore.host._sessionSummary, 'Original rolling summary');
     assert.equal(rejectedRestore.restores.length, 2, 'failed durable restore rolls files back through its safety checkpoint');
     assert.equal(rejectedRestore.restores[1][1], 'safe');
-    assert.equal(rejectedRestore.host._subagentRunsByChat.has('A'), true);
+    assert.equal(rejectedRestore.host._subagentRunsByChat.has('family-A'), true);
     assert.equal(rejectedRestore.messages.some(message => ['truncateFromUser', 'checkpointRestored'].includes(message.type)), false, 'failed restore must not announce success or discard the visible transcript');
 
     const storage = mkdtempSync(path.join(tmpdir(), 'xratu-action-storage-'));

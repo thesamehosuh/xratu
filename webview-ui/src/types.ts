@@ -1,3 +1,4 @@
+import type { ChildSessionView } from '../../src/sessions/view';
 import type { AppearancePrefs } from '../../src/appearancePrefs';
 import type { ResearchEvidence } from '../../src/web/types';
 export type { ResearchEvidence } from '../../src/web/types';
@@ -103,6 +104,9 @@ export type ToExtensionMessage =
     /** Stop ONE delegated agent (a `task` call) without ending the parent
      *  turn. `callId` is that call's id, the same key the observation uses. */
     | { type: 'stopAgent'; callId: string }
+    | { type: 'nativeChildInstruction'; rootId: string; sessionId: string; callId: string; text: string; receipt: string }
+    | { type: 'childSessionsGet' }
+    | { type: 'childSessionAction'; rootId: string; sessionId: string; action: 'send' | 'stop' | 'create' | 'configure' | 'report'; text?: string; receipt?: string }
     /** Restore workspace files to a shadow checkpoint. With no sha, the host
      *  shows its checkpoint QuickPick; with a sha, it restores that turn's
      *  checkpoint after a confirm (files only, or files + rewind chat). */
@@ -413,6 +417,8 @@ export type FromExtensionMessage =
     | { type: 'checkpointRestored'; sessionId: string | null }
     | { type: 'changesState'; sha: string; requestId: string; files: ReviewChange[]; errorKey?: string }
     | { type: 'changeFileState'; sha: string; requestId: string; file?: ReviewFile; errorKey?: string }
+    | { type: 'childSessionReceipt'; rootId: string; sessionId: string; receipt?: string; accepted: boolean }
+    | { type: 'childSessions'; rootId: string; sessions: ChildSessionView[] }
     | { type: 'agentsState'; profiles: AgentProfileView[]; errorKey?: string }
     | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
     | ({ type: 'localModelOperation' } & LocalModelOperation)

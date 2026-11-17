@@ -42,7 +42,8 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
     { re: /^update_task_list$/, icon: ListChecks },
-    { re: /^ask_user_question$/, icon: HelpCircle },
+    { re: /^(ask_user_question|ask_session_question)$/, icon: HelpCircle },
+    { re: /^(spawn_agent|send_agent|inspect_agents|wait_agents|stop_agent)$/, icon: Bot },
     { re: /^task$/, icon: Bot },
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
     { re: /^skill$/, icon: BookOpen },
@@ -81,6 +82,11 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
 /** Persian labels for the builtin tool pills - shown RTL like the thinking
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
+    { re: /^spawn_agent$/, key: 'childLaunch' },
+    { re: /^send_agent$/, key: 'childSendInstruction' },
+    { re: /^inspect_agents$/, key: 'childInspect' },
+    { re: /^wait_agents$/, key: 'childWait' },
+    { re: /^stop_agent$/, key: 'agentStop' },
     { re: /^start_download$/, key: 'toolStartDownload' },
     { re: /^view_image$/, key: 'toolViewImage' },
     { re: /^symbols$/, key: 'toolDefinitions' },
@@ -101,7 +107,7 @@ const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
     { re: /^process_input$/, key: 'toolTerminal' },
     { re: /^process$/, key: 'toolProcess' },
-    { re: /^ask_user_question$/, key: 'toolAskUserQuestion' },
+    { re: /^(ask_user_question|ask_session_question)$/, key: 'toolAskUserQuestion' },
     { re: /^task$/, key: 'toolTask' },
     { re: /^read_file$/, key: 'toolReadFile' },
     { re: /^read_files$/, key: 'toolReadFiles' },

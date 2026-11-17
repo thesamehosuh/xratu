@@ -1,3 +1,5 @@
+import { committedChildResults } from './sessions/delivery';
+import { WorkspaceWriter, mutatesWorkspace } from './sessions/resources';
 import { readBoundedFile } from './tooling/boundedRead';
 import { setTimeout as nativeSetupDelay } from 'timers/promises';
 import type { NativeSetupState } from './engines/nativeSetup';
@@ -150,7 +152,10 @@ import { checkOpenCode, openCodeUpdateAvailable, OpenCodeInstallation } from './
 import { openCodeEnvironment } from './engines/opencode/environment';
 import type { EngineId, EngineSessionRef, EngineSetupState } from './engines/types';
 import type { LocalToolImage } from './local/localAgent';
-import { createSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
+import { createSubagentRunner, closeSubagentRunner, type SubagentRunRegistry } from './local/subagentRunner';
+import { FileCoordinatorStore } from './sessions/store';
+import { childSessionView } from './sessions/view';
+import type { SubagentRunner } from './subagents';
 import { SUBAGENT_TOOL_NAME, agentFileTemplate, discoverSubagents, filterToolsForSubagent, subagentIssues, type SubagentDefinition, type SubagentSource } from './subagents';
 import { extractPdfAttachments } from './pdfExtract';
 import { LocalSessionStore, resolveSessionTitle, renameWithRetry, type LocalSessionHistoryMessage, type LocalSessionSnapshot } from './local/localSessionStore';
@@ -208,7 +213,7 @@ import { isGeoBlockedError, providerHttpStatus } from './providerErrors';
 import { explainError } from './local/errorExplain';
 import { priceForModel, resolvePrice, costForUsage, type PriceOverride, type GatewayRate, type PriceLookup } from './pricing';
 import { resolveApiStyle, isOpenCodeHost, isNonChatModel } from './local/apiStyle';
-import { discoverSkills, ensureBundledSkill, listableSkills, readSkillBody, resolveSkillForRun, sha256Hex, skillId, updateBundledSkillIfUntouched, SKILL_FILE, type DiscoveredSkill } from './skills';
+import { discoverSkills, ensureBundledSkill, listableSkills, readSkillBody, resolveSkillForRun, sha256Hex, skillId, syncBundledSkillResource, updateBundledSkillIfUntouched, SKILL_FILE, type DiscoveredSkill } from './skills';
 
 /** Shared promisified runner for the git status line. */
 const execFileAsync = promisify(execFile);
@@ -931,6 +936,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _connectionStatusInterval: NodeJS.Timeout | null = null;
     private _chatRetryCount: number = 0;
     private _researchConversationId: string = crypto.randomUUID();
+    private _childFamilyIds = new Set<string>();
     _yoloMode: boolean = true;
     _planMode: boolean = false;
     _selectedModel: string | null = null;
@@ -1085,6 +1091,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  than held in one map so switching chats and coming back does not orphan
      *  a run the model can still legitimately resume; only a window reload or a
      *  cleared history ends a run for good (the task_id note says so). */
+    private _childRunner?: SubagentRunner;
+    private _childrenSettled?: Promise<void>;
+    private _childWorkActive = false;
+    private readonly _childReportsInFlight = new Set<string>();
+    private readonly _workspaceWriters = new Map<string, WorkspaceWriter>();
+    private _childRunnerRoot?: string;
     private readonly _subagentRunsByChat = new Map<string, SubagentRunRegistry>();
     /** Fingerprint of the last agent-file diagnostics logged, so a per-turn
      *  rediscovery does not repeat an unchanged complaint. */
@@ -1093,19 +1105,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  dropped (their runs become non-resumable, as a reload would). */
     private static readonly MAX_SUBAGENT_CHATS = 4;
 
-    /** Registry backing the live chat's delegated runs, created on first use
-     *  and re-touched (LRU) on every access.
-     *
-     *  The EPHEMERAL id is preferred over the stored one: a chat's first send
-     *  creates the ephemeral id, and persisting that same chat then assigns a
-     *  stored id WITHOUT clearing the ephemeral one. Keying on the stored id
-     *  first would move the registry out from under the run that is still live,
-     *  so a task_id reported in the first turn would be unresolvable in the
-     *  second. The ephemeral id is assigned once per live chat and every path
-     *  that adopts a different chat clears it (see _restoreLocalSession), so
-     *  preferring it can never point one chat's key at another's runs. */
+    /** Durable family identity is independent of transient UI/session adoption. */
     private _subagentRuns(): SubagentRunRegistry {
-        const key = this._ephemeralSessionId ?? this._sessionId ?? '';
+        const key = this._researchConversationId;
         const existing = this._subagentRunsByChat.get(key);
         if (existing) {
             this._subagentRunsByChat.delete(key);
@@ -1117,7 +1119,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         for (const [chat, registry] of this._subagentRunsByChat) {
             if (this._subagentRunsByChat.size <= XratuChatViewProvider.MAX_SUBAGENT_CHATS) break;
             if (chat === key) continue;
-            registry.clear();
+            void closeSubagentRunner(registry).catch(error => diagnosticsChannel?.appendLine(`Closing child sessions: ${String(error)}`));
             this._subagentRunsByChat.delete(chat);
         }
         return created;
@@ -1125,7 +1127,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** Drop the live chat's resumable runs (history cleared / chat deleted). */
     private _forgetSubagentRuns(): void {
-        this._subagentRunsByChat.delete(this._ephemeralSessionId ?? this._sessionId ?? '');
+        const registry = this._subagentRunsByChat.get(this._researchConversationId);
+        if (registry) void closeSubagentRunner(registry).catch(error => diagnosticsChannel?.appendLine(`Closing child sessions: ${String(error)}`));
+        this._subagentRunsByChat.delete(this._researchConversationId);
+        this._childRunner = undefined;
+        this._childRunnerRoot = undefined;
+        this._childWorkActive = false;
+        this._researchConversationId = crypto.randomUUID();
+        this._view?.webview.postMessage({type:'childSessions',rootId:this._researchConversationId,sessions:[]});
     }
 
     /** Every tool name a subagent could be offered in this workspace: the
@@ -1136,6 +1145,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         return new Set(getLocalToolDefinitions({
             yolo: true,
             plan: false,
+            sessionQuestions: true,
             external,
             skills: this._discoverSkillsForRun(workspaceRoot ?? ''),
         }).map((t) => t.name));
@@ -1313,7 +1323,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._localSessionStore = new LocalSessionStore(localStorageUri.fsPath);
         this._pullRequests = new PullRequestController({
             identity: () => ({ sessionId: this._sessionId, workspace: this._sessionWorkspaceIdentity(), epoch: this._sessionEpoch,
-                busy: !this._view || this._localRunActive || this._abortControllers.size > 0 || this._sessionTransitionsPending > 0 || this._checkpointRestoreActive || !!this._modelManagementController || !!this._benchmarkController,
+                busy: !this._view || this._localRunActive || this._childWorkActive || this._abortControllers.size > 0 || this._sessionTransitionsPending > 0 || this._checkpointRestoreActive || !!this._modelManagementController || !!this._benchmarkController,
                 plan: this._planMode }),
             ensureSession: async () => { await this._persistLocalSession(); this._pushSessionState(); },
             execution: () => this._pullRequestExecution(),
@@ -1943,7 +1953,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('warning', 'sessionWorkspaceReadOnly'); return;
         }
         if (userIndex !== undefined && !this._view) return;
-        if (this._checkpointRestoreActive || this._sessionTransitionsPending > 0 || this._localRunActive || this._abortControllers.size > 0) {
+        if (this._checkpointRestoreActive || this._sessionTransitionsPending > 0 || this._localRunActive || this._childWorkActive || this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchBusy');
             return;
         }
@@ -1978,7 +1988,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this.notifyBanner('warning', 'checkpointActionStale');
             return false;
         }
-        if (this._localRunActive || this._abortControllers.size > 0) {
+        if (this._localRunActive || this._childWorkActive || this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchBusy');
             return false;
         }
@@ -4654,6 +4664,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         onAccepted?: () => void,
         prepared?: Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>,
         checkpoint?: string,
+        childrenOnly = false,
     ): Promise<StreamOutcome> {
         if (this._activeEngine === 'opencode') return this._runOpenCodeAgent(prompt, attachments, existingController, planMode, hiddenPrompt, onAccepted, checkpoint);
         const controller = existingController ?? new AbortController();
@@ -4685,28 +4696,31 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             events: [],
         };
 
-        this._localAccumulatedText = '';
-        this._localAccumulatedThinking = '';
-        this._localThinkingBlockEvent = null;
-        this._localThinkingBlockRaw = null;
-        this._localCurrentUsage = null;
-        this._localTurnUsage = null;
-        this._localTurnCost = { USD: 0, IRT: 0 }; this._localTurnCostKnown = true;
-        // `events` is held by reference and grows as the run streams - the
-        // throttled snapshot below always captures the current tail.
-        this._localPendingTurn = {
-            hidden: hiddenPrompt,
-            cp: checkpoint,
-            prompt,
-            events: outcome.events,
-            ...(attachments?.length ? {
-                attachments: attachments.map((a) => ({
-                    name: a.name,
-                    mime_type: a.mimeType,
-                    size: Math.ceil(a.dataBase64.length * 3 / 4),
-                })),
-            } : {}),
-        };
+        if (!childrenOnly) {
+            this._localAccumulatedText = '';
+            this._localAccumulatedThinking = '';
+            this._localThinkingBlockEvent = null;
+            this._localThinkingBlockRaw = null;
+            this._localCurrentUsage = null;
+            this._localTurnUsage = null;
+            this._localTurnCost = { USD: 0, IRT: 0 }; this._localTurnCostKnown = true;
+            // `events` is held by reference and grows as the run streams - the
+            // throttled snapshot below always captures the current tail.
+            this._localPendingTurn = {
+                hidden: hiddenPrompt,
+                cp: checkpoint,
+                prompt,
+                events: outcome.events,
+                ...(attachments?.length ? {
+                    attachments: attachments.map((a) => ({
+                        name: a.name,
+                        mime_type: a.mimeType,
+                        size: Math.ceil(a.dataBase64.length * 3 / 4),
+                    })),
+                } : {}),
+            };
+
+        }
 
         // External MCP tools ride the local loop too: aggregated before the
         // run starts (listTools is async) and routed through the same manager.
@@ -4792,8 +4806,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             },
         });
         this._logSubagentIssues(subagentDefs);
+        const writerKey = this._sessionWorkspaceIdentity() ?? workspaceRoot;
+        let workspaceWriter = this._workspaceWriters.get(writerKey);
+        if (!workspaceWriter) {
+            workspaceWriter = new WorkspaceWriter(path.join(this._storagePath, 'writers', crypto.createHash('sha256').update(writerKey).digest('hex')));
+            this._workspaceWriters.set(writerKey, workspaceWriter);
+        }
+        const childRoot = this._researchConversationId;
+        this._childFamilyIds.add(childRoot);
         const subagentRunner = createSubagentRunner(
             {
+                maxParallel: resolveParallelSubagents(vscode.workspace.getConfiguration('xratu').get('maxParallelSubagents')),
+                withWorkspaceWriter: (signal, work) => workspaceWriter!.run(signal, work),
+                store: new FileCoordinatorStore(path.join(this._storagePath, 'children', `${childRoot}.json`)),
+                parentSessionId: childRoot,
+                onSessions: sessions => {
+                    if (this._researchConversationId !== childRoot) return;
+                    this._childWorkActive = sessions.some(session => session.executions.some(execution => ['queued','running','waiting_for_workspace','stopping'].includes(execution.state)));
+                    this._view?.webview.postMessage({ type: 'childSessions', rootId: childRoot, sessions: sessions.map(session => childSessionView(session, text => this._renderMarkdown(text))) });
+                },
                 connectionId: active.id,
                 baseRequest: (def, childConversationId) => {
                     const subagentConversationId = `xratu-subagent-${childConversationId}`;
@@ -4828,6 +4859,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         // Preserve approval flags; the shared gate reads live YOLO.
                         yolo: false,
                         plan: runPlanMode,
+                        sessionQuestions: true,
                         external: externalTools,
                         skills: runSkills,
                     }),
@@ -4852,7 +4884,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // A delegated child must not leave a background process
                     // behind it - see the `nested` guard in mcp.ts.
                     undefined,
-                    undefined,
+                    {ask: question => this._requestLocalDecision({...question,source},signal)},
                     { nested: true, browser: this._browser, downloads: this._downloads, sessionId: browserSessionId, signal, plan: runPlanMode, pullRequests: this._pullRequests.tool, approveOutsideWorkspace: (call, paths) => approveOutsideWorkspace(call, paths, signal, source) },
                 ),
                 approvalGate: localApprovalGate,
@@ -4866,10 +4898,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._scheduleLocalPartialPersist();
                 },
                 onUsage: (usage, usageModel) => {
-                    // Delegated rounds are real spend on the same account:
-                    // fold them into the turn/session/global ledgers exactly
-                    // like parent rounds.
-                    this._handleLocalAgentEvent({ type: 'usage', usage, model: usageModel, source: 'subagent', estimated: false }, outcome);
+                    const price = priceForModel(usageModel, this._modelPriceOverrides(), this._priceLookupFor(active.baseUrl, usageModel));
+                    const cost = auth.subscription ? null : usage.costUsd !== undefined
+                        ? {amount: usage.costUsd, currency: 'USD' as const} : price ? costForUsage(price, usage) : null;
+                    const current = this._researchConversationId === childRoot;
+                    if (current) {
+                        this._addSessionUsage(usage, null);
+                        if (cost) this._sessionCost[cost.currency] += cost.amount;
+                        this._postSessionCost();
+                        if (this._localPendingTurn?.events === outcome.events) {
+                            this._localTurnUsage = this._addUsage(this._localTurnUsage, usage);
+                            if (cost) this._localTurnCost[cost.currency] += cost.amount;
+                            else this._localTurnCostKnown = false;
+                        }
+                        void this._persistLocalSession().catch(error => diagnosticsChannel?.appendLine(`Child usage persistence: ${String(error)}`));
+                    }
+                    void this._recordUsage({ts:Date.now(),sessionId:current ? this._sessionId : null,host:baseUrlHost(active.baseUrl) ?? '',
+                        engine:'xratu',model:usageModel,...(auth.subscription ? {billing:'chatgpt-plan' as const}:{}),
+                        input:usage.promptTokens ?? 0,output:usage.completionTokens ?? 0,cached:usage.cachedTokens ?? 0,
+                        cacheWrite:usage.cacheWriteTokens ?? 0,amount:cost?.amount ?? null,currency:cost?.currency ?? null});
                 },
                 onControl: (callId, stop) => {
                     if (!callId) return;
@@ -4880,6 +4927,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             subagentDefs,
             this._subagentRuns(),
         );
+        this._childRunner = subagentRunner;
+        this._childRunnerRoot = childRoot;
+        if (childrenOnly) {
+            if (this._abortControllers.get('chat') === controller) this._abortControllers.delete('chat');
+            return { ...outcome, noRun: true };
+        }
 
         const rawExecutor = createLocalToolExecutor(
             workspaceRoot,
@@ -4910,7 +4963,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // of THIS call later (restored sessions fall back to args).
                 const snap = this._beginEditSnapshot(call, workspaceRoot);
                 try {
-                    const result = await rawExecutor.execute(call, onOutput);
+                    const result = mutatesWorkspace(call.name)
+                        ? await workspaceWriter!.run(controller.signal, () => rawExecutor.execute(call, onOutput))
+                        : await rawExecutor.execute(call, onOutput);
                     if (snap && !result.isError) this._endEditSnapshot(call.id, snap);
                     return result;
                 } finally {
@@ -5148,6 +5203,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     await this._persistLocalSession();
                 },
                 steer: { drain: () => this._localSteerQueue.splice(0).map((entry) => ({ text: entry.text, attachments: entry.images, steerId: entry.steerId })) },
+                onChildInstructionReceipt: (sessionId,receipt,accepted) => {if(epoch===this._sessionEpoch)this._view?.webview.postMessage({type:'childSessionReceipt',rootId:this._researchConversationId,sessionId,receipt,accepted});},
                 onSteerRejected: (steerId) => this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId }),
                 onObservation: (callId, trace) => {
                     if (epoch !== this._sessionEpoch) return;
@@ -5970,7 +6026,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  would overwrite local changes (no -f here, deliberately), and a failure
      *  is REPORTED - a picker that silently does nothing reads as broken. */
     async _gitCheckout(branch: string): Promise<void> {
-        const busy = () => this._checkpointRestoreActive || this._localRunActive || this._abortControllers.size > 0;
+        const busy = () => this._checkpointRestoreActive || this._localRunActive || this._childWorkActive || this._abortControllers.size > 0;
         if (busy() || this._sessionTransitionsPending > 0) { this.notifyBanner('warning', 'gitCheckoutBusy'); return; }
         if (!this._view) return;
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -6519,6 +6575,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const ok = await this._localSessionStore.delete(meta.id);
                 if (!ok) failed++;
             }
+            failed += await this._localSessionStore.clearChildFamilies?.() ?? 0;
         } catch (e) {
             console.error('xratu: clear all sessions failed', e);
             failed++;
@@ -6707,6 +6764,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._engineSession = { engineId: this._activeEngine };
         this._forgetSubagentRuns();
         this._sessionId = null;
+        this._childFamilyIds = new Set();
         this._researchConversationId = crypto.randomUUID();
         // A new conversation gets a fresh OpenCode session id.
         this._ephemeralSessionId = null;
@@ -6829,11 +6887,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private async _waitForSessionSettlement(): Promise<boolean> {
-        if (!this._localRunSettled) return true;
+        if (!this._localRunSettled && !this._childrenSettled) return true;
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
             return await Promise.race([
-                this._localRunSettled.then(() => true),
+                Promise.all([this._localRunSettled, this._childrenSettled]).then(() => true, () => false),
                 new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5000); }),
             ]);
         } finally { if (timer !== undefined) clearTimeout(timer); }
@@ -6856,7 +6914,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!current()) { this.notifyBanner('warning', 'sessionSwitchStale'); return; }
         snapshot = await this._loadSessionForAdoption(id);
         if (!snapshot) return;
-        if (!current() || this._localRunActive || this._abortControllers.size > 0) {
+        if (!current() || this._localRunActive || this._childWorkActive || this._abortControllers.size > 0) {
             this.notifyBanner('warning', 'sessionSwitchStale');
             return;
         }
@@ -6872,6 +6930,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._activeEngine = engine;
         this._engineSession = empty ? { engineId: engine } : snapshot.engineSession;
         this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
+        this._childFamilyIds = new Set(snapshot.childFamilyIds ?? []);
         this._sessionId = snapshot.sessionId;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
@@ -7012,7 +7071,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const prState = (await this._pullRequests.service.store.sessions()).find(state => state.sessionId === id);
             if (prState) await this._pullRequests.service.store.remove(id, prState.workspace);
         } catch (error) { diagnosticsChannel?.appendLine(`PR cleanup: ${String(error)}`); }
-        await this._localSessionStore.delete(id);
+        if (await this._localSessionStore.delete(id) === false) {
+            this.notifyBanner('warning', 'sessionDeleteFailed');
+            await this._listSessions(false);
+            return;
+        }
         if (this._taskListEdits[id]) {
             delete this._taskListEdits[id];
             void this._saveTaskListEdits().catch((e) =>
@@ -7051,21 +7114,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         this._engineSession = empty ? { engineId: engine } : snapshot.engineSession;
         this._researchConversationId = snapshot.researchConversationId ?? crypto.randomUUID();
+        this._childFamilyIds = new Set(snapshot.childFamilyIds ?? []);
         this._activeEngine = engine;
         this._localHistory = snapshot.localHistory;
         this._history = snapshot.uiHistory as HistoryMessage[];
         this._deriveEvictedUserTurns();
         this._restoreReplayBoundary(snapshot.replayUserTurns);
-        // Adopting a stored session REPLACES the live chat identity. A stale
-        // ephemeral id (from the chat this webview was showing before the
-        // reload) must not survive as the subagent-registry key, or the
-        // restored chat could resolve a task_id against the PREVIOUS chat's
-        // runs - one conversation's context leaking into another. Forgetting
-        // here costs a resume; the alternative costs isolation, so forget.
-        if (this._ephemeralSessionId) {
-            this._forgetSubagentRuns();
-            this._ephemeralSessionId = null;
-        }
+        this._ephemeralSessionId = null;
         this._sessionId = snapshot.sessionId;
         this._postEngineState();
         // Cumulative spend survives a rewind (tokens were already spent).
@@ -7194,6 +7249,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // session directory under an already-stale id.
             return;
         }
+        const childResultsAtEntry = committedChildResults(this._localHistory);
+        const childRootAtEntry = this._researchConversationId;
         const sessionIdAtEntry = this._sessionId;
         const titleWasNull = this._sessionTitle == null;
         const hasUserTurn = this._history.some((m) => m.role === 'user');
@@ -7202,6 +7259,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             {
                 workspace: this._sessionWorkspace ?? this._localWorkspaceKey(),
                 researchConversationId: this._researchConversationId,
+                childFamilyIds: [...this._childFamilyIds],
                 engineSession: this._engineSession ?? { engineId: this._activeEngine },
                 connectionId: this._activeEngine === 'xratu' ? this._sessionConnectionId ?? undefined : undefined,
                 model: this._activeEngine === 'opencode' ? this._sessionConnectionModel ?? this._selectedModel
@@ -7235,6 +7293,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             contentCapForWindow(this._contextWindowHint(this._sessionConnectionModel))
         );
         if (!saved) throw new EngineError('sessionSaveFailed');
+        if (this._researchConversationId === childRootAtEntry && this._childRunnerRoot === childRootAtEntry) {
+            await this._childRunner?.acknowledgeCommitted?.(childResultsAtEntry);
+        }
         // The store derives the title from the first user message when the
         // user has not renamed the session - adopt it so the toolbar shows
         // the real name without a reload. Only after a user turn is actually
@@ -7372,6 +7433,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     _cancelActiveRequests() {
+        if (this._childRunnerRoot === this._researchConversationId) {
+            this._childrenSettled = this._childRunner?.stopAll?.();
+            void this._childrenSettled?.catch(error => diagnosticsChannel?.appendLine(`Child settlement: ${String(error)}`));
+        }
         this._cancelModelPings();
         for (const controller of this._abortControllers.values()) {
             controller.abort();
@@ -7384,6 +7449,73 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Stop ONE delegated agent from the Agents surface. The parent turn and
      *  sibling agents keep running; a built-in child settles as a cancelled
      *  task result, a native child as an interrupted native subtree. */
+    async _nativeChildInstruction(rootId: string, sessionId: string, callId: string, text: string, receipt: string): Promise<void> {
+        if(rootId!==this._researchConversationId || this._activeEngine!=='opencode' || !this._nativeTurnActive || typeof text!=='string' || !text.trim() || text.length>100000 || typeof receipt!=='string' || receipt.length>200) return;
+        let accepted=false;
+        try {accepted=await this._openCodeEngine?.sendSubagent(callId,{text,steerId:receipt},sessionId) ?? false;}
+        catch(error){diagnosticsChannel?.appendLine(`Native child instruction: ${String(error)}`);}
+        if(rootId===this._researchConversationId) this._view?.webview.postMessage({type:'childSessionReceipt',rootId,sessionId,receipt,accepted});
+    }
+
+    async _sendChildSessions(): Promise<void> {
+        const rootId = this._researchConversationId;
+        try {
+            const sessions = this._childRunnerRoot === rootId && this._childRunner?.sessions
+                ? await this._childRunner.sessions()
+                : (await FileCoordinatorStore.peek(path.join(this._storagePath, 'children', `${rootId}.json`)))?.sessions ?? [];
+            if (rootId !== this._researchConversationId) return;
+            this._view?.webview.postMessage({ type: 'childSessions', rootId,
+                sessions: sessions.map(session => childSessionView(session, text => this._renderMarkdown(text))) });
+        } catch (error) {
+            diagnosticsChannel?.appendLine(`Child history: ${String(error)}`);
+            if (rootId === this._researchConversationId) {
+                this._view?.webview.postMessage({ type: 'childSessions', rootId, sessions: [] });
+                this._view?.webview.postMessage({ type: 'composerError', valueKey: 'childStorageFailed' });
+            }
+        }
+    }
+
+    async _childSessionAction(rootId: string, sessionId: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string): Promise<void> {
+        if (rootId !== this._researchConversationId || this._activeEngine !== 'xratu') return;
+        try {
+            if (this._childRunnerRoot !== rootId || !this._childRunner) {
+                if (this._localRunActive || this._planMode && action !== 'report') throw new Error('Child runtime cannot reconnect during this operation');
+                await this._runLocalAgent('', await this._localRulesContext(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, true);
+                if (this._researchConversationId !== rootId) return;
+            }
+            if (!this._childRunner) throw new Error('Child runtime is unavailable');
+            if (action === 'report') {
+                if (this._localRunActive || !this._childRunner.report) throw new Error('Parent conversation is busy');
+                const result=await this._childRunner.report(sessionId);
+                const key=`${rootId}:${result.id}`;
+                if (result.state==='pending' && !this._childReportsInFlight.has(key)) {
+                    this._childReportsInFlight.add(key);
+                    try {
+                        let accepted=false;
+                        await this._handleChatRequest(JSON.stringify({type:'child_result',session_id:sessionId,result_id:result.id,report:result.text}),undefined,{hiddenPrompt:true,onAccepted:()=>{accepted=true;}});
+                        if (!accepted) throw new Error('Parent conversation did not accept the report');
+                    } finally {this._childReportsInFlight.delete(key);}
+                }
+            } else if (action === 'configure') {
+                if (this._planMode || !text || text.length > 2000 || !this._childRunner.configureChild) throw new Error('Invalid child configuration');
+                await this._childRunner.configureChild(sessionId, JSON.parse(text));
+            } else if (action === 'create') {
+                if (this._planMode || !text?.trim() || !receipt || !this._childRunner.create) throw new Error('Invalid child assignment');
+                await this._persistLocalSession();
+                if (this._researchConversationId !== rootId) return;
+                sessionId = await this._childRunner.create(sessionId, text, receipt);
+                this._pushSessionState();
+            } else if (action === 'stop') await this._childRunner.stop?.(sessionId);
+            else if (!this._planMode && !this._sessionTransitionsPending && typeof text === 'string' && text.trim() && text.length <= 100_000 && typeof receipt === 'string') {
+                await this._childRunner.send?.(sessionId, text, receipt);
+            } else throw new Error('Child instruction is not allowed in the current mode');
+            this._view?.webview.postMessage({type: 'childSessionReceipt', rootId, sessionId, receipt, accepted: true});
+        } catch (error) {
+            this._view?.webview.postMessage({type: 'childSessionReceipt', rootId, sessionId, receipt, accepted: false});
+            diagnosticsChannel?.appendLine(`Child session action: ${String(error)}`);
+        }
+    }
+
     _stopSubagent(callId: string): void {
         const stop = this._agentStops.get(callId);
         if (stop) { this._agentStops.delete(callId); stop(); return; }
@@ -8363,12 +8495,26 @@ async function seedBundledSkills(context: vscode.ExtensionContext): Promise<void
                 // 'exists' = a copy was already there (user-authored): never
                 // ours to update. 'created' records our hash.
                 await context.globalState.update(hashKey, result === 'created' ? sha256Hex(skillMd) : 'foreign');
-                continue;
+            } else {
+                const updated = await updateBundledSkillIfUntouched(
+                    root, name, skillMd, context.globalState.get<string>(hashKey) ?? 'foreign');
+                if (updated === 'updated') {
+                    await context.globalState.update(hashKey, sha256Hex(skillMd));
+                }
             }
-            const updated = await updateBundledSkillIfUntouched(
-                root, name, skillMd, context.globalState.get<string>(hashKey) ?? 'foreign');
-            if (updated === 'updated') {
-                await context.globalState.update(hashKey, sha256Hex(skillMd));
+            const skillHash = context.globalState.get<string>(hashKey);
+            if (!skillHash || skillHash === 'foreign') continue;
+            const resources = name === 'natural-farsi' ? ['check-register.mjs'] : [];
+            for (const fileName of resources) {
+                const resourceKey = `xratu.skills.seededResourceHash.${name}.${fileName}`;
+                const previous = context.globalState.get<string>(resourceKey);
+                const content = await fs.promises.readFile(path.join(context.extensionPath, path.dirname(relPath), fileName), 'utf-8');
+                const result = await syncBundledSkillResource(root, name, fileName, content, previous);
+                if (result !== 'skipped') {
+                    await context.globalState.update(resourceKey, sha256Hex(content));
+                } else if (previous === undefined) {
+                    await context.globalState.update(resourceKey, 'foreign');
+                }
             }
         } catch (e) {
             console.error('xratu: bundled skill seed failed', name, e);
