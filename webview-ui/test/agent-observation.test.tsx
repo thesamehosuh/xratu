@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { MessageItem } from '../src/components/MessageItem';
+import { childTranscript } from '../src/childTranscript';
 import { ToolDetails, parseCommandOutput } from '../src/components/ToolDetails';
 import { agentMessage, collectAgentRuns } from '../src/subagentView';
 import { createInitialChatState, reduceChat } from '../src/state';
@@ -78,3 +79,15 @@ assert.equal(bg.background,undefined); assert.equal(bg.backgroundOutcome?.exitCo
 const bgHtml = renderToString(createElement(MessageItem,{message:state.messages.at(-1)!,transcriptPrefs:{expand:{terminal:true}}}));
 assert.match(bgHtml,/failure/); assert.match(bgHtml,/step fail/); assert.doesNotMatch(bgHtml,/icon-btn-mini/);
 console.log('agent observation: call identity, read-only runs, terminal states, safe artifacts, migrated docking and background completion passed');
+
+// Child tool results pair by call identity even when parallel results reverse.
+{
+ const messages = childTranscript({id:'child',title:'Child',profile:'explore',state:'completed',revision:1,queued:0,receipts:[],messages:[
+  {id:'a',role:'assistant',content:'',toolCalls:[{id:'one',name:'read_file',arguments:'{}'},{id:'two',name:'grep_search',arguments:'{}'}]},
+  {id:'two-result',role:'tool',content:'second',toolCallId:'two',isError:true},
+  {id:'one-result',role:'tool',content:'first',toolCallId:'one'},
+ ]});
+ assert.equal(messages[0].steps[0].result,'first');
+ assert.equal(messages[0].steps[1].result,'second');
+ assert.equal(messages[0].steps[1].isError,true);
+}

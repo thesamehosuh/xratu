@@ -35,6 +35,9 @@ const check = (name, actual, expected) => {
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : ` (got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)})`}`);
 };
 
+const attributed = normalizeEntry({ts:Date.now(),sessionId:'s',host:'api.openai.com',model:'test',input:100,output:1,cached:90,connectionId:'connection-2',scope:'child',source:'compaction'});
+check('account connection and execution attribution survive ledger serialization',parseLedger(serializeLedger([attributed]))[0],attributed);
+
 const entry = (over = {}) => ({
     ts: Date.now(),
     sessionId: 's1',

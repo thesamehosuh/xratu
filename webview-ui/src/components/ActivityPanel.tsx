@@ -6,7 +6,7 @@ import { Dropdown } from './Dropdown';
 import { transcriptOptions } from '../transcriptPrefs';
 
 /** Follow new activity until the reader scrolls away; docking retains that choice. */
-export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; sessionKey?: string | null }) {
+export function ActivityPanel({ visible, panelClass, sessionKey, embedded = false, ...props }: ComponentProps<typeof ActivityTimeline> & { visible: boolean; panelClass: string; sessionKey?: string | null; embedded?: boolean }) {
     const pane = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
@@ -35,7 +35,7 @@ export function ActivityPanel({ visible, panelClass, sessionKey, ...props }: Com
 
     const hasActiveFilter = filter !== 'all' || Boolean(search.trim());
 
-    return <div ref={pane} className={`activity-pane ${panelClass}`} id="surface-panel-activity" role="tabpanel" aria-labelledby="surface-tab-activity" aria-hidden={!visible || undefined}
+    return <div ref={pane} className={`activity-pane ${panelClass}`} id={embedded ? undefined : 'surface-panel-activity'} role="tabpanel" aria-label={embedded ? t('surfaceActivity') : undefined} aria-labelledby={embedded ? undefined : 'surface-tab-activity'} aria-hidden={!visible || undefined}
         onScroll={() => {
             const element = pane.current;
             if (visible && element) {

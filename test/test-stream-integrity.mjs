@@ -45,6 +45,31 @@ async function read(style, chunks, options = {}) {
 }
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
+test('Responses empty terminal output preserves finalized reasoning, text and calls in canonical order', async () => {
+    const items = [
+        { id: 'reason-a', type: 'reasoning', encrypted_content: 'opaque', summary: [] },
+        { id: 'message-a', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Reading.' }] },
+        { ...call, id: 'item-a', call_id: call.id, type: 'function_call', namespace: 'xratu' },
+    ];
+    const run = await read('responses', [
+        ...[2, 0, 1].map(output_index => event({ type: 'response.output_item.done', output_index, item: items[output_index] })),
+        event({ type: 'response.completed', response: { output: [], usage: { input_tokens: 14035, output_tokens: 83 } } }),
+    ]);
+    const result = await run.result;
+    assert.deepEqual(result.providerBlocks, items);
+    assert.equal(result.text, 'Reading.');
+    assert.deepEqual(result.toolCalls.map(item => item.arguments), [{ path: 'a' }]);
+    assert.deepEqual(result.cacheDiagnostic.outputTypes, ['reasoning', 'message', 'function_call']);
+    assert.equal(result.usage.completionTokens, 83);
+});
+test('Responses empty terminal output cannot finalize an unfinished streamed call', async () => {
+    const item = { ...call, id: 'item-a', call_id: call.id, type: 'function_call' };
+    const run = await read('responses', [
+        event({ type: 'response.output_item.added', output_index: 0, item }),
+        event({ type: 'response.completed', response: { output: [] } }),
+    ]);
+    await assert.rejects(run.result, error => error instanceof ModelStreamError && error.valueKey === 'modelStreamIncomplete');
+});
 for (const thought of [false, true]) test(`Google rejects mixed text/tool parts (thought=${thought}) before dropping a call`, async () => {
     const emitted = [];
     const part = fixtures.google[0].candidates[0].content.parts[0];

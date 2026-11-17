@@ -97,5 +97,25 @@ try {
         assert.deepEqual(allowed.executed, [], 'unavailable names cannot execute even when approvals are granted');
         assert.equal(allowed.bodies[1].messages.find(m => m.tool_calls)?.tool_calls[0].function.name, 'write_file', 'provider replay retains the original spelling');
     }
+    // A steer interrupts a running tool, closes every skipped call, and
+    // reaches the next model round without aborting the parent signal.
+    for (const parallel of [false, true]) {
+        const queued=[], bodies=[], events=[]; let interrupt; const parent=new AbortController(); let ran=0;
+        globalThis.fetch=async(_url,init)=>{
+            bodies.push(JSON.parse(init.body));
+            const delta=bodies.length===1 ? {tool_calls:[0,1].map(i=>({index:i,id:'steer-tool-'+i,function:{name:'read_file',arguments:'{}'}}))} : {content:'Corrected'};
+            return new Response(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}});
+        };
+        for await (const event of runLocalAgent({baseUrl:'http://localhost:11434/v1',model:'test',systemPrompt:'test',userText:'Original',signal:parent.signal,maxRounds:3,
+            tools:[{name:'read_file',description:'',inputSchema:{}}],...(parallel?{parallelTools:['read_file'],parallelToolLimit:1}:{})},
+            {execute:async(_call,_output,signal)=>{ran++;queued.push({text:'New direction',steerId:'tool-steer'});assert.equal(typeof interrupt,'function');interrupt();signal.throwIfAborted();}},
+            {requestApproval:async()=>({})},{drain:()=>queued.splice(0),setInterrupt:fn=>{interrupt=fn;}})) events.push(event);
+        assert.equal(ran,1);
+        assert.equal(events.filter(e=>e.type==='toolResult').length,2);
+        assert.equal(events.filter(e=>e.type==='steer').length,1);
+        assert.equal(parent.signal.aborted,false);
+        assert.equal(interrupt,undefined);
+        assert.ok(JSON.stringify(bodies[1]).includes('New direction'));
+    }
     console.log('tool-admission: serial/parallel allowlists, alias approvals and provider replay passed');
 } finally { globalThis.fetch = originalFetch; }

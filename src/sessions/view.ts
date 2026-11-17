@@ -6,7 +6,7 @@ interface DisplayCheckpoint {
     definition?: {model?: string; reasoningEffort?: string; maxRounds?: number};
     contextIdentity?: {model: string};
     trace?: SubagentTrace;
-    rows?: Array<{role: string; content?: string}>;
+    rows?: Array<{role: string; content?: string; tool_calls?: Array<{id?: unknown; function?: {name?: unknown; arguments?: unknown}}>; tool_call_id?: unknown; isError?: boolean; compactedToolCalls?: string[]}>;
 }
 
 export interface ChildSessionView {
@@ -31,12 +31,13 @@ export interface ChildSessionView {
     receipts: Array<{id: string; state: 'queued' | 'delivered' | 'cancelled'}>;
     error?: string;
     errorKey?: 'childStorageFailed';
-    messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; content: string; html?: string; source?: 'parent' | 'user' }>;
+    messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; content: string; html?: string; source?: 'parent' | 'user'; toolCalls?: Array<{id: string; name: string; arguments: string}>; toolCallId?: string; isError?: boolean }>;
 }
 /** Project plain display content only; provider-native replay carriers stay on the host. */
 export function childSessionView(session: ChildSession, render?: (text: string) => string): ChildSessionView {
     const record = session.checkpoint as DisplayCheckpoint | undefined;
     const execution = session.executions.at(-1);
+    const activeTool = execution?.state === 'running' ? record?.trace?.entries.slice().reverse().find(entry => entry.kind === 'tool' && !entry.endedAt) : undefined;
     return { id: session.id, title: session.title, profile: session.profile, state: execution?.state === 'running' && record?.trace?.status === 'waiting' ? record.trace.pendingTools?.includes('ask_session_question') ? 'waiting_for_answer' : 'waiting_for_approval' : execution?.state ?? 'idle',
         parentCallId: record?.parentCallId,
         model: record?.definition?.model ?? record?.contextIdentity?.model,
@@ -44,6 +45,7 @@ export function childSessionView(session: ChildSession, render?: (text: string) 
         rounds: record?.definition?.maxRounds ?? 50,
         reportState: session.results.at(-1)?.state,
         liveText: execution?.state === 'running' ? record?.trace?.entries.slice().reverse().find(entry => entry.kind === 'text' && !entry.endedAt)?.text : undefined,
+        activeTool: activeTool ? {name: activeTool.tool ?? '', live: activeTool.live} : undefined,
         revision: session.revision, queued: session.messages.filter(message => message.state === 'queued').length,
         generation: session.generation,
         displayRevision: record?.trace?.generation === session.generation ? record.trace.sequence ?? record.trace.updatedAt : undefined,
@@ -51,10 +53,12 @@ export function childSessionView(session: ChildSession, render?: (text: string) 
         errorKey: execution?.errorCode === 'storage_failed' ? 'childStorageFailed' : undefined,
         receipts: session.messages.slice(-100).map(message => ({id: message.id, state: message.state})),
         limited: (record?.rows??[]).some(row=>(row.content?.length??0)>24_000) || record?.trace?.truncated,
-        messages: (record?.rows ?? []).filter(row => ['user', 'assistant', 'tool'].includes(row.role)).flatMap((row, index) =>
+        messages: (record?.rows ?? []).filter(row => ['user', 'assistant', 'tool'].includes(row.role) && !row.compactedToolCalls).flatMap((row, index) =>
             displayInstructions(row.role,row.content??'').map((part,partIndex)=>({
                 id: `${session.id}:${index}:${partIndex}`, role: row.role as 'user' | 'assistant' | 'tool',
                 ...part, content:part.content.slice(0,24_000),
+                ...(row.role === 'assistant' && Array.isArray(row.tool_calls) ? {toolCalls: row.tool_calls.slice(0, 100).flatMap(call => typeof call?.id === 'string' && typeof call.function?.name === 'string' ? [{id: call.id.slice(0, 300), name: call.function.name.slice(0, 300), arguments: typeof call.function.arguments === 'string' ? call.function.arguments.slice(0, 24_000) : ''}] : [])} : {}),
+                ...(row.role === 'tool' && typeof row.tool_call_id === 'string' ? {toolCallId: row.tool_call_id.slice(0, 300), isError: row.isError === true} : {}),
                 ...(row.role==='assistant'&&render?{html:render(part.content.slice(0,24_000))}:{}),
             }))),
     };

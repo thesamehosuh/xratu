@@ -127,5 +127,16 @@ try {
     ok('an unverifiable process kill returns an actionable error without waiting forever', result?.isError === true && /identity could not be verified/.test(result.output));
 } finally { jobs.getTerminalJob = getJob; clearTimeout(timer); }
 
+try {
+    const fake = {id:'paged',status:'exited',exitCode:7,killReason:null,error:null,command:'test',startedAt:Date.now(),uptimeSeconds:()=>0,output:Array.from({length:100},(_,i)=>'line-'+i).join('\n')};
+    jobs.getTerminalJob = () => fake;
+    for (const action of ['poll', 'wait']) {
+        const result = await executeLocalTool(process.cwd(), 'process', {action,jobId:'paged',offset:10,limit:5},async()=>{});
+        ok(action+' honors output pagination', result.output.includes('line-10') && result.output.includes('line-14') && !result.output.includes('line-15') && !result.output.includes('line-99'));
+        ok(action+' retains actual exit status', result.output.includes('7'));
+    }
+    ok('wait reports failure structurally', (await executeLocalTool(process.cwd(),'process',{action:'wait',jobId:'paged',limit:1},async()=>{})).isError===true);
+} finally { jobs.getTerminalJob = getJob; }
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

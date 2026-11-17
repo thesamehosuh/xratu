@@ -13,13 +13,23 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         const post = (message: Record<string, unknown>) => page.evaluate(value => window.postMessage(value, '*'), message);
         await post({ type: 'showChat' }); await post({ type: 'locale', locale });
         await post({ type: 'childSessions', rootId: 'family', sessions: [
-            { id: 'a', title: 'Check Windows paths', profile: 'explore', state: 'running', revision: 1, queued: 0, messages: [{ id: 'm1', role: 'user', content: 'Investigate the path mismatch.' }, { id: 'm2', role: 'assistant', content: 'Checking path ownership.' }] },
-            { id: 'b', title: 'Inspect persistence', profile: 'general', state: 'completed', revision: 1, queued: 0, messages: [{ id: 'm3', role: 'assistant', content: 'History is retained.' }] },
+            { id: 'a', title: 'Check Windows paths', profile: 'explore', model: 'model-alpha', effort: 'high', state: 'running', revision: 1, queued: 0, messages: [{ id: 'm1', role: 'user', content: 'Investigate the path mismatch.' }, { id: 'm2', role: 'assistant', content: 'Checking path ownership.', toolCalls: [{id:'call-1', name:'read_file', arguments:'{"path":"example.txt"}'}] }, {id:'m4', role:'tool', content:'File contents', toolCallId:'call-1'}] },
+            { id: 'b', title: 'Inspect persistence', profile: 'general', model: 'model-beta', effort: 'low', state: 'completed', revision: 1, queued: 0, messages: [{ id: 'm3', role: 'assistant', content: 'History is retained.' }] },
         ] });
         await expect(page.locator('.child-sessions')).toBeHidden();
         await page.locator('#surface-tab-agents').click();
+        await expect(page.locator('.child-conversation-header')).toContainText('Check Windows paths');
+        await expect(page.locator('#surface-tab-agents')).toContainText('1');
+        if (width === 420) await page.locator('.child-back').click();
+        await expect(page.locator('.child-session-row').first()).toContainText('model-alpha');
+        await expect(page.locator('.child-session-row').first()).toContainText('high');
         await page.locator('.child-session-row').first().click();
+        await expect(page.locator('.child-conversation-header .child-model-summary')).toContainText('model-alpha');
+        await expect(page.locator('.child-conversation-header .child-model-summary')).toContainText('high');
         await expect(page.locator('.child-conversation')).toContainText('Checking path ownership.');
+        await page.locator('.child-view-switch button').nth(1).click();
+        await expect(page.locator('.child-activity')).toContainText(locale === 'en' ? 'Read file' : 'خواندن فایل');
+        await page.locator('.child-view-switch button').first().click();
         await page.locator('.child-composer textarea').fill('Also check UNC paths');
         await page.locator('.child-composer button[type=submit]').click();
         expect(await page.evaluate(() => (window as unknown as { __childMessages: Array<Record<string, unknown>> }).__childMessages)).toContainEqual(expect.objectContaining({ type: 'childSessionAction', rootId: 'family', sessionId: 'a', action: 'send', text: 'Also check UNC paths' }));
@@ -34,13 +44,9 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
         expect(await page.evaluate(() => (window as unknown as { __childMessages: Array<Record<string, unknown>> }).__childMessages)).toContainEqual(expect.objectContaining({ type: 'childSessionAction', sessionId: 'a', action: 'stop' }));
         if (width === 420) await page.locator('.child-back').click();
         await page.locator('.child-session-row').nth(1).click();
-        await page.locator('.child-settings summary').click();
-        await page.locator('input[name=model]').fill('alternate-model');
-        await page.locator('input[name=rounds]').fill('24');
-        await page.locator('.child-settings button[type=submit]').click();
-        const outbound = await page.evaluate(() => (window as unknown as { __childMessages: Array<Record<string, unknown>> }).__childMessages);
-        const configuration = outbound.find(message => message.action === 'configure');
-        expect(JSON.parse(String(configuration?.text))).toMatchObject({model:'alternate-model',rounds:24,revision:1});
+        await expect(page.locator('.child-conversation-header .child-model-summary')).toContainText('model-beta');
+        await expect(page.locator('.child-conversation-header .child-model-summary')).toContainText('low');
+        await expect(page.locator('.child-settings')).toHaveCount(0);
         expect(await page.locator('.child-sessions').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     });
 }
