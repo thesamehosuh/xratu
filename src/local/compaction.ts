@@ -552,11 +552,17 @@ export async function compactActiveTurn(
     const previous = typeof oldCheckpoint?.content === 'string' ? oldCheckpoint.content : null;
     const summary = await summarizeDroppedTurns(request, dropped, previous, windowTokens);
     if (!summary || request.signal?.aborted) return null;
-    const checkpoint: LocalAgentMessage = { role: 'assistant', content: summary,
-        compactedToolCalls: [...new Set([...(oldCheckpoint?.compactedToolCalls ?? []), ...calls.map(call => call.id)])] };
+    const retained = older.filter(row => row.role === 'user');
+    const keptToolCalls = (recent[0]?.tool_calls ?? []).map(call => call.id);
+    const checkpoint: LocalAgentMessage = {
+        role: 'assistant',
+        content: summary,
+        compactedToolCalls: [...new Set([...(oldCheckpoint?.compactedToolCalls ?? []), ...calls.map(call => call.id)])],
+        compactedKeptToolCalls: keptToolCalls,
+        compactedSteerCount: retained.length,
+    };
     // Avoid repeated cache-invalidating summaries when fixed instructions or
     // a very large summary leave too little reclaimable space.
-    const retained = older.filter(row => row.role === 'user');
     if (estimateMessageTokens(checkpoint) + retained.reduce((n, row) => n + estimateMessageTokens(row), 0)
         >= older.reduce((n, row) => n + estimateMessageTokens(row), 0) * 0.8) return null;
     messages.splice(start + 1, tail.length, ...retained, checkpoint, ...recent);

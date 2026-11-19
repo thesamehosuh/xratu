@@ -150,6 +150,12 @@ function ChangeReview({ sha, toSha, initialPath, busy, sessionKey, onCount, onFi
     useEffect(() => { if (initialPath) { setSelected(initialPath); setOpened(current => current.includes(initialPath) ? current : [...current, initialPath]); } }, [initialPath, sha]);
 
     useEffect(() => {
+        if (!initialPath || !files.length) return;
+        const index = files.findIndex(file => file.path === initialPath);
+        if (index >= 0) setVisibleFiles(count => Math.max(count, index + 1));
+    }, [initialPath, files]);
+
+    useEffect(() => {
         listRequest.current = `${id}-list-${++sequence.current}`;
         if (!sha) { setLoading(false); setErrorKey(null); return; }
         setLoading(!listLoaded.current); setErrorKey(null);

@@ -24,6 +24,7 @@ export async function filePage(file: string, label: string, startValue: unknown,
             offset += piece.length;
             if (i < pieces.length - 1) {
                 if (!next && line >= start) {
+                    if (body.endsWith('\r')) body = body.slice(0, -1);
                     if (line + 1 >= start + max || body.length >= budget) next = { line: line + 1, column: 0 };
                     else body += '\n';
                 }
@@ -34,10 +35,11 @@ export async function filePage(file: string, label: string, startValue: unknown,
     // A cursor beyond EOF is unnecessary, including the empty final line.
     const more = next && (next.line < line || next.line === line && next.column < offset)
         ? `\n… (call again with start_line=${next.line}, start_column=${next.column})` : '';
-    return `[${label} - lines ${start}-${end} of ${line}]\n${body.replace(/\r\n/g, '\n').replace(/\r$/, '')}${more}`;
+    return `[${label} - lines ${start}-${end} of ${line}]\n${body}${more}`;
 }
 
 export async function fileHead(file: string): Promise<Buffer> {
+    if (!(await fs.promises.stat(file)).isFile()) throw new Error('Not a regular file');
     const handle = await fs.promises.open(file, 'r');
     try {
         if (!(await handle.stat()).isFile()) throw new Error('Not a regular file');

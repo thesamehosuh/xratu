@@ -4992,16 +4992,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // executor's own signature stays the single source of truth.
         const executor: typeof rawExecutor = {
             execute: async (call, onOutput, signal) => {
-                // Snapshot file state around edit-family calls so the
-                // webview's "open diff" button can show the exact before/after
-                // of THIS call later (restored sessions fall back to args).
-                const snap = this._beginEditSnapshot(call, workspaceRoot);
-                try {
-                    const result = mutatesWorkspace(call.name)
-                        ? await workspaceWriter!.run(signal ?? controller.signal, () => rawExecutor.execute(call, onOutput, signal))
-                        : await rawExecutor.execute(call, onOutput, signal);
+                // Snapshot file state around edit-family calls inside the
+                // workspace writer lock so a concurrent child edit cannot leak
+                // into this call's before/after diff.
+                const runWithSnapshot = async () => {
+                    const snap = this._beginEditSnapshot(call, workspaceRoot);
+                    const result = await rawExecutor.execute(call, onOutput, signal);
                     if (snap && !result.isError) this._endEditSnapshot(call.id, snap);
                     return result;
+                };
+                try {
+                    return mutatesWorkspace(call.name)
+                        ? await workspaceWriter!.run(signal ?? controller.signal, runWithSnapshot)
+                        : await runWithSnapshot();
                 } finally {
                     this._scheduleGitStatusPush();
                 }
@@ -7526,7 +7529,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _childSessionAction(rootId: string, sessionId: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string): Promise<void> {
         if (rootId !== this._researchConversationId || this._activeEngine !== 'xratu') return;
+        const canStartChildWork = () =>
+            this._researchConversationId === rootId
+            && !this._planMode
+            && !this._checkpointRestoreActive
+            && (this._sessionWorkspace == null || this._sessionWorkspaceMatches(this._sessionWorkspace));
         try {
+            if (action !== 'stop' && this._sessionWorkspace != null && !this._sessionWorkspaceMatches(this._sessionWorkspace)) {
+                throw new Error('Saved conversation belongs to a different workspace');
+            }
+            if ((action === 'create' || action === 'send') && (this._checkpointRestoreActive || this._sessionTransitionsPending > 0)) {
+                throw new Error('Session transition in progress');
+            }
             if (this._childRunnerRoot !== rootId || !this._childRunner) {
                 if (this._localRunActive || this._planMode && action !== 'report') throw new Error('Child runtime cannot reconnect during this operation');
                 await this._runLocalAgent('', await this._localRulesContext(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, true);
@@ -7541,7 +7555,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._childReportsInFlight.add(key);
                     try {
                         let accepted=false;
-                        await this._handleChatRequest(JSON.stringify({type:'child_result',session_id:sessionId,result_id:result.id,report:result.text}),undefined,{hiddenPrompt:true,onAccepted:()=>{accepted=true;}});
+                        await this._handleChatRequest(JSON.stringify({type:'child_result',session_id:sessionId,result_id:result.id,report:result.text}),undefined,{hiddenPrompt:true,hostChildReport:true,onAccepted:()=>{accepted=true;}});
                         if (!accepted) throw new Error('Parent conversation did not accept the report');
                     } finally {this._childReportsInFlight.delete(key);}
                 }
@@ -7550,13 +7564,22 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 await this._childRunner.configureChild(sessionId, JSON.parse(text));
             } else if (action === 'create') {
                 if (this._planMode || !text?.trim() || !receipt || !this._childRunner.create) throw new Error('Invalid child assignment');
-                await this._persistLocalSession();
-                if (this._researchConversationId !== rootId) return;
-                sessionId = await this._childRunner.create(sessionId, text, receipt);
+                let createdId: string | undefined;
+                await this._serializeSessionTransition(async () => {
+                    if (!canStartChildWork() || !this._childRunner?.create) throw new Error('Child assignment is not allowed during this transition');
+                    await this._persistLocalSession();
+                    if (!canStartChildWork() || !this._childRunner?.create) throw new Error('Child assignment is not allowed during this transition');
+                    createdId = await this._childRunner.create(sessionId, text, receipt);
+                });
+                if (!createdId || this._researchConversationId !== rootId) return;
+                sessionId = createdId;
                 this._pushSessionState();
             } else if (action === 'stop') await this._childRunner.stop?.(sessionId);
-            else if (!this._planMode && !this._sessionTransitionsPending && typeof text === 'string' && text.trim() && text.length <= 100_000 && typeof receipt === 'string') {
-                await this._childRunner.send?.(sessionId, text, receipt);
+            else if (typeof text === 'string' && text.trim() && text.length <= 100_000 && typeof receipt === 'string' && this._childRunner.send) {
+                await this._serializeSessionTransition(async () => {
+                    if (!canStartChildWork() || !this._childRunner?.send) throw new Error('Child instruction is not allowed in the current mode');
+                    await this._childRunner.send(sessionId, text, receipt);
+                });
             } else throw new Error('Child instruction is not allowed in the current mode');
             this._view?.webview.postMessage({type: 'childSessionReceipt', rootId, sessionId, receipt, accepted: true});
         } catch (error) {
@@ -7716,7 +7739,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         let files: string[] = [];
         if (wsFolder) {
             try {
-                files = Array.from(await gitWorkspaceFiles(wsFolder.uri.fsPath));
+                files = Array.from((await gitWorkspaceFiles(wsFolder.uri.fsPath)) ?? []);
             } catch (e) {
                 console.error('xratu: git file list failed:', e);
             }
@@ -7779,7 +7802,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: {
-        requestId?: string; baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; onAccepted?: () => void;
+        requestId?: string; baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; hostChildReport?: boolean; onAccepted?: () => void;
         prepared?: { connection: NonNullable<Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>>; attachments: ComposerAttachment[]; rulesContext: string };
     }): Promise<void> {
         if (!this._view) { return; }
@@ -8016,7 +8039,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // steerCarry turns re-enter with an ALREADY-ledgered user row
                     // (the carry loop below pushed it) - skip their own push.
                     if (!opts?.steerCarry) {
-                        this._pushLocalHistory({ role: 'user', content: prompt });
+                        this._pushLocalHistory({ role: 'user', content: prompt, ...(opts?.hostChildReport ? { hostChildReport: true } : {}) });
                     }
                     for (const event of outcome.events) {
                         const row = historyRowFromEvent(event);
@@ -8069,7 +8092,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // the local model replays the tool/thinking context next turn,
                     // and edit/regenerate indexing stays aligned.
                     if (epoch === this._sessionEpoch) {
-                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[cancelled by user]', opts?.hiddenPrompt);
+                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[cancelled by user]', opts?.hiddenPrompt, opts?.hostChildReport);
                         await this._persistLocalSession().catch((e) => {
                             console.error('xratu: local session persist failed:', e);
                         });
@@ -8084,7 +8107,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // it. Commit exactly like a cancel, placeholder-answer dangling
                     // tool calls, keep the pre-prompt checkpoint shas, and persist.
                     if (epoch === this._sessionEpoch) {
-                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt);
+                        this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt, opts?.hostChildReport);
                         await this._persistLocalSession().catch((e) => {
                             console.error('xratu: local session persist failed:', e);
                         });
@@ -8106,7 +8129,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // the webview rendered its user bubble, and a dropped row would
                 // desync edit/regenerate indexing. Then surface the error.
                 if (epoch === this._sessionEpoch) {
-                    this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt);
+                    this._commitUnfinishedLocalTurn(prompt, attachmentMeta, prePromptSha, outcome, opts?.steerCarry, '[interrupted by error]', opts?.hiddenPrompt, opts?.hostChildReport);
                     await this._persistLocalSession().catch((e) => {
                         console.error('xratu: local session persist failed:', e);
                     });
@@ -8174,10 +8197,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         steerCarry: boolean | undefined,
         toolPlaceholder: string,
         hiddenPrompt?: boolean,
+        hostChildReport?: boolean,
     ): void {
         if (!steerCarry) {
             this._history.push({ role: 'user', content: prompt, cp: prePromptSha, attachments: attachmentMeta, hidden: hiddenPrompt });
-            this._pushLocalHistory({ role: 'user', content: prompt });
+            this._pushLocalHistory({ role: 'user', content: prompt, ...(hostChildReport ? { hostChildReport: true } : {}) });
         }
         for (const event of outcome.events) {
             const row = historyRowFromEvent(event);

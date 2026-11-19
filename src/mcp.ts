@@ -14,6 +14,8 @@ import { PULL_REQUEST_TOOLS, PULL_REQUEST_MUTATIONS, type PullRequestToolExecuto
 import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
+import crossSpawn from 'cross-spawn';
+import { killTree } from './tooling/processTree';
 import { looksBinary, sanitizePath as workspaceSanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
 import { UNPARSED_ARGS_KEY, resolveEditContentFrom, resolveEditMode } from './tooling/editFileArgs';
 import { resolveToolName } from './tooling/toolNames';
@@ -370,7 +372,7 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
     },
     {
         name: 'list_files',
-        description: 'Lists files and directories at a given path. Returns directory names, file names, and sizes.',
+        description: 'Lists files and directories at a given path. Returns workspace-relative directory and file paths with pagination.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -430,7 +432,7 @@ const BUILTIN_TOOL_DEFINITIONS: Array<{
                 options: {
                     type: 'array',
                     description: '2-4 mutually exclusive choices for this question',
-                    minItems: 0,
+                    minItems: 2,
                     maxItems: 4,
                     items: {
                         type: 'object',
@@ -691,6 +693,101 @@ function finishedJobReport(job: import('./tooling/backgroundJobs').TerminalJob):
  *  pass for the `skill` tool - the model cannot load a user-disabled skill
  *  via a direct call, and the resolved dirPath is reused for the body load
  *  (no second scan). Without it, skills resolve unauthenticated. */
+function runRipgrepWindow(
+    rg: string,
+    rgArgs: string[],
+    workspaceRoot: string,
+    offset: number,
+    limit: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+): Promise<{ lines: string[]; more: boolean; stderr: string; exitCode: number | null; timedOut: boolean; spawnError?: Error }> {
+    return new Promise((resolve) => {
+        const child = crossSpawn(rg, rgArgs, {
+            cwd: workspaceRoot,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+        });
+        const lines: string[] = [];
+        let seen = 0;
+        let more = false;
+        let remainder = '';
+        let stderr = '';
+        let timedOut = false;
+        let settled = false;
+        let stoppedEarly = false;
+
+        const finish = (exitCode: number | null, spawnError?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            if (!stoppedEarly && remainder.trim()) {
+                const line = remainder.replace(/\r$/, '');
+                if (line) {
+                    if (seen >= offset && lines.length < limit) lines.push(line);
+                    else if (seen >= offset + limit) more = true;
+                    seen++;
+                }
+            }
+            resolve({ lines, more, stderr, exitCode, timedOut, spawnError });
+        };
+
+        const stopChild = () => {
+            stoppedEarly = true;
+            void killTree(child.pid).catch(() => undefined);
+        };
+
+        const onAbort = () => {
+            stopChild();
+            finish(null, new DOMException('Search cancelled', 'AbortError') as unknown as Error);
+        };
+
+        const timer = setTimeout(() => {
+            timedOut = true;
+            stopChild();
+        }, timeoutMs);
+
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+
+        child.stdout?.setEncoding('utf8');
+        child.stdout?.on('data', (chunk: string) => {
+            if (stoppedEarly) return;
+            remainder += chunk;
+            let nl = remainder.indexOf('\n');
+            while (nl !== -1) {
+                const rawLine = remainder.slice(0, nl).replace(/\r$/, '');
+                remainder = remainder.slice(nl + 1);
+                if (rawLine.length > 0) {
+                    if (seen < offset) {
+                        seen++;
+                    } else if (lines.length < limit) {
+                        lines.push(rawLine);
+                        seen++;
+                    } else {
+                        more = true;
+                        stopChild();
+                        return;
+                    }
+                }
+                nl = remainder.indexOf('\n');
+            }
+        });
+
+        child.stderr?.setEncoding('utf8');
+        child.stderr?.on('data', (chunk: string) => {
+            if (stderr.length < 16_384) stderr += chunk.slice(0, 16_384 - stderr.length);
+        });
+
+        child.on('error', (err) => finish(null, err));
+        child.on('close', (code) => finish(code));
+    });
+}
+
 async function dispatchTool(
     workspaceRoot: string,
     name: string,
@@ -716,6 +813,7 @@ async function dispatchTool(
     nested = false,
     signal?: AbortSignal,
     approvedPaths?: ReadonlySet<string>,
+    sessionId?: string,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean; research?: import('./web/types').ResearchEvidence }> {
     signal?.throwIfAborted();
     const sanitizePath = (input: string, root: string) => workspaceSanitizePath(input, root, approvedPaths);
@@ -826,7 +924,7 @@ async function dispatchTool(
         signal?.throwIfAborted();
         const command = String(args.command ?? '').trim();
         const commandRoot = sanitizePath(args.cwd || '.', workspaceRoot);
-        const jobOptions = { workspaceRoot: commandRoot, command, onOutput, callId, stdin: typeof args.stdin === 'string' ? args.stdin : undefined, interactive: args.interactive === true, ...(args.timeout_seconds ? { hardCapMs: Math.max(1000, Math.min(3600_000, Number(args.timeout_seconds) * 1000)) } : {}) };
+        const jobOptions = { workspaceRoot: commandRoot, command, onOutput, callId, sessionId, stdin: typeof args.stdin === 'string' ? args.stdin : undefined, interactive: args.interactive === true, ...(args.timeout_seconds ? { hardCapMs: Math.max(1000, Math.min(3600_000, Number(args.timeout_seconds) * 1000)) } : {}) };
         if (!command) {
             return { content: [{ type: 'text', text: 'Error: Empty command' }], isError: true };
         }
@@ -864,7 +962,7 @@ async function dispatchTool(
         // the call open until the timeout, and the kill took the launched app
         // down with it), and a shell-level `&`/`start /b` loses the output and
         // the handle entirely.
-        if (args.background === true) {
+        if (args.background === true || args.detach === true) {
             // A child must not leave work running behind it. The job would
             // outlive the delegation, keep a port or a file handle open, and
             // report its completion into a conversation that has already
@@ -896,9 +994,18 @@ async function dispatchTool(
         const cancel = () => { if (!job.background && job.status === 'running') job.kill('cancelled by the user'); };
         signal?.addEventListener('abort', cancel, { once: true });
         try {
-            if (args.yield_ms !== undefined && !nested && !await waitForTerminalJob(job, Math.max(0, Math.min(60000, Number(args.yield_ms) || 0)))) {
-                signal?.throwIfAborted();
-                if (job.moveToBackground()) return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+            if (args.yield_ms !== undefined && !nested) {
+                const yieldMs = Math.max(0, Math.min(60000, Number(args.yield_ms) || 0));
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const settled = await Promise.race([
+                    job.released.then(() => true),
+                    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), yieldMs); }),
+                ]);
+                clearTimeout(timer);
+                if (!settled) {
+                    signal?.throwIfAborted();
+                    if (job.moveToBackground()) return { content: [{ type: 'text', text: describeBackgroundHandoff(job) }] };
+                }
             }
             if (await job.released === 'backgrounded') {
                 // The user can release the turn at the same moment the command
@@ -916,7 +1023,10 @@ async function dispatchTool(
     } else if (name === 'process_input') {
         const job = getTerminalJob(String(args.jobId ?? ''));
         if (!job?.writeInput || typeof args.text !== 'string') throw new Error('No writable job with this ID.');
-        job.writeInput(args.text, args.end === true);
+        if ((job.sessionId || sessionId) && job.sessionId !== sessionId) {
+            throw new Error('This job belongs to a different session.');
+        }
+        await job.writeInput(args.text, args.end === true);
         return { content: [{ type: 'text', text: 'Input delivered.' }] };
     } else if (name === 'process') {
         return await dispatchProcessTool(args);
@@ -929,53 +1039,67 @@ async function dispatchTool(
         const pattern = args.pattern;
         const include = args.include || '';
         const fullPath = sanitizePath(searchPath, workspaceRoot);
-        return new Promise((resolve) => {
-            const rgArgs = ['-n', '--no-heading', '--color=never', '--max-columns=300', '--sort=path'];
-            if (args.literal) rgArgs.push('-F');
-            if (args.case_sensitive === false) rgArgs.push('-i');
-            if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
-            if (args.output === 'files') rgArgs.push('-l');
-            else if (args.output === 'count') rgArgs.push('-c');
-            else if (args.context_lines) rgArgs.push('-C', String(Math.max(0, Math.min(20, Number(args.context_lines)))));
-            if (include) {
-                rgArgs.push('-g', include);
-            }
-            // `--` stops option parsing: a pattern like `--pre` must be taken
-            // as the pattern (rg treats unknown `--x` flags as options - the
-            // `--pre` preprocessing command would even EXECUTE a file).
-            rgArgs.push('--', pattern, fullPath);
-            cp.execFile(rg, rgArgs, { cwd: workspaceRoot, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-                if (error && !stdout) {
-                    const msg = stderr || error.message;
-                    if (msg.includes('no matches') || error.code === 1) {
-                        resolve({ content: [{ type: 'text', text: 'No matches found.' }] });
-                    } else {
-                        resolve({ content: [{ type: 'text', text: `Error: ${msg}` }], isError: true });
-                    }
-                } else {
-                    const lines = (stdout || '').trim().split('\n').filter(Boolean);
-                    const offset = Math.max(0, Number(args.offset) || 0); const limit = Math.max(1, Math.min(2000, Number(args.limit) || 200));
-                    const truncated = !!error || lines.length > offset + limit;
-                    resolve({ content: [{ type: 'text', text: JSON.stringify({ results: lines.slice(offset, offset + limit).map(line => line.replace(workspaceRoot + path.sep, '')), truncated, next_offset: !error && truncated ? offset + limit : null, ...(error ? { notice: 'Search exceeded its output budget; narrow pattern or path before continuing.' } : {}) }) }], isError: !!error });
-                }
-            });
-        });
+        const rgArgs = ['-n', '--no-heading', '--color=never', '--max-columns=300', '--sort=path'];
+        if (args.literal) rgArgs.push('-F');
+        if (args.case_sensitive === false) rgArgs.push('-i');
+        if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
+        if (args.output === 'files') rgArgs.push('-l');
+        else if (args.output === 'count') rgArgs.push('-c');
+        else if (args.context_lines) rgArgs.push('-C', String(Math.max(0, Math.min(20, Number(args.context_lines)))));
+        if (include) rgArgs.push('-g', include);
+        // `--` stops option parsing: a pattern like `--pre` must be taken
+        // as the pattern (rg treats unknown `--x` flags as options - the
+        // `--pre` preprocessing command would even EXECUTE a file).
+        rgArgs.push('--', pattern, fullPath);
+        const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
+        const limit = Math.max(1, Math.min(2000, Math.floor(Number(args.limit) || 200)));
+        const run = await runRipgrepWindow(rg, rgArgs, workspaceRoot, offset, limit, 15_000, signal);
+        if (run.spawnError) {
+            if (signal?.aborted) throw run.spawnError;
+            return { content: [{ type: 'text', text: `Error: ${run.spawnError.message}` }], isError: true };
+        }
+        if (run.timedOut) {
+            return { content: [{ type: 'text', text: JSON.stringify({ results: run.lines.map(line => line.replace(workspaceRoot + path.sep, '')), truncated: true, next_offset: null, notice: 'Search timed out before completing; narrow pattern or path before continuing.' }) }], isError: true };
+        }
+        if (!run.more && run.lines.length === 0 && (run.exitCode === 1 || run.stderr.includes('no matches'))) {
+            return { content: [{ type: 'text', text: 'No matches found.' }] };
+        }
+        if (!run.more && run.exitCode && run.exitCode !== 1 && run.lines.length === 0) {
+            return { content: [{ type: 'text', text: `Error: ${run.stderr || `ripgrep exited with code ${run.exitCode}`}` }], isError: true };
+        }
+        const rootPrefix = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
+        return { content: [{ type: 'text', text: JSON.stringify({ results: run.lines.map(line => line.startsWith(rootPrefix) ? line.slice(rootPrefix.length) : line), truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
     } else if (name === 'edit_file') {
         const fullPath = sanitizePath(args.path, workspaceRoot);
-        const raw = await fs.promises.readFile(fullPath, 'utf8');
+        const openDoc = vscode.workspace?.textDocuments?.find((doc) => doc.uri.scheme === 'file' && path.resolve(doc.uri.fsPath) === path.resolve(fullPath));
+        const raw = openDoc ? openDoc.getText() : await fs.promises.readFile(fullPath, 'utf8');
+        const expectedVersion = openDoc?.version;
         const edits = args.edits;
         if (!Array.isArray(edits) || !edits.length || edits.length > 100) throw new Error('Provide 1–100 replacements.');
         let content = raw.replace(/\r\n/g, '\n');
         for (const edit of edits) {
             if (typeof edit.old_text !== 'string' || !edit.old_text || typeof edit.new_text !== 'string') throw new Error('Each replacement requires nonempty old_text and string new_text.');
             const oldText = edit.old_text.replace(/\r\n/g, '\n');
-            if (content.split(oldText).length !== 2) throw new Error('old_text must match exactly once; no changes were written.');
-            content = content.replace(oldText, () => edit.new_text.replace(/\r\n/g, '\n'));
+            const firstIndex = content.indexOf(oldText);
+            if (firstIndex === -1 || content.indexOf(oldText, firstIndex + 1) !== -1) {
+                throw new Error('old_text must match exactly once; no changes were written.');
+            }
+            content = content.slice(0, firstIndex) + edit.new_text.replace(/\r\n/g, '\n') + content.slice(firstIndex + oldText.length);
         }
         await ensureTurnSnapshot(workspaceRoot, 'before edit');
-        // Do not overwrite intervening edits from the user or another agent.
-        if (await fs.promises.readFile(fullPath, 'utf8') !== raw) throw new Error('File changed during editing; read it again.');
-        await fs.promises.writeFile(fullPath, preserveEol(raw, content), 'utf8');
+        const nextText = preserveEol(raw, content);
+        if (openDoc && typeof vscode.WorkspaceEdit === 'function' && typeof vscode.workspace.applyEdit === 'function' && typeof vscode.Range === 'function') {
+            if (openDoc.version !== expectedVersion) throw new Error('File changed during editing; read it again.');
+            const fullRange = new vscode.Range(openDoc.positionAt(0), openDoc.positionAt(raw.length));
+            const wsEdit = new vscode.WorkspaceEdit();
+            wsEdit.replace(openDoc.uri, fullRange, nextText);
+            if (!(await vscode.workspace.applyEdit(wsEdit))) throw new Error('File changed during editing; read it again.');
+            await openDoc.save();
+        } else {
+            // Best-effort check before writing disk-only files (cannot lock out concurrent external editors).
+            if (await fs.promises.readFile(fullPath, 'utf8') !== raw) throw new Error('File changed during editing; read it again.');
+            await fs.promises.writeFile(fullPath, nextText, 'utf8');
+        }
         return { content: [{ type: 'text', text: `Applied ${edits.length} replacements to ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
     } else if (name === 'list_files') {
         const root = sanitizePath(args.path || '.', workspaceRoot);
@@ -983,21 +1107,23 @@ async function dispatchTool(
         const limit = Math.max(1, Math.min(5000, Number(args.max_entries) || 200));
         const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
         const rows: string[] = []; let seen = 0; let more = false;
-        const kept = depth > 1 && args.include_ignored !== true ? await gitWorkspaceFiles(workspaceRoot) : new Set<string>();
+        const kept = depth > 1 && args.include_ignored !== true ? await gitWorkspaceFiles(workspaceRoot) : null;
         const directories = new Set<string>();
-        for (const file of kept) { const parts = file.split('/'); for (let index = 1; index < parts.length; index++) directories.add(parts.slice(0, index).join('/')); }
+        if (kept) {
+            for (const file of kept) { const parts = file.split('/'); for (let index = 1; index < parts.length; index++) directories.add(parts.slice(0, index).join('/')); }
+        }
         const heavy = new Set(['node_modules', 'dist', 'build', 'out', 'target', '.venv', 'venv', '__pycache__', '.cache']);
         const walk = async (dir: string, level: number): Promise<void> => {
             const entries = (await fs.promises.readdir(dir, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
             for (const entry of entries) {
                 signal?.throwIfAborted();
                 if (entry.name === '.git' || args.hidden === false && entry.name.startsWith('.')) continue;
-                if (rows.length >= limit) { more = true; return; }
                 const file = path.join(dir, entry.name);
                 if (depth > 1 && args.include_ignored !== true) {
                     const relative = path.relative(workspaceRoot, file).replace(/\\/g, '/');
-                    if (kept.size ? !(kept.has(relative) || directories.has(relative)) : entry.isDirectory() && heavy.has(entry.name)) continue;
+                    if (kept !== null ? !(kept.has(relative) || directories.has(relative)) : entry.isDirectory() && heavy.has(entry.name)) continue;
                 }
+                if (rows.length >= limit) { more = true; return; }
                 if (seen++ >= offset) rows.push(path.relative(root, file) + (entry.isDirectory() ? '/' : ''));
                 if (entry.isDirectory() && level < depth) await walk(file, level + 1);
                 if (more) return;
@@ -1016,32 +1142,28 @@ async function dispatchTool(
         if (!fs.existsSync(fullPath)) {
             return { content: [{ type: 'text', text: `Error: path not found: ${searchPath}` }], isError: true };
         }
-        return new Promise((resolve) => {
-            const rgArgs = ['--files', '--glob', pattern];
-            if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
-            rgArgs.push('--', fullPath);
-            cp.execFile(rg, rgArgs, { cwd: workspaceRoot, timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-                if (error && !stdout) {
-                    const msg = stderr || error.message;
-                    if (msg.includes('no matches') || error.code === 1) {
-                        resolve({ content: [{ type: 'text', text: 'No matching files found.' }] });
-                    } else {
-                        resolve({ content: [{ type: 'text', text: `Error: ${msg}` }], isError: true });
-                    }
-                } else {
-                    // Workspace-relative, matching grep_search - absolute paths
-                    // here made agents mix path conventions between the tools.
-                    const rootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
-                    const output = (stdout || '').split('\n')
-                        .map((l) => l.trim())
-                        .filter(Boolean)
-                        .map((p) => (p.startsWith(rootWithSep) ? p.slice(rootWithSep.length) : p))
-                        .sort();
-                    const offset = Math.max(0, Number(args.offset) || 0); const limit = Math.max(1, Math.min(2000, Number(args.limit) || 200));
-                    resolve({ content: [{ type: 'text', text: JSON.stringify({ paths: output.slice(offset, offset + limit), truncated: !!error || output.length > offset + limit, next_offset: !error && output.length > offset + limit ? offset + limit : null }) }], isError: !!error });
-                }
-            });
-        });
+        const rgArgs = ['--files', '--sort=path', '--glob', pattern];
+        if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
+        rgArgs.push('--', fullPath);
+        const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
+        const limit = Math.max(1, Math.min(2000, Math.floor(Number(args.limit) || 200)));
+        const run = await runRipgrepWindow(rg, rgArgs, workspaceRoot, offset, limit, 15_000, signal);
+        if (run.spawnError) {
+            if (signal?.aborted) throw run.spawnError;
+            return { content: [{ type: 'text', text: `Error: ${run.spawnError.message}` }], isError: true };
+        }
+        if (run.timedOut) {
+            const rootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
+            return { content: [{ type: 'text', text: JSON.stringify({ paths: run.lines.map(p => p.startsWith(rootWithSep) ? p.slice(rootWithSep.length) : p), truncated: true, next_offset: null }) }], isError: true };
+        }
+        if (!run.more && run.lines.length === 0 && (run.exitCode === 1 || run.stderr.includes('no matches'))) {
+            return { content: [{ type: 'text', text: 'No matching files found.' }] };
+        }
+        if (!run.more && run.exitCode && run.exitCode !== 1 && run.lines.length === 0) {
+            return { content: [{ type: 'text', text: `Error: ${run.stderr || `ripgrep exited with code ${run.exitCode}`}` }], isError: true };
+        }
+        const rootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
+        return { content: [{ type: 'text', text: JSON.stringify({ paths: run.lines.map(p => p.startsWith(rootWithSep) ? p.slice(rootWithSep.length) : p), truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
     } else if (name === 'skill') {
         // Agent Skills: progressive disclosure - return the SKILL.md body
         // (read-only, like read_file; available in plan mode). Bundled files
@@ -1189,6 +1311,7 @@ export async function executeLocalTool(
     nested?: boolean,
     signal?: AbortSignal,
     approveOutsideWorkspace?: (paths: string[]) => Promise<boolean>,
+    sessionId?: string,
 ): Promise<LocalToolResult> {
     try {
         signal?.throwIfAborted();
@@ -1204,10 +1327,28 @@ export async function executeLocalTool(
             return { output: r.text, isError: r.isError, ...(r.structuredContent ? { structuredContent: r.structuredContent } : {}), ...(r.research ? { research: r.research } : {}), ...(r.images.length ? { images: r.images } : {}) };
         }
         if (name === 'view_image') {
+            const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
             const file = workspaceSanitizePath(String(args.path ?? ''), workspaceRoot);
-            const stat = await fs.promises.stat(file);
-            if (!stat.isFile() || stat.size > 20 * 1024 * 1024) throw new Error('Image must be a regular file no larger than 20 MiB.');
-            const bytes = await fs.promises.readFile(file);
+            if (!(await fs.promises.stat(file)).isFile()) throw new Error('Image must be a regular file no larger than 20 MiB.');
+            const handle = await fs.promises.open(file, 'r');
+            let bytes: Buffer;
+            try {
+                const st = await handle.stat();
+                if (!st.isFile() || st.size > MAX_IMAGE_BYTES) throw new Error('Image must be a regular file no larger than 20 MiB.');
+                const chunks: Buffer[] = [];
+                let total = 0;
+                const buf = Buffer.allocUnsafe(64 * 1024);
+                for (;;) {
+                    const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, MAX_IMAGE_BYTES + 1 - total), null);
+                    if (bytesRead <= 0) break;
+                    total += bytesRead;
+                    if (total > MAX_IMAGE_BYTES) throw new Error('Image must be a regular file no larger than 20 MiB.');
+                    chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
+                }
+                bytes = Buffer.concat(chunks, total);
+            } finally {
+                await handle.close();
+            }
             const mimeType = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? 'image/png'
                 : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? 'image/jpeg'
                 : bytes.subarray(0, 6).toString().match(/^GIF8[79]a$/) ? 'image/gif'
@@ -1227,7 +1368,7 @@ export async function executeLocalTool(
             return { output: 'Error: outside-workspace file access was not approved.', isError: true };
         }
         signal?.throwIfAborted();
-        const result = await dispatchTool(workspaceRoot, named.name, normalized, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested, signal, approvedPaths);
+        const result = await dispatchTool(workspaceRoot, named.name, normalized, ensureTurnSnapshot, skillResolver, onOutput, subagentRunner, decisionGate, callId, nested, signal, approvedPaths, sessionId);
         return { output: result.content[0]?.text ?? '', isError: result.isError, ...(result.research ? { research: result.research } : {}) };
     } catch (err: any) {
         signal?.throwIfAborted();
@@ -1281,7 +1422,7 @@ export function createLocalToolExecutor(
         }
         if (opts?.plan && (call.name === 'process' || call.name === 'task')) return { output: 'Error: process control and delegation are disabled in plan mode.', isError: true };
         if (opts?.plan && !isAvailableTool(resolveToolName(call.name, Object.keys(TOOL_POLICY)).name, true)) return { output: 'Error: mutating tools are disabled in plan mode.', isError: true };
-        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths, opts.signal) : undefined);
+        return executeLocalTool(workspaceRoot, call.name, call.arguments, snapshot, externalMcp, skillResolver, onOutput, subagentRunner, decisionGate, call.id, opts?.nested, opts?.signal, opts?.approveOutsideWorkspace ? paths => opts.approveOutsideWorkspace!(call, paths, opts.signal) : undefined, opts?.sessionId);
     };
     return {
         execute: (call, onOutput, signal) => {

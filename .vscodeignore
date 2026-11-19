@@ -37,7 +37,6 @@ eslint.config.mjs
 .editorconfig
 .gitattributes
 .husky/
-.coderabbit.yaml
 
 # tsc output for the node test suites. The extension runs from the esbuild
 # bundle (dist/extension.js - see "main"), so out/ is never needed at runtime.

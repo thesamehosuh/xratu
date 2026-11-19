@@ -221,7 +221,7 @@ export type LocalAgentEvent =
      *  The host advances its replay boundary by this so the next turn does not
      *  re-send turns the summary already covers. */
     | { type: 'compactionSummary'; value: string; droppedUserTurns?: number }
-    | { type: 'compactionCheckpoint'; value: string; compactedToolCalls: string[] }
+    | { type: 'compactionCheckpoint'; value: string; compactedToolCalls: string[]; keptToolCalls?: string[]; steerCount?: number }
     | { type: 'error'; value: string };
 
 export interface LocalAgentMessage {
@@ -262,6 +262,8 @@ export interface LocalAgentMessage {
      *  in the same wire position; never a display row or a user turn. */
     contextNote?: string;
     compactedToolCalls?: string[];
+    compactedKeptToolCalls?: string[];
+    compactedSteerCount?: number;
 }
 
 export interface LocalAgentRequest {

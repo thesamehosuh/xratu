@@ -14,8 +14,8 @@ export function nativeChildSessions(runs: AgentRun[]): ChildSessionView[] {
         const messages: ChildSessionView['messages'] = trace.entries.filter(entry => entry.kind !== 'thinking').flatMap((entry): ChildSessionView['messages'] => {
             const id = `${run.id}:${entry.id}`;
             if (entry.kind === 'tool') return [
-                {id, role:'assistant' as const, content:'', toolCalls:[{id, name:entry.tool ?? '', arguments:entry.text}]},
-                ...(entry.output !== undefined || entry.live !== undefined ? [{id:`${id}:result`, role:'tool' as const, content:entry.output ?? entry.live ?? '', toolCallId:id, isError:entry.isError}] : []),
+                {id, role:'assistant' as const, content:'', toolCalls:[{id, name:entry.tool ?? '', arguments:entry.text, ...(entry.output === undefined && entry.live !== undefined ? { live: entry.live } : {})}]},
+                ...(entry.output !== undefined ? [{id:`${id}:result`, role:'tool' as const, content:entry.output, toolCallId:id, isError:entry.isError}] : []),
             ];
             return [{id, role:entry.kind === 'user' ? 'user' as const : 'assistant' as const, ...(entry.kind === 'user' ? {source:'user' as const} : {}), content:entry.text, ...(entry.html ? {html:entry.html} : {})}];
         });

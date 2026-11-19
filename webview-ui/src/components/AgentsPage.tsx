@@ -3,8 +3,9 @@ import { Bot, Check, ChevronDown, FolderOpen, RefreshCw, Search, TriangleAlert, 
 import { t } from '../i18n';
 import type { AgentProfileView } from '../types';
 
-export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen, onLaunch, canLaunch }: {
+export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen, onLaunch, canLaunch, launchReady = true }: {
     canLaunch: boolean;
+    launchReady?: boolean;
     onLaunch: (profile: AgentProfileView, prompt: string) => void;
     profiles: AgentProfileView[] | null;
     errorKey?: string;
@@ -63,10 +64,10 @@ export function AgentsPage({ profiles, errorKey, onRefresh, onManage, onOpen, on
                     <p dir="auto">{selected.description}</p>
                     {selected.model && <code dir="ltr">{selected.model}{selected.reasoningEffort ? ` · ${selected.reasoningEffort}` : ''}</code>}
                     {selected.tools && <div className="agent-tools" aria-label={t('surfaceTools')}>{selected.tools.map(tool => <code dir="ltr" key={tool}>{tool}</code>)}</div>}
-                    {canLaunch && !selected.error && <form className="child-launch" onSubmit={event => { event.preventDefault(); if (assignment.trim()) {onLaunch(selected, assignment.trim());setAssignment('');} }}>
+                    {canLaunch && !selected.error && <form className="child-launch" onSubmit={event => { event.preventDefault(); if (launchReady && assignment.trim()) {onLaunch(selected, assignment.trim());setAssignment('');} }}>
                         <label htmlFor="child-assignment">{t('childAssignment')}</label>
-                        <textarea id="child-assignment" dir="auto" rows={4} maxLength={100000} value={assignment} onChange={event => setAssignment(event.target.value)} />
-                        <button type="submit" className="secondary-btn" disabled={!assignment.trim()}>{t('childLaunch')}</button>
+                        <textarea id="child-assignment" dir="auto" rows={4} maxLength={100000} disabled={!launchReady} value={assignment} onChange={event => setAssignment(event.target.value)} />
+                        <button type="submit" className="secondary-btn" disabled={!launchReady || !assignment.trim()}>{t('childLaunch')}</button>
                     </form>}
                     {selected.editable && <button type="button" className="settings-ghost-action" onClick={() => onOpen(selected)}><FolderOpen size={12} /><span>{t('surfaceOpenFile')}</span></button>}
                 </aside>}

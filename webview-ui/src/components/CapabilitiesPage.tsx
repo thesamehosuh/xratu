@@ -556,6 +556,8 @@ export function CapabilitiesPage({
             openEditorFromEntry(entry, entry.install, notice);
             return;
         }
+        setDetecting(null);
+        onMarketplaceClearDetection();
         setPendingMarketAdd({
             target: newServerTarget,
             payload: payloadFromInstall(uniqueName(entry.serverName), entry.install),

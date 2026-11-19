@@ -70,7 +70,13 @@ export function persistedEventFromAgentEvent(event: LocalAgentEvent, cap = IN_ME
             ...(event.contextNote ? { contextNote: event.contextNote } : {}),
         };
     }
-    if (event.type === 'compactionCheckpoint') return { type: 'compaction_checkpoint', content: event.value, compactedToolCalls: event.compactedToolCalls };
+    if (event.type === 'compactionCheckpoint') return {
+        type: 'compaction_checkpoint',
+        content: event.value,
+        compactedToolCalls: event.compactedToolCalls,
+        ...(event.keptToolCalls?.length ? { compactedKeptToolCalls: event.keptToolCalls } : {}),
+        ...(typeof event.steerCount === 'number' ? { compactedSteerCount: event.steerCount } : {}),
+    };
     if (event.type === 'toolResult') {
         return {
             type: 'tool_result',
@@ -132,7 +138,13 @@ function toolImageMeta(image: any): ToolImageMeta {
  */
 export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | null {
     if (!event || typeof event !== 'object') return null;
-    if (event.type === 'compaction_checkpoint') return { role: 'assistant', content: event.content, compactedToolCalls: event.compactedToolCalls };
+    if (event.type === 'compaction_checkpoint') return {
+        role: 'assistant',
+        content: event.content,
+        compactedToolCalls: event.compactedToolCalls,
+        ...(Array.isArray(event.compactedKeptToolCalls) && event.compactedKeptToolCalls.length ? { compactedKeptToolCalls: event.compactedKeptToolCalls } : {}),
+        ...(typeof event.compactedSteerCount === 'number' ? { compactedSteerCount: event.compactedSteerCount } : {}),
+    };
     if (event.type === 'assistant_message') {
         return {
             role: 'assistant',
@@ -195,14 +207,65 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
     };
     for (const row of rows) {
         if (row.role === 'assistant' && Array.isArray(row.compactedToolCalls)) {
+            closeInterruptedBatch();
             const ids = new Set(row.compactedToolCalls);
-            for (let i = out.length - 1; i >= 0; i--) {
-                const previous = out[i];
-                if (previous.role === 'tool' && ids.has(previous.tool_call_id ?? '')
-                    || previous.role === 'assistant' && (previous.tool_calls?.some(call => ids.has(call.id))
-                        || previous.compactedToolCalls?.some(id => ids.has(id)))) out.splice(i, 1);
+            const keptCallIds = Array.isArray(row.compactedKeptToolCalls) && row.compactedKeptToolCalls.length
+                ? new Set(row.compactedKeptToolCalls)
+                : null;
+            let recentStart = out.length;
+            if (keptCallIds) {
+                for (let i = out.length - 1; i >= 0; i--) {
+                    const msg = out[i];
+                    if (msg.role === 'assistant' && msg.tool_calls?.some(call => keptCallIds.has(call.id))) {
+                        recentStart = i;
+                        break;
+                    }
+                }
+            } else {
+                // Legacy checkpoint without keptCallIds: locate the kept newest tool round
+                // within this turn (stopping at the turn's user boundary).
+                for (let i = out.length - 1; i >= 0; i--) {
+                    const msg = out[i];
+                    if (msg.role === 'user') break;
+                    if (msg.role === 'assistant' && msg.tool_calls?.length && !msg.tool_calls.some(call => ids.has(call.id))) {
+                        recentStart = i;
+                        break;
+                    }
+                }
             }
-            declared.clear();
+            let steersToSkip = typeof row.compactedSteerCount === 'number' && row.compactedSteerCount >= 0
+                ? row.compactedSteerCount
+                : 0;
+            let turnBodyStart = 0;
+            for (let i = recentStart - 1; i >= 0; i--) {
+                if (out[i].role === 'user') {
+                    if (steersToSkip > 0) {
+                        steersToSkip--;
+                        continue;
+                    }
+                    turnBodyStart = i + 1;
+                    break;
+                }
+            }
+            const olderSlice = out.slice(turnBodyStart, recentStart);
+            const recentSlice = out.slice(recentStart);
+            const checkpointMsg: LocalAgentMessage = {
+                role: 'assistant',
+                content: row.content ?? '',
+                compactedToolCalls: row.compactedToolCalls,
+                ...(row.compactedKeptToolCalls ? { compactedKeptToolCalls: row.compactedKeptToolCalls } : {}),
+                ...(row.compactedSteerCount != null ? { compactedSteerCount: row.compactedSteerCount } : {}),
+            };
+            const hasCompactedTarget = olderSlice.some(msg =>
+                (msg.role === 'tool' && ids.has(msg.tool_call_id ?? ''))
+                || (msg.role === 'assistant' && (msg.tool_calls?.some(call => ids.has(call.id)) || msg.compactedToolCalls?.some(id => ids.has(id)))));
+            if (hasCompactedTarget) {
+                const keptSteers = olderSlice.filter(msg => msg.role === 'user');
+                out.splice(turnBodyStart, out.length - turnBodyStart, ...keptSteers, checkpointMsg, ...recentSlice);
+            } else {
+                out.push(checkpointMsg);
+            }
+            continue;
         }
         if (row.role === 'tool') {
             if (row.tool_call_id == null || !declared.has(row.tool_call_id)) continue;

@@ -78,9 +78,20 @@ export class OpenCodeEngine implements AgentEngine {
         let verified=false;
         try {
             const child=await active.client.session.get({sessionID:childID},{signal:active.signal});
+            if(this.active!==active || active.signal.aborted) throw new DOMException('Native execution ended','AbortError');
+            if(coordinator.instructionTarget(callId)!==childID) {
+                active.steers.delete(id);
+                coordinator.cancelInstructions(childID);
+                return false;
+            }
             if(child.parentID!==active.sessionID || child.location.directory!==active.workspace) throw new Error('Native child ownership mismatch');
             verified=true;
             if(this.active!==active || active.signal.aborted) throw new DOMException('Native execution ended','AbortError');
+            if(coordinator.instructionTarget(callId)!==childID) {
+                active.steers.delete(id);
+                coordinator.cancelInstructions(childID);
+                return false;
+            }
             await active.client.session.prompt({sessionID:childID,id,delivery:'steer',text:message.text},{signal:active.signal});
             return true;
         } catch(error) {

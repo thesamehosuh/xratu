@@ -31,20 +31,21 @@ export interface ChildSessionView {
     receipts: Array<{id: string; state: 'queued' | 'delivered' | 'cancelled'}>;
     error?: string;
     errorKey?: 'childStorageFailed';
-    messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; content: string; html?: string; source?: 'parent' | 'user'; toolCalls?: Array<{id: string; name: string; arguments: string}>; toolCallId?: string; isError?: boolean }>;
+    messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; content: string; html?: string; source?: 'parent' | 'user'; toolCalls?: Array<{id: string; name: string; arguments: string; live?: string}>; toolCallId?: string; isError?: boolean }>;
 }
 /** Project plain display content only; provider-native replay carriers stay on the host. */
 export function childSessionView(session: ChildSession, render?: (text: string) => string): ChildSessionView {
     const record = session.checkpoint as DisplayCheckpoint | undefined;
     const execution = session.executions.at(-1);
-    const activeTool = execution?.state === 'running' ? record?.trace?.entries.slice().reverse().find(entry => entry.kind === 'tool' && !entry.endedAt) : undefined;
-    return { id: session.id, title: session.title, profile: session.profile, state: execution?.state === 'running' && record?.trace?.status === 'waiting' ? record.trace.pendingTools?.includes('ask_session_question') ? 'waiting_for_answer' : 'waiting_for_approval' : execution?.state ?? 'idle',
+    const liveTrace = execution?.state === 'running' && record?.trace?.generation === session.generation ? record.trace : undefined;
+    const activeTool = liveTrace?.entries.slice().reverse().find(entry => entry.kind === 'tool' && !entry.endedAt);
+    return { id: session.id, title: session.title, profile: session.profile, state: liveTrace?.status === 'waiting' ? liveTrace.pendingTools?.includes('ask_session_question') ? 'waiting_for_answer' : 'waiting_for_approval' : execution?.state ?? 'idle',
         parentCallId: record?.parentCallId,
         model: record?.definition?.model ?? record?.contextIdentity?.model,
         effort: record?.definition?.reasoningEffort,
         rounds: record?.definition?.maxRounds ?? 50,
         reportState: session.results.at(-1)?.state,
-        liveText: execution?.state === 'running' ? record?.trace?.entries.slice().reverse().find(entry => entry.kind === 'text' && !entry.endedAt)?.text : undefined,
+        liveText: liveTrace?.entries.slice().reverse().find(entry => entry.kind === 'text' && !entry.endedAt)?.text,
         activeTool: activeTool ? {name: activeTool.tool ?? '', live: activeTool.live} : undefined,
         revision: session.revision, queued: session.messages.filter(message => message.state === 'queued').length,
         generation: session.generation,

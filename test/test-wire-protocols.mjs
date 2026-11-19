@@ -31,6 +31,8 @@ try {
     await assert.rejects(read([added, { type: 'response.function_call_arguments.delta', item_id: call.id, delta: call.arguments }]), /without response.completed/, 'an unfinished Responses stream cannot authorize tool execution');
     await assert.rejects(read([added, { type: 'response.completed', response: { output: [] } }]),
         /unfinished output items/, 'a partial call omitted from completed output must not execute');
+    await assert.rejects(read([added, { type: 'response.function_call_arguments.delta', item_id: call.id, delta: call.arguments }, { type: 'response.completed', response: {} }]),
+        /unfinished output items/, 'an unfinished call when response.completed omits output must not execute');
     for (const content of [[{ type: 'output_text', text: 'Final text' }], [{ type: 'refusal', refusal: 'Cannot complete this request' }]]) {
         const { result, deltas } = await read([{ type: 'response.completed', response: { output: [{ type: 'message', content }] } }]);
         const expected = content[0].text ?? content[0].refusal;

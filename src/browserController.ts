@@ -18,10 +18,54 @@ interface Options {
     liveReloadDebounceMs?: number;
 }
 const MAX_DIAGNOSTICS = 100;
+const MAX_EVALUATE_BYTES = 64_000;
 const TIMEOUT = 15_000;
 const boundedString = (value: unknown, max = 8192): string => {
     if (typeof value !== 'string' || value.length > max) throw new Error('Invalid browser argument.');
     return value;
+};
+const isLoopbackWebSocketUrl = (raw: string): boolean => {
+    try {
+        const url = new URL(raw);
+        url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+        return isLoopbackUrl(url);
+    } catch {
+        return false;
+    }
+};
+const urlWithoutHash = (raw: string): string => {
+    try {
+        const url = new URL(raw);
+        url.hash = '';
+        return url.href;
+    } catch {
+        return raw.split('#', 1)[0];
+    }
+};
+const boundEvaluateOutput = (output: string, maxBytes = MAX_EVALUATE_BYTES): string => {
+    if (Buffer.byteLength(output, 'utf8') <= maxBytes) return output;
+    const serialize = (end: number): string => {
+        const safeEnd = end > 0 && end < output.length
+            && output.charCodeAt(end - 1) >= 0xd800 && output.charCodeAt(end - 1) <= 0xdbff
+            && output.charCodeAt(end) >= 0xdc00 && output.charCodeAt(end) <= 0xdfff
+            ? end - 1
+            : end;
+        return JSON.stringify({ truncated: true, preview: output.slice(0, safeEnd) });
+    };
+    let low = 0;
+    let high = Math.min(output.length, maxBytes);
+    let best = serialize(0);
+    while (low <= high) {
+        const mid = (low + high) >> 1;
+        const candidate = serialize(mid);
+        if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) {
+            best = candidate;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return best;
 };
 
 /** One isolated page per active chat. No debug server, exposed port, or personal profile. */
@@ -40,7 +84,8 @@ export class BrowserController {
     private latestFrame: string | null = null;
     private frameTimer: ReturnType<typeof setTimeout> | undefined;
     private liveReloadTimer: ReturnType<typeof setTimeout> | undefined;
-    private loopbackSockets = 0;
+    private loopbackSockets = new Set<unknown>();
+    private navigationGeneration = 0;
     private diagnostics: Array<{ kind: string; text: string }> = [];
     private disposed = false;
 
@@ -67,7 +112,7 @@ export class BrowserController {
         this.browser = null; this.context = null; this.page = null; this.cdp = null;
         this.streaming = false; this.pendingFrame = null; this.diagnostics = [];
         this.latestFrame = null; clearTimeout(this.frameTimer); this.frameTimer = undefined;
-        clearTimeout(this.liveReloadTimer); this.liveReloadTimer = undefined; this.loopbackSockets = 0;
+        clearTimeout(this.liveReloadTimer); this.liveReloadTimer = undefined; this.loopbackSockets.clear(); this.navigationGeneration++;
         this.state = this.emptyState(this.state.sessionId);
         this.publish();
         void browser?.close().catch(() => undefined);
@@ -122,18 +167,8 @@ export class BrowserController {
                 else await route.continue();
             });
             await context.routeWebSocket('**/*', socket => {
-                const url = new URL(socket.url());
-                url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-                if (isOfflineMode() && !isLoopbackUrl(url)) socket.close();
-                else {
-                    if (isLoopbackUrl(url)) {
-                        this.loopbackSockets++;
-                        if (typeof socket.onClose === 'function') {
-                            socket.onClose(() => { this.loopbackSockets = Math.max(0, this.loopbackSockets - 1); });
-                        }
-                    }
-                    socket.connectToServer();
-                }
+                if (isOfflineMode() && !isLoopbackWebSocketUrl(socket.url())) socket.close();
+                else socket.connectToServer();
             });
             const page = await context.newPage();
             page.setDefaultTimeout(TIMEOUT);
@@ -143,6 +178,13 @@ export class BrowserController {
             this.current(sessionId, browserId);
             this.browser = launched; this.context = context; this.page = page; this.cdp = cdp;
             const active = () => this.page === page && this.state.browserId === browserId;
+            page.on('websocket', ws => {
+                if (!active() || ws.isClosed() || !isLoopbackWebSocketUrl(ws.url())) return;
+                this.loopbackSockets.add(ws);
+                ws.on('close', () => {
+                    if (active()) this.loopbackSockets.delete(ws);
+                });
+            });
             const diagnostic = (kind: string, text: string) => {
                 if (!active()) return;
                 this.diagnostics.push({ kind, text: text.slice(0, 2000) });
@@ -162,8 +204,14 @@ export class BrowserController {
             });
             page.on('framenavigated', frame => {
                 if (!active() || frame !== page.mainFrame()) return;
-                this.loopbackSockets = 0;
-                this.state = { ...this.state, url: page.url(), loading: true };
+                const nextUrl = page.url();
+                const fragmentNavigation = Boolean(this.state.url) && nextUrl !== this.state.url && urlWithoutHash(nextUrl) === urlWithoutHash(this.state.url);
+                if (fragmentNavigation) {
+                    this.state = { ...this.state, url: nextUrl };
+                } else {
+                    this.navigationGeneration++;
+                    this.state = { ...this.state, url: nextUrl, loading: true };
+                }
                 this.publish();
             });
             const loaded = () => { if (active()) void this.refresh(page); };
@@ -186,6 +234,7 @@ export class BrowserController {
             await launched?.close().catch(() => undefined);
             if (this.state.browserId === browserId) {
                 this.browser = null; this.context = null; this.page = null; this.cdp = null;
+                this.loopbackSockets.clear();
                 this.state = { ...this.state, status: 'error', loading: false, errorKey: 'browserStartFailed', errorDetail: String(error) };
                 this.publish();
             }
@@ -233,15 +282,18 @@ export class BrowserController {
      */
     notifyWorkspaceFileChanged(): void {
         if (this.disposed || this.state.status !== 'ready' || !this.page || this.page.isClosed()) return;
-        if (!isLoopbackUrl(this.state.url) || this.loopbackSockets > 0) return;
+        if (!isLoopbackUrl(this.state.url) || this.loopbackSockets.size > 0) return;
         const sessionId = this.state.sessionId;
         const browserId = this.state.browserId;
+        const navigationGeneration = this.navigationGeneration;
         clearTimeout(this.liveReloadTimer);
         this.liveReloadTimer = setTimeout(() => {
             this.liveReloadTimer = undefined;
+            if (this.navigationGeneration !== navigationGeneration) return;
             void this.enqueue(sessionId, browserId, async () => {
+                if (this.navigationGeneration !== navigationGeneration) return;
                 if (!this.page || this.page.isClosed() || this.state.status !== 'ready' || this.state.loading) return;
-                if (!isLoopbackUrl(this.state.url) || this.loopbackSockets > 0) return;
+                if (!isLoopbackUrl(this.state.url) || this.loopbackSockets.size > 0) return;
                 const page = this.page;
                 try {
                     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -389,7 +441,7 @@ export class BrowserController {
                     if (![args.locator, args.text, args.url].some(value => typeof value === 'string' && value.length)) throw new Error('Provide locator, text, or URL.');
                     await Promise.all([
                         ...(args.locator ? [page.locator(boundedString(args.locator)).waitFor({ state: 'visible', timeout })] : []),
-                        ...(args.text ? [page.getByText(boundedString(args.text), { exact: false }).first().waitFor({ state: 'visible', timeout })] : []),
+                        ...(args.text ? [page.getByText(boundedString(args.text), { exact: false }).filter({ visible: true }).first().waitFor({ state: 'visible', timeout })] : []),
                         ...(args.url ? [page.waitForURL(boundedString(args.url), { timeout })] : []),
                     ]);
                     return { output: JSON.stringify(this.getState()) };
@@ -423,7 +475,7 @@ export class BrowserController {
                         ]);
                     } finally { clearTimeout(timer); }
                     const output = JSON.stringify(result) ?? 'null';
-                    return { output: output.length > 64000 ? JSON.stringify({ truncated: true, preview: output.slice(0, 60000) }) : output };
+                    return { output: boundEvaluateOutput(output) };
                 } else throw new Error('Unknown browser tool.');
                 checkAbort(); await this.refresh(page);
                 return { output: JSON.stringify(this.getState()) };

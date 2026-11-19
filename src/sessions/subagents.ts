@@ -61,12 +61,14 @@ export class CoordinatedSubagents implements SubagentRunner {
     }
     private bind(coordinator: SessionCoordinator, session: ChildSession, parentCallId?: string): void {
         const driver: SessionDriver = { execute: async execution => {
+            const host = this.host;
+            const definitions = this.definitions;
             const saved = execution.session.checkpoint as SubagentRunRecord | undefined;
-            if (saved?.contextIdentity?.connectionId && saved.contextIdentity.connectionId !== this.host.connectionId) throw new Error('Reconnect the original child model connection before continuing.');
+            if (saved?.contextIdentity?.connectionId && saved.contextIdentity.connectionId !== host.connectionId) throw new Error('Reconnect the original child model connection before continuing.');
             if (saved) this.registry.set(session.id, recoverChildHistory(saved));
             else if (!this.registry.has(session.id)) this.registry.set(session.id, {
                 defName: session.profile, rows: [], startedAt: Date.now(),
-                definition: structuredClone(resolveSubagent(this.definitions, session.profile)!),
+                definition: structuredClone(resolveSubagent(definitions, session.profile)!),
             });
             let latestRecord = this.registry.get(session.id)!;
             const committed = new Set(latestRecord.deliveredMessageIds ?? []);
@@ -77,29 +79,29 @@ export class CoordinatedSubagents implements SubagentRunner {
                 || message.state === 'delivered' && !committed.has(message.id));
             latestRecord.deliveredMessageIds = [...new Set([...committed, ...prompts.map(message => message.id)])];
             let latestTrace = latestRecord.trace;
-            const run = () => runSubagentTask({ ...this.host, store: undefined,
+            const run = () => runSubagentTask({ ...host, store: undefined,
                 executionGeneration: execution.execution.generation,
                 onControl: undefined,
                 steerFeed: {drain: async () => (await execution.drain()).map(message => ({text:JSON.stringify({sender:message.source,instruction:message.text}),steerId:message.id}))},
                 onObservation: (callId, trace) => {
                     latestTrace = trace;
-                    this.host.onObservation?.(callId, trace);
+                    host.onObservation?.(callId, trace);
                     // Streaming display traces must reach durable child views
                     // before the next model/tool checkpoint is committed.
-                    this.host.onSessions?.(coordinator.list().map(child => child.id === session.id
+                    host.onSessions?.(coordinator.list().map(child => child.id === session.id
                         ? { ...child, checkpoint: { ...latestRecord, trace } } : child));
                 },
-                baseRequest: (definition, conversationId) => ({ ...this.host.baseRequest(definition, conversationId), signal: execution.signal }),
+                baseRequest: (definition, conversationId) => ({ ...host.baseRequest(definition, conversationId), signal: execution.signal }),
                 onCheckpoint: async (_id, record) => {
                     latestRecord = record;
                     await execution.checkpoint({...record, trace: latestTrace});
                 },
-            }, this.definitions, { taskId: session.id, subagentType: session.profile,
+            }, definitions, { taskId: session.id, subagentType: session.profile,
                 description: session.title, prompt: prompts.map(message => JSON.stringify({sender:message.source,instruction:message.text})).join('\n\n'), parentCallId: parentCallId ?? session.id }, this.registry);
-            const definition = latestRecord.definition ?? resolveSubagent(this.definitions, session.profile);
-            const writer = definition && this.host.tools(definition).some(tool => mutatesWorkspace(tool.name));
-            if (writer && this.host.withWorkspaceWriter) await execution.state('waiting_for_workspace');
-            const result = writer && this.host.withWorkspaceWriter ? await this.host.withWorkspaceWriter(execution.signal, async () => {
+            const definition = latestRecord.definition ?? resolveSubagent(definitions, session.profile);
+            const writer = definition && host.tools(definition).some(tool => mutatesWorkspace(tool.name));
+            if (writer && host.withWorkspaceWriter) await execution.state('waiting_for_workspace');
+            const result = writer && host.withWorkspaceWriter ? await host.withWorkspaceWriter(execution.signal, async () => {
                 await execution.state('running');
                 return run();
             }) : await run();
@@ -134,12 +136,22 @@ export class CoordinatedSubagents implements SubagentRunner {
 
             try {
                 if (parentSignal?.aborted) return { output: 'Parent execution cancelled.', isError: true };
-                await coordinator.send(session.id, request.prompt, 'parent', request.parentCallId);
+                const receipt = await coordinator.send(session.id, request.prompt, 'parent', request.parentCallId);
                 this.host.onControl?.(request.parentCallId, stop);
                 if (request.background) return {output:JSON.stringify({session_id:session.id,state:'queued',instruction:'Use send_agent for follow-ups and wait_agents for the report.'})};
-                const settled = await coordinator.wait(session.id, parentSignal);
-                const execution = settled.executions.at(-1)!;
-                return { output: `${settled.results.at(-1)?.text ?? 'Child execution cancelled.'}\n[child_result: ${execution.id}]`, isError: execution.state !== 'completed' };
+                const settled = await coordinator.waitForInstruction(session.id, receipt.id, parentSignal);
+                const message = settled.messages.find(item => item.id === receipt.id);
+                if (message?.state === 'cancelled') {
+                    return { output: 'Child execution cancelled.', isError: true };
+                }
+                const execution = (message?.executionId
+                    ? settled.executions.find(item => item.id === message.executionId)
+                    : undefined) ?? settled.executions.at(-1);
+                const result = execution ? settled.results.find(item => item.executionId === execution.id) : undefined;
+                if (!execution || !result) {
+                    return { output: execution?.error || 'Child execution cancelled.', isError: true };
+                }
+                return { output: `${result.text}\n[child_result: ${result.id}]`, isError: execution.state !== 'completed' };
             } finally {
                 this.host.onControl?.(request.parentCallId, undefined);
             }

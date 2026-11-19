@@ -271,7 +271,7 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
             const { isError: _isError, ...wire } = m;
             cleaned = stripLocalImageFields(wire);
         } else if (m.role === 'assistant') {
-            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, compactedToolCalls: _compactedToolCalls, ...wire } = m;
+            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, compactedToolCalls: _compactedToolCalls, compactedKeptToolCalls: _compactedKeptToolCalls, compactedSteerCount: _compactedSteerCount, ...wire } = m;
             cleaned = stripLocalImageFields(wire);
         } else {
             cleaned = stripLocalImageFields(m);
@@ -288,7 +288,11 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
             out[out.length - 1] = { ...prev, content: mergeUserContent(prev.content, cleaned.content) };
             continue;
         }
-        if (prev && prev.role === 'assistant' && cleaned.role === 'assistant' && !prev.tool_calls?.length) {
+        if (prev && prev.role === 'assistant' && cleaned.role === 'assistant'
+            && !prev.tool_calls?.length
+            && !prev.reasoningContent
+            && (prev.content == null || typeof prev.content === 'string')
+            && (cleaned.content == null || typeof cleaned.content === 'string')) {
             const prevText = typeof prev.content === 'string' ? prev.content : '';
             const nextText = typeof cleaned.content === 'string' ? cleaned.content : '';
             out[out.length - 1] = {
@@ -1343,6 +1347,7 @@ async function requestResponsesCompletion(
     const itemsByIndex = new Map<number, any>();
     const itemIndexById = new Map<string, number>();
     const closedItems = new Set<number>();
+    const closedFunctionCalls = new Set<number>();
     let completedItems: any[] | null = null;
     let completed = false;
     let cacheDiagnostic: CompletionResult['cacheDiagnostic'];
@@ -1436,6 +1441,7 @@ async function requestResponsesCompletion(
                 const index = itemIndexById.get(json.item_id);
                 if (!current || index === undefined || closedItems.has(index)) throw new ModelStreamError('Model returned an unmatched or finalized argument item identity.');
                 current.arguments = json.arguments;
+                closedFunctionCalls.add(index);
                 break;
             }
             case 'response.completed':
@@ -1481,7 +1487,9 @@ async function requestResponsesCompletion(
     // (or reasoning replay carriers) with the empty terminal snapshot. Never
     // promote an unfinished streamed item into an executable call, though.
     const terminalItems = completedItems as Record<string, unknown>[] | null;
-    if (terminalItems?.length === 0 && [...itemsByIndex.keys()].some(index => !closedItems.has(index))) {
+    const hasOpenItem = [...itemsByIndex.keys()].some(index => !closedItems.has(index));
+    const hasOpenFunctionCall = [...itemsByIndex.entries()].some(([index, item]) => !closedItems.has(index) && !closedFunctionCalls.has(index) && item?.type === 'function_call');
+    if ((terminalItems?.length === 0 && hasOpenItem) || (!terminalItems && hasOpenFunctionCall)) {
         throw new ModelStreamError('Model completion omitted unfinished output items; no tools were executed.', 'modelStreamIncomplete');
     }
     const providerBlocks = terminalItems?.length ? terminalItems

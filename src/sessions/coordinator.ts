@@ -1,7 +1,11 @@
 import { randomUUID } from 'crypto';
 import type { ChildSession, CoordinatorSnapshot, CoordinatorStore, SessionDriver, SessionExecution, SessionMessage, SessionResult } from './types';
+import { MAX_COORDINATOR_STORE_BYTES } from './store';
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_for_workspace', 'stopping']);
+const MAX_SETTLED_MESSAGES = 200;
+const MAX_SETTLED_EXECUTIONS = 100;
+const MAX_DELIVERED_RESULTS = 50;
 const copy = <T>(value: T): T => structuredClone(value);
 
 /** One execution authority. Command serialization never waits for a driver. */
@@ -14,6 +18,8 @@ export class SessionCoordinator {
     private readonly tasks = new Set<Promise<void>>();
     private readonly waiters = new Map<string, Set<() => void>>();
     private active = 0;
+    private persisting = false;
+    private closing = false;
     private closed = false;
     private fault: unknown;
     private constructor(private readonly store: CoordinatorStore, private capacity: number) {}
@@ -59,7 +65,7 @@ export class SessionCoordinator {
     list(parentId?: string): ChildSession[] {
         return copy([...this.sessions.values()].filter(session => !parentId || session.parentId === parentId));
     }
-    get unavailable(): boolean { return this.closed || !!this.fault; }
+    get unavailable(): boolean { return this.closed || this.closing || !!this.fault; }
     setCapacity(value: number): void {
         if (!Number.isInteger(value) || value < 1 || value > 32) throw new Error('Invalid session capacity');
         this.capacity = value;
@@ -79,19 +85,97 @@ export class SessionCoordinator {
         if (!session) throw new Error('Unknown child session');
         return session;
     }
-    private command<T>(action: () => Promise<T>): Promise<T> {
+    private command<T>(action: () => Promise<T>, internal = false): Promise<T> {
+        if (!internal && (this.closed || this.closing)) return Promise.reject(new Error('Session coordinator is closed'));
         const run = this.commands.then(async () => {
-            if (this.closed) throw new Error('Session coordinator is closed');
+            if (this.closed || (!internal && this.closing)) throw new Error('Session coordinator is closed');
             if (this.fault) throw new Error('Session storage failed; execution is fenced');
             return action();
         });
         this.commands = run.catch(() => undefined);
         return run;
     }
+    private boundHistory(): void {
+        for (const session of this.sessions.values()) {
+            const activeExecIds = new Set(session.executions.filter(e => ACTIVE.has(e.state)).map(e => e.id));
+            const pendingExecIds = new Set(session.results.filter(r => r.state === 'pending').map(r => r.executionId));
+            const keepExecIds = new Set([...activeExecIds, ...pendingExecIds]);
+            const latestExec = session.executions.at(-1);
+            if (latestExec) keepExecIds.add(latestExec.id);
+            if (session.executions.length > MAX_SETTLED_EXECUTIONS) {
+                const keptSettled = session.executions.filter(e => !keepExecIds.has(e.id)).slice(-MAX_SETTLED_EXECUTIONS);
+                const keepSet = new Set([...keepExecIds, ...keptSettled.map(e => e.id)]);
+                session.executions = session.executions.filter(e => keepSet.has(e.id));
+            }
+            const activeMsgIds = new Set(session.executions.filter(e => activeExecIds.has(e.id)).flatMap(e => e.messageIds));
+            if (session.messages.length > MAX_SETTLED_MESSAGES) {
+                const keepMsg = new Set(session.messages.filter(m => m.state === 'queued' || activeMsgIds.has(m.id)).map(m => m.id));
+                const settledMsgs = session.messages.filter(m => !keepMsg.has(m.id)).slice(-MAX_SETTLED_MESSAGES);
+                for (const m of settledMsgs) keepMsg.add(m.id);
+                session.messages = session.messages.filter(m => keepMsg.has(m.id));
+            }
+            const deliveredResults = session.results.filter(r => r.state === 'delivered');
+            if (deliveredResults.length > MAX_DELIVERED_RESULTS) {
+                const keepDelivered = new Set(deliveredResults.slice(-MAX_DELIVERED_RESULTS).map(r => r.id));
+                session.results = session.results.filter(r => r.state === 'pending' || keepDelivered.has(r.id));
+            }
+        }
+    }
+    private compactForStorage(maxBytes = MAX_COORDINATOR_STORE_BYTES): void {
+        this.boundHistory();
+        const fits = () => Buffer.byteLength(JSON.stringify({ version: 1, sessions: [...this.sessions.values()] })) <= maxBytes;
+        if (fits()) return;
+        // Pass 1: Keep all pending reports and the latest result per session; archive older delivered report text.
+        for (const session of this.sessions.values()) {
+            const latestId = session.results.at(-1)?.id;
+            session.results = session.results.filter(r => r.state === 'pending' || r.id === latestId);
+            for (const r of session.results) {
+                if (r.state === 'delivered' && r.text.length > 512) r.text = '[Archived delivered report.]';
+            }
+        }
+        if (fits()) return;
+        // Pass 2: Trim settled executions and older message bodies while preserving recent retry receipts.
+        for (const session of this.sessions.values()) {
+            const activeExecIds = new Set(session.executions.filter(e => ACTIVE.has(e.state)).map(e => e.id));
+            const pendingExecIds = new Set(session.results.filter(r => r.state === 'pending').map(r => r.executionId));
+            const latestExecId = session.executions.at(-1)?.id;
+            session.executions = session.executions.filter(e => activeExecIds.has(e.id) || pendingExecIds.has(e.id) || e.id === latestExecId);
+            const activeMsgIds = new Set(session.executions.filter(e => activeExecIds.has(e.id)).flatMap(e => e.messageIds));
+            const keepMsg = new Set(session.messages.filter(m => m.state === 'queued' || activeMsgIds.has(m.id)).map(m => m.id));
+            for (const m of session.messages.filter(m => !keepMsg.has(m.id)).slice(-50)) keepMsg.add(m.id);
+            session.messages = session.messages.filter(m => keepMsg.has(m.id));
+        }
+        if (fits()) return;
+        // Pass 3: Trim display traces and oldest checkpoint rows so a family near the 32 MiB ceiling can recover.
+        for (const session of this.sessions.values()) {
+            const cp = session.checkpoint as { trace?: unknown; rows?: Array<{ role?: string }>; historyTrimmed?: boolean; replayUserTurns?: number } | undefined;
+            if (!cp || typeof cp !== 'object') continue;
+            if (!session.executions.some(e => ACTIVE.has(e.state))) delete cp.trace;
+        }
+        for (let pass = 0; pass < 16 && !fits(); pass++) {
+            let trimmed = false;
+            for (const session of this.sessions.values()) {
+                const cp = session.checkpoint as { rows?: Array<{ role?: string }>; historyTrimmed?: boolean; replayUserTurns?: number } | undefined;
+                if (!cp || !Array.isArray(cp.rows) || cp.rows.length <= 2) continue;
+                const drop = Math.max(1, Math.ceil(cp.rows.length / 2));
+                cp.rows = cp.rows.slice(drop);
+                cp.historyTrimmed = true;
+                if (typeof cp.replayUserTurns === 'number') {
+                    const userCount = cp.rows.filter(r => r?.role === 'user').length;
+                    cp.replayUserTurns = Math.min(cp.replayUserTurns, userCount);
+                }
+                trimmed = true;
+            }
+            if (!trimmed) break;
+        }
+    }
     private async persist(): Promise<void> {
+        this.compactForStorage();
         const snapshot: CoordinatorSnapshot = { version: 1, sessions: this.list() };
+        this.persisting = true;
         try { await this.store.save(snapshot); }
         catch (error) {
+            this.persisting = false;
             this.fault = error;
             for (const controller of this.controls.values()) controller.abort();
             for (const session of this.sessions.values()) for (const execution of session.executions) {
@@ -105,10 +189,11 @@ export class SessionCoordinator {
             for (const callbacks of this.waiters.values()) for (const callback of [...callbacks]) callback();
             throw error;
         }
+        this.persisting = false;
         for (const listener of this.listeners) {
             try { listener(copy(snapshot.sessions)); } catch { /* A view cannot break execution ownership. */ }
         }
-        for (const callbacks of this.waiters.values()) for (const callback of callbacks) callback();
+        for (const callbacks of this.waiters.values()) for (const callback of [...callbacks]) callback();
     }
     async create(parentId: string, profile: string, title: string, driver: SessionDriver, creationId?: string, checkpoint?: unknown): Promise<ChildSession> {
         if (typeof parentId !== 'string' || !parentId || typeof profile !== 'string' || !profile || typeof title !== 'string' || title.length > 1000
@@ -153,9 +238,10 @@ export class SessionCoordinator {
         session.executions.push({ id: randomUUID(), generation: ++session.generation, state: 'queued', messageIds: [] });
     }
     private pump(): void {
-        if (this.closed || this.fault) return;
+        if (this.closed || this.closing || this.fault) return;
         // Claims occur in the same command queue as Stop and Send.
         const task = this.command(async () => {
+            if (this.closing) return;
             for (const session of this.sessions.values()) {
                 if (this.active >= this.capacity) break;
                 const execution = session.executions.find(item => item.state === 'queued');
@@ -172,7 +258,7 @@ export class SessionCoordinator {
                 await this.persist();
                 this.launch(session, execution, driver, controller);
             }
-        }).catch(error => { this.fault = error; });
+        }, true).catch(error => { this.fault = error; });
         this.track(task);
     }
     private track(task: Promise<void>): void {
@@ -181,7 +267,7 @@ export class SessionCoordinator {
     }
     private launch(session: ChildSession, execution: SessionExecution, driver: SessionDriver, controller: AbortController): void {
         const task = (async () => {
-            let report = ''; let failure: unknown;
+            let report = ''; let failed = false; let failure: unknown;
             try {
                 report = await driver.execute({ session: copy(session), execution: copy(execution), signal: controller.signal,
                     state: value => this.command(async () => {
@@ -189,7 +275,7 @@ export class SessionCoordinator {
                         if (session.generation !== execution.generation) throw new Error('Obsolete child execution');
                         execution.state = value; session.revision++;
                         await this.persist();
-                    }),
+                    }, true),
                     drain: () => this.command(async () => {
                         if (session.generation !== execution.generation || controller.signal.aborted) return [];
                         const messages = session.messages.filter(message => message.state === 'queued');
@@ -202,35 +288,38 @@ export class SessionCoordinator {
                             await this.persist();
                         }
                         return copy(messages);
-                    }),
+                    }, true),
                     checkpoint: value => {
                         const snapshot = copy(value);
                         return this.command(async () => {
                             if (session.generation !== execution.generation) throw new Error('Obsolete child execution');
                             session.checkpoint = snapshot; session.revision++;
                             await this.persist();
-                        });
+                        }, true);
                     } });
-            } catch (error) { failure = error; }
+            } catch (error) { failed = true; failure = error; }
             try {
                 await this.command(async () => {
                     if (session.generation !== execution.generation) return;
-                    execution.state = controller.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed';
+                    execution.state = controller.signal.aborted ? 'cancelled' : failed ? 'failed' : 'completed';
                     execution.endedAt = Date.now();
-                    if (failure && !controller.signal.aborted) execution.error = failure instanceof Error ? failure.message : String(failure);
+                    if (failed && !controller.signal.aborted) {
+                        const detail = failure instanceof Error ? failure.message : String(failure ?? '');
+                        execution.error = detail || 'Child execution failed';
+                    }
                     const fullReport = report || execution.error || (controller.signal.aborted ? 'Cancelled' : '');
                     session.results.push({ id: execution.id, sessionId: session.id, executionId: execution.id,
                         text: fullReport.length > 48_000 ? `${fullReport.slice(0,47_900)}\n[Report shortened. Inspect the child conversation for details.]` : fullReport, state: 'pending' });
-                    if (session.messages.some(message => message.state === 'queued')) this.enqueue(session);
+                    if (!this.closing && session.messages.some(message => message.state === 'queued')) this.enqueue(session);
                     session.revision++;
                     await this.persist();
-                });
+                }, true);
             } finally { this.active--; this.controls.delete(session.id); }
         })().catch(error => { this.fault = error; }).finally(() => this.pump());
         this.track(task);
     }
-    async stop(sessionId: string): Promise<void> {
-        await this.command(async () => {
+    private stopSession(sessionId: string, internal = false): Promise<void> {
+        return this.command(async () => {
             const session = this.get(sessionId);
             for (const message of session.messages) if (message.state === 'queued') message.state = 'cancelled';
             for (const execution of session.executions) {
@@ -241,7 +330,10 @@ export class SessionCoordinator {
             this.controls.get(sessionId)?.abort();
             session.revision++;
             await this.persist();
-        });
+        }, internal);
+    }
+    async stop(sessionId: string): Promise<void> {
+        await this.stopSession(sessionId, false);
     }
     pendingResults(parentId: string): SessionResult[] {
         return this.list(parentId).flatMap(session => session.results.filter(result => result.state === 'pending'));
@@ -264,13 +356,13 @@ export class SessionCoordinator {
             await this.persist();
         });
     }
-    /** Event-driven wait; abort removes the subscription without stopping the child. */
-    async wait(sessionId: string, signal?: AbortSignal): Promise<ChildSession> {
-        const settled = () => !this.get(sessionId).executions.some(item => ACTIVE.has(item.state));
-        if (!settled()) await new Promise<void>((resolve, reject) => {
+    private async waitUntil(sessionId: string, predicate: (session: ChildSession) => boolean, signal?: AbortSignal): Promise<ChildSession> {
+        if (this.fault) throw this.fault;
+        const ready = () => !this.persisting && predicate(this.get(sessionId));
+        if (!ready()) await new Promise<void>((resolve, reject) => {
             const cleanup = () => { this.waiters.get(sessionId)?.delete(check); signal?.removeEventListener('abort', abort); };
             const check = () => {
-                if (this.fault || settled()) {
+                if (this.fault || ready()) {
                     cleanup();
                     if (this.fault) reject(this.fault);
                     else resolve();
@@ -284,17 +376,40 @@ export class SessionCoordinator {
         });
         return copy(this.get(sessionId));
     }
+    /** Event-driven wait; abort removes the subscription without stopping the child. */
+    async wait(sessionId: string, signal?: AbortSignal): Promise<ChildSession> {
+        return this.waitUntil(sessionId, session => !session.executions.some(item => ACTIVE.has(item.state)), signal);
+    }
+    /** Wait for the execution that claimed a specific instruction (or its cancellation). */
+    async waitForInstruction(sessionId: string, messageId: string, signal?: AbortSignal): Promise<ChildSession> {
+        return this.waitUntil(sessionId, session => {
+            const message = session.messages.find(item => item.id === messageId);
+            if (!message) return !session.executions.some(item => ACTIVE.has(item.state));
+            if (message.state === 'queued') return false;
+            if (message.state === 'cancelled') return true;
+            const execution = message.executionId ? session.executions.find(item => item.id === message.executionId) : undefined;
+            return !execution || !ACTIVE.has(execution.state);
+        }, signal);
+    }
     async close(): Promise<void> {
-        if (this.fault) {
-            this.closed = true;
+        this.closing = true;
+        let closeError: unknown;
+        try {
+            await this.commands;
+            if (!this.fault) {
+                for (const session of [...this.sessions.values()]) {
+                    try { await this.stopSession(session.id, true); }
+                    catch (error) { closeError ??= error; break; }
+                }
+            }
+        } finally {
             for (const controller of this.controls.values()) controller.abort();
-            await Promise.all([...this.tasks]);
-            await this.store.close?.();
-            return;
+            while (this.tasks.size) await Promise.all([...this.tasks]);
+            await this.commands;
+            this.closed = true;
+            try { await this.store.close?.(); }
+            catch (error) { closeError ??= error; }
         }
-        for (const session of this.sessions.values()) await this.stop(session.id);
-        while (this.tasks.size) await Promise.all([...this.tasks]);
-        this.closed = true;
-        await this.store.close?.();
+        if (closeError) throw closeError;
     }
 }

@@ -11,16 +11,19 @@ import { childTranscript } from '../childTranscript';
 
 const statusKeys = { idle: 'childIdle', queued: 'agentQueued', running: 'agentRunning', stopping: 'childStopping', waiting_for_workspace: 'childWaitingWorkspace', waiting_for_approval: 'agentWaiting', waiting_for_answer: 'agentWaitingQuestion', completed: 'agentDone', failed: 'agentFailed', cancelled: 'agentCancelled', interrupted: 'agentInterrupted' } as const;
 
-export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAction, onParent, receipt, decisions, onNew }: {
+export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAction, onParent, receipt, decisions, onNew, requestedId, selectionNonce }: {
     decisions: (parentCallId: string) => ReactNode;
     receipt: {sessionId: string; receipt?: string; accepted: boolean} | null;
     sessions: ChildSessionView[]; rootId: string; visible: boolean; panelClass: string;
     onAction: (root: string, id: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string) => void;
     onParent: () => void;
     onNew: () => void;
+    requestedId?: string | null;
+    selectionNonce?: number;
 }) {
     const [selected, setSelected] = useState<string | null>(null);
     const initialSelection = useRef(false);
+    const appliedRequest = useRef<string | null>(null);
     const [query, setQuery] = useState('');
     const [drafts, setDrafts] = useState<Record<string, string>>({});
     const [activity, setActivity] = useState(false);
@@ -38,7 +41,7 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
     const pane = useRef<HTMLDivElement>(null);
     const following = useRef(true);
     const scroll = useRef<Record<string, number>>({});
-    useEffect(() => { initialSelection.current = false; setSelected(null); setDrafts({}); setPending({}); setSendError(null); scroll.current = {}; }, [rootId]);
+    useEffect(() => { initialSelection.current = false; appliedRequest.current = null; setSelected(null); setDrafts({}); setPending({}); setSendError(null); scroll.current = {}; }, [rootId]);
     const child = sessions.find(session => session.id === selected);
     useEffect(() => {
         if (!child) return;
@@ -57,14 +60,26 @@ export function ChildSessionsPanel({ sessions, rootId, visible, panelClass, onAc
     const choose = (id: string | null) => {
         if (pane.current && selected) scroll.current[selected] = pane.current.scrollTop;
         following.current = scroll.current[id ?? ''] === undefined;
-        if (id && drafts[id] === undefined) setDrafts(current => ({...current,[id]:readComposerDraft(composerDraftKey(`child:${rootId}`,id)).text}));
+        if (id) setDrafts(current => current[id] !== undefined ? current : {...current,[id]:readComposerDraft(composerDraftKey(`child:${rootId}`,id)).text});
         setSelected(id);
     };
+    useEffect(() => {
+        if (!requestedId) return;
+        const key = `${selectionNonce ?? 0}:${requestedId}`;
+        if (appliedRequest.current === key) return;
+        const match = sessions.find(session => session.id === requestedId || session.parentCallId === requestedId);
+        if (!match) return;
+        appliedRequest.current = key;
+        initialSelection.current = true;
+        choose(match.id);
+        setActivity(false);
+        setSendError(null);
+    }, [requestedId, selectionNonce, sessions, rootId]);
     useEffect(() => {
         if (!visible || initialSelection.current || !sessions.length) return;
         initialSelection.current = true;
         const active = sessions.filter(session => ['queued', 'running', 'waiting_for_workspace', 'stopping', 'waiting_for_approval', 'waiting_for_answer'].includes(session.state));
-        setSelected((active.at(-1) ?? sessions.at(-1))!.id);
+        choose((active.at(-1) ?? sessions.at(-1))!.id);
         setActivity(false);
         setSendError(null);
     }, [visible, sessions, rootId]);

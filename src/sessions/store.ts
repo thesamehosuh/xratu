@@ -5,15 +5,16 @@ import { renameWithRetry } from '../local/localSessionStore';
 import type { CoordinatorSnapshot, CoordinatorStore } from './types';
 import {SessionFileOwnership} from './ownership';
 
-const MAX_BYTES = 32 * 1024 * 1024;
+export const MAX_COORDINATOR_STORE_BYTES = 32 * 1024 * 1024;
+const MAX_BYTES = MAX_COORDINATOR_STORE_BYTES;
 
 /** Atomic snapshots. Caller owns execution admission; writes are serialized here. */
 export class FileCoordinatorStore implements CoordinatorStore {
     private writes: Promise<unknown> = Promise.resolve();
     private readonly ownership: SessionFileOwnership;
     constructor(private readonly file: string) {this.ownership=new SessionFileOwnership(file);}
-    async load(): Promise<CoordinatorSnapshot | undefined> {
-        await this.ownership.acquire();
+    async load(signal?: AbortSignal): Promise<CoordinatorSnapshot | undefined> {
+        await this.ownership.acquire(signal);
         return FileCoordinatorStore.peek(this.file);
     }
     static async peek(file: string): Promise<CoordinatorSnapshot | undefined> {

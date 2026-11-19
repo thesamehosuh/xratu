@@ -1,5 +1,5 @@
 /** Recognize host-owned result envelopes after parent history is committed. */
-export function committedChildResults(rows: Array<{role: string; content?: string; tool_call_id?: string; tool_calls?: Array<{id?: unknown; function?: {name?: unknown}}>}>): string[] {
+export function committedChildResults(rows: Array<{role: string; content?: string; hostChildReport?: boolean; tool_call_id?: string; tool_calls?: Array<{id?: unknown; function?: {name?: unknown}}>}>): string[] {
     const calls = new Map<string, string>();
     const receipts = new Set<string>();
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -10,7 +10,7 @@ export function committedChildResults(rows: Array<{role: string; content?: strin
             && typeof result.sessionId === 'string' && typeof result.text === 'string') receipts.add(result.id);
     };
     for (const row of rows) {
-        if (row.role === 'user' && row.content?.startsWith('{')) {
+        if (row.role === 'user' && row.hostChildReport === true && row.content?.startsWith('{')) {
             try {
                 const report = JSON.parse(row.content) as {type?: unknown; result_id?: unknown; report?: unknown};
                 if (report.type === 'child_result' && typeof report.result_id === 'string' && uuid.test(report.result_id)

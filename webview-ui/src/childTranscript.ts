@@ -11,6 +11,7 @@ export function childTranscript(child: ChildSessionView): ChatMessage[] {
         for (const call of row.toolCalls ?? []) {
             const result = results.get(call.id);
             steps.push({id: `${row.id}:${call.id}`, kind:'toolCall', callId:call.id, tool:call.name, text:call.arguments,
+                ...(call.live !== undefined ? { live: call.live } : {}),
                 result:result?.content, isError:result?.isError, interrupted:!result && !live});
         }
         return {id:row.id, role:'assistant', text:row.content, steps, status:live ? 'streaming' : 'done', createdAt:0};

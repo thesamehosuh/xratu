@@ -343,6 +343,14 @@ export async function runSubagentTask(
     let finalText = '';
     let lastError = '';
     let toolCallCount = 0;
+    let steersDelivered = 0;
+    const checkpointRecord = (rows: LocalSessionHistoryMessage[]): SubagentRunRecord => {
+        const bounded = boundSubagentHistory(rows);
+        const replayUserTurns = record.replayUserTurns == null
+            ? undefined
+            : Math.min(record.replayUserTurns + 1, countUserRows(bounded));
+        return { ...record, rows: bounded, ...(replayUserTurns !== undefined ? { replayUserTurns } : {}) };
+    };
     const commitTurn = (): void => {
         if (!finalText.trim()) turnRows.push({ role: 'assistant', content: '[The child run ended without a final report. Tool effects may already have occurred; verify current state before repeating actions.]' });
         record.rows.push({ role: 'user', content: req.prompt }, ...turnRows);
@@ -361,7 +369,7 @@ export async function runSubagentTask(
     // concurrent `task` calls carrying this task_id cannot both start.
     record.running = true;
     try {
-        if (ctx.onCheckpoint) await ctx.onCheckpoint(taskId, {...record, rows: [...record.rows, {role: 'user', content: req.prompt}]});
+        if (ctx.onCheckpoint) await ctx.onCheckpoint(taskId, checkpointRecord([...record.rows, {role: 'user', content: req.prompt}]));
         const restricted = wrapRestrictedExecutor(ctx.executor(signal, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined), allowed);
         const executor: LocalToolExecutor = {execute: (call, output) => {
             if (call.name === 'ask_session_question' && allowed.has(call.name)) {
@@ -381,6 +389,7 @@ export async function runSubagentTask(
             switch (event.type) {
                 case 'steer':
                     turnRows.push({role: 'user', content: event.text});
+                    steersDelivered++;
                     if (event.steerId) record.deliveredMessageIds = [...(record.deliveredMessageIds ?? []), event.steerId];
                     if (record.replayUserTurns != null) record.replayUserTurns++;
                     break;
@@ -408,7 +417,7 @@ export async function runSubagentTask(
                     break;
                 case 'compactionSummary':
                     record.summary = event.value;
-                    record.replayUserTurns = Math.max(0, replayAtEntry - Math.max(0, event.droppedUserTurns ?? 0));
+                    record.replayUserTurns = Math.max(0, replayAtEntry - Math.max(0, event.droppedUserTurns ?? 0)) + steersDelivered;
                     break;
                 default:
                     break;
@@ -417,8 +426,7 @@ export async function runSubagentTask(
             const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(request.contextWindow));
             const row = persisted ? historyRowFromEvent(persisted) : null;
             if (row) { turnRows.push(row); turnRows = boundCarriers(turnRows); }
-            if ((row || event.type === 'steer') && ctx.onCheckpoint) await ctx.onCheckpoint(taskId, { ...record,
-                rows: boundSubagentHistory([...record.rows, { role: 'user', content: req.prompt }, ...turnRows]) });
+            if ((row || event.type === 'steer') && ctx.onCheckpoint) await ctx.onCheckpoint(taskId, checkpointRecord([...record.rows, { role: 'user', content: req.prompt }, ...turnRows]));
         }
     } catch (err) {
         commitTurn();

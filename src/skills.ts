@@ -594,14 +594,25 @@ export async function syncBundledSkillResource(
         if ((err as NodeJS.ErrnoException).code === 'EEXIST') return 'skipped';
         throw err;
     }
+    let shouldUnlink = false;
     try {
         // Recheck the directory after opening, before writing executable bytes.
         if (!fs.lstatSync(skillDir).isDirectory()) return 'skipped';
         const relative = path.relative(fs.realpathSync(skillDir), fs.realpathSync(target));
         if (relative !== fileName) return 'skipped';
-        fs.writeFileSync(descriptor, content, 'utf-8');
+        try {
+            fs.writeFileSync(descriptor, content, 'utf-8');
+        } catch (err: unknown) {
+            shouldUnlink = true;
+            throw err;
+        }
         return 'created';
-    } finally { fs.closeSync(descriptor); }
+    } finally {
+        fs.closeSync(descriptor);
+        if (shouldUnlink) {
+            try { fs.unlinkSync(target); } catch { /* best-effort cleanup of incomplete file */ }
+        }
+    }
 }
 
 /** Read one bundled resource of a skill, scoped to the skill's directory:

@@ -24,9 +24,13 @@ export interface LocalSessionHistoryMessage {
     reasoningContent?: string;
     contextNote?: string;
     compactedToolCalls?: string[];
+    compactedKeptToolCalls?: string[];
+    compactedSteerCount?: number;
     /** Tool-row failure flag. The Messages transport maps it to `is_error`;
      *  persisting it keeps the replayed tool row byte-stable. */
     isError?: boolean;
+    /** Host-origin child report handoff row (never set on user-typed prompts). */
+    hostChildReport?: boolean;
 }
 
 /** An interrupted in-flight turn, persisted mid-run so a host crash can
@@ -784,17 +788,47 @@ export class LocalSessionStore {
         let files: string[];
         try{files=await fs.readdir(directory);}
         catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return 0;throw error;}
+        const families = new Set<string>();
+        for (const name of files) {
+            const match = /^([a-f0-9-]{36}\.json)(?:\.[a-f0-9-]{36}\.tmp)?$/i.exec(name);
+            if (match) families.add(match[1]);
+        }
         let failed=0;
-        for(const file of files.filter(name=>/^[a-f0-9-]{36}\.json$/i.test(name))){
+        for(const file of families){
             try{await removeChildFamily(path.join(directory,file));}catch{failed++;}
         }
         return failed;
     }
 
+    private async readDeletionFamilies(id: string): Promise<Set<string>> {
+        const file = path.join(this.sessionDir(id), 'snapshot.json');
+        let raw: string;
+        try {
+            raw = await fs.readFile(file, 'utf8');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+            throw error;
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Invalid session snapshot');
+        }
+        const families = new Set<string>();
+        const uuid = /^[a-f0-9-]{36}$/i;
+        if (typeof parsed.researchConversationId === 'string' && uuid.test(parsed.researchConversationId)) {
+            families.add(parsed.researchConversationId);
+        }
+        if (Array.isArray(parsed.childFamilyIds)) {
+            for (const entry of parsed.childFamilyIds) {
+                if (typeof entry === 'string' && uuid.test(entry)) families.add(entry);
+            }
+        }
+        return families;
+    }
+
     private async _delete(id: string): Promise<boolean> {
         try {
-            const snapshot=await this.load(id);
-            const families=new Set([...(snapshot?.childFamilyIds??[]),...(snapshot?.researchConversationId?[snapshot.researchConversationId]:[])]);
+            const families = await this.readDeletionFamilies(id);
             for(const family of families) await removeChildFamily(path.join(this.storageRoot,'children',`${family}.json`));
             await fs.rm(this.sessionDir(id), { recursive: true, force: true });
         } catch {

@@ -281,8 +281,11 @@ export async function* runLocalAgent(
     // three agree on when the window counts as "full".
     const compactRatio = request.autoCompactRatio ?? AUTO_COMPACT_RATIO;
     const budget = request.compactionTokenBudget;
-    const compactionWindow = windowTokens && typeof budget === 'number' && Number.isFinite(budget) && budget >= 4096
-        ? Math.min(windowTokens, budget / compactRatio) : windowTokens;
+    const validBudget = typeof budget === 'number' && Number.isFinite(budget) && budget >= 4096 ? budget : undefined;
+    const budgetWindow = validBudget ? validBudget / compactRatio : undefined;
+    const compactionWindow = windowTokens && budgetWindow
+        ? Math.min(windowTokens, budgetWindow)
+        : (windowTokens ?? budgetWindow);
     // Tool schemas ship on every request and the message-only estimate
     // ignores them - compute once and fold into every occupancy calculation.
     const toolTokens = estimateToolTokens(request.tools);
@@ -439,21 +442,32 @@ export async function* runLocalAgent(
     let lastActiveCompactionRound = -8;
     const activeMinCalls = compactionWindow && compactionWindow <= 32_768 ? 4 : 8;
     const activeCooldown = compactionWindow && compactionWindow <= 32_768 ? 4 : 8;
-    for (let round = 0; round < rounds; round++) {
+    let toolRounds = 0;
+    let round = -1;
+    while (toolRounds < rounds) {
+        round++;
         // Admission/compaction can take time before the first model request.
         yield* applySteers();
         if (messages.slice(messages.indexOf(currentTurnMessage) + 1).reduce((n, row) => n + (row.tool_calls?.length ?? 0), 0) >= activeMinCalls
             && round - lastActiveCompactionRound >= activeCooldown
             && compactionWindow
-            && (request.compactionTokenBudget || compactionWindow <= 32_768)
+            && (validBudget != null || compactionWindow <= 32_768)
             && Math.max(noteUsed, estimateUsed()) >= compactionWindow * compactRatio) {
             lastActiveCompactionRound = round;
             const checkpoint = await compactActiveTurn(messages, request, currentTurnMessage, windowTokens, activeMinCalls);
             for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
             if (checkpoint) {
-                yield { type: 'compactionCheckpoint', value: String(checkpoint.content), compactedToolCalls: checkpoint.compactedToolCalls! };
+                yield {
+                    type: 'compactionCheckpoint',
+                    value: String(checkpoint.content),
+                    compactedToolCalls: checkpoint.compactedToolCalls!,
+                    keptToolCalls: checkpoint.compactedKeptToolCalls,
+                    steerCount: checkpoint.compactedSteerCount,
+                };
                 noteUsed = estimateUsed();
             }
+            // Drain any steers queued while active compaction was running.
+            yield* applySteers();
         }
         yield { type: 'status', value: round === 0 ? 'running' : 'continuing' };
 
@@ -990,6 +1004,7 @@ export async function* runLocalAgent(
                     yield event;
                 }
                 if (execError) throw execError;
+                toolRounds++;
                 yield* applySteers();
                 continue;
             }
@@ -1054,6 +1069,7 @@ export async function* runLocalAgent(
             steerFeed?.setInterrupt?.(undefined);
         }
 
+        toolRounds++;
         // Steering: user messages typed while the run streams join the
         // conversation HERE - after the current tool results, BEFORE the
         // next model request - so the model reads them when it reasons

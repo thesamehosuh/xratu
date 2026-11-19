@@ -216,7 +216,7 @@ check('lmstudio: reasoning object -> capability', lmstudioReasoning[0].supportsR
 const lmstudioNoReasoning = parseModelList({ models: [{ key: 'plain', type: 'llm', max_context_length: 8192, capabilities: { vision: false, trained_for_tool_use: false } }] });
 check('lmstudio: absent reasoning stays unknown', lmstudioNoReasoning[0].supportsReasoning, undefined);
 check('lmstudio: explicit vision false preserved', lmstudioNoReasoning[0].supportsVision, false);
-check('lmstudio: explicit tools false preserved', lmstudioNoReasoning[0].supportsTools, false);
+check('lmstudio: trained_for_tool_use false leaves supportsTools unset', lmstudioNoReasoning[0].supportsTools, undefined);
 
 // --- Unrecognized payloads ------------------------------------------------
 check('empty payload -> null', parseModelList({ object: 'list', data: [] }), null);

@@ -22,7 +22,7 @@ export class WorkspaceWriter {
             await cancelled(previous, signal);
             signal.throwIfAborted();
             for (;;) {
-                try { await owner.load(); break; }
+                try { await owner.load(signal); break; }
                 catch (error) {
                     if (!(error instanceof SessionOwnershipError)) throw error;
                     await cancelled(new Promise<void>(resolve => setTimeout(resolve, 50)), signal);

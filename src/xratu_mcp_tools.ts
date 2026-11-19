@@ -48,24 +48,37 @@ export const XRATU_EXPANSION_TOOLS = [
     tool('exit_plan_mode', 'End plan mode. In plan mode, call this ONCE as the LAST step - right after drafting the implementation plan as a task list with update_task_list. It hands control back to the user so the work can be executed in the next turn (which runs in normal mode). No arguments. Meaningless outside plan mode.', {}, [])
 ];
 function textResult(text: string, isError = false) {
-    // JSON results must remain parseable; bound their string fields before serialization.
+    // JSON results must remain parseable; omit whole records and mark partial
+    // rather than silently dropping items or truncating URI/location fields.
     if (text.length > MAX_OUTPUT) {
         try {
             const value: unknown = JSON.parse(text);
-            let budget = 4000;
-            const bounded = (v: unknown): unknown => {
-                if (typeof v === 'string') {
-                    const out = v.slice(0, Math.max(0, budget));
-                    budget -= out.length;
-                    return out.length < v.length ? out + '… [truncated]' : out;
+            if (Array.isArray(value)) {
+                const kept: unknown[] = [];
+                let size = 64;
+                for (const item of value) {
+                    const serialized = JSON.stringify(item);
+                    if (size + serialized.length + 2 > MAX_OUTPUT && kept.length > 0) break;
+                    if (size + serialized.length + 2 > MAX_OUTPUT) break;
+                    kept.push(item);
+                    size += serialized.length + 2;
                 }
-                if (Array.isArray(v))
-                    return v.slice(0, 100).map(bounded);
-                if (v && typeof v === 'object')
-                    return Object.fromEntries(Object.entries(v).slice(0, 100).map(([k, x]) => [k, bounded(x)]));
-                return v;
-            };
-            text = JSON.stringify(bounded(value));
+                text = JSON.stringify({ items: kept, truncated: true, total: value.length });
+            } else if (value && typeof value === 'object' && Array.isArray((value as { symbols?: unknown }).symbols)) {
+                const record = value as { symbols: unknown[]; [key: string]: unknown };
+                const kept: unknown[] = [];
+                let size = 128;
+                for (const item of record.symbols) {
+                    const serialized = JSON.stringify(item);
+                    if (size + serialized.length + 2 > MAX_OUTPUT && kept.length > 0) break;
+                    if (size + serialized.length + 2 > MAX_OUTPUT) break;
+                    kept.push(item);
+                    size += serialized.length + 2;
+                }
+                text = JSON.stringify({ ...record, symbols: kept, truncated: true });
+            } else {
+                text = JSON.stringify({ truncated: true, preview: text.slice(0, 16000) });
+            }
             if (text.length > MAX_OUTPUT)
                 text = JSON.stringify({ truncated: true, preview: text.slice(0, 16000) });
         }
@@ -103,12 +116,22 @@ async function lspTool(name: string, args: any, runtime: ExpansionToolRuntime): 
         const uri = uriFor(runtime, args.path);
         const result = await vscode.commands.executeCommand<any[]>('vscode.executeDocumentSymbolProvider', uri);
         let remaining = 500;
-        const bounded = (items: any[]): any[] => items.slice(0, 200).flatMap(item => {
-            if (remaining-- <= 0)
-                return [];
-            return [{ ...locationJson(item), ...(item.children?.length ? { children: bounded(item.children) } : {}) }];
-        });
-        return textResult(JSON.stringify({ symbols: bounded(result ?? []), status: result?.length ? 'ok' : 'empty_or_unavailable' }));
+        let truncated = false;
+        const bounded = (items: any[]): any[] => {
+            if (items.length > 200) truncated = true;
+            const out: any[] = [];
+            for (const item of items.slice(0, 200)) {
+                if (remaining <= 0) { truncated = true; break; }
+                remaining--;
+                out.push({ ...locationJson(item), ...(item.children?.length ? { children: bounded(item.children) } : {}) });
+            }
+            return out;
+        };
+        return textResult(JSON.stringify({
+            symbols: bounded(result ?? []),
+            status: result?.length ? 'ok' : 'empty_or_unavailable',
+            ...(truncated ? { truncated: true } : {}),
+        }));
     }
     if (name === 'symbols') {
         const query = String(args.query || '').trim();
@@ -131,11 +154,28 @@ async function lspTool(name: string, args: any, runtime: ExpansionToolRuntime): 
         let result = await vscode.commands.executeCommand<any[]>('vscode.executeReferenceProvider', uri, position) || [];
         if (args.include_declaration === false) {
             const definitions = await vscode.commands.executeCommand<any[]>('vscode.executeDefinitionProvider', uri, position) || [];
-            result = result.filter(ref => !definitions.some(def => {
-                const targetUri = def.targetUri ?? def.uri;
-                const range = def.targetSelectionRange ?? def.range;
-                return targetUri?.toString() === ref.uri?.toString() && range?.contains(ref.range.start);
-            }));
+            const isRange = (r: any): r is vscode.Range =>
+                typeof r?.start?.line === 'number' && typeof r?.start?.character === 'number'
+                && typeof r?.end?.line === 'number' && typeof r?.end?.character === 'number';
+            const preciseDefs = definitions.flatMap(def => {
+                const targetUri = def?.targetUri ?? def?.uri;
+                const selection = isRange(def?.targetSelectionRange)
+                    ? def.targetSelectionRange
+                    : (isRange(def?.range) && def.range.start.line === def.range.end.line ? def.range : undefined);
+                return targetUri && selection ? [{ uri: targetUri.toString(), range: selection }] : [];
+            });
+            if (result.length > 0 && preciseDefs.length === 0) {
+                return textResult(JSON.stringify({
+                    references: result.slice(0, 300).map(locationJson),
+                    declarationExcluded: false,
+                    note: 'Language provider did not identify a precise declaration location; results may still include the declaration.',
+                }, null, 2));
+            }
+            const sameRange = (a: vscode.Range, b: vscode.Range) =>
+                a.start.line === b.start.line && a.start.character === b.start.character
+                && a.end.line === b.end.line && a.end.character === b.end.character;
+            result = result.filter(ref => !preciseDefs.some(def =>
+                def.uri === ref.uri?.toString() && isRange(ref.range) && sameRange(def.range, ref.range)));
         }
         return textResult(JSON.stringify(result.slice(0, 300).map(locationJson), null, 2));
     }
@@ -227,13 +267,15 @@ export async function handleExpansionTool(name: string, args: any, runtime: Expa
         return textResult(String(error), true);
     }
 }
-/** Shared workspace inventory for context selection; not a model tool. */
-export async function gitWorkspaceFiles(workspaceRoot: string, timeout = 15000): Promise<Set<string>> {
+/** Shared workspace inventory for context selection; not a model tool.
+ *  Returns `null` when Git inventory lookup fails so callers can distinguish
+ *  a failure from a valid empty repository. */
+export async function gitWorkspaceFiles(workspaceRoot: string, timeout = 15000): Promise<Set<string> | null> {
     try {
         const result = await execFile('git', ['-C', workspaceRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], { timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
         return new Set(String(result.stdout ?? '').split('\0').filter(Boolean).map(item => item.replace(/\\/g, '/')));
     }
     catch {
-        return new Set();
+        return null;
     }
 }

@@ -24,7 +24,7 @@ const vscode = {
     },
     commands: { executeCommand: async name => name === 'vscode.executeReferenceProvider'
         ? [0, 1].map(line => ({ uri: uriFor(path.join(ws, 'sample.txt')), range: { start: { line, character: 0 }, end: { line, character: 1 } } }))
-        : [{ uri: uriFor(path.join(ws, 'sample.txt')), range: { contains: position => position.line === 0 } }] },
+        : [{ uri: uriFor(path.join(ws, 'sample.txt')), range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }] },
 };
 Module._load = function (name, ...args) {
     if (name === 'vscode') return vscode;
