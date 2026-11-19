@@ -113,16 +113,21 @@ export class CoordinatedSubagents implements SubagentRunner {
     async run(request: SubagentRunRequest): Promise<{ output: string; isError?: boolean }> {
         try {
             const coordinator = await this.ready;
+            if (request.taskId && request.model) return { output: 'Omit model when continuing an existing child.', isError: true };
             let session = request.taskId ? coordinator.list().find(item => item.id === request.taskId) : undefined;
             if (request.taskId && !session) return { output: 'Unknown child session. Start a new assignment.', isError: true };
             if (!session) {
                 const definition = resolveSubagent(this.definitions, request.subagentType);
                 if (!definition) return { output: 'Unknown child profile.', isError: true };
-                session = await coordinator.create(this.host.parentSessionId!, definition.name, request.description, { execute: async () => '' }, request.parentCallId, this.seed(definition));
+                if (request.model && !this.host.childModelIds?.has(request.model)) {
+                    return { output: 'The requested model is unavailable for child tools on the active connection.', isError: true };
+                }
+                session = await coordinator.create(this.host.parentSessionId!, definition.name, request.description, { execute: async () => '' }, request.parentCallId,
+                    this.seed(request.model ? { ...definition, model: request.model } : definition));
             }
             if (request.subagentType && request.subagentType !== session.profile) return { output: 'Child session profile mismatch.', isError: true };
             this.bind(coordinator, session, request.parentCallId ?? session.id);
-            const definition = resolveSubagent(this.definitions, session.profile) ?? (session.checkpoint as SubagentRunRecord | undefined)?.definition;
+            const definition = (session.checkpoint as SubagentRunRecord | undefined)?.definition ?? resolveSubagent(this.definitions, session.profile);
             if (!definition) return { output: 'Child profile is unavailable.', isError: true };
             const parentSignal = this.host.baseRequest(definition, session.id).signal;
             const stop = () => { void coordinator.stop(session!.id).catch(() => undefined); };

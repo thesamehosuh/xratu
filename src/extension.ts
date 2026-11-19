@@ -4797,6 +4797,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // worst failure mode this feature had. Unresolvable lists are now
         // definition errors, and partial mismatches are warnings.
         const runSkills = this._discoverSkillsForRun(workspaceRoot);
+        const availableModels = catalogEntryFor(this._modelCatalog, baseUrlHost(active.baseUrl), Date.now())?.models ?? [];
+        const childModels = availableModels.filter(candidate => candidate.supportsTools ?? modelLikelySupportsTools(candidate.id));
+        const childModelIds = new Set(childModels.map(candidate => candidate.id));
+        const lowerCostChildModels: string[] = [];
+        if (!runPlanMode && !auth.subscription && childModels.length) {
+            const overrides = this._modelPriceOverrides();
+            const priceLookup = this._priceLookupFor(active.baseUrl, model);
+            const parentPrice = priceForModel(model, overrides, priceLookup);
+            if (parentPrice) {
+                const candidates = childModels.map(({ id, pricing }) => ({
+                    id, price: priceForModel(id, overrides, { ...priceLookup, providerPrice: pricing ?? null }),
+                }));
+                const lowerCost = candidates.flatMap(({ id, price }) =>
+                    price && (price.currency ?? 'USD') === (parentPrice.currency ?? 'USD') && price.input < parentPrice.input && price.output <= parentPrice.output
+                        ? [{ id, input: price.input, output: price.output }] : []);
+                lowerCost.sort((a, b) => a.input - b.input || a.output - b.output || (a.id < b.id ? -1 : 1));
+                lowerCostChildModels.push(...lowerCost.slice(0, 8).map(candidate => candidate.id));
+            }
+        }
+        const childModelChoices = lowerCostChildModels.length
+            ? { ids: lowerCostChildModels, lowerInputPrice: true }
+            : { ids: [...childModelIds].filter(id => id !== model).slice(0, 8), lowerInputPrice: false };
         const subagentDefs = discoverSubagents({
             workspaceRoot: workspaceRoot || undefined,
             validation: {
@@ -4825,6 +4847,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._view?.webview.postMessage({ type: 'childSessions', rootId: childRoot, sessions: sessions.map(session => childSessionView(session, text => this._renderMarkdown(text))) });
                 },
                 connectionId: active.id,
+                childModelIds,
                 baseRequest: (def, childConversationId) => {
                     const subagentConversationId = `xratu-subagent-${childConversationId}`;
                     // A profile may name its own model/reasoning level; the
@@ -5036,6 +5059,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         skills: runSkills,
                         // Subagent profiles: adds the `task` delegation tool.
                         subagents: subagentDefs,
+                        childModelChoices,
                     }),
                     ...(this._currentTaskList()?.length ? { taskList: this._currentTaskList()! } : {}),
                     taskListProvider: () => this._activeRunTaskList ?? undefined,

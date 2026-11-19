@@ -69,6 +69,8 @@ export interface SubagentHostContext {
     >;
     /** Nonsecret provider identity, used to invalidate opaque replay state. */
     connectionId?: string;
+    /** Models eligible for a parent-selected override on the active connection. */
+    childModelIds?: ReadonlySet<string>;
     /** Build the child toolset (host applies plan/yolo/external/skills, this
      *  layer only enforces the per-agent allow-list and the recursion deny). */
     tools(def: SubagentDefinition): LocalToolDefinition[];
@@ -240,6 +242,7 @@ export async function runSubagentTask(
     let taskId = '';
     let resumed = false;
     if (req.taskId) {
+        if (req.model) return { output: 'Omit model when continuing an existing child.', isError: true };
         const existing = registry.get(req.taskId);
         if (!existing) {
             const known = Array.from(registry.keys()).join(', ') || 'none';
@@ -272,8 +275,11 @@ export async function runSubagentTask(
                 isError: true,
             };
         }
+        if (req.model && !ctx.childModelIds?.has(req.model)) {
+            return { output: 'The requested model is unavailable for child tools on the active connection.', isError: true };
+        }
         taskId = newTaskId();
-        record = { defName: def0.name, rows: [], startedAt: Date.now() };
+        record = { defName: def0.name, rows: [], startedAt: Date.now(), ...(req.model ? { definition: { ...def0, model: req.model } } : {}) };
     }
 
     const def = record.definition ?? resolveSubagent(defs, record.defName);

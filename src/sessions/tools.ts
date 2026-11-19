@@ -1,12 +1,12 @@
 import type { LocalToolDefinition } from '../local/localTypes';
-import type { SubagentDefinition, SubagentRunner } from '../subagents';
+import type { ChildModelChoices, SubagentDefinition, SubagentRunner } from '../subagents';
 import { buildTaskToolSchema, buildTaskToolDescription } from '../subagents';
 
 export const SESSION_TOOLS = new Set(['spawn_agent', 'send_agent', 'inspect_agents', 'wait_agents', 'stop_agent']);
-export function sessionToolDefinitions(profiles: readonly SubagentDefinition[]): LocalToolDefinition[] {
+export function sessionToolDefinitions(profiles: readonly SubagentDefinition[], models?: ChildModelChoices): LocalToolDefinition[] {
     const reference = { type: 'string', description: 'Durable child session ID returned by spawn_agent or inspect_agents.' };
     return [
-        { name: 'spawn_agent', description: `${buildTaskToolDescription(profiles)} Launches in the background and returns its durable ID immediately. Use send_agent for follow-ups and wait_agents for required results before finishing.`, inputSchema: buildTaskToolSchema(profiles), requiresApproval: false },
+        { name: 'spawn_agent', description: `${buildTaskToolDescription(profiles)} Use background delegation when requested or when you have useful independent work to do while the child runs. Returns the durable ID immediately. Use send_agent for follow-ups and wait_agents for required results before finishing.`, inputSchema: buildTaskToolSchema(profiles, models), requiresApproval: false },
         { name: 'send_agent', description: 'Send a follow-up assignment to an existing child conversation. Queues behind active work without discarding its context. Returns a receipt immediately; wait_agents receives the result.', inputSchema: { type: 'object', properties: { session_id: reference, prompt: {type:'string'} }, required:['session_id','prompt'] }, requiresApproval: false },
         { name: 'inspect_agents', description: 'Inspect this conversation’s child sessions, execution states, queued instructions and latest results. Does not start model work.', inputSchema: {type:'object',properties:{}}, requiresApproval:false },
         { name: 'wait_agents', description: 'Wait for selected child sessions to settle and receive their reports. Event-driven: do useful independent work before waiting; do not poll inspect_agents repeatedly.', inputSchema:{type:'object',properties:{session_ids:{type:'array',items:reference,minItems:1,maxItems:32}},required:['session_ids']},requiresApproval:false },

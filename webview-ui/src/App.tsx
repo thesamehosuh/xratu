@@ -15,7 +15,6 @@ import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AppearancePage } from './components/AppearancePage';
 import { appearanceStyle, readAppearance } from './appearance';
-import { SessionPages } from './components/SessionPages';
 import { AgentsPage } from './components/AgentsPage';
 import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { ChangesPanel } from './components/ChangesPanel';
@@ -79,7 +78,7 @@ import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, transcriptOptions, type TranscriptPrefs } from './transcriptPrefs';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'appearance' | 'workspace' | 'history' | 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
+type Screen = 'appearance' | 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -376,7 +375,7 @@ export function App() {
     const sessionSearchLatest = useRef(0);
     // Debounced full-text session search while the picker is open.
     useEffect(() => {
-        if ((!sessionsOpen && screen !== 'history' && screen !== 'workspace') || !sessionQuery.trim()) {
+        if (!sessionsOpen || !sessionQuery.trim()) {
             // Invalidate any in-flight search and drop the results view.
             sessionSearchLatest.current = ++sessionSearchSeq.current;
             setSessionResults(null);
@@ -391,7 +390,7 @@ export function App() {
             send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all', requestId });
         }, 200);
         return () => clearTimeout(handle);
-    }, [sessionQuery, sessionsOpen, sessionsScope, send, screen]);
+    }, [sessionQuery, sessionsOpen, sessionsScope, send]);
 
     /** Kick off local-runtime discovery (welcome screen + credentials page).
      *  Probing can finish near-instantly - the ≥1s spinner floor lives in
@@ -753,8 +752,6 @@ export function App() {
             case 'proxy': setScreen(proxyReturnTo); return true;
             case 'settings':
             case 'appearance':
-            case 'history':
-            case 'workspace':
             case 'engines':
             case 'agents': setScreen('chat'); return true;
             default: return false;
@@ -1395,10 +1392,6 @@ export function App() {
     };
     let overlay: JSX.Element | null = null;
     if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={prefs => { setAppearance(prefs); send({ type: 'appearanceSet', prefs }); }} onTheme={() => send({ type: 'selectColorTheme' })} />;
-    if (screen === 'history' || screen === 'workspace') overlay = <SessionPages history={screen === 'history'} sessions={sessionQuery.trim() ? sessionResults ?? [] : sessions} loading={sessionsLoading || !!sessionQuery.trim() && sessionResults === null} query={sessionQuery} onQuery={setSessionQuery}
-        onOpen={id => { setScreen('chat'); if (id !== currentSessionId) { setEditDraft(null); send({ type: 'openSession', id }); } }} onNew={() => { setEditDraft(null); showConversation(); send({ type: 'newSession' }); }}
-        onConversation={() => { setScreen('chat'); showConversation(); }} onAgents={() => { setScreen('chat'); setSurfaceTab('agents'); }} onBackground={() => { setScreen('chat'); setSurfaceTab('background'); }}
-        onPanel={panel => { setScreen('chat'); dock.activate(panel); }} pending={chat.messages.reduce((count, message) => count + (message.approval && !message.approval.resolution ? 1 : 0) + (message.decisions?.filter(decision => !decision.answered).length ?? 0), 0)} agents={agentRuns.length} background={liveJobs.length} />;
     if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { settingsScopeInitialized.current = true; setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
@@ -1670,7 +1663,7 @@ export function App() {
     />;
 
     const overlayOpen = overlay !== null;
-    const settingsOpen = overlayOpen && screen !== 'welcome' && screen !== 'workspace' && screen !== 'history';
+    const settingsOpen = overlayOpen && screen !== 'welcome';
     useLayoutEffect(() => {
         if (overlayOpen && screen !== 'welcome') setSessionsOpen(window.innerWidth >= 860);
     }, [overlayOpen, screen]);
@@ -1700,9 +1693,7 @@ export function App() {
                 onToggleSide={dock.toggleSide}
                 onAddTab={() => { setScreen('chat'); dock.add('main'); }}
                 onBackWork={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }}
-                destinationLabel={overlayOpen ? t(screen === 'history' ? 'surfaceHistory' : screen === 'workspace' ? 'surfaceWorkspace' : screen === 'welcome' ? 'settingsTitle' : activeSection === 'appearance' ? 'appearanceTitle' : activeSection === 'settings' ? 'settingsTitle' : activeSection === 'mcp' ? 'mcpServersTab' : activeSection === 'providers' ? 'providersTitle' : activeSection === 'engines' ? 'enginesTitle' : activeSection === 'skills' ? 'skillsTitle' : activeSection === 'marketplace' ? 'mcpMarketTab' : activeSection === 'agents' ? 'surfaceAgents' : activeSection === 'usage' ? 'settingsUsage' : 'proxyPageTitle') : undefined}
-                onOpenHistory={() => { setScreen('history'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
-                onOpenWorkspace={() => { setScreen('workspace'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
+                destinationLabel={overlayOpen ? t(screen === 'welcome' ? 'settingsTitle' : activeSection === 'appearance' ? 'appearanceTitle' : activeSection === 'settings' ? 'settingsTitle' : activeSection === 'mcp' ? 'mcpServersTab' : activeSection === 'providers' ? 'providersTitle' : activeSection === 'engines' ? 'enginesTitle' : activeSection === 'skills' ? 'skillsTitle' : activeSection === 'marketplace' ? 'mcpMarketTab' : activeSection === 'agents' ? 'surfaceAgents' : activeSection === 'usage' ? 'settingsUsage' : 'proxyPageTitle') : undefined}
                 settingsNavigation={settingsOpen ? <PageSidebar current={activeSection} onSelect={openSection} onBack={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }} /> : undefined}
                 workNavigation={<nav className="workspace-views" aria-label={t('surfaceWorkspace')}>{dock.allPanels.filter(panel => !isNewTab(panel)).map(panel => {
                     if (isNewTab(panel)) return null;

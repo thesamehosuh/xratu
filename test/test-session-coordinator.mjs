@@ -161,6 +161,16 @@ console.log('Session coordinator real-loop integration and cross-window ownershi
 // Parent orchestration can launch, instruct an active child, then await both executions.
 {
  const {createSubagentRunner,closeSubagentRunner}=require('../out/local/subagentRunner.js');
+ const Module=require('node:module');
+ const originalLoad=Module._load;
+ let createLocalToolExecutor;
+ try {
+  Module._load=function(name,...args) {
+   if(name==='vscode') return {workspace:{getConfiguration:()=>({get:()=>undefined})}};
+   return originalLoad.call(this,name,...args);
+  };
+  ({createLocalToolExecutor}=require('../out/mcp.js'));
+ } finally {Module._load=originalLoad;}
  const {builtinSubagents,filterToolsForSubagent}=require('../out/subagents.js');
  const {sessionToolDefinitions}=require('../out/sessions/tools.js');
  const {isAvailableTool}=require('../out/tooling/toolPolicy.js');
@@ -178,10 +188,17 @@ console.log('Session coordinator real-loop integration and cross-window ownershi
    const bytes=new TextEncoder().encode(`data: ${JSON.stringify({choices:[{delta:{content:'Result '+requests.length}}]})}\n\ndata: [DONE]\n\n`);
    return {ok:true,status:200,body:new ReadableStream({start(controller){controller.enqueue(bytes);controller.close();}})};
   };
-  const runner=createSubagentRunner({store,parentSessionId:'root',baseRequest:()=>({baseUrl:'https://example.invalid/v1',apiKey:'test',model:'test-model',apiStyle:'chat',contextWindow:100000}),tools:()=>[],systemPrompt:()=> 'Complete the assignment',executor:()=>({execute:async()=>({output:'ok'})}),approvalGate:{requestApproval:async()=>({})}},builtinSubagents(),registry);
-  const launch=await runner.run({subagentType:'general',description:'Parallel investigation',prompt:'Investigate',parentCallId:'launch-receipt',background:true});
+  const runner=createSubagentRunner({store,parentSessionId:'root',childModelIds:new Set(['search-model']),
+   baseRequest:definition=>({baseUrl:'https://example.invalid/v1',apiKey:'test',model:definition.model ?? 'test-model',apiStyle:'chat',contextWindow:100000}),
+   tools:()=>[],systemPrompt:()=> 'Complete the assignment',executor:()=>({execute:async()=>({output:'ok'})}),approvalGate:{requestApproval:async()=>({})}},builtinSubagents(),registry);
+  const executor=createLocalToolExecutor(process.cwd(),async()=>{},undefined,undefined,runner);
+  const assignment={subagent_type:'explore',description:'Parallel investigation',prompt:'Investigate',model:'search-model'};
+  const invalid=await executor.execute({id:'invalid',name:'task',arguments:{...assignment,model:'unknown-model'}});
+  assert.equal(invalid.isError,true);
+  assert.equal((await runner.sessions()).length,0);
+  const launch=await executor.execute({id:'launch-receipt',name:'spawn_agent',arguments:assignment});
   const id=JSON.parse(launch.output).session_id; await started.promise;
-  const retried=await runner.run({subagentType:'general',description:'Parallel investigation',prompt:'Investigate',parentCallId:'launch-receipt',background:true});
+  const retried=await executor.execute({id:'launch-receipt',name:'spawn_agent',arguments:assignment});
   assert.equal(JSON.parse(retried.output).session_id,id);
   assert.equal((await runner.sessions()).length,1);
   assert.equal((await runner.sessions())[0].messages.length,1);
@@ -194,6 +211,8 @@ console.log('Session coordinator real-loop integration and cross-window ownershi
   assert.equal(report.output.includes('providerBlocks'),false);
   assert.ok(JSON.stringify(requests[1]).includes('Also verify Windows'));
   assert.ok(JSON.stringify(requests[1]).includes('Investigate'));
+  assert.deepEqual(requests.map(request=>request.model),['search-model','search-model']);
+  assert.equal((await runner.sessions())[0].checkpoint.definition.model,'search-model');
   await closeSubagentRunner(registry);
  } finally {globalThis.fetch=original;}
 }

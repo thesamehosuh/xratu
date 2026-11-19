@@ -511,6 +511,7 @@ export function getLocalToolDefinitions(opts?: {
     external?: import('./externalMcp').AggregatedTool[];
     skills?: DiscoveredSkill[];
     subagents?: SubagentDefinition[];
+    childModelChoices?: import('./subagents').ChildModelChoices;
     sessionQuestions?: boolean;
 }): LocalToolDefinition[] {
     const yolo = !!opts?.yolo;
@@ -567,11 +568,11 @@ export function getLocalToolDefinitions(opts?: {
     const taskDefs: LocalToolDefinition[] = [];
     const subagents = opts?.subagents;
     if (!plan && subagents && listableSubagents(subagents).length > 0) {
-        taskDefs.push(...sessionToolDefinitions(subagents));
+        taskDefs.push(...sessionToolDefinitions(subagents, opts?.childModelChoices));
         taskDefs.push({
             name: SUBAGENT_TOOL_NAME,
             description: buildTaskToolDescription(subagents),
-            inputSchema: buildTaskToolSchema(subagents),
+            inputSchema: buildTaskToolSchema(subagents, opts?.childModelChoices),
             requiresApproval: false,
         });
     }

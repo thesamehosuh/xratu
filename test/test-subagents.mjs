@@ -259,6 +259,9 @@ fs.writeFileSync(
     check('valid args parse', good.ok, true);
     check('type kept', good.value?.subagentType, 'explore');
     check('prompt kept', good.value?.prompt, 'Find X');
+    check('model override captured', parseTaskToolArgs({ subagent_type: 'explore', prompt: 'Find X', model: ' small-model ' }).value?.model, 'small-model');
+    check('non-string model rejected', parseTaskToolArgs({ subagent_type: 'explore', prompt: 'Find X', model: 42 }).ok, false);
+    check('resume model override rejected', parseTaskToolArgs({ prompt: 'Find X', task_id: 'abc123def0', model: 'small-model' }).ok, false);
     const noType = parseTaskToolArgs({ prompt: 'Find X' });
     check('missing subagent_type rejected', noType.ok, false);
     ok('missing type error names the field', !noType.ok && noType.error.includes('subagent_type'));
@@ -286,13 +289,17 @@ fs.writeFileSync(
     ok('description lists custom reviewer', description.includes('- reviewer: Project reviewer'));
     ok('description excludes invalid defs', !description.includes('mismatch'));
     ok('description states the fresh-context contract', description.includes('FRESH context'));
-    ok('description leaves delegation choice to the agent', !description.includes('When to delegate'));
+    ok('description reserves delegation for requested or materially beneficial work', description.includes('requested delegation or a self-contained assignment that materially benefits'));
+    ok('description requires a capable model for implementation', description.includes('comparably capable coding model for delegated implementation'));
     ok('description retains the user-decision boundary', description.includes("ask_session_question"));
     ok('description does not promote delegation for research', !description.includes('tours'));
-    const schema = buildTaskToolSchema(defs);
+    const schema = buildTaskToolSchema(defs, { ids: ['small-model'], lowerInputPrice: true });
     check('schema requires prompt (type comes from subagent_type or task_id)', JSON.stringify(schema.required), JSON.stringify(['prompt']));
     ok('schema enum line lists types', String(schema.properties.subagent_type.description).includes('explore'));
     ok('schema enum line lists custom type', String(schema.properties.subagent_type.description).includes('reviewer'));
+    ok('schema scopes lower-priced models to read-only bulk search', schema.properties.model.description.includes('Lower input-price options for read-only bulk search: small-model'));
+    const unpriced = buildTaskToolSchema(defs, { ids: ['local-model'], lowerInputPrice: false });
+    ok('schema lists an alternative without claiming a price advantage', unpriced.properties.model.description.includes('Available alternatives: local-model'));
     ok('schema documents task_id continuation', String(schema.properties.task_id.description).includes('task_id'));
     ok('description documents the task_id resume path', description.includes('task_id'));
 }

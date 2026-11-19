@@ -9,6 +9,8 @@ export const REPLY_CONCISE_FINAL = "Final responses: default to 1-3 short senten
 
 export const TASK_LIST_GUIDANCE = "Outside plan mode, use update_task_list only for substantial work that benefits from a persistent checklist or when the user requests one. Skip it for simple fixes and short tasks. Update at meaningful milestones, not after every tool call, and do not resend unchanged lists.";
 
+export const SUBAGENT_GUIDANCE = "Do the work in the current conversation by default. Handle routine searches, focused edits, debugging, and verification directly. Delegate only when the user asks or a self-contained assignment has a concrete benefit. Reserve smaller or lower-cost search models for read-only evidence gathering on very large searches. Give the child a bounded search scope and ask for evidence with paths, line numbers, and gaps in coverage. If you delegate implementation, use the parent model or a comparably capable coding model. Use the fewest child sessions needed and reuse them for follow-ups. Review the evidence yourself and make the final judgment in the parent conversation.";
+
 /** Bridge facts the native context may advertise. */
 export interface NativeSystemContextOptions {
     /** The bridged tool catalog for this session (`nativeServiceTools(...)`
@@ -33,7 +35,9 @@ export function buildNativeSystemContext(planMode: boolean, replyLanguage: 'fa' 
         'Keep task labels in the reply language. Native tools, credentials, and project instructions remain managed by OpenCode.',
     ].join(' ');
     return [language, REPLY_CONCISE_FINAL, services,
-        planMode ? 'Plan mode: keep this turn read-only. Draft the plan with update_task_list, then call exit_plan_mode and finish. Full tool access begins on the next turn only.' : PULL_REQUEST_AGENT_INSTRUCTIONS,
+        ...(planMode
+            ? ['Plan mode: keep this turn read-only. Draft the plan with update_task_list, then call exit_plan_mode and finish. Full tool access begins on the next turn only.']
+            : [SUBAGENT_GUIDANCE, 'For bulk searches, choose a native OpenCode subagent configured with a smaller or lower-cost model when available.', PULL_REQUEST_AGENT_INSTRUCTIONS]),
     ].filter(Boolean).join('\n\n');
 }
 
@@ -173,6 +177,9 @@ export function buildLocalSystemPrompt(inputs: LocalSystemPromptInputs): string 
         );
     } else {
         parts.push(
+            "",
+            SUBAGENT_GUIDANCE,
+            "For bulk workspace searches, use the read-only explore profile. Set model on a new task or spawn_agent call to select a model from the active connection, or choose a profile with a suitable configured model.",
             "",
             "BUILD MODE: this turn permits workspace edits and command execution through the available tools. " +
             "Carry out the user's requested implementation and verify it. Tool approvals are handled by the host; " +

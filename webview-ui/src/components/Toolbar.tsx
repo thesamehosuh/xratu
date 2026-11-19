@@ -8,9 +8,8 @@ import {
     PanelRight,
     Plus,
     FolderOpen,
-    History,
-    LayoutDashboard,
     ChevronDown,
+    ChevronUp,
     MessageSquarePlus,
     Pencil,
     Search,
@@ -28,8 +27,6 @@ interface ToolbarProps {
     conn: ConnStatus;
     destinationLabel?: string;
     onBackWork?: () => void;
-    onOpenHistory?: () => void;
-    onOpenWorkspace?: () => void;
     settingsNavigation?: ReactNode;
     workNavigation?: ReactNode;
     tabsVisible?: boolean;
@@ -76,9 +73,10 @@ function timeGroup(ts: number): 'today' | 'yesterday' | 'week' | 'older' {
 
 const GROUP_ORDER: Array<'today' | 'yesterday' | 'week' | 'older'> = ['today', 'yesterday', 'week', 'older'];
 const GROUP_KEYS = { today: 'sessionsToday', yesterday: 'sessionsYesterday', week: 'sessionsLastWeek', older: 'sessionsOlder' } as const;
+const RECENT_SESSION_COUNT = 5;
 
 export function Toolbar({
-    conn: _conn, workspaceLabel, destinationLabel, onBackWork, onOpenHistory, onOpenWorkspace, settingsNavigation, workNavigation, tabsVisible, sideOpen, onToggleTabs, onToggleSide, onAddTab,
+    conn: _conn, workspaceLabel, destinationLabel, onBackWork, settingsNavigation, workNavigation, tabsVisible, sideOpen, onToggleTabs, onToggleSide, onAddTab,
     sessionTitle, sessionsOpen, sessions, sessionsLoading, currentSessionId, sessionsScope,
     sessionQuery, searchResults, onSessionQuery,
     onNewSession, onToggleSessions, onSessionsScope, onOpenSession, onRenameSession, onDeleteSession,
@@ -88,6 +86,7 @@ export function Toolbar({
     const [editValue, setEditValue] = useState('');
     const [confirmId, setConfirmId] = useState<string | null>(null);
     const [searchOpen, setSearchOpen] = useState(false);
+    const [showAllSessions, setShowAllSessions] = useState(false);
     const searchInput = useRef<HTMLInputElement>(null);
     const searchTrigger = useRef<HTMLButtonElement>(null);
     const rootRef = useRef<HTMLElement | null>(null);
@@ -109,6 +108,7 @@ export function Toolbar({
         if (!sessionsOpen) {
             setEditingId(null);
             setConfirmId(null);
+            setShowAllSessions(false);
         }
     }, [sessionsOpen]);
 
@@ -118,7 +118,7 @@ export function Toolbar({
     };
 
     const grouped = new Map<string, SessionMeta[]>();
-    for (const item of sessions) {
+    for (const item of showAllSessions ? sessions : sessions.slice(0, RECENT_SESSION_COUNT)) {
         const g = timeGroup(item.updatedAt);
         if (!grouped.has(g)) grouped.set(g, []);
         grouped.get(g)!.push(item);
@@ -237,7 +237,6 @@ export function Toolbar({
                     <div className="workspace-directory"><FolderOpen size={16} /><span dir="ltr">{workspaceLabel || t('sessionsThisWorkspace')}</span></div>
                     <button type="button" className="workspace-new" onClick={startNewSession}><MessageSquarePlus size={15} /><span>{t('newSession')}</span></button>
                     <div className="workspace-nav-label">{t('surfaceWorkspace')}</div>
-                    <nav className="workspace-views"><button type="button" onClick={onOpenWorkspace}><LayoutDashboard size={15} /><span>{t('surfaceWorkspace')}</span></button><button type="button" onClick={onOpenHistory}><History size={15} /><span>{t('surfaceHistory')}</span></button></nav>
                     {workNavigation}
                     <div className="workspace-nav-label">{t('sessionsTitle')}</div>
                     <div className="session-pop-head" role="group" aria-label={t('sessionsTitle')}>
@@ -245,7 +244,7 @@ export function Toolbar({
                             type="button"
                             className={`session-scope${sessionsScope === 'workspace' ? ' active' : ''}`}
                             aria-pressed={sessionsScope === 'workspace'}
-                            onClick={() => onSessionsScope('workspace')}
+                            onClick={() => { if (sessionsScope !== 'workspace') setShowAllSessions(false); onSessionsScope('workspace'); }}
                         >
                             {t('sessionsThisWorkspace')}
                         </button>
@@ -253,7 +252,7 @@ export function Toolbar({
                             type="button"
                             className={`session-scope${sessionsScope === 'all' ? ' active' : ''}`}
                             aria-pressed={sessionsScope === 'all'}
-                            onClick={() => onSessionsScope('all')}
+                            onClick={() => { if (sessionsScope !== 'all') setShowAllSessions(false); onSessionsScope('all'); }}
                         >
                             {t('sessionsAllWorkspaces')}
                         </button>
@@ -301,6 +300,12 @@ export function Toolbar({
                                         </div>
                                     );
                                 })}
+                                {sessions.length > RECENT_SESSION_COUNT && (
+                                    <button type="button" className="session-list-toggle" aria-expanded={showAllSessions} onClick={() => setShowAllSessions(value => !value)}>
+                                        {showAllSessions ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                                        <span>{t(showAllSessions ? 'sessionsShowLess' : 'sessionsShowMore')}</span>
+                                    </button>
+                                )}
                             </>
                         )}
                     </div>

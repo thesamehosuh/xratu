@@ -587,8 +587,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .compact-dialog.server-drawer .mcp-form { padding:0; margin:0; border:0; overflow:auto; }
 
 
-.history-group > h3 { font-size:var(--xratu-fs-sm); font-weight:600; margin:0 0 12px; }
-.history-group + .history-group { margin-block-start:24px; }
 
 .skills-page .mcp-group + .mcp-group { margin:0; }
 .skills-page .mcp-row { min-height:70px; padding:14px 18px; gap:14px; }

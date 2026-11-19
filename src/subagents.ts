@@ -108,6 +108,7 @@ export interface SubagentRunRequest {
     description: string;
     prompt: string;
     taskId?: string;
+    model?: string;
     background?: boolean;
     onOutput?: (chunk: string) => void;
     /** Host identity of the parent task call, never a model argument. */
@@ -515,6 +516,7 @@ export interface TaskToolArgs {
     description: string;
     prompt: string;
     taskId: string;
+    model?: string;
 }
 
 export function parseTaskToolArgs(
@@ -524,6 +526,7 @@ export function parseTaskToolArgs(
     const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
     const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
     const description = typeof args.description === 'string' ? args.description.trim() : '';
+    const model = typeof args.model === 'string' ? args.model.trim() : '';
     if (!prompt) {
         return { ok: false, error: 'Missing required argument: prompt' };
     }
@@ -533,11 +536,14 @@ export function parseTaskToolArgs(
             error: 'Missing required argument: subagent_type (or task_id to continue a previous subagent run)',
         };
     }
-    return { ok: true, value: { subagentType, description, prompt, taskId } };
+    if (args.model !== undefined && (!model || model.length > 300 || taskId)) {
+        return { ok: false, error: 'Pass a valid model ID only when launching a new child. Omit model when continuing via task_id.' };
+    }
+    return { ok: true, value: { subagentType, description, prompt, taskId, ...(model ? { model } : {}) } };
 }
 
 function typeLines(defs: readonly SubagentDefinition[]): string[] {
-    return listableSubagents(defs).map((d) => `- ${d.name}: ${d.description}`);
+    return listableSubagents(defs).map((d) => `- ${d.name}: ${d.description}${d.model ? ` (configured model: ${d.model})` : ''}`);
 }
 
 /** Task tool description. Lists the launchable subagent types so the model
@@ -546,6 +552,8 @@ function typeLines(defs: readonly SubagentDefinition[]): string[] {
  *  silently fails. */
 export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): string {
     return [
+        'Use only for requested delegation or a self-contained assignment that materially benefits from a separate agent. Handle routine lookups, edits, and checks directly.',
+        'Reserve smaller or lower-cost search models for read-only evidence gathering on very large searches. Use the parent model or a comparably capable coding model for delegated implementation. The parent reviews the evidence and makes the final judgment.',
         'Delegates a self-contained task to a specialized subagent. The subagent runs in a FRESH context - it cannot see this conversation - and returns only its final report (its intermediate tool calls stay private).',
         'The prompt must contain everything the subagent needs: the goal, relevant file paths, and constraints. The child can ask scoped questions through ask_session_question when its profile permits it; do not delegate an unresolved user choice without the necessary context.',
         'Every run reports a task_id. If a run was interrupted, failed, or needs follow-up work, pass that task_id to CONTINUE the same subagent with its context restored - never relaunch the same work from scratch.',
@@ -556,8 +564,16 @@ export function buildTaskToolDescription(defs: readonly SubagentDefinition[]): s
     ].join('\n');
 }
 
-export function buildTaskToolSchema(defs: readonly SubagentDefinition[]): Record<string, unknown> {
+export interface ChildModelChoices {
+    ids: readonly string[];
+    lowerInputPrice: boolean;
+}
+
+export function buildTaskToolSchema(defs: readonly SubagentDefinition[], models?: ChildModelChoices): Record<string, unknown> {
     const names = listableSubagents(defs).map((d) => d.name).join(', ');
+    const modelHint = models?.ids.length
+        ? ` ${models.lowerInputPrice ? 'Lower input-price options for read-only bulk search' : 'Available alternatives'}: ${models.ids.join(', ')}.`
+        : '';
     return {
         type: 'object',
         properties: {
@@ -569,6 +585,10 @@ export function buildTaskToolSchema(defs: readonly SubagentDefinition[]): Record
             subagent_type: {
                 type: 'string',
                 description: `The kind of subagent to launch for a NEW run. Must be one of: ${names}. Omit when continuing a previous run via task_id.`,
+            },
+            model: {
+                type: 'string',
+                description: 'Optional exact model ID from the active connection for a new child. Defaults to the profile model or the parent model. Continuing a child keeps its current model.' + modelHint,
             },
             task_id: {
                 type: 'string',

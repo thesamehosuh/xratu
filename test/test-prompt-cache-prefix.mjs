@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 const require = createRequire(import.meta.url);
-const { buildNativeSystemContext, REPLY_CONCISE_FINAL, buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_LANGUAGE_AUTO, REPLY_VISIBLE_NARRATION, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
+const { buildNativeSystemContext, REPLY_CONCISE_FINAL, SUBAGENT_GUIDANCE, buildLocalSystemPrompt, REPLY_LANGUAGE_FA, REPLY_LANGUAGE_EN, REPLY_LANGUAGE_AUTO, REPLY_VISIBLE_NARRATION, REPLY_COMMIT_MESSAGES } = require('../out/systemPrompt.js');
 const { RulesSnapshot } = require('../out/local/rulesSnapshot.js');
 
 let failed = 0;
@@ -269,12 +269,19 @@ for (const [mode, directive] of [['en', REPLY_LANGUAGE_EN], ['fa', REPLY_LANGUAG
     ok(`native context respects ${mode} reply language`, buildNativeSystemContext(false, mode).includes(directive));
 }
 
-const execution = buildLocalSystemPrompt({ rulesContext: '', sessionSummary: null, planMode: false, evictedUserTurns: 0 });
+const executionInputs = { rulesContext: '', sessionSummary: null, planMode: false, evictedUserTurns: 0 };
+const execution = buildLocalSystemPrompt(executionInputs);
 for (const [name, prompt] of [['built-in', execution], ['native', buildNativeSystemContext(false)]]) {
     ok(`${name} skips checklists for simple fixes`, prompt.includes('Skip it for simple fixes and short tasks'));
     ok(`${name} avoids per-tool checklist updates`, prompt.includes('not after every tool call'));
-    ok(`${name} does not direct broad research to subagents`, !prompt.includes('Prefer it for codebase-wide research'));
+    ok(`${name} defaults to handling work in the current conversation`, prompt.includes(SUBAGENT_GUIDANCE));
+    ok(`${name} requires a capable coding model for delegated implementation`, prompt.includes('If you delegate implementation, use the parent model or a comparably capable coding model'));
+    ok(`${name} keeps the verdict with the parent`, prompt.includes('make the final judgment in the parent conversation'));
 }
+ok('built-in prompt advertises the child launch model selector', execution.includes('Set model on a new task or spawn_agent'));
+ok('native prompt uses OpenCode configured child models', buildNativeSystemContext(false).includes('native OpenCode subagent configured with a smaller or lower-cost model'));
+ok('built-in plan mode omits delegation guidance', !buildLocalSystemPrompt({ ...executionInputs, planMode: true }).includes(SUBAGENT_GUIDANCE));
+ok('native plan mode omits delegation guidance', !buildNativeSystemContext(true).includes(SUBAGENT_GUIDANCE));
 ok('native plan mode still requires the plan handoff', buildNativeSystemContext(true).includes('Draft the plan with update_task_list, then call exit_plan_mode'));
 
 console.log(failed === 0 ? '\nall prompt-cache-prefix checks passed' : `\n${failed} check(s) failed`);

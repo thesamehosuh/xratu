@@ -1531,21 +1531,14 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'chunk', value: 'Still running' });
-        for (const section of ['appearance', 'history', 'workspace']) {
-            if (section === 'appearance') {
-                await post(page, { type: 'openSettings' });
-                await openPageNavigation(page);
-                await page.locator('[data-section=appearance]').click();
-            } else {
-                if (!await page.locator('.workspace-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
-                await page.locator('.workspace-sidebar .workspace-views').first().locator('button').nth(section === 'workspace' ? 0 : 1).click();
-            }
-            await expect(page.locator('.page-content')).toBeVisible();
-            await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
-            await page.keyboard.press('Escape');
-            await expect(page.locator('.page-content')).toHaveCount(0);
-            expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
-        }
+        await post(page, { type: 'openSettings' });
+        await openPageNavigation(page);
+        await page.locator('[data-section=appearance]').click();
+        await expect(page.locator('.page-content')).toBeVisible();
+        await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.page-content')).toHaveCount(0);
+        expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
     });
 }
 

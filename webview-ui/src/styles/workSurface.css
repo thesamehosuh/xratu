@@ -530,6 +530,9 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .workspace-nav-label { padding:6px 10px 0; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-sm); }
 .workspace-settings { margin-block-start:auto; }
 .workspace-sidebar .session-pop-list { max-height:none; flex:1; min-height:0; padding:0; }
+.workspace-sidebar .session-list-toggle { display:flex; align-items:center; justify-content:center; gap:5px; margin-inline:auto; padding:8px; border:0; background:none; color:var(--vscode-descriptionForeground); font:inherit; font-size:var(--xratu-fs-sm); text-align:center; }
+.workspace-sidebar .session-list-toggle:is(:hover,:focus-visible) { color:var(--vscode-foreground); }
+.workspace-sidebar .session-list-toggle:focus-visible { outline:none; }
 .workspace-sidebar .session-pop-head { flex-wrap:nowrap; align-items:center; padding:0 4px; border:0; gap:8px; }
 .workspace-sidebar .session-scope { min-width:0; padding:4px 2px; font-size:var(--xratu-fs-sm); background:transparent; color:var(--page-muted); }
 .workspace-sidebar .session-scope.active { color:var(--page-ink); font-weight:600; }
@@ -609,21 +612,6 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .session-btn.open { background:transparent; color:var(--vscode-foreground); box-shadow:none; }
 .sidebar-group { margin-block:20px 8px; }
 .sidebar-group .workspace-nav-label { margin-block-end:8px; }
-.sessions-page .session-destination-list { border:0; overflow:visible; }
-.session-destination-row { width:100%; display:flex; align-items:center; gap:14px; padding:16px 18px; border:0; border-block-end:1px solid var(--page-line); background:transparent; text-align:start; color:var(--vscode-descriptionForeground); }
-.history-group > .session-destination-row { border-inline:1px solid var(--page-line); }
-.history-group > .session-destination-row:first-of-type { border-block-start:1px solid var(--page-line); border-start-start-radius:10px; border-start-end-radius:10px; }
-.history-group > .session-destination-row:last-child { border-end-start-radius:10px; border-end-end-radius:10px; }
-.session-destination-row:hover { color:var(--vscode-foreground); background:color-mix(in srgb,var(--vscode-foreground) 3%,transparent); }
-.session-destination-copy { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0; }
-.session-destination-copy strong { color:var(--vscode-foreground); font-size:var(--xratu-fs-sm); font-weight:550; }
-.session-destination-copy small { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:var(--xratu-fs-xs); }
-.session-destination-copy small > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.session-destination-row time { font-size:var(--xratu-fs-xs); }
-.workspace-attention { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
-.workspace-attention > button { display:flex; align-items:center; gap:12px; min-height:90px; padding:20px; border:1px solid var(--page-line); border-radius:12px; background:transparent; color:var(--vscode-foreground); font-size:var(--xratu-fs-sm); }
-.workspace-attention strong { margin-inline-start:auto; }
-@container settings-page (max-width:600px) { .session-destination-row { gap:9px; padding:14px; } .session-destination-row time { display:none; } }
 .toolbar:has(.toolbar-back-work) .toolbar-tools > :not(.toolbar-back-work) { display:none; }
 /* Appearance preferences keep the same transcript and composer nodes. */
 .workbench:not(.setting-up) .msg-content { font-family:var(--conversation-font,var(--xratu-font-ui)); }
@@ -782,15 +770,6 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 .panel-picker-dialog .new-tab-choice:is(:hover,:focus-visible) { background:color-mix(in srgb,var(--page-ink) 6%,transparent); }
 .panel-picker-dialog .new-tab-choice > span:first-of-type { flex:1; }
 .panel-picker-dialog .new-tab-open { margin:0; }
-.workspace-tools h3,.workspace-recent-heading { font-size:var(--xratu-fs-md); font-weight:600; margin:4px 0 14px; }
-.workspace-tools > div { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-block-end:28px; }
-.workspace-tools button { display:flex; align-items:center; gap:12px; padding:14px; text-align:start; background:transparent; border:1px solid var(--page-line); border-radius:8px; color:var(--page-ink); }
-.workspace-tools button:hover { background:color-mix(in srgb,var(--page-ink) 4%,transparent); }
-.workspace-tools button > svg { flex-shrink:0; }
-.workspace-tools button span { display:flex; flex-direction:column; gap:4px; }
-.workspace-tools button strong { font-size:var(--xratu-fs-md); font-weight:550; }
-.workspace-tools button small { color:var(--page-muted); font-size:var(--xratu-fs-sm); line-height:1.65; }
-@media(max-width:600px) { .workspace-tools > div { grid-template-columns:1fr; } }
 .skill-row { cursor:pointer; }
 .skill-row:is(:hover,:focus-within) { background:color-mix(in srgb,var(--page-ink) 4%,transparent); }
 .skill-row.selected .skill-select { color:var(--page-ink); font-weight:650; }
@@ -805,7 +784,6 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 .composer-prelude { transition:height 160ms cubic-bezier(.2,.8,.2,1),margin 160ms cubic-bezier(.2,.8,.2,1),opacity 160ms cubic-bezier(.2,.8,.2,1); }
 .composer-actions { transition:height 160ms cubic-bezier(.2,.8,.2,1),padding 160ms cubic-bezier(.2,.8,.2,1); }
 .workspace-sidebar .session-row-title { max-width:none; min-width:0; }
-.sessions-page .workspace-recent-heading { margin-inline:var(--page-gutter,18px); }
 
 /* Usage is one data surface: choose a measure, inspect time, then its sources. */
 .usage-dashboard .settings-head { padding-inline:max(var(--page-gutter,18px),calc((100% - 1040px) / 2)); }
@@ -917,7 +895,6 @@ body .workbench[data-color-scheme="dark"] .code-surface > pre:not(.xratu-dark-co
 .skills-page .skill-row { margin:0; border-radius:0; }
 .skills-page .mcp-group { padding:0; }
 .agents-page .settings-scroll > .inventory-split,.agents-page .settings-scroll > .inventory-toolbar { margin-inline:auto; width:100%; }
-.sessions-page .settings-scroll > .workspace-recent-heading { margin-inline:auto; max-width:1076px; width:100%; }
 .connection-drawer .cred-provider-box { order:0; }
 .skills-page .mcp-group { gap:0; margin-block:0; }
 .agents-page .settings-scroll > :is(.inventory-toolbar,.inventory-split) { max-width:1076px; }
