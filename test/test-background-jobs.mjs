@@ -780,14 +780,20 @@ ok('monitor preserves spawn errors', backgroundJobViews([monitorJob(1,{status:'f
     const dir = mkdtempSync(join(tmpdir(), 'xratu-stdin-'));
     const script = join(dir, 'echo-input.cjs');
     writeFileSync(script, "let text = ''; process.stdin.on('data', part => text += part); process.stdin.on('end', () => process.stdout.write(text));");
-    const job = spawnTerminalJob({ workspaceRoot: dir, command: `"${process.execPath}" "${script}"`, interactive: true, background: true, stdin: 'initial:' });
+    const job = spawnTerminalJob({
+        workspaceRoot: dir,
+        command: sh(`${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`, `node ${JSON.stringify(script)}`),
+        interactive: true,
+        background: true,
+        stdin: 'initial:',
+    });
     try {
-        job.writeInput('continued', true);
+        await job.writeInput('continued', true);
         ok('interactive input completes after explicit EOF', await waitForTerminalJob(job, 10000));
         ok('interactive input preserves initial and subsequent bytes', job.stdout === 'initial:continued', job.stdout);
         ok('interactive input reports the actual exit code', job.exitCode === 0);
         let rejected = false;
-        try { job.writeInput('late', false); } catch { rejected = true; }
+        try { await job.writeInput('late', false); } catch { rejected = true; }
         ok('finished jobs refuse further input', rejected);
     } finally {
         if (job.status === 'running') { job.kill('test cleanup'); await job.finished; }
