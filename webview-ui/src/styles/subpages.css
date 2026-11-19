@@ -861,6 +861,8 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .account-connections .cred-oauth-account-head:has(> .cred-oauth-action) .cred-oauth-signout { margin-inline-start:0; order:1; }
 
 .account-connections .cred-oauth-use { border-color:var(--xratu-action-border); background:var(--xratu-accent-faint); color:var(--surface-accent); }
+.saved-credential-actions .saved-use-btn { flex:0 0 auto; width:auto; height:auto; min-height:25px; padding:3px 8px; gap:4px; display:inline-flex; align-items:center; font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); white-space:nowrap; border:1px solid var(--xratu-action-border); background:var(--xratu-accent-faint); color:var(--surface-accent); border-radius:5px; }
+.saved-credential-actions .saved-use-btn:hover { background:color-mix(in srgb,var(--surface-accent) 18%,transparent); }
 
 .marketplace-page .mp-row .mcp-row-main { align-items:stretch; max-inline-size:100%; }
 .marketplace-page .mp-row .mcp-row-title { max-inline-size:100%; }

@@ -537,6 +537,20 @@ for (const style of ['chat', 'messages', 'responses', 'google', 'subscription'])
         const pending=new Set();let paired=true;
         for(const row of replay){if(row.role==='assistant')for(const call of row.tool_calls??[])pending.add(call.id);if(row.role==='tool'){if(!pending.delete(row.tool_call_id))paired=false;}}
         ok('live compaction preserves tool-result pairing on restore',paired&&pending.size===0);
+        // No context-window % harness noise is injected into model requests,
+        // and no request terminates on role=assistant or duplicates adjacent user/assistant roles.
+        const noContextNoise = requests.every(body => !JSON.stringify(body.messages).includes('Context status:') && !JSON.stringify(body.messages).includes('CONTEXT FULL'));
+        const validWire = requests.every(body => {
+            const msgs = body.messages;
+            if (!msgs.length || msgs.at(-1).role === 'assistant') return false;
+            for (let i = 1; i < msgs.length; i++) {
+                if (msgs[i].role === 'user' && msgs[i - 1].role === 'user') return false;
+                if (msgs[i].role === 'assistant' && msgs[i - 1].role === 'assistant') return false;
+            }
+            return true;
+        });
+        ok('model requests omit context-window status/hint noise', noContextNoise);
+        ok('live compaction keeps chat wire alternating and never ends on assistant', validWire);
     } finally {globalThis.fetch=original;await rm(folder,{recursive:true,force:true});}
 }
 

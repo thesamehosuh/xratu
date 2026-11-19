@@ -26,8 +26,6 @@ import {
     HISTORY_BOUND_RATIO,
     boundToolResults,
     compactMessages,
-    contextHint,
-    contextStatusLine,
     estimateRunTokens,
     estimateToolTokens,
 } from './contextWindow';
@@ -294,21 +292,17 @@ export async function* runLocalAgent(
     // model should treat the free headroom as optimistic.
     const estimateUsed = (): number => {
         const systemChars = request.systemPrompt.length;
-        // The trailing note ships on every request too - count the task-list
-        // reminder (unbounded) plus a fixed allowance for the status/hint.
-        const tailChars = taskListReminderLine(reminderTaskList(request)).length + 400;
+        // Include the active task-list reminder when present.
+        const tailChars = taskListReminderLine(reminderTaskList(request)).length;
         return Math.ceil((systemChars + tailChars) / 3) + estimateRunTokens(messages.slice(1)) + toolTokens;
     };
 
-    // Context awareness (fill level + progressive hints + task-list reminder)
-    // is VOLATILE: it changes every round. It is sent as a TRAILING note, never
-    // added to the system message. Each completed assistant round records the
-    // exact note it followed so replay retains the previous request's full
-    // prefix, including its tail, without counting an extra user turn.
-    const tailNoteFor = (usedTokens: number): string => {
-        const note = taskListReminderLine(reminderTaskList(request))
-            + contextStatusLine(usedTokens, windowTokens)
-            + contextHint(usedTokens, windowTokens, compactRatio);
+    // Volatile trailing note: carries ONLY actionable runtime state (the live
+    // task list, when non-empty). Context window occupancy is tracked by the
+    // harness/UI and is deliberately NOT injected into model prompts (avoids
+    // harness noise, context anxiety, and synthetic user turns after tools).
+    const tailNoteFor = (): string => {
+        const note = taskListReminderLine(reminderTaskList(request));
         return note ? '[Runtime snapshot: applies only to the assistant response immediately following this note; '
             + 'earlier runtime snapshots are historical.]' + note : '';
     };
@@ -443,13 +437,18 @@ export async function* runLocalAgent(
     yield { type: 'status', value: 'connecting' };
 
     let lastActiveCompactionRound = -8;
+    const activeMinCalls = compactionWindow && compactionWindow <= 32_768 ? 4 : 8;
+    const activeCooldown = compactionWindow && compactionWindow <= 32_768 ? 4 : 8;
     for (let round = 0; round < rounds; round++) {
         // Admission/compaction can take time before the first model request.
         yield* applySteers();
-        if (messages.slice(messages.indexOf(currentTurnMessage) + 1).reduce((n, row) => n + (row.tool_calls?.length ?? 0), 0) >= 8
-            && round - lastActiveCompactionRound >= 8 && compactionWindow && request.compactionTokenBudget && Math.max(noteUsed, estimateUsed()) >= compactionWindow * compactRatio) {
+        if (messages.slice(messages.indexOf(currentTurnMessage) + 1).reduce((n, row) => n + (row.tool_calls?.length ?? 0), 0) >= activeMinCalls
+            && round - lastActiveCompactionRound >= activeCooldown
+            && compactionWindow
+            && (request.compactionTokenBudget || compactionWindow <= 32_768)
+            && Math.max(noteUsed, estimateUsed()) >= compactionWindow * compactRatio) {
             lastActiveCompactionRound = round;
-            const checkpoint = await compactActiveTurn(messages, request, currentTurnMessage, windowTokens);
+            const checkpoint = await compactActiveTurn(messages, request, currentTurnMessage, windowTokens, activeMinCalls);
             for (const usage of compactionUsage.splice(0)) yield { type: 'usage', usage, model: request.model, source: 'compaction' };
             if (checkpoint) {
                 yield { type: 'compactionCheckpoint', value: String(checkpoint.content), compactedToolCalls: checkpoint.compactedToolCalls! };
@@ -470,7 +469,7 @@ export async function* runLocalAgent(
         let resumedText = '';
         // The continuation request's messages once a resume is armed.
         let continuationMessages: LocalAgentMessage[] | null = null;
-        const contextNote = tailNoteFor(noteUsed);
+        const contextNote = tailNoteFor();
         const retryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
         let result: CompletionResult | null = null;
         let requestError: unknown = null;
@@ -1090,7 +1089,7 @@ export async function* runLocalAgent(
     let wrapRecovered = false;
     let wrapRetries = 0;
     const wrapRetryDeadline = Date.now() + NETWORK_RETRY_MAX_TOTAL_MS;
-    const wrapContextNote = tailNoteFor(noteUsed) + ROUND_LIMIT_WRAPUP_NUDGE;
+    const wrapContextNote = tailNoteFor() + ROUND_LIMIT_WRAPUP_NUDGE;
     let wrapResult: CompletionResult | null = null;
     let wrapError: unknown = null;
     for (;;) {

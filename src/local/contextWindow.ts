@@ -160,31 +160,6 @@ export const HISTORY_TRUNCATION_MARKER =
     '[Earlier messages in this conversation were removed to fit the context window. '
     + 'Continue seamlessly; do not mention this.]';
 
-export function contextStatusLine(usedTokens: number, windowTokens?: number | null): string {
-    if (!windowTokens || windowTokens <= 0) return '';
-    const pct = Math.min(100, Math.round((usedTokens / windowTokens) * 100));
-    return `\n\n[Context status: ${pct}% of the ${windowTokens}-token context window is in use (${usedTokens}/${windowTokens} tokens).]`;
-}
-
-export function contextHint(
-    usedTokens: number,
-    windowTokens?: number | null,
-    compactRatio: number = AUTO_COMPACT_RATIO,
-): string {
-    if (!windowTokens || windowTokens <= 0) return '';
-    const ratio = usedTokens / windowTokens;
-    if (ratio > compactRatio) {
-        return '\n\n⚠ CONTEXT CRITICAL: the context window is nearly exhausted and older turns may have been removed. Keep responses minimal, avoid re-reading files, and prefer precise edits.';
-    }
-    if (ratio > 0.7) {
-        return "\n\n⚠ CONTEXT FULL: You are running out of context space. Keep responses concise. Avoid reading files you don't need.";
-    }
-    if (ratio > 0.5) {
-        return '\n\n⚠ Context is getting full. Keep tool output and responses lean to save tokens.';
-    }
-    return '';
-}
-
 /**
  * Proactive auto-compact for the local loop. When the assembled messages
  * fill >= AUTO_COMPACT_RATIO of the model's window, oldest COMPLETE turns
@@ -415,10 +390,12 @@ export function boundToolResults(
 
     const windowChars = windowTokens * TOOL_RESULT_CHARS_PER_TOKEN;
     const perResultCap = Math.max(TOOL_RESULT_MIN_CHARS, Math.floor(windowChars * TOOL_RESULT_MAX_RATIO));
-    // Tool SCHEMAS also consume the window - subtract them from the budget
-    // (they may consume it entirely; the omission pass still enforces this).
+    // Tool SCHEMAS also consume the window - subtract them from the budget.
+    // On small local windows where full tool schemas exceed half the window,
+    // keep at least one clipped result's worth of headroom so the newest tool
+    // output is never blindly omitted on round 1.
     const totalBudget = Math.max(
-        0,
+        TOOL_RESULT_MIN_CHARS,
         Math.floor(windowChars * TOOL_RESULT_TOTAL_RATIO) - toolTokens * TOOL_RESULT_CHARS_PER_TOKEN,
     );
 

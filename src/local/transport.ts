@@ -228,6 +228,11 @@ export function providerHttpError(status: number, text: string): Error {
  *  (seen live). 8k still fits inside every real window with room for the
  *  prompt, and providers clamp to the true remaining context anyway. */
 function derivedMaxTokens(windowTokens?: number | null): number {
+    // Small local windows (e.g. 8k-16k) must not be handed an 8k output cap:
+    // strict servers (vLLM, llama.cpp) reject `input + max_tokens > window`.
+    if (windowTokens && windowTokens < 32768) {
+        return Math.max(2048, Math.floor(windowTokens / 4));
+    }
     return Math.min(16384, Math.max(8192, Math.floor((windowTokens ?? 8192) / 4)));
 }
 

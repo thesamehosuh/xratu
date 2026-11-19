@@ -16,6 +16,9 @@ test('browser navigation accepts local servers and rejects executable/credential
     assert.equal(browserUrl('example.com'), 'https://example.com/');
     assert.equal(browserUrl('http://[::1]:3000'), 'http://[::1]:3000/');
     for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,test', 'ftp://example.com', 'https://key:secret@example.com', '', null, 'http://']) assert.throws(() => browserUrl(url));
+    for (const localPath of ['./index.html', '../index.html', '/tmp/index.html', '~/index.html', 'C:\\site\\index.html', 'file:///workspace/index.html']) {
+        assert.throws(() => browserUrl(localPath, true), /Local file paths cannot be opened directly/i);
+    }
     assert.equal(browserUrl('localhost:3000', true), 'http://localhost:3000/');
     assert.throws(() => browserUrl('https://example.com', true));
 });
@@ -35,6 +38,7 @@ function fakeBrowser() {
         isClosed: () => closed, setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
         url: () => url, title: async () => 'Test page', mainFrame: () => page,
         goto: async target => { calls.push(['goto', target]); url = target; page.emit('framenavigated', page); },
+        reload: async () => { calls.push(['reload', url]); page.emit('framenavigated', page); page.emit('domcontentloaded'); },
         screenshot: async () => Buffer.from('frame'), setViewportSize: async size => calls.push(['viewport', size]),
         keyboard: { press: async key => calls.push(['press', key]), insertText: async text => calls.push(['type', text]) },
         mouse: { click: async (x, y) => calls.push(['click', x, y]), move: async (x, y) => calls.push(['move', x, y]), wheel: async (x, y) => calls.push(['wheel', x, y]) },
@@ -240,5 +244,53 @@ test('an agent browser-open reveals launch errors and stale opens cannot switch 
         assert.ok(shown >= 0 && failed > shown);
         await controller.tool('old-chat', 'browser_open', { url: 'http://localhost:3000' });
         assert.equal(events.filter(event => event.type === 'openBrowser').length, 1);
+    } finally { controller.dispose(); }
+});
+
+test('loopback pages auto-reload on workspace file changes unless HMR WebSocket is active', async () => {
+    const fake = fakeBrowser();
+    const events = [];
+    const controller = new BrowserController({
+        emit: event => events.push(event),
+        executablePath: () => '',
+        launch: async () => fake.browser,
+        liveReloadDebounceMs: 25,
+    });
+    try {
+        controller.setSession('chat');
+        const id = controller.getState().browserId;
+        await controller.setVisible('chat', id, true);
+        await controller.command('chat', id, { action: 'open', url: 'http://localhost:8000/index.html' });
+        const initialFrames = events.filter(e => e.type === 'browserFrame');
+        controller.ack('chat', id, initialFrames.at(-1).frame.frameId);
+        // Rapid saves coalesce into one reload.
+        controller.notifyWorkspaceFileChanged();
+        controller.notifyWorkspaceFileChanged();
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 160));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 1);
+        assert.ok(events.filter(e => e.type === 'browserFrame').length > initialFrames.length, 'live reload pushes a fresh frame');
+
+        // An active loopback HMR WebSocket skips hard reload until it closes.
+        let closeSocket;
+        fake.sockets[0]({
+            url: () => 'ws://localhost:8000/@vite/client',
+            close: () => {},
+            connectToServer: () => {},
+            onClose: cb => { closeSocket = cb; },
+        });
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 1, 'HMR WebSocket suppresses redundant reload');
+        closeSocket();
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 2, 'closing HMR WebSocket re-enables live reload');
+
+        // Remote URLs never auto-reload on local file edits.
+        await controller.command('chat', id, { action: 'navigate', url: 'https://example.com' });
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 2, 'remote pages do not auto-reload');
     } finally { controller.dispose(); }
 });

@@ -24,6 +24,7 @@ export interface ExplainedError {
 
 /** Text patterns, most specific first. The first match wins. */
 const TEXT_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+    [/error rendering prompt with jinja template|unknown test:\s*sequence|issue with the model'?s prompt template/i, 'errPromptTemplate'],
     [/context[_ ]?(length|window)|maximum context|too many tokens|prompt is too long|context_length_exceeded/i, 'errContextLength'],
     [/model.{0,30}(not found|does not exist|not exist)|no such model|unknown model|invalid model/i, 'errModelNotFound'],
     [/invalid.{0,20}(api )?key|incorrect api key|invalid x-api-key|unauthorized|authentication failed|api key not/i, 'errAuth'],

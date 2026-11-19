@@ -13,6 +13,7 @@ const require = createRequire(import.meta.url);
 const {
     pickProxyUrl, isSocksProxy, isHttpProxy, redactProxyUrl,
     pickNoProxy, parseNoProxy, hostFromUrl, hostMatchesNoProxy,
+    shouldBypassProxy, mergeNoProxyWithLoopback,
     parseWindowsProxyServer, parseScutilProxy, parseGsettingsProxy,
     resolveProxyUrl, normalizeProxyRoute,
 } = require('../out/proxy.js');
@@ -83,6 +84,18 @@ check('noProxy port pattern skips default-port host', hostMatchesNoProxy('exampl
 check('noProxy port pattern skips other port', hostMatchesNoProxy('example.com:443', ['example.com:8080']), false);
 check('noProxy localhost', hostMatchesNoProxy('localhost:11434', ['localhost']), true);
 check('noProxy empty list no match', hostMatchesNoProxy('api.openai.com', []), false);
+
+// --- local routes bypass proxy automatically (even with empty no_proxy) ----
+check('localhost bypasses proxy', shouldBypassProxy('http://localhost:1234/v1', ''), true);
+check('127.0.0.1 bypasses proxy', shouldBypassProxy('http://127.0.0.1:11434/v1', ''), true);
+check('IPv6 loopback bypasses proxy', shouldBypassProxy('http://[::1]:8080/v1', ''), true);
+check('LAN RFC1918 bypasses proxy', shouldBypassProxy('http://192.168.1.50:1234/v1', ''), true);
+check('remote URL uses proxy when not in no_proxy', shouldBypassProxy('https://api.openai.com/v1', ''), false);
+check('remote URL matching no_proxy bypasses', shouldBypassProxy('https://api.openai.com/v1', 'openai.com'), true);
+check('direct override bypasses remote URL', shouldBypassProxy('https://api.openai.com/v1', '', 'direct'), true);
+check('proxy override forces local URL through proxy', shouldBypassProxy('http://127.0.0.1:11434/v1', '', 'proxy'), false);
+check('mergeNoProxyWithLoopback seeds loopback when empty', mergeNoProxyWithLoopback(''), 'localhost,127.0.0.1,::1');
+check('mergeNoProxyWithLoopback deduplicates case-insensitively', mergeNoProxyWithLoopback('Localhost, internal.corp'), 'localhost,127.0.0.1,::1,internal.corp');
 
 // --- OS system proxy (Clash "System Proxy" mode etc.) ---
 check('systemProxy is lowest priority (explicit)', pickProxyUrl({ explicit: 'http://e:1', systemProxy: 'http://sys:2' }), 'http://e:1');

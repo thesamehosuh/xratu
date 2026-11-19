@@ -205,6 +205,7 @@ import { resolveParallelSubagents } from './tooling/parallelSubagents';
 import { resolveCompactRatio } from './tooling/compactionPolicy';
 import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type GitStatusSummary } from './tooling/gitStatus';
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
+import { mergeNoProxyWithLoopback } from './proxy';
 import { getProxyDispatcher, getProxyResolution } from './proxyDispatcher';
 import { proxyFetch } from './proxyFetch';
 import { detectLocalProxies, probeProxyReachable } from './proxyDetect';
@@ -405,6 +406,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     _browserAck(sessionId: string, browserId: string, frameId: number): void { this._browser.ack(sessionId, browserId, frameId); }
+    notifyBrowserFileChanged(filePath?: string): void {
+        if (filePath) {
+            const ignored = new Set(['.git', 'node_modules', '.xratu', 'dist', 'out', '.next', '.cache', 'target', '__pycache__']);
+            if (filePath.split(/[\\/]+/).some((segment) => ignored.has(segment))) return;
+        }
+        this._browser.notifyWorkspaceFileChanged();
+    }
     disposeBrowser(): void { this._browser.dispose(); this._engineInstallController?.abort(); this._cancelSetup(); this._cancelNativeSetup(); this._cancelModelPings(); void this._engines.dispose(); }
     private readonly _engines = new EngineRegistry();
     private _openCodeEngine?: OpenCodeEngine;
@@ -1334,7 +1342,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const proxy = getProxyResolution(), env = { ...process.env };
             if (proxy.url) {
                 env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = proxy.url;
-                env.NO_PROXY = env.no_proxy = proxy.noProxy;
+                env.NO_PROXY = env.no_proxy = mergeNoProxyWithLoopback(proxy.noProxy);
             } else if (proxy.mode === 'off') {
                 for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
             }
@@ -3447,6 +3455,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
         if (!this._runtimeSetup) await this._fetchModels();
         await this._sendSavedCredentials();
+        await this._sendOAuthState();
 
         this._view?.webview.postMessage({
             type: 'credentialsSaved',
@@ -3539,6 +3548,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (refresh) {
             await this._fetchModels();
             await this._sendSavedCredentials();
+            await this._sendOAuthState();
         }
     }
 
@@ -3798,6 +3808,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const replyLanguage = this._resolveReplyLanguage();
         return buildLocalSystemPrompt({
             rulesContext,
+            workspaceRoot: workspaceRoot || undefined,
             sessionSummary,
             planMode,
             evictedUserTurns: this._localEvictedUserTurns,
@@ -5358,6 +5369,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         ? { images: event.images.map(toToolImageView) }
                         : {}),
                 });
+                if (!event.isError && (event.tool === 'write_file' || event.tool === 'edit_file')) {
+                    this._browser.notifyWorkspaceFileChanged();
+                }
                 break;
             }
             case 'toolOutput':
@@ -8736,6 +8750,19 @@ export function activate(context: vscode.ExtensionContext) {
         w.onDidCreate(onMcpFileChanged);
         w.onDidDelete(onMcpFileChanged);
     }
+
+    // Reload the shared Xratu browser live when a served workspace file changes
+    // on disk (static servers like `python3 -m http.server` have no HMR).
+    const browserFileWatcher = vscode.workspace.createFileSystemWatcher('**/*');
+    context.subscriptions.push(
+        browserFileWatcher,
+        browserFileWatcher.onDidChange((uri) => provider.notifyBrowserFileChanged(uri.fsPath)),
+        browserFileWatcher.onDidCreate((uri) => provider.notifyBrowserFileChanged(uri.fsPath)),
+        browserFileWatcher.onDidDelete((uri) => provider.notifyBrowserFileChanged(uri.fsPath)),
+        vscode.workspace.onDidSaveTextDocument((doc) => {
+            if (doc.uri.scheme === 'file') provider.notifyBrowserFileChanged(doc.uri.fsPath);
+        }),
+    );
 
     // Trust transitions re-resolve the effective config. Entering restricted
     // mode forces a window reload (so the filtered load() applies fresh);

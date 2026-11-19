@@ -5,6 +5,9 @@ import { isLoopbackUrl } from './networkPolicy';
 export function browserUrl(value: unknown, offline = false): string {
     if (typeof value !== 'string' || !value.trim() || value.length > 8192) throw new Error('Enter an HTTP or HTTPS URL.');
     const input = value.trim();
+    if (/^(file:|~\/|\.\.?\/|\/|[a-z]:[\\/])/i.test(input)) {
+        throw new Error('Local file paths cannot be opened directly. Serve the file over http://localhost (for example, python3 -m http.server) and open that HTTP URL.');
+    }
     const schemeless = !/^[a-z][a-z\d+.-]*:/i.test(input) || /^[\w.-]+:\d+(?:\/|$)/.test(input);
     const url = new URL(schemeless ? `${/^(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(input) ? 'http' : 'https'}://${input}` : input);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Enter an HTTP or HTTPS URL without embedded credentials.');

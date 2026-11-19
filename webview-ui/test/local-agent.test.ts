@@ -633,19 +633,16 @@ async function testContextStatusRidesTheTailNotTheSystemPrompt() {
             })
         );
 
-        // The system prompt is the STABLE cacheable prefix: it must not carry
-        // the volatile fill-level line (that would break the prefix cache every
-        // round). The status rides a trailing message instead.
+        // The system prompt is the STABLE cacheable prefix, and context-window
+        // occupancy is tracked in the harness/UI rather than injected into
+        // model prompts (no harness noise or synthetic tail turns).
         const system: string = requests[0].messages[0].content;
         assert.equal(system, 'You are Xratu.', 'system prompt stays byte-stable');
         assert.ok(!system.includes('[Context status:'), 'status line must not be in the system prompt');
 
-        // Chat appends the note to the LAST message (a trailing system message
-        // is rejected by strict servers).
         const tail = requests[0].messages[requests[0].messages.length - 1];
-        assert.equal(tail.role, 'user', 'the volatile note rides the last message');
-        assert.ok(String(tail.content).includes('[Context status:'), `missing status line: ${tail.content}`);
-        assert.ok(String(tail.content).includes('of the 8192-token context window'), tail.content);
+        assert.equal(tail.role, 'user');
+        assert.ok(!String(tail.content).includes('[Context status:'), `context status must not be injected: ${tail.content}`);
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -672,6 +669,7 @@ async function testSystemPromptStaysStableAcrossRounds() {
             runLocalAgent(baseRequest({
                 contextWindow: 8192,
                 systemPrompt: 'You are an AI coding assistant.',
+                taskList: [{ id: '1', label: 'Inspect file', status: 'in_progress' }],
                 tools: [{
                     name: 'read_file',
                     description: 'Read a file',
@@ -692,13 +690,15 @@ async function testSystemPromptStaysStableAcrossRounds() {
             'system prompt must not change between rounds',
         );
         assert.ok(!requests[0].messages[0].content.includes('[Context status:'));
-        // Each completed response retains the note that preceded it. The next
-        // request preserves that entire prefix and appends one current note.
+        // Each completed response retains the note that preceded it (e.g. the
+        // live task list). The next request preserves that entire prefix and
+        // appends one current note without injecting context-window noise.
         for (const [index, body] of requests.entries()) {
             const msgs = body.messages;
-            const notes = msgs.filter((m: any) => String(m.content).includes('[Context status:'));
+            const notes = msgs.filter((m: any) => String(m.content).includes('[Task list:'));
             assert.equal(notes.length, index + 1, 'past notes are retained, with one new trailing note');
-            assert.ok(String(msgs[msgs.length - 1].content).includes('[Context status:'), 'note rides the last message');
+            assert.ok(String(msgs[msgs.length - 1].content).includes('[Task list:'), 'note rides the last message');
+            assert.ok(!JSON.stringify(msgs).includes('[Context status:'), 'no context status noise');
         }
         assert.deepEqual(requests[1].messages.slice(0, requests[0].messages.length), requests[0].messages,
             'the complete previous prompt, including its status note, remains a prefix');
@@ -763,14 +763,12 @@ async function testProactiveCompactDropsOldTurnsAtStart() {
         // trailing volatile note rides it, never stored in history).
         assert.ok(messages.length < 2 + history.length + 1);
         assert.equal(messages.at(-1)!.role, 'user');
-        assert.ok(String(messages.at(-1)!.content).includes('[Context status:'));
+        assert.ok(!String(messages.at(-1)!.content).includes('[Context status:'));
         assert.ok(serialized.includes('turn7') && serialized.includes('reply7'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1'));
         // The host is told about the summary so it can roll it forward.
         assert.ok(events.some((e: any) => e.type === 'compactionSummary'));
-        // Post-compaction occupancy rides the trailing note, not the system
-        // prompt (which must stay cache-stable).
-        assert.ok(String(messages.at(-1)!.content).includes('[Context status:'));
+        assert.ok(!String(messages[0].content).includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -849,14 +847,10 @@ async function testMidRunCompactionFromServerUsage() {
         assert.ok(round2[1].content.includes('Mid-run summary: earlier turns read configs.'));
         assert.ok(!serialized.includes('turn0') && !serialized.includes('turn1'));
         assert.ok(serialized.includes('turn2') && serialized.includes('contents'));
-        // The current turn's tool result is the last STORED message; the
-        // volatile note rides its own trailing user turn, so the tool result
-        // stays byte-exact for the next round's cache. The system prompt stays
-        // byte-stable (cacheable).
-        assert.equal(round2.at(-2)!.role, 'tool');
-        assert.equal(round2.at(-1)!.role, 'user');
-        assert.ok(String(round2.at(-1)!.content).includes('[Context status:'));
-        assert.ok(!String(round2.at(-2)!.content).includes('[Context status:'));
+        // Without an active task list, the current turn's tool result stays the
+        // final message (no synthetic trailing user turn or context-status noise).
+        assert.equal(round2.at(-1)!.role, 'tool');
+        assert.ok(!String(round2.at(-1)!.content).includes('[Context status:'));
         assert.ok(!round2[0].content.includes('[Context status:'));
     } finally {
         globalThis.fetch = originalFetch;
@@ -1321,6 +1315,7 @@ async function testMessagesApiToolUse() {
                 apiStyle: 'messages',
                 model: 'claude-sonnet-5',
                 contextWindow: 8192,
+                taskList: [{ id: '1', label: 'Inspect file', status: 'in_progress' }],
                 tools: [{
                     name: 'read_file',
                     description: 'Read a file',
@@ -1360,7 +1355,7 @@ async function testMessagesApiToolUse() {
         // the next request can reuse the complete previous prompt.
         const lastTurn = secondInput[secondInput.length - 1];
         const lastBlock = lastTurn.content[lastTurn.content.length - 1];
-        assert.ok(String(lastBlock.text).includes('[Context status:'), 'note is the last block');
+        assert.ok(String(lastBlock.text).includes('[Task list:'), 'note is the last block');
         assert.equal(lastBlock.cache_control.type, 'ephemeral', 'the retained note is a cache breakpoint');
         const storedBlock = lastTurn.content[lastTurn.content.length - 2];
         assert.equal(storedBlock.type, 'tool_result', 'tool results remain before the status note');

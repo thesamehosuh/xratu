@@ -14,6 +14,8 @@ interface Options {
     /** Tests can supply a real, already-launched browser without changing production sandboxing. */
     launch?: () => Promise<Browser>;
     protocolTimeoutMs?: number;
+    /** Debounce delay before auto-reloading a loopback page after a workspace file edit. */
+    liveReloadDebounceMs?: number;
 }
 const MAX_DIAGNOSTICS = 100;
 const TIMEOUT = 15_000;
@@ -37,6 +39,8 @@ export class BrowserController {
     private lastFrame = 0;
     private latestFrame: string | null = null;
     private frameTimer: ReturnType<typeof setTimeout> | undefined;
+    private liveReloadTimer: ReturnType<typeof setTimeout> | undefined;
+    private loopbackSockets = 0;
     private diagnostics: Array<{ kind: string; text: string }> = [];
     private disposed = false;
 
@@ -63,6 +67,7 @@ export class BrowserController {
         this.browser = null; this.context = null; this.page = null; this.cdp = null;
         this.streaming = false; this.pendingFrame = null; this.diagnostics = [];
         this.latestFrame = null; clearTimeout(this.frameTimer); this.frameTimer = undefined;
+        clearTimeout(this.liveReloadTimer); this.liveReloadTimer = undefined; this.loopbackSockets = 0;
         this.state = this.emptyState(this.state.sessionId);
         this.publish();
         void browser?.close().catch(() => undefined);
@@ -120,7 +125,15 @@ export class BrowserController {
                 const url = new URL(socket.url());
                 url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
                 if (isOfflineMode() && !isLoopbackUrl(url)) socket.close();
-                else socket.connectToServer();
+                else {
+                    if (isLoopbackUrl(url)) {
+                        this.loopbackSockets++;
+                        if (typeof socket.onClose === 'function') {
+                            socket.onClose(() => { this.loopbackSockets = Math.max(0, this.loopbackSockets - 1); });
+                        }
+                    }
+                    socket.connectToServer();
+                }
             });
             const page = await context.newPage();
             page.setDefaultTimeout(TIMEOUT);
@@ -149,6 +162,7 @@ export class BrowserController {
             });
             page.on('framenavigated', frame => {
                 if (!active() || frame !== page.mainFrame()) return;
+                this.loopbackSockets = 0;
                 this.state = { ...this.state, url: page.url(), loading: true };
                 this.publish();
             });
@@ -210,6 +224,40 @@ export class BrowserController {
 
     setVisible(sessionId: string, browserId: string, visible: boolean): Promise<void> {
         return this.enqueue(sessionId, browserId, async () => { this.visible = visible; await this.stream(); });
+    }
+
+    /**
+     * Auto-reload a loopback page (e.g. `python3 -m http.server`) when a served
+     * workspace file changes on disk. Skips remote pages and dev servers that
+     * already hold an active loopback HMR WebSocket.
+     */
+    notifyWorkspaceFileChanged(): void {
+        if (this.disposed || this.state.status !== 'ready' || !this.page || this.page.isClosed()) return;
+        if (!isLoopbackUrl(this.state.url) || this.loopbackSockets > 0) return;
+        const sessionId = this.state.sessionId;
+        const browserId = this.state.browserId;
+        clearTimeout(this.liveReloadTimer);
+        this.liveReloadTimer = setTimeout(() => {
+            this.liveReloadTimer = undefined;
+            void this.enqueue(sessionId, browserId, async () => {
+                if (!this.page || this.page.isClosed() || this.state.status !== 'ready' || this.state.loading) return;
+                if (!isLoopbackUrl(this.state.url) || this.loopbackSockets > 0) return;
+                const page = this.page;
+                try {
+                    await page.reload({ waitUntil: 'domcontentloaded' });
+                } catch {
+                    return;
+                }
+                if (this.page !== page || this.state.browserId !== browserId) return;
+                await this.refresh(page);
+                if (this.visible && this.page === page && this.state.browserId === browserId) {
+                    const still = await page.screenshot({ type: 'jpeg', quality: 70, timeout: TIMEOUT }).catch(() => null);
+                    if (still && this.page === page && this.visible && this.state.browserId === browserId) {
+                        this.sendFrame(still.toString('base64'));
+                    }
+                }
+            }).catch(() => undefined);
+        }, this.options.liveReloadDebounceMs ?? 250);
     }
 
     private async protocolCommand(operation: Promise<unknown>): Promise<void> {

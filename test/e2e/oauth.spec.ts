@@ -105,6 +105,28 @@ test('connected account actions select and sign out the intended account', async
     expect(messages).toContainEqual({ type: 'oauthSignOut', credentialId: 'two' });
 });
 
+test('activating a local runtime deactivates the subscription and exposes one-click switching', async ({ page }) => {
+    await page.locator('.drawer-head .icon-btn').click();
+    await post(page, { type: 'savedCredentials', credentials: [
+        { id: 'oauth-1', providerId: 'chatgpt-codex', label: 'sub@example.test', baseUrl: 'https://chatgpt.com/backend-api/codex', maskedKey: '', active: false, oauth: true },
+        { id: 'local-1', providerId: 'lmstudio', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1', maskedKey: '', active: true, oauth: false },
+        { id: 'byok-1', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: 'sk-•••', active: false, oauth: false },
+    ] });
+    // Even if oauthState lags with stale active: true, savedCredentials keeps the card in sync.
+    await post(page, { type: 'oauthState', state: {
+        providers: [provider],
+        accounts: [{ providerId: provider.providerId, credentialId: 'oauth-1', accountLabel: 'sub@example.test', active: true }],
+    } });
+    const subCard = page.locator('.cred-oauth-account-card').filter({ hasText: 'sub@example.test' });
+    await expect(subCard).not.toHaveClass(/active/);
+    await subCard.getByRole('button', { name: 'Use account' }).click();
+    const byokRow = page.locator('.saved-credential').filter({ hasText: 'OpenAI' });
+    await byokRow.getByRole('button', { name: 'Use connection' }).click();
+    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
+    expect(messages).toContainEqual({ type: 'selectLlmCredential', id: 'oauth-1' });
+    expect(messages).toContainEqual({ type: 'selectLlmCredential', id: 'byok-1' });
+});
+
 test('previous accounts are collapsed and reconnect their saved registration', async ({ page }) => {
     await post(page, { type: 'oauthState', state: { providers: [provider],
         registrations: [{ providerId: provider.providerId, credentialId: 'previous', label: 'previous@example.test' }] } });

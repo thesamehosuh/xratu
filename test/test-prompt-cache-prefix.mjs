@@ -152,9 +152,10 @@ try {
 // The assembly itself: deterministic, and every section lands where expected.
 // ---------------------------------------------------------------------------
 {
-    const inputs = { rulesContext: 'RULES', sessionSummary: 'SUMMARY', planMode: false, evictedUserTurns: 0 };
+    const inputs = { rulesContext: 'RULES', workspaceRoot: '/tmp/my-app', sessionSummary: 'SUMMARY', planMode: false, evictedUserTurns: 0 };
     ok('assembly is deterministic', buildLocalSystemPrompt(inputs) === buildLocalSystemPrompt({ ...inputs }));
     const s = buildLocalSystemPrompt(inputs);
+    ok('workspace root rides the system prompt', s.includes('- Workspace root: /tmp/my-app'));
     ok('rules ride the system prompt', s.includes('Project Rules (from AGENTS.md):\nRULES'));
     ok('summary rides the system prompt', s.includes('Conversation summary:\nSUMMARY'));
     ok('plan guidance is omitted when not in plan mode', !s.includes('PLAN MODE'));

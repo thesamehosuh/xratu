@@ -264,7 +264,7 @@ function legacyRow(row) {
  * asserts the live path is stable AND that the legacy path measurably is not,
  * so the test cannot silently stop testing.
  */
-async function runScenario(style, { reasoning = false, legacyReplay = false, dropContextNotes = false, modernResponses = false } = {}) {
+async function runScenario(style, { reasoning = false, legacyReplay = false, dropContextNotes = false, modernResponses = false, withTaskList = false } = {}) {
     const requests = [];
     const originalFetch = globalThis.fetch;
     let turn = 0;
@@ -302,6 +302,7 @@ async function runScenario(style, { reasoning = false, legacyReplay = false, dro
                 contextWindow: 200000,
                 apiStyle: style,
                 cacheKey: 'session-fixed',
+                ...(withTaskList ? { taskList: [{ id: `t-${turn}`, label: `Step ${turn}`, status: 'in_progress' }] } : {}),
                 ...(reasoning ? { reasoningEffort: 'medium' } : {}),
             };
             const events = [];
@@ -380,8 +381,8 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 // PROOF: the lossy replay this suite guards against measurably fails.
 // ---------------------------------------------------------------------------
 for (const style of ['chat', 'messages', 'responses', 'google']) {
-    const omitted = await runScenario(style, { reasoning: true, dropContextNotes: true });
-    const retained = await runScenario(style, { reasoning: true });
+    const omitted = await runScenario(style, { reasoning: true, dropContextNotes: true, withTaskList: true });
+    const retained = await runScenario(style, { reasoning: true, withTaskList: true });
     ok(`${style}: forgetting only the sent status notes breaks the previous prompt prefix`,
         omitted.minCover < retained.minCover && retained.minCover >= 0.999,
         `omitted=${(omitted.minCover * 100).toFixed(1)}% retained=${(retained.minCover * 100).toFixed(1)}%`);
