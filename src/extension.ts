@@ -71,7 +71,7 @@ import {
     type ProxyTestOutcome,
     type ProxyTestResult,
 } from './proxyTest';
-import { sanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
+import { pathIdentity, sanitizePath, OutsideWorkspacePathError, withPathAlias } from './paths';
 import { ATTACH_MAX_BYTES, ATTACH_MAX_COUNT, ATTACH_MAX_TOTAL_BYTES, buildLocalUserText, isImageAttachment, isPdfAttachment, isTextAttachment, mimeFromFilename, resolveReferenceAttachments, validateHostAttachments } from './attachments';
 import type { AttachmentMeta, ComposerAttachment, HistoryMessage } from './chatViewTypes';
 import { displayHistoryForReplay } from './chatReplay';
@@ -413,7 +413,19 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
         this._browser.notifyWorkspaceFileChanged();
     }
-    disposeBrowser(): void { this._browser.dispose(); this._engineInstallController?.abort(); this._cancelSetup(); this._cancelNativeSetup(); this._cancelModelPings(); void this._engines.dispose(); }
+    private _shutdown?: Promise<unknown>;
+    dispose(): Promise<unknown> {
+        if (this._shutdown) return this._shutdown;
+        this._clearWebview();
+        this._cancelActiveRequests(true);
+        const oauthClosed = this._cancelOAuthFlow();
+        this._engineInstallController?.abort();
+        this._cancelSetup();
+        this._cancelNativeSetup();
+        return this._shutdown = Promise.allSettled([
+            this._browser.dispose(), this._engines.dispose(), this.disposeDownloads(), this._childrenSettled, oauthClosed,
+        ]);
+    }
     private readonly _engines = new EngineRegistry();
     private _openCodeEngine?: OpenCodeEngine;
     private readonly _modelPingControllers = new Map<string, AbortController>();
@@ -573,7 +585,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._nativeAuth = undefined;
         if (auth) {
             auth.controller.abort();
-            void this._getOpenCodeEngine().then((engine) => engine.oauthCancel(auth.integrationID, auth.attemptID, auth.workspace)).catch(() => undefined);
+            if (!isOfflineMode() && this._view) void this._openCodeEngine?.oauthCancel(auth.integrationID, auth.attemptID, auth.workspace).catch(() => undefined);
         }
     }
     async _nativeGetState(requestId: string): Promise<void> {
@@ -667,7 +679,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await this._serializeSessionTransition(async () => {
                 if (this._runtimeSetup?.requestId !== requestId) return;
                 if (this._localRunActive) { reject('engineBusyHint'); return; }
-                if (this._setupWorkspace !== vscode.workspace.workspaceFolders?.[0]?.uri.fsPath) { reject('engineWorkspaceMismatch'); return; }
+                const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                if (!workspace || !this._setupWorkspace || pathIdentity(this._setupWorkspace) !== pathIdentity(workspace)) { reject('engineWorkspaceMismatch'); return; }
                 const credential = state.engine === 'xratu' ? (await this._getSavedCredentials()).find((entry) => entry.id === state.credentialId) : undefined;
                 if (state.engine === 'xratu' && !credential) { reject('setupChangeConnection'); return; }
                 if (state.engine === 'opencode') {
@@ -836,15 +849,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         });
     }
     private async _getOpenCodeEngine(sessionBinary?: string): Promise<OpenCodeEngine> {
-        if (isOfflineMode()) throw new EngineError('engineOfflineUnsupported');
+        if (isOfflineMode() || this._shutdown) throw new EngineError('engineOfflineUnsupported');
         sessionBinary ??= this._activeEngine === 'opencode' ? this._engineSession?.binaryPath : undefined;
         await this._sendEnginesState();
+        if (isOfflineMode() || this._shutdown) throw new EngineError('engineOfflineUnsupported');
         if (this._engineInstallController) throw new EngineError('engineNotReady');
         if (!sessionBinary && (this._engineSetup.phase !== 'ready' || !this._engineSetup.binaryPath)) throw new EngineError('engineNotReady');
         const binary = sessionBinary || this._engineSetup.binaryPath!;
         // An update keeps earlier managed versions for saved native sessions.
         // Resume their recorded runtime rather than silently changing identity.
         if (sessionBinary && sessionBinary !== this._engineSetup.binaryPath && !(await checkOpenCode(sessionBinary)).startsWith('2.')) throw new EngineError('engineNotReady');
+        if (isOfflineMode() || this._shutdown) throw new EngineError('engineOfflineUnsupported');
         const proxy = getProxyResolution();
         const environmentKey = JSON.stringify([proxy.mode, proxy.url, proxy.noProxy]);
         if (this._openCodeEngine?.binary !== binary || (!this._nativeTurnActive && this._openCodeEnvironmentKey !== environmentKey)) {
@@ -1655,19 +1670,18 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     : vscode.window.showInformationMessage;
             void fn(text);
         };
-        if (!this._view) {
+        const view = this._view;
+        if (!view) {
             showNative();
             return;
         }
-        this._view.webview.postMessage({
+        void Promise.resolve().then(() => view.webview.postMessage({
             type: 'notification',
             id: `n${++this._notifSeq}`,
             kind,
             valueKey,
             params
-        }).then((ok) => {
-            if (!ok) showNative();
-        });
+        })).then(ok => { if (!ok) showNative(); }, showNative);
     }
 
     /** Confirm dialog rendered as an in-app banner with action buttons.
@@ -1683,17 +1697,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 )
             );
         };
-        if (!this._view) return native();
+        const view = this._view;
+        if (!view) return native();
         const id = `n${++this._notifSeq}`;
         return new Promise<string | null>((resolve) => {
             this._pendingNotifies.set(id, resolve);
-            this._view!.webview.postMessage({ type: 'notification', id, kind: 'warning', valueKey: messageKey, params, actions })
-                .then((ok) => {
-                    if (!ok) {
-                        this._pendingNotifies.delete(id);
-                        native().then(resolve);
-                    }
-                });
+            const fallback = () => {
+                if (this._pendingNotifies.delete(id)) void native().then(resolve, () => resolve(null));
+            };
+            void Promise.resolve()
+                .then(() => this._view === view && view.webview.postMessage({ type: 'notification', id, kind: 'warning', valueKey: messageKey, params, actions }))
+                .then(ok => { if (!ok) fallback(); }, fallback);
         });
     }
 
@@ -1893,34 +1907,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         );
         if (!pickedFile) return;
         const picked = pickedFile.file;
-        if (picked.binary) {
-            this.notifyBanner('info', 'notifReviewBinary', { file: picked.path });
+        let review;
+        try { review = await readReviewFile(this._checkpoints, root, sha, picked.path, undefined, REVIEW_MAX_CHARS); }
+        catch (error) {
+            this.notifyBanner('error', 'notifReviewFailed', { error: error instanceof Error ? error.message : String(error) });
             return;
         }
-        let before = '';
-        let after = '';
-        try {
-            if (picked.untracked) {
-                // A new file may be an image - never feed NUL bytes to the
-                // virtual-document diff. Binary detection reads only the head.
-                const buf = await fs.promises.readFile(path.join(root, picked.path));
-                if (buf.subarray(0, 8192).includes(0)) {
-                    this.notifyBanner('info', 'notifReviewBinary', { file: picked.path });
-                    return;
-                }
-                after = buf.toString('utf-8');
-            } else {
-                before = (await this._checkpoints.readCheckpointFile(root, sha, picked.path)) ?? '';
-                after = await fs.promises.readFile(path.join(root, picked.path), 'utf-8');
-            }
-        } catch {
-            // A file deleted since the checkpoint keeps its old side only.
-            after = after || '';
-        }
-        if (Math.max(before.length, after.length) > REVIEW_MAX_CHARS) {
-            this.notifyBanner('info', 'notifReviewTooLarge', { file: picked.path });
+        if (review.kind !== 'text') {
+            this.notifyBanner('info', review.kind === 'binary' ? 'notifReviewBinary' : 'notifReviewTooLarge', { file: picked.path });
             return;
         }
+        const { before, after } = review;
         if (before === after) {
             this.notifyBanner('info', 'notifReviewNoHunks', { file: picked.path });
             return;
@@ -3194,6 +3191,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (this._oauthFlow !== flow || flow.controller.signal.aborted) throw new OAuthCancelledError();
     }
 
+    private _oauthLoopbackStart?: Promise<LoopbackServer>;
+
     private async _runBrowserSignIn(flow: OAuthFlowState, options: OAuthAuthorization): Promise<OAuthCallback> {
         const signal = flow.controller.signal;
         const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
@@ -3201,12 +3200,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         let server: LoopbackServer | undefined;
         try {
             try {
-                server = await startLoopbackServer({
+                const opening = startLoopbackServer({
                     candidatePorts: [1455, 1457, 0], callbackPath: '/auth/callback',
                     expectedState: options.expectedState, timeoutMs,
                     successHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackDone') + '</p>',
                     errorHtml: '<!doctype html><meta charset="utf-8"><p>' + ui('oauthCallbackFailed') + '</p>',
                 });
+                this._oauthLoopbackStart = opening;
+                try { server = await opening; }
+                finally { if (this._oauthLoopbackStart === opening) this._oauthLoopbackStart = undefined; }
                 flow.server = server;
             } catch (error) {
                 this._assertOAuthFlow(flow);
@@ -3245,7 +3247,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._assertOAuthFlow(flow);
             return callback;
         } finally {
-            server?.dispose();
+            await server?.dispose();
             if (flow.server === server) flow.server = undefined;
         }
     }
@@ -3269,12 +3271,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     async _cancelOAuthSignIn(): Promise<void> {
         if (!this._oauthFlow) return;
-        this._cancelOAuthFlow();
+        await this._cancelOAuthFlow();
         this._postOAuthState({ inProgress: null });
         await this._sendOAuthState();
     }
 
-    private _cancelOAuthFlow(): void {
+    private async _cancelOAuthFlow(): Promise<void> {
         const flow = this._oauthFlow;
         if (!flow) return;
         this._oauthFlow = null;
@@ -3282,8 +3284,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // Release the paste slot too: a flow that is gone must not leave a
         // pending promise holding its caller.
         flow.manualCode.release();
-        flow.server?.cancel();
-        flow.server?.dispose();
+        const server = flow.server ?? await this._oauthLoopbackStart?.catch(() => undefined);
+        await server?.cancel();
     }
 
     private async _oauthCompleteSignIn(handler: OAuthProviderHandler, tokens: OAuthTokenSet, flow: OAuthFlowState): Promise<void> {
@@ -4173,7 +4175,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (enabled) await this._downloads.pauseForOffline().catch(error => diagnosticsChannel?.appendLine(`Downloads offline: ${String(error)}`));
         // Terminate existing remote page connections, including WebSockets.
         if (enabled) this._browser.close();
-        if (enabled && this._activeEngine === 'opencode') { this._cancelActiveRequests(); await this._openCodeEngine?.dispose(); }
+        if (enabled) {
+            if (this._activeEngine === 'opencode') this._cancelActiveRequests();
+            await this._resetOpenCodeEngine();
+        }
         // Remote requests share the network-policy signal. Local work stays
         // permitted, except a pull asks Ollama to download from the network.
         if (enabled && this._modelManagementAction === 'pull') this._modelManagementController?.abort();
@@ -5550,9 +5555,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _fetchModels(): Promise<boolean> {
-        if (!this._view) return false;
+        const view = this._view;
+        if (!view) return false;
+        const post = (message: unknown) => {
+            if (this._view === view) void Promise.resolve(view.webview.postMessage(message)).catch(() => undefined);
+        };
         if (this._activeEngine === 'opencode') {
-            this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
+            post({ type: 'modelsRefreshing', active: true });
             try {
                 const epoch = this._sessionEpoch;
                 const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -5571,13 +5580,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const contextWindows = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.limit.context]));
                 this._nativeModelWindows = contextWindows;
                 this._nativeModelVariants = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.variants.map((variant) => variant.id).filter((id) => id !== 'default')]));
-                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: this._selectedModel ?? '', selectedModel: this._selectedModel ?? '', models, contextWindows, nativeVariants: this._nativeVariants(), capabilities: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, { provider: model.providerID, free: isFreeModel(model), variants: this._nativeModelVariants[`${model.providerID}/${model.id}`], noReasoning: !this._nativeModelVariants[`${model.providerID}/${model.id}`].length, vision: model.capabilities.input.includes('image'), noTools: !model.capabilities.tools }])), visionCapable: catalog.find((model) => `${model.providerID}/${model.id}` === this._selectedModel)?.capabilities.input.includes('image') ?? false, displayNames: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.name])) });
+                post({ type: 'modelInfo', defaultModel: this._selectedModel ?? '', selectedModel: this._selectedModel ?? '', models, contextWindows, nativeVariants: this._nativeVariants(), capabilities: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, { provider: model.providerID, free: isFreeModel(model), variants: this._nativeModelVariants[`${model.providerID}/${model.id}`], noReasoning: !this._nativeModelVariants[`${model.providerID}/${model.id}`].length, vision: model.capabilities.input.includes('image'), noTools: !model.capabilities.tools }])), visionCapable: catalog.find((model) => `${model.providerID}/${model.id}` === this._selectedModel)?.capabilities.input.includes('image') ?? false, displayNames: Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.name])) });
                 return models.length > 0;
             } catch (error) {
-                this._view.webview.postMessage({ type: 'modelInfo', defaultModel: '', models: [] });
-                this._view.webview.postMessage(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: error instanceof Error ? error.message : String(error) });
+                post({ type: 'modelInfo', defaultModel: '', models: [] });
+                post(error instanceof EngineError ? { type: 'error', valueKey: error.valueKey } : { type: 'error', value: error instanceof Error ? error.message : String(error) });
                 return false;
-            } finally { this._view.webview.postMessage({ type: 'modelsRefreshing', active: false }); }
+            } finally { post({ type: 'modelsRefreshing', active: false }); }
         }
         // A remembered model for THIS credential wins over the in-memory one -
         // the in-memory value may belong to the credential we just switched
@@ -5593,13 +5602,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await this._secrets.delete('xratu.selectedModel');
         }
         // Let the picker spin its refresh button for the duration of the fetch.
-        this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
+        post({ type: 'modelsRefreshing', active: true });
         try {
             const llm = await this._getLlmCredentials();
             if (!llm.llm_base_url) {
                 // Nothing configured - the picker stays empty until a
                 // provider is connected.
-                this._view.webview.postMessage({
+                post({
                     type: 'modelInfo', defaultModel: '', models: [],
                     visionCapable: this.isLocalModelVisionCapable(),
                     contextWindows: {},
@@ -5607,7 +5616,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     thinkingLevels: this._thinkingLevels(),
                     selectedModel: this._selectedModel ?? undefined
                 });
-                this._view.webview.postMessage({ type: 'byokSetupHint' });
+                post({ type: 'byokSetupHint' });
                 return false;
             }
             // Runtime collapse: every credential - remote BYOK or on-machine
@@ -5616,21 +5625,25 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key, llm.extra_headers, llm.discoverModels);
         } catch (e) {
             // Probe failure - tell the user instead of failing silently.
-            this._view.webview.postMessage({
+            post({
                 type: 'byokCredentialError',
                 value: e instanceof Error ? e.message : String(e)
             });
             return false;
         } finally {
-            this._view.webview.postMessage({ type: 'modelsRefreshing', active: false });
+            post({ type: 'modelsRefreshing', active: false });
         }
     }
 
     private async _fetchLocalModels(baseUrl: string, apiKey?: string, extraHeaders?: Record<string, string>, discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>): Promise<boolean> {
-        if (!this._view) return false;
+        const view = this._view;
+        if (!view) return false;
+        const post = (message: unknown) => {
+            if (this._view === view) void Promise.resolve(view.webview.postMessage(message)).catch(() => undefined);
+        };
         const insecureError = insecureRemoteHttpError(baseUrl, apiKey);
         if (insecureError) {
-            this._view.webview.postMessage({ type: 'byokCredentialError', valueKey: insecureError });
+            post({ type: 'byokCredentialError', valueKey: insecureError });
             return false;
         }
         // Deselect/switch may happen while the probe below is in flight -
@@ -5638,7 +5651,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // never resurrects a selection the user just cleared (a stale model
         // paired with the fallback credential would mislabel chat requests).
         const fetchCredId = await this._resolveActiveCredentialId();
-        this._view.webview.postMessage({ type: 'modelsRefreshing', active: true });
+        post({ type: 'modelsRefreshing', active: true });
         try {
             // Only providers the catalog covers trigger the request.
             const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl))
@@ -5662,7 +5675,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 }
             }
             if (!probed) {
-                this._view.webview.postMessage({
+                post({
                     type: 'byokCredentialError',
                     valueKey: 'localUnreachable',
                 });
@@ -5733,7 +5746,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // The active provider is known here (even before any run), so the
             // cost currency is correct for a reopened session.
             this._setCostCurrencyFor(baseUrl);
-            this._view.webview.postMessage({
+            post({
                 type: 'modelInfo',
                 defaultModel: models[0] ?? '',
                 models,
@@ -5741,7 +5754,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 contextWindows: servedWindows,
                 overrides: this._contextWindowOverrides(),
                 thinkingLevels: this._thinkingLevels(),
-                selectedModel: this._selectedModel ?? undefined,
+                selectedModel: this._selectedModel ?? '',
                 visionCapable: this.isLocalModelVisionCapable(),
                 capabilities,
             });
@@ -5749,14 +5762,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._postSessionCost();
             return true;
         } catch (e) {
-            this._view.webview.postMessage({
+            post({
                 type: 'byokCredentialError',
                 valueKey: 'localUnreachableDetail',
                 params: { detail: e instanceof Error ? e.message : String(e) },
             });
             return false;
         } finally {
-            this._view.webview.postMessage({ type: 'modelsRefreshing', active: false });
+            post({ type: 'modelsRefreshing', active: false });
         }
     }
 
@@ -5860,12 +5873,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         await vscode.window.showTextDocument(doc);
     }
 
-    public resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken,
-    ) {
-        this._view = webviewView;
+    private _clearWebview(): void {
+        this._view = undefined;
+        this._startupPage.reset();
+        for (const sub of this._webviewSubscriptions.splice(0)) sub.dispose();
 
         // The old webview is gone (reload/re-init): any confirm banner it owed
         // an answer can never be answered - settle them as cancelled.
@@ -5879,6 +5890,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // waits forever, holding its controller slot.
         this._rejectPendingLocalApprovals();
         this._rejectPendingLocalDecisions();
+        const state = this._browser.getState();
+        void this._browser.setVisible(state.sessionId, state.browserId, false).catch(() => undefined);
+    }
+
+    public resolveWebviewView(
+        webviewView: vscode.WebviewView,
+        _context: vscode.WebviewViewResolveContext,
+        _token: vscode.CancellationToken,
+    ) {
+        this._clearWebview();
+        this._view = webviewView;
+        this._webviewSubscriptions.push(webviewView.onDidDispose(() => {
+            if (this._view === webviewView) this._clearWebview();
+        }));
 
         // DEV-ONLY: `XRATU_WEBVIEW_LOG=<path>` appends every host→webview
         // envelope to a JSONL tape, so a session that misbehaved on screen can
@@ -5903,12 +5928,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
         };
-        this._startupPage.reset();
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-
-        // Dispose old subscriptions before creating new ones (prevents listener leak on re-init)
-        for (const sub of this._webviewSubscriptions) { sub.dispose(); }
-        this._webviewSubscriptions = [];
 
         this._webviewSubscriptions.push(
             webviewView.onDidChangeVisibility(() => {
@@ -8642,7 +8662,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (['xratu.webSearchUseProxy', 'xratu.proxyMode', 'xratu.proxyUrl', 'xratu.noProxy'].some(key => event.affectsConfiguration(key))) resetResearchPolicy();
     }));
     const provider = new XratuChatViewProvider(context.extensionUri, context.secrets, checkpoints, context.globalState, context.globalStorageUri);
-    downloadShutdown = () => provider.disposeDownloads();
+    providerShutdown = () => provider.dispose();
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(XratuChatViewProvider.viewType, provider)
@@ -8652,7 +8672,7 @@ export function activate(context: vscode.ExtensionContext) {
     // to be dropped explicitly - VS Code disposing the subscriptions is what
     // guarantees a window reload leaves nothing posting into a dead webview.
     context.subscriptions.push({ dispose: () => provider.disposeJobEvents() });
-    context.subscriptions.push({ dispose: () => provider.disposeBrowser() });
+    context.subscriptions.push({ dispose: () => { void provider.dispose(); } });
     context.subscriptions.push({ dispose: () => provider.disposePullRequests() });
     context.subscriptions.push({ dispose: () => { void provider.disposeDownloads().catch(error => diagnosticsChannel?.appendLine(`Downloads shutdown: ${String(error)}`)); } });
 
@@ -8804,7 +8824,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
-let downloadShutdown: (() => Promise<void>) | undefined;
+let providerShutdown: (() => Promise<unknown>) | undefined;
 
 export async function deactivate() {
     // Background jobs are the user's own processes (a dev server, a watcher)
@@ -8814,10 +8834,10 @@ export async function deactivate() {
     setJobChangeListener(undefined);
     // External stdio MCP servers are child processes - without this they
     // outlive extension-host reloads until the process dies on its own.
-    void externalMcpInstance?.stopAll();
+    const externalShutdown = externalMcpInstance?.stopAll();
     externalMcpInstance = null;
     mcpConfigStoreInstance = null;
     mcpMarketplaceInstance = null;
-    await downloadShutdown?.();
-    downloadShutdown = undefined;
+    await Promise.allSettled([providerShutdown?.(), externalShutdown]);
+    providerShutdown = undefined;
 }

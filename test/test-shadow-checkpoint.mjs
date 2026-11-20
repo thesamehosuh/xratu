@@ -35,6 +35,12 @@ const store = new ShadowCheckpointStore({ globalStorageUri: { fsPath: storageRoo
 const work = mkdtempSync(join(tmpdir(), 'xratu-cp-work-'));
 
 try {
+    const partialRepo = join(storageRoot, 'checkpoints', createHash('sha1').update(work).digest('hex').slice(0, 16));
+    mkdirSync(partialRepo, { recursive: true });
+    execFileSync('git', ['init', '--bare', '--quiet', partialRepo], { windowsHide: true });
+    const recovered = await store.createCheckpoint(work, 'recover interrupted initialization');
+    ok('an unborn shadow HEAD is seeded on retry', /^[a-f0-9]{12}$/.test(recovered));
+
     const createCheckpoint = store.createCheckpoint;
     let releaseCapture, captureCount = 0, secondCaptured = false;
     const captureGate = new Promise(resolve => { releaseCapture = resolve; });

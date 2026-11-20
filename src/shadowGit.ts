@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { sanitizePath } from './paths';
 import { withDirectoryLock } from './oauth/refreshLock';
+import { CheckpointFileTooLargeError } from './workSurface';
 
 /**
  * ALL git work here is ASYNCHRONOUS on purpose: spawnSync would freeze the
@@ -29,7 +30,8 @@ import { withDirectoryLock } from './oauth/refreshLock';
  */
 
 interface GitResult {
-    code: number;
+    code: number | string;
+    killed: boolean;
     stdout: string;
     stderr: string;
 }
@@ -65,17 +67,18 @@ export class EmptySeedError extends Error {
     }
 }
 
-function gitExec(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<GitResult> {
+function gitExec(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, maxBuffer = 16 * 1024 * 1024): Promise<GitResult> {
     return new Promise((resolve) => {
         cp.execFile(
             'git',
             args,
             // windowsHide: git.exe is a console app - without this flag every
             // checkpoint spawns a visible console window on Windows.
-            { env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf-8', windowsHide: true },
+            { env, timeout: timeoutMs, maxBuffer, encoding: 'utf-8', windowsHide: true },
             (error, stdout, stderr) => resolve({
                 // git exit codes land in error.code; null error means 0.
-                code: error ? ((error as any).code ?? 1) : 0,
+                code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0,
+                killed: error?.killed === true,
                 stdout: stdout ?? '',
                 stderr: stderr ?? '',
             })
@@ -197,8 +200,8 @@ export class ShadowCheckpointStore {
         return p;
     }
 
-    private gitAsync(args: string[], workspaceRoot: string, timeoutMs = 20000): Promise<GitResult> {
-        return gitExec(args, this.env(workspaceRoot), timeoutMs);
+    private gitAsync(args: string[], workspaceRoot: string, timeoutMs = 20000, maxBuffer?: number): Promise<GitResult> {
+        return gitExec(args, this.env(workspaceRoot), timeoutMs, maxBuffer);
     }
 
     /** Identity-free commits: never fail just because the user has no git config. */
@@ -255,8 +258,12 @@ export class ShadowCheckpointStore {
             if (init.code !== 0) {
                 throw new Error(`Could not initialize checkpoint storage: ${init.stderr}`);
             }
-            // Seed an empty root commit so restores/diffs always have a base.
-            await this.gitAsync([...this.repoConfigArgs(), 'read-tree', '--empty'], workspaceRoot);
+        }
+        const head = await this.gitAsync(['rev-parse', '--verify', '--quiet', 'HEAD'], workspaceRoot);
+        if (head.code !== 0 && head.code !== 1) throw new Error(`Could not read checkpoint HEAD: ${head.stderr}`);
+        if (head.code === 1) {
+            const cleared = await this.gitAsync([...this.repoConfigArgs(), 'read-tree', '--empty'], workspaceRoot);
+            if (cleared.code !== 0) throw new Error(`Checkpoint storage init failed: ${cleared.stderr}`);
             const seeded = await this.gitAsync(
                 [...this.repoConfigArgs(), ...this.commitArgs('checkpoint: initial snapshot'), '--allow-empty'],
                 workspaceRoot
@@ -372,6 +379,10 @@ export class ShadowCheckpointStore {
     private async _createCheckpointInner(workspaceRoot: string, description: string): Promise<string> {
         await this.ensureRepo(workspaceRoot);
         const add = await this.gitAsync([...this.repoConfigArgs(), 'add', '--all'], workspaceRoot);
+        if (add.killed) {
+            // The timed-out git process has exited, and this operation still holds the shadow lock.
+            await fs.promises.rm(path.join(this.repoDir(workspaceRoot), 'index.lock'), { force: true }).catch(error => report('could not remove timed-out index lock', error));
+        }
         if (add.code !== 0) {
             throw new Error(`Staging failed: ${add.stderr.trim()}`);
         }
@@ -611,13 +622,16 @@ export class ShadowCheckpointStore {
 
     /** Content of `filePath` as of checkpoint `sha` (null when the file did
      *  not exist there - the review flow treats that as an empty side). */
-    async readCheckpointFile(workspaceRoot: string, sha: string, filePath: string): Promise<string | null> {
+    async readCheckpointFile(workspaceRoot: string, sha: string, filePath: string, limit?: number): Promise<string | null> {
         const result = await this.gitAsync(
             [...this.repoConfigArgs(), 'show', `${sha}:${filePath}`],
             workspaceRoot,
             30000,
+            limit === undefined ? undefined : limit + 1,
         );
+        if (result.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new CheckpointFileTooLargeError();
         if (result.code !== 0) return null;
+        if (limit !== undefined && Buffer.byteLength(result.stdout) > limit) throw new CheckpointFileTooLargeError();
         return result.stdout;
     }
 }

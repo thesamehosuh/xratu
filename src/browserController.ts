@@ -88,6 +88,7 @@ export class BrowserController {
     private navigationGeneration = 0;
     private diagnostics: Array<{ kind: string; text: string }> = [];
     private disposed = false;
+    private closing: Promise<void> = Promise.resolve();
 
     constructor(private readonly options: Options) {}
 
@@ -115,10 +116,14 @@ export class BrowserController {
         clearTimeout(this.liveReloadTimer); this.liveReloadTimer = undefined; this.loopbackSockets.clear(); this.navigationGeneration++;
         this.state = this.emptyState(this.state.sessionId);
         this.publish();
-        void browser?.close().catch(() => undefined);
+        if (browser) this.closing = Promise.all([this.closing, browser.close().catch(() => undefined)]).then(() => undefined);
     }
 
-    dispose(): void { this.disposed = true; this.close(); }
+    async dispose(): Promise<void> {
+        this.disposed = true;
+        this.close();
+        await Promise.all([this.closing, this.queue]);
+    }
 
     private current(sessionId: string, browserId?: string): void {
         if (this.disposed || sessionId !== this.state.sessionId || (browserId && browserId !== this.state.browserId)) throw new Error('This browser operation belongs to an expired chat or browser.');

@@ -1,3 +1,4 @@
+import { pathIdentity } from '../../paths';
 // Event and permission mapping adapted from T3 Code's OpenCode 2 adapter.
 // Native OpenCode owns tools/history; Xratu owns the display and decision cards.
 import { readResearchEvidence } from '../../web/types';
@@ -84,7 +85,7 @@ export class OpenCodeEngine implements AgentEngine {
                 coordinator.cancelInstructions(childID);
                 return false;
             }
-            if(child.parentID!==active.sessionID || child.location.directory!==active.workspace) throw new Error('Native child ownership mismatch');
+            if(child.parentID!==active.sessionID || pathIdentity(child.location.directory)!==pathIdentity(active.workspace)) throw new Error('Native child ownership mismatch');
             verified=true;
             if(this.active!==active || active.signal.aborted) throw new DOMException('Native execution ended','AbortError');
             if(coordinator.instructionTarget(callId)!==childID) {
@@ -256,7 +257,7 @@ export class OpenCodeEngine implements AgentEngine {
         turn.signal.throwIfAborted();
         const slash = turn.model.indexOf('/');
         if (slash <= 0) throw new EngineError('engineModelMissing');
-        if (turn.session?.workspace && turn.session.workspace !== turn.workspace) throw new EngineError('engineWorkspaceMismatch');
+        if (turn.session?.workspace && pathIdentity(turn.session.workspace) !== pathIdentity(turn.workspace)) throw new EngineError('engineWorkspaceMismatch');
         if (turn.session?.binaryPath && turn.session.binaryPath !== this.binary) throw new EngineError('engineSessionRuntimeChanged');
         yield { type: 'status', value: 'connecting' };
         const { client, baseUrl, headers } = await this.server.connect();
@@ -285,7 +286,7 @@ export class OpenCodeEngine implements AgentEngine {
         if (sessionID) {
             try {
                 const session = await client.session.get({ sessionID }, options);
-                if (session.location.directory !== turn.workspace) throw new EngineError('engineWorkspaceMismatch');
+                if (pathIdentity(session.location.directory) !== pathIdentity(turn.workspace)) throw new EngineError('engineWorkspaceMismatch');
             } catch (error) {
                 turn.signal.throwIfAborted();
                 if (isSessionNotFoundError(error)) throw new EngineError('engineSessionMissing');
@@ -489,10 +490,13 @@ export class OpenCodeEngine implements AgentEngine {
                                     allowed &&= call?.name === 'subagent';
                                     const childID = call?.input.sessionID;
                                     if (allowed && typeof childID === 'string' && childID) {
-                                        const child = await client.session.get({ sessionID: childID }, { signal });
-                                        allowed = child.parentID === eventSessionID && child.location.directory === turn.workspace;
+                                        const child = await client.session.get({ sessionID: childID }, { signal }).catch(error => {
+                                            if (isSessionNotFoundError(error)) return undefined;
+                                            throw error;
+                                        });
+                                        allowed = !!child && child.parentID === eventSessionID && pathIdentity(child.location.directory) === pathIdentity(turn.workspace);
                                         if (allowed) allowed = !(childID in await client.session.active({ signal })) && coordinator.reusable(childID) && coordinator.claim(childID, eventSessionID, nativeID);
-                                        if (allowed) {
+                                        if (allowed && child) {
                                             await tree.drainPending(childID, signal);
                                             await client.session.update({ sessionID: childID, permissions }, { signal });
                                             coordinator.admit(childID, eventSessionID, child.model ? `${child.model.providerID}/${child.model.id}` : turn.model, child.agent ?? '');

@@ -11,9 +11,17 @@ export interface OpenCodeConnection { client: OpenCodeClient; baseUrl: string; h
 export class OpenCodeServer {
     private child?: ChildProcess;
     private connection?: Promise<OpenCodeConnection>;
+    private stopping?: Promise<void>;
     constructor(readonly binary: string, private readonly env: NodeJS.ProcessEnv = process.env) {}
     connect(): Promise<OpenCodeConnection> {
-        return this.connection ??= this.start().catch((error) => { this.connection = undefined; throw error; });
+        if (this.stopping) return Promise.reject(new Error('OpenCode server is stopping'));
+        if (this.connection) return this.connection;
+        const connection = this.start().catch(error => {
+            if (this.connection === connection) this.connection = undefined;
+            throw error;
+        });
+        this.connection = connection;
+        return connection;
     }
     private start(): Promise<OpenCodeConnection> {
         return new Promise((resolve, reject) => {
@@ -25,9 +33,9 @@ export class OpenCodeServer {
             let output = '';
             let settled = false;
             const timer = setTimeout(() => { fail(new Error('OpenCode server startup timed out')); }, 45_000);
-            const fail = (error: Error) => {
+            const fail = (error: Error, stop = true) => {
                 clearTimeout(timer);
-                if (!settled) { settled = true; reject(error); void killTree(child.pid); }
+                if (!settled) { settled = true; reject(error); if (stop) void killTree(child.pid); }
             };
             const read = (data: Buffer) => {
                 output = (output + data.toString()).slice(-8192);
@@ -40,14 +48,21 @@ export class OpenCodeServer {
             };
             child.stdout?.on('data', read);
             child.stderr?.on('data', read);
-            child.on('error', fail);
-            child.on('close', (code) => { this.connection = undefined; if (this.child === child) this.child = undefined; fail(new Error(`OpenCode server exited (${code}): ${output.trim()}`)); });
+            child.on('error', error => fail(error));
+            child.on('close', (code) => {
+                if (this.child === child) {
+                    this.child = undefined;
+                    this.connection = undefined;
+                }
+                fail(new Error(`OpenCode server exited (${code}): ${output.trim()}`), false);
+            });
         });
     }
-    async dispose(): Promise<void> {
+    dispose(): Promise<void> {
+        if (this.stopping) return this.stopping;
         const child = this.child;
         this.child = undefined;
         this.connection = undefined;
-        await killTree(child?.pid);
+        return this.stopping = killTree(child?.pid).finally(() => { this.stopping = undefined; });
     }
 }

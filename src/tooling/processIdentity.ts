@@ -213,7 +213,11 @@ export function captureIdentityAsync(
     // Still pending: recorded as unverified so a checkpoint written in the
     // meantime is honest about not knowing.
     apply({ pid, token: 'unverified' });
-    void new Promise<string | null>((resolve) => {
+    void windowsStartTokenAsync(pid).then(token => apply({ pid, token: token ?? 'unverified' }));
+}
+
+function windowsStartTokenAsync(pid: number): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
         const child = cp.spawn('powershell.exe', [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
             windowsStartTimeQuery(pid),
@@ -247,7 +251,7 @@ export function captureIdentityAsync(
             }
             resolve(windowsToken(value));
         });
-    }).then((token) => { apply({ pid, token: token ?? 'unverified' }); });
+    });
 }
 
 /**
@@ -262,7 +266,9 @@ export function isOurProcess(identity: ProcessIdentity | null | undefined): bool
 
 /** Failure to read an incarnation token is uncertainty, not proof of exit.
  * Callers may retain an unknown process, but must never signal it. */
-export function processIdentityStatus(identity: ProcessIdentity | null | undefined): 'same' | 'different' | 'gone' | 'unknown' {
+type ProcessIdentityStatus = 'same' | 'different' | 'gone' | 'unknown';
+
+export function processLivenessStatus(identity: ProcessIdentity | null | undefined): ProcessIdentityStatus | undefined {
     if (!identity || !Number.isInteger(identity.pid) || identity.pid <= 0 || identity.pid > 0x7fffffff
         || typeof identity.token !== 'string' || !identity.token) return 'different';
     try {
@@ -271,6 +277,26 @@ export function processIdentityStatus(identity: ProcessIdentity | null | undefin
         return err?.code === 'ESRCH' ? 'gone' : 'unknown';
     }
     if (identity.token === 'unverified') return 'unknown';
-    const current = processStartToken(identity.pid);
-    return current === null ? 'unknown' : current === identity.token ? 'same' : 'different';
+}
+
+export function processIdentityStatus(identity: ProcessIdentity | null | undefined): ProcessIdentityStatus {
+    const known = processLivenessStatus(identity);
+    if (known) return known;
+    const current = processStartToken(identity!.pid);
+    return current === null ? 'unknown' : current === identity!.token ? 'same' : 'different';
+}
+
+export async function processIdentityStatusAsync(identity: ProcessIdentity): Promise<ProcessIdentityStatus> {
+    if (process.platform !== 'win32') return processIdentityStatus(identity);
+    const known = processLivenessStatus(identity);
+    if (known) return known;
+    const current = await windowsStartTokenAsync(identity.pid);
+    return current === null ? processLivenessStatus(identity) ?? 'unknown' : current === identity.token ? 'same' : 'different';
+}
+
+let selfIdentity: Promise<ProcessIdentity> | undefined;
+export function captureSelfIdentity(): Promise<ProcessIdentity> {
+    return selfIdentity ??= (process.platform === 'win32'
+        ? windowsStartTokenAsync(process.pid).then(token => ({pid: process.pid, token: token ?? 'unverified'}))
+        : Promise.resolve(captureIdentity(process.pid)!));
 }

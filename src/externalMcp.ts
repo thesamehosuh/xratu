@@ -108,54 +108,41 @@ interface ServerState {
     /** SDK v1 replaces its metadata cache on each list page. Retain every
      * page's validators and task requirements until the next full listing. */
     toolMetadata?: Map<string, { validator?: ReturnType<AjvJsonSchemaValidator['getValidator']>; requiresTask: boolean }>;
-    /** stdio child pid - lets close paths kill the WHOLE process tree
-     *  (on Windows, npx/uvx run through a cmd.exe shim: killing the direct
-     *  child orphans the actual node grandchild without taskkill /T). */
-    pid?: number;
+
 }
 
 function serverConfigHash(cfg: ExternalServerConfig, source: string, generation?: number): string {
     return createHash('sha256').update(JSON.stringify([source, cfg, generation])).digest('hex');
 }
 
-/** Close one external server's stdio process tree and client (a no-op for
- *  already-exited processes and for remote transports without a pid).
- *
- *  The real server is a GRANDCHILD when the command is `npx`/`uvx` (a
- *  cmd.exe shim on Windows, a launcher elsewhere), and the SDK's close()
- *  signals only the DIRECT child. The two failure modes must both be avoided:
- *  orphaned servers (they keep running and holding ports/files) and killing a
- *  well-behaved server before it can shut down gracefully (stdin EOF is the
- *  MCP spec's shutdown signal).
- *
- *  - POSIX: snapshot the descendant tree, run the graceful close (stdin EOF,
- *    then SIGTERM/SIGKILL escalation), then reap anything that outlived it.
- *  - Windows: `taskkill /T` can only find the grandchild while the shim is
- *    alive, and close() force-kills the shim, so the tree must be killed
- *    BEFORE close. Windows offers no cheap pre-close snapshot and taskkill
- *    cannot gracefully stop a console app, so a hard kill is the only
- *    reliable orphan-free option here. */
-async function closeState(state: ServerState | null | undefined): Promise<void> {
-    if (!state) return;
-    if (!state.pid) {
-        try { await state.client.close(); } catch { /* already dead */ }
-        return;
+/** The SDK closes the transport on failed initialization as well as on
+ *  explicit disconnect. Wrap that boundary so both paths reap descendants. */
+class StdioProcessTreeTransport extends StdioClientTransport {
+    private closing?: Promise<void>;
+
+    override close(): Promise<void> { return this.closing ??= this.closeTree(); }
+
+    private async closeTree(): Promise<void> {
+        const pid = this.pid ?? undefined;
+        const descendants = pid ? snapshotTree(pid) : [];
+        // Windows must enumerate while the launcher is still alive.
+        if (process.platform === 'win32') await killTree(pid);
+        try { await super.close(); } catch { /* already dead */ }
+        killPids(descendants);
     }
-    const tree = snapshotTree(state.pid);
-    if (process.platform === 'win32') {
-        await killTree(state.pid);
-    }
-    try {
-        await state.client.close();
-    } catch { /* already dead */ }
-    killPids(tree);
+}
+
+type Closable = { close(): Promise<void> };
+
+async function closeTransport(transport?: Closable): Promise<void> {
+    try { await transport?.close(); } catch { /* already dead */ }
 }
 
 export class ExternalMcpManager {
     private readonly _schemaValidator = new AjvJsonSchemaValidator();
     private _states = new Map<string, Promise<ServerState | null>>();
     private _retryAfter = new Map<string, number>();
-    private _connectingTransports = new Set<{ close: () => Promise<void>; pid?: number | null }>();
+    private _connectingTransports = new Set<Closable>();
     private _statuses = new Map<string, ExternalServerStatus>();
     private _stopped = false;
     private _inventory: AggregatedTool[] = [];
@@ -179,13 +166,10 @@ export class ExternalMcpManager {
 
     async stopAll(): Promise<void> {
         this._stopped = true;
-        await this.closeConnectingTransports();
-        for (const pending of this._states.values()) {
-            try {
-                const state = await pending;
-                await closeState(state);
-            } catch { /* already dead */ }
-        }
+        await Promise.allSettled([
+            this.closeConnectingTransports(),
+            ...[...this._states.values()].map(pending => pending.then(state => closeTransport(state?.client))),
+        ]);
         this._states.clear();
         this._retryAfter.clear();
     }
@@ -200,7 +184,7 @@ export class ExternalMcpManager {
             this._states.delete(name);
             try {
                 const state = await pending;
-                await closeState(state);
+                await closeTransport(state?.client);
             } catch { /* already dead */ }
         }
         this._statuses.clear();
@@ -210,11 +194,7 @@ export class ExternalMcpManager {
     private async closeConnectingTransports(): Promise<void> {
         const pending = [...this._connectingTransports];
         this._connectingTransports.clear();
-        await Promise.allSettled(pending.map((transport) => closeState({
-            name: 'connecting',
-            client: { close: () => transport.close() } as Client,
-            pid: transport.pid ?? undefined,
-        })));
+        await Promise.allSettled(pending.map(closeTransport));
     }
 
     /** Restart one server: drop its cached client and reconnect eagerly so
@@ -227,7 +207,7 @@ export class ExternalMcpManager {
         this._states.delete(name);
         try {
             const state = await pending;
-            await closeState(state);
+            await closeTransport(state?.client);
         } catch { /* already dead */ }
         this._statuses.delete(name);
         const config = await this.loadConfig();
@@ -346,7 +326,7 @@ export class ExternalMcpManager {
             return { transport: new WebSocketClientTransport(new URL(cfg.url!)), type };
         }
         return {
-            transport: new StdioClientTransport({
+            transport: new StdioProcessTreeTransport({
                 command: cfg.command!,
                 args: cfg.args ?? [],
                 env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>,
@@ -360,14 +340,16 @@ export class ExternalMcpManager {
         const start = (async (): Promise<ServerState | null> => {
             let built: { transport: unknown; type: McpTransportType } | null = null;
             try {
-                built = this.buildTransport(name, await resolveMcpSecrets(cfg));
+                const resolved = await resolveMcpSecrets(cfg);
+                if (this._stopped) return null;
+                built = this.buildTransport(name, resolved);
                 if (!built) {
                     this._markStatus(name, { state: 'error', transport: 'unknown', lastError: 'missing url/command' }, source);
                     return null;
                 }
                 const client = new Client({ name: 'xratu-external-bridge', version: '1.0.0' }, { jsonSchemaValidator: this._schemaValidator });
                 client.onerror = (e) => console.error(`xratu mcpServers[${name}] error:`, e);
-                const transport = built.transport as { close: () => Promise<void>; pid?: number | null };
+                const transport = built.transport as Closable;
                 this._connectingTransports.add(transport);
                 try {
                     const configuredTimeout = cfg.connectTimeoutMs;
@@ -379,14 +361,14 @@ export class ExternalMcpManager {
                 }
                 console.log(`xratu: connected to external MCP server '${name}' (${built.type})`);
                 this._markStatus(name, { state: 'connected', transport: built.type }, source);
-                return { name, client, configHash: serverConfigHash(cfg, source), pid: (built.transport as { pid?: number | null }).pid ?? undefined };
+                return { name, client, configHash: serverConfigHash(cfg, source) };
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.error(`xratu: failed to connect external MCP server '${name}':`, e);
                 // A failed SSE connect leaves the SDK's internal EventSource
                 // scheduling reconnects every few seconds - close the
                 // transport so the rejected server goes quiet.
-                try { await (built?.transport as { close?: () => Promise<void> } | undefined)?.close?.(); } catch { /* best effort */ }
+                await closeTransport(built?.transport as Closable | undefined);
                 this._markStatus(name, { state: 'error', lastError: msg }, source);
                 return null;
             }
@@ -407,14 +389,14 @@ export class ExternalMcpManager {
             if (this._states.get(name) !== pending) return null;
             this._states.delete(name);
             this._retryAfter.delete(name);
-            await closeState(state);
+            await closeTransport(state?.client);
             if (this._stopped || isOfflineMode()) return null;
             pending = this._states.get(name) ?? this.connect(name, cfg, source);
             state = await pending;
             if (state && state.configHash !== serverConfigHash(cfg, source)) return null;
         }
         if (isOfflineMode() && state) {
-            await closeState(state);
+            await closeTransport(state?.client);
             this._states.delete(name);
             return null;
         }
@@ -582,7 +564,7 @@ export class ExternalMcpManager {
             const connectionFailure = !protocolError || e.code === ErrorCode.ConnectionClosed;
             if (connectionFailure && usedPromise && await usedPromise.catch(() => null) === state && this._states.get(serverName) === usedPromise) {
                 this._states.delete(serverName);
-                void usedPromise.then(state => closeState(state)).catch(() => undefined);
+                void usedPromise.then(state => closeTransport(state?.client)).catch(() => undefined);
                 this._markStatus(serverName, { state: 'error', lastError: msg }, source);
             }
             console.error(`xratu: callTool ${namespaced} failed:`, e);

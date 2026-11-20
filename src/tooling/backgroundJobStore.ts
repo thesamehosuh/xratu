@@ -19,7 +19,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { renameWithRetry } from '../local/localSessionStore';
 import { withDirectoryLock } from '../oauth/refreshLock';
-import { processIdentityStatus } from './processIdentity';
+import { processIdentityStatusAsync } from './processIdentity';
 import type { BackgroundJobRecord } from './backgroundJobs';
 
 /** Jobs whose recorded process is gone, or whose record is malformed. */
@@ -130,8 +130,7 @@ export class BackgroundJobStore {
      * ALIVE is not proof (see processIdentity.ts), and a record whose token no
      * longer matches is a recycled number that must never be adopted or killed.
      *
-     * Synchronous verification, at activation only: we cannot adopt a job
-     * without knowing it is ours, and there are at most a handful of records.
+     * An uncertain process stays listed. Stopping it still requires proof of its identity.
      */
     async load(): Promise<ReconcileResult> {
         const alive: BackgroundJobRecord[] = [];
@@ -155,7 +154,7 @@ export class BackgroundJobStore {
             // backwards: a long-lived database is exactly the case where the
             // user still needs the stop handle, and dropping it left a live
             // process that no window could signal.
-            if (['gone', 'different'].includes(processIdentityStatus(entry.identity))) {
+            if (['gone', 'different'].includes(await processIdentityStatusAsync(entry.identity))) {
                 dropped.push(entry.id);
                 // A failed identity probe can be temporary (e.g. PowerShell
                 // timing out). Retain its record for a later restart unless

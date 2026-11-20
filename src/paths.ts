@@ -5,6 +5,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+export function resolvedPath(file: string): string {
+    try { return fs.realpathSync(file); }
+    catch { return path.resolve(file); }
+}
+
+export function pathIdentity(file: string): string {
+    const resolved = resolvedPath(file);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 export interface PatchBlock { search: string; replace: string; }
 
 /** Count marker lines anchored at the start of a line (the parser only ever

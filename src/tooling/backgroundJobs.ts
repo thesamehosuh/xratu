@@ -30,7 +30,7 @@
 import * as cp from 'child_process';
 import { randomUUID } from 'crypto';
 import { killPids, killTree, snapshotTree } from './processTree';
-import { captureIdentity, captureIdentityAsync, processIdentityStatus, type ProcessIdentity } from './processIdentity';
+import { captureIdentity, captureIdentityAsync, processIdentityStatus, processIdentityStatusAsync, processLivenessStatus, type ProcessIdentity } from './processIdentity';
 import { terminalSpawn, terminalFailureHint, appendHintToResult } from './shellPlatform';
 
 /**
@@ -280,6 +280,7 @@ export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
     let killReason: string | null = null;
     let finishedAt: number | undefined;
     let lastChecked = 0;
+    let checking = false;
     let resolveFinished: (() => void) | undefined;
     const finished = new Promise<void>((resolve) => { resolveFinished = resolve; });
 
@@ -288,13 +289,23 @@ export function adoptDetachedJob(spec: BackgroundJobRecord): TerminalJob {
         if (finishedAt !== undefined) return;
         const now = Date.now();
         if (now - lastChecked < ADOPTED_REVALIDATE_MS) return;
+        const update = (status: ReturnType<typeof processIdentityStatus>) => {
+            if (finishedAt !== undefined || status === 'same' || status === 'unknown') return;
+            finishedAt = Date.now();
+            resolveFinished?.();
+            onJobsChanged?.();
+        };
+        if (process.platform !== 'win32') {
+            lastChecked = now;
+            update(processIdentityStatus(identity));
+            return;
+        }
+        const known = processLivenessStatus(identity);
+        if (known) { lastChecked = now; update(known); return; }
+        if (checking) return;
         lastChecked = now;
-        const identityStatus = processIdentityStatus(identity);
-        if (identityStatus === 'same' || identityStatus === 'unknown') return;
-        // The process is gone (or was never ours after all). Latch the time so
-        // `uptimeSeconds` freezes and `pruneFinished` can eventually drop it.
-        finishedAt = now;
-        resolveFinished?.();
+        checking = true;
+        void processIdentityStatusAsync(identity).then(update).finally(() => { checking = false; });
     };
 
     const entry: TerminalJob = {

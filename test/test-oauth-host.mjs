@@ -263,7 +263,8 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     h._modelManagementAction = 'delete';
     let browserClosed = 0;
     h._browser = { close: () => { browserClosed++; } };
-    let downloadsPaused = 0;
+    let downloadsPaused = 0, nativeResets = 0;
+    h._resetOpenCodeEngine = async () => { nativeResets++; };
     h._downloads = { pauseForOffline: async () => { downloadsPaused++; } };
     try {
         policy.setOfflineMode(false);
@@ -272,6 +273,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
         await h._setOfflineMode(true);
         assert.equal(browserClosed, 1, 'offline closes existing browser connections');
         assert.equal(downloadsPaused, 1, 'offline pauses managed downloads');
+        assert.equal(nativeResets, 1, 'offline stops native services even when Xratu owns the chat');
         assert.equal(remote.aborted, true, 'offline policy cancels remote requests');
         assert.equal(local.aborted, false, 'offline policy preserves loopback benchmarks');
         assert.equal(h._modelManagementController.signal.aborted, false, 'local deletion remains permitted');

@@ -96,7 +96,7 @@ function rmIfOwnerUnchanged(lockPath: string, seen: OwnerRecord): void {
     const current = readOwner(lockPath);
     if (!current || current.token !== seen.token) return;
     try {
-        fs.rmSync(lockPath, { recursive: true, force: true });
+        fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
         // Best effort: if the rm fails the next acquire loop re-evaluates.
     }
@@ -112,7 +112,7 @@ function removeIfUnchanged(lockPath: string, measuredAgeMs: number, nowMs: numbe
     const age = dirAgeMs(lockPath, nowMs);
     if (age === 0 || Math.abs(age - measuredAgeMs) > 1) return;
     try {
-        fs.rmSync(lockPath, { recursive: true, force: true });
+        fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
         // Best effort: the acquire loop re-evaluates.
     }
@@ -198,7 +198,7 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
             const currentStat = fs.statSync(lockPath);
             if (owner?.token === token || (!ownerWritten && !owner
                 && currentStat.ino === acquiredStat.ino && currentStat.birthtimeMs === acquiredStat.birthtimeMs)) {
-                fs.rmSync(lockPath, { recursive: true, force: true });
+                fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
             }
         } catch {
             // Process is exiting or the FS is misbehaving; the stale path

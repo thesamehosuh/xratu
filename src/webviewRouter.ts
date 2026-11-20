@@ -233,7 +233,8 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'agentFileOpen':
                     if (typeof data.name === 'string' && typeof data.source === 'string') await host._openAgentFile(data.name, data.source);
                     break;
-                case 'webviewReady':
+                case 'webviewReady': {
+                    const view = host._view;
                     // Locale FIRST, before any await: the boot chain
                     // below (_showStartScreen) must never outrun this
                     // echo, or the page renders in the wrong language.
@@ -286,9 +287,10 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                                 console.error('xratu: local session reconcile failed', e));
                             await host._showStartScreen();
                         });
-                    } finally { host._completeWebviewStartup(); }
+                    } finally { if (view === host._view && view) host._completeWebviewStartup(); }
                     host._pushEditorContext();
                     break;
+                }
                 case 'setLocale':
                     await host._globalState.update('xratu.locale', data.locale);
                     setUiLocale(data.locale === 'en' ? 'en' : 'fa');

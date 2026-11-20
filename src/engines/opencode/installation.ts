@@ -117,8 +117,13 @@ export class OpenCodeInstallation {
             const destination = path.join(this.root, OPENCODE_VERSION);
             await fs.mkdir(destination, { recursive: true });
             const binary = this.binary(OPENCODE_VERSION);
-            // Never overwrite a running managed binary (Windows locks it).
-            try { await fs.access(binary); } catch { await fs.rename(candidate, binary); }
+            const installedVersion = await checkOpenCode(binary, signal).catch(() => {
+                signal.throwIfAborted();
+                return '';
+            });
+            signal.throwIfAborted();
+            // Rename keeps the previous executable intact if Windows still has it open.
+            if (installedVersion !== OPENCODE_VERSION) await fs.rename(candidate, binary);
             if (await checkOpenCode(binary, signal) !== OPENCODE_VERSION) throw new Error('Managed OpenCode version does not match');
             const pointer = path.join(this.root, `.active-${randomUUID()}`);
             await fs.writeFile(pointer, OPENCODE_VERSION, { flag: 'wx' });
