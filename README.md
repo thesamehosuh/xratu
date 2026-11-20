@@ -15,8 +15,7 @@
   <img src="https://img.shields.io/badge/VS%20Code-1.90%2B-007ACC.svg" alt="VS Code 1.90+" />
 </p>
 
-An open-source AI coding agent for VS Code. Use free OpenCode models, bring
-your own API key, or run a model locally. Available in English and Persian.
+An open-source AI coding agent for VS Code. Start with free OpenCode models, connect your own API key or ChatGPT subscription, or run models locally — in English and Persian.
 
 <p align="center">
   <a href="assets/brand/xratu-showcase.mp4"><img src="assets/brand/xratu-demo.gif" width="1080" alt="Xratu: build a website, add workspace tabs, and verify the result in the browser" /></a>
@@ -24,74 +23,49 @@ your own API key, or run a model locally. Available in English and Persian.
 
 ## Get started
 
-Install [Xratu from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=xratu.xratu).
-For a manual install, download a `.vsix` from [Releases](https://github.com/thesamehosuh/xratu/releases)
-and choose **Extensions → ⋯ → Install from VSIX…**.
+Install [Xratu from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=xratu.xratu). For a manual install, download the latest `.vsix` from [Releases](https://github.com/thesamehosuh/xratu/releases) and choose **Extensions → ⋯ → Install from VSIX…**.
 
 1. Open your project folder in VS Code, then open Xratu from the activity bar.
-2. Choose **Start free**, **Use my provider**, or **Run locally**.
+2. Pick **Start free**, **Use my provider**, or **Run locally**.
 3. Choose a model, click **Start chat**, and describe what you want to build or fix.
 
 | Setup path | What you need |
 |------------|---------------|
-| **Start free** | Xratu can install OpenCode 2 for you. Free model availability and rate limits depend on OpenCode. |
-| **Use my provider** | Connect your provider, including Iranian gateways or a custom OpenAI-compatible endpoint. |
-| **Run locally** | Start Ollama, LM Studio, vLLM, or llama.cpp with a model loaded. |
+| **Start free** | Xratu installs OpenCode 2 for you with one click. Free model availability and rate limits are managed by OpenCode. |
+| **Use my provider** | Connect a cloud API key, sign in with a ChatGPT subscription, pick an Iranian gateway, or enter any OpenAI-compatible endpoint. |
+| **Run locally** | Start Ollama, LM Studio, vLLM, or llama.cpp with a model loaded (Ollama models can be downloaded inside Xratu). |
 
-To change your connection later, open **Settings → Providers**. Use
-**Settings → Engines** to choose the engine for a new conversation.
+You can switch connections anytime under **Settings → Providers** and pick the engine for new conversations under **Settings → Engines**.
 
 ## What you can do
 
-- Ask the agent to read a codebase, edit files, run commands, and investigate bugs.
-- Use **Plan mode** to explore and plan with changes blocked.
-- Attach images, PDFs, or code, and steer the agent while it works.
-- Inspect diffs in **Changes**, detailed output in **Activity**, and running
-  commands in **Background**. Restore files from a checkpoint when needed.
-- Ask the agent to download files and follow progress in **Downloads**. Downloads
-  resume after interruptions and use direct or configured proxy routing. [Details](docs/downloads.md).
-- Work with the agent in a shared **Browser**, or extend it through **MCP**,
-  **Skills**, and custom **Agents**.
+- **Build and debug across your repo**: Read files, edit code, run terminal commands, attach images, PDFs, or `@` file references, and steer the agent mid-turn. Switch to **Plan** mode to explore and plan with edits and commands blocked in code.
+- **Review every change**: Inspect inline diffs and leave file notes in **Changes**, trace full tool output in **Activity**, monitor long-running commands in **Background**, and roll back anytime from shadow-git checkpoints.
+- **Work with subagents**: Delegate research, verification, or edits to parallel child conversations in **Agents** using built-in profiles (`explore`, `verify`, `general`) or your own `.md` agent files — send follow-ups, answer scoped approvals, or stop any child independently. [Subagents guide](docs/guide.md#subagents).
+- **Share a live browser**: Open a website or local dev server in the **Browser** tab so you and the agent work on the same page, with screenshots, DOM/console inspection, and live interaction.
+- **Manage downloads and PRs**: Follow resumable file downloads and safe archive extraction in **Downloads** ([guide](docs/guide.md#downloads-and-archives)), and track GitHub pull request checks, reviews, and comments in **Pull requests** ([guide](docs/guide.md#pull-requests)).
+- **Extend with MCP and Skills**: Connect stdio, WebSocket, or HTTP/SSE MCP servers from the built-in **Marketplace** or JSON config, and share open `SKILL.md` skills with Claude Code, OpenCode, and other tools.
+- **Built for Persian and Iranian workflows**: Full RTL Persian UI, Jalali dates, natural Persian replies, first-class Iranian AI gateways with Toman cost tracking, automatic Clash/v2rayN system-proxy detection (no TUN needed), and curated Iranian MCP servers.
 
-The built-in Xratu engine supports local models, subagents, and conversation
-rewind. OpenCode shares Xratu’s MCP servers, marketplace installs, browser,
-task list, and enabled skills while keeping its own credentials and native
-sessions. Its native subagents appear in Agents with live traces and attributed
-approvals/questions; each agent can be stopped on its own, and Stop covers
-nested and background children. The turn stays active until their reports
-settle. Delegation is unavailable in Plan mode; conversation rewind and offline
-mode remain unavailable with OpenCode.
+## Two engines, one workspace
 
-## Child sessions
+- **Xratu (built-in)** runs your cloud providers, Iranian gateways, ChatGPT subscription, or local models — with full support for custom agent profiles, conversation rewind, and **Offline mode**.
+- **OpenCode 2** brings free models and OpenCode's native sessions, tools, and subagents into Xratu's workspace, sharing your Xratu MCP servers, enabled skills, browser, downloads, and task list while keeping OpenCode credentials separate.
 
-Open **Agents** to enter a child's conversation, send follow-up instructions,
-answer its questions, or stop it independently. The parent can launch children
-in the background, send follow-ups, inspect their state, and wait for reports.
-Built-in child history survives reloads; stopped or interrupted work continues
-only after a new instruction. Choose **Report to parent** for a manual investigation.
-Agent profiles are reusable starting configurations. [Details](docs/guide.md#subagents).
+See the [engines guide](docs/guide.md#engines) for the full comparison.
 
 ## Approvals and privacy
 
-Ask first is the default. You can enable YOLO for the whole agent tree in
-the composer. Xratu saves your choice.
-Checkpoints use separate shadow git storage and leave your repository's git
-index and history alone.
+- **Ask first by default**: File edits, terminal commands, browser actions, and MCP tools ask for approval before running. Switch to **YOLO** in the composer when you want uninterrupted runs; **Plan** mode always blocks mutations.
+- **Shadow checkpoints**: Automatic snapshots before edits live in separate shadow-git storage and never touch your repository's git index or history.
+- **Local by design**: No telemetry, analytics, or crash reporting. Chat history and checkpoints stay on your disk, API keys stay in VS Code SecretStorage, and **Offline mode** restricts Xratu-managed traffic to loopback local models. [Full privacy details](docs/guide.md#privacy).
 
-Model API keys use VS Code secrets storage. MCP saves protect header/environment
-values with secret references; manually edited MCP JSON can still contain secrets.
-History and checkpoints stay local. Prompts go to your selected model provider;
-automatic web research uses anonymous Parallel with Exa fallback. MCP servers
-contact their configured services. The extension has no telemetry.
-For local-only use, choose a local model and enable **Offline mode**; terminal
-commands remain unrestricted.
+## Documentation
 
-## More help
-
-- [Full guide](docs/guide.md): OpenCode, checkpoints, browser, MCP, skills, subagents, and proxy settings.
-- [Local models and hardware](assets/guides/offline.en.md).
-- [Provider comparison](assets/guides/providers.en.md), including Iranian providers.
-- [Report a bug](https://github.com/thesamehosuh/xratu/issues) or [report a security issue](SECURITY.md).
+- [Full user guide](docs/guide.md) — workspace panels, engines, subagents, browser control, downloads, pull requests, MCP, skills, proxy routing, and settings
+- [Offline setup and local models](assets/guides/offline.en.md) — Ollama, LM Studio, hardware sizing, and offline mode
+- [Provider comparison](assets/guides/providers.en.md) — Iranian gateways, payment notes, and latency/cost checks
+- [Report a bug](https://github.com/thesamehosuh/xratu/issues) · [Security policy](SECURITY.md)
 
 ## Contributing
 
@@ -100,6 +74,6 @@ npm ci
 npm run compile
 ```
 
-See [AGENTS.md](AGENTS.md) for development, verification, and PR requirements.
+See [AGENTS.md](AGENTS.md) for development setup, verification commands, and PR guidelines.
 
 [Apache-2.0](LICENSE)

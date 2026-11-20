@@ -138,6 +138,15 @@ assert.doesNotMatch(progressSearch, /final-answer/);
 const finalSearch = renderToString(createElement(ActivityTimeline, { messages: [completed], search: 'final-answer' }));
 assert.match(finalSearch, /No activity matches/);
 
+const compactedStep: Step = { id: 'compact-1', kind: 'compacted', text: '', startedAt: 1_700_000_000_000 };
+const compactedLive = render({}, { ...message, steps: [compactedStep, text('after-compact')] });
+assert.match(compactedLive, /class="compaction-divider"/, 'live turn renders inline compacted indicator');
+assert.match(compactedLive, /Conversation history compacted/);
+const compactedDone = render({}, { ...message, status: 'done', steps: [compactedStep, { ...compactedStep, id: 'compact-2' }, ...steps, text('final-answer')] });
+assert.equal((compactedDone.match(/class="compaction-divider"/g) ?? []).length, 1, 'collapsed completed turn keeps one compacted indicator visible');
+const compactedActivity = renderToString(createElement(ActivityTimeline, { messages: [{ ...message, status: 'done', steps: [compactedStep, text('final-answer')] }], search: 'compacted' }));
+assert.match(compactedActivity, /class="compaction-divider"/, 'Activity timeline includes compacted events');
+
 assert.equal(transcriptOptions().detail, 'balanced');
 assert.equal(conversationPrefs().expand.edit, false);
 assert.equal(conversationPrefs({ expand: { edit: true } }).expand.edit, true, 'explicit legacy expansion survives');

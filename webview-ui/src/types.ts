@@ -423,7 +423,7 @@ export type FromExtensionMessage =
     | { type: 'runtimePreferences'; offline: boolean; errorExplanations: boolean }
     | ({ type: 'localModelOperation' } & LocalModelOperation)
     | ({ type: 'providerBenchmark' } & ProviderBenchmark)
-    | { type: 'compactionState'; active: boolean }
+    | { type: 'compactionState'; active: boolean; completed?: boolean; timestamp?: number }
     | { type: 'connectionStatus'; status: ConnectionStatus; details?: { version?: string } }
     | { type: 'showWelcome'; path?: SetupPath; canBack?: boolean }
     | { type: 'nativeSetupState'; state: NativeSetupState }
@@ -876,7 +876,7 @@ export interface SkillView {
 // UI model
 // ---------------------------------------------------------------------------
 
-export type StepKind = 'thinking' | 'toolCall' | 'toolResult' | 'text';
+export type StepKind = 'thinking' | 'toolCall' | 'toolResult' | 'text' | 'compacted';
 
 /** One item of the session task list ("the list IS the plan"). Mirrors the
  *  host-side TaskListItem (extension/src/taskList.ts). */

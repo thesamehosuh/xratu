@@ -5515,10 +5515,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     } : null,
                 });
                 break;
-            case 'compactionCheckpoint':
-                outcome.events.push(persistedEventFromAgentEvent(event));
+            case 'compactionCheckpoint': {
+                const timestamp = Date.now();
+                outcome.events.push({ ...persistedEventFromAgentEvent(event), timestamp });
                 this._scheduleLocalPartialPersist();
+                this._view?.webview.postMessage({ type: 'compactionState', active: false, completed: true, timestamp });
                 break;
+            }
             case 'compactionSummary': {
                 // Local compaction summarized the dropped turns with the
                 // user's model - keep it rolling: the next local request's
@@ -5536,6 +5539,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     : 0;
                 const replay = Math.max(0, Math.min(base - dropped, total));
                 this._localReplayUserTurns = replay >= total ? null : replay;
+                const timestamp = Date.now();
+                outcome.events.push({ type: 'compaction_done', timestamp });
+                this._scheduleLocalPartialPersist();
+                this._view?.webview.postMessage({ type: 'compactionState', active: false, completed: true, timestamp });
                 break;
             }
             case 'retrying':
@@ -5559,7 +5566,17 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 break;
             case 'engineNotice':
                 if (['engineCompacting', 'engineCompacted', 'engineCompactionFailed'].includes(event.valueKey)) {
-                    this._view?.webview.postMessage({ type: 'compactionState', active: event.valueKey === 'engineCompacting' });
+                    const completed = event.valueKey === 'engineCompacted';
+                    const timestamp = Date.now();
+                    if (completed) {
+                        outcome.events.push({ type: 'compaction_done', timestamp });
+                        this._scheduleLocalPartialPersist();
+                    }
+                    this._view?.webview.postMessage({
+                        type: 'compactionState',
+                        active: event.valueKey === 'engineCompacting',
+                        ...(completed ? { completed: true, timestamp } : {}),
+                    });
                 }
                 this.notifyBanner(event.kind, event.valueKey, event.params);
                 break;
@@ -6758,6 +6775,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             this._liveSegments.push(parsed.content);
                             this._view.webview.postMessage({ type: 'chunk', value: parsed.content });
                             this._view.webview.postMessage({ type: 'streamHtml', value: this._renderMarkdown(parsed.content) });
+                        } else if (parsed.type === 'compaction_done' || parsed.type === 'compaction_checkpoint') {
+                            this._view.webview.postMessage({
+                                type: 'compactionState',
+                                active: false,
+                                completed: true,
+                                timestamp: typeof parsed.timestamp === 'number' ? parsed.timestamp : undefined,
+                            });
                         } else if (parsed.type === 'steer_user') {
                             this._view.webview.postMessage({ type: 'steerUser', value: parsed.text, attachments: parsed.attachments });
                         } else if (parsed.type === 'result') {

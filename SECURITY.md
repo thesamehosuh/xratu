@@ -21,7 +21,8 @@ bugs we want to hear about:
 - **Workspace escape** - a file tool writing or reading outside the workspace
   through a `sanitizePath` bypass, a symlink, or a traversal segment.
 - **Secret exposure** - an API key or stored token reaching a log, a model
-  request, a checkpoint, or any destination this README does not document.
+  request, a checkpoint, or any destination the [privacy guide](docs/guide.md#privacy)
+  does not document.
 - **SSRF guard bypass** - `webTools.ts` reaching loopback, link-local, cloud
   metadata (`169.254.169.254`), or a private range via a redirect, a DNS
   rebind, or an encoded address.

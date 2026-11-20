@@ -497,7 +497,13 @@ body:is(.vscode-light,.vscode-high-contrast-light) :is(.outcome-check:not(.faile
 .activity-jump { position:sticky; inset-block-end:12px; height:0; display:flex; justify-content:center; z-index:3; }
 .activity-jump .jump-btn { position:relative; inset:auto; transform:translateY(-40px); }
 
-.compaction-status { display:flex; align-items:center; gap:8px; padding:8px 12px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-md); }
+.compaction-status { display:flex; align-items:center; gap:8px; width:calc(100% - 2 * var(--composer-inset)); max-width:var(--conversation-width,700px); margin-inline:auto; padding:6px 4px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-sm); line-height:var(--xratu-line-ui); }
+.compaction-divider { display:flex; align-items:center; gap:10px; margin-block:4px; color:var(--vscode-descriptionForeground); font-size:var(--xratu-fs-xs); line-height:var(--xratu-line-ui); }
+.compaction-divider-line { flex:1; block-size:1px; background:var(--page-line); }
+.compaction-divider-label { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; white-space:nowrap; }
+.compaction-divider-label > svg { color:var(--surface-accent); flex-shrink:0; }
+.composer-support > .byok-hint { width:calc(100% - 2 * var(--composer-inset)); max-width:var(--conversation-width,700px); margin-inline:auto; margin-block:0 8px; }
+.composer-support > .queued-steers { max-width:var(--conversation-width,700px); }
 .review-file-group { min-width:0; border-block-end:1px solid var(--page-line); }
 .review-file-group .review-open-file { padding:10px 7px 14px; }
 .review-file-group .review-footer { margin-block-start:10px; }

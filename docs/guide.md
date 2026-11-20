@@ -1,450 +1,191 @@
-# Xratu reference
+# Xratu Guide
 
 [Quick start](../README.md) · [فارسی](guide.fa.md)
 
-## Quick setup
+**Contents:** [Getting started](#getting-started) · [Workspace and panels](#workspace-and-panels) · [Models and providers](#models-and-providers) · [Engines](#engines) · [Checkpoints and reviewing changes](#checkpoints-and-reviewing-changes) · [Subagents](#subagents) · [Browser control](#browser-control) · [Downloads and archives](#downloads-and-archives) · [Pull requests](#pull-requests) · [MCP servers](#mcp-servers) · [Agent Skills](#agent-skills) · [Proxy and network routing](#proxy-and-network-routing) · [Privacy](#privacy) · [Commands and settings](#commands-and-settings) · [License](#license)
 
-The welcome screen offers **Start free**, **Use my provider**, and **Run locally**.
-It skips completed steps, reuses saved connections, and asks you to choose a
-model before opening chat. Free OpenCode models are checked in parallel;
-provider and local catalogs are loaded without a paid test inference. A local
-server with no models stays in setup; Ollama downloads are available in the app.
-**Start chat** opens the new conversation after setup, including when saved
-connections already exist.
-
-Onboarding appears only before the first completed setup. Unfinished setup
-resumes on the next launch. After setup, **Settings → Engines** and
-**Xratu: Set Up Xratu** open engine settings; switching engines starts a new
-chat without reopening onboarding. A missing Xratu connection opens Providers.
-Installing OpenCode alone does
-not mean a model is available; workspace, offline mode, and upstream rate limits
-are checked separately.
-
-Providers, MCP, Skills, and Agents show which engine they configure. Browsing
-another engine's settings does not change the current conversation. OpenCode's
-provider view lists its saved and environment connections and supports simple
-SDK API-key and OAuth methods. Authentication methods with additional forms or
-commands still use OpenCode's own setup. Native MCP and skill lists are read-only.
-Manage Xratu MCP servers, marketplace installs, and skills with either settings
-scope selected. OpenCode accesses enabled Xratu skills and their bundled resources
-through the shared skill tool. Its own native resources remain a separate read-only
-inventory. The browser, task list, reply language, and plan handoff also work
-with OpenCode; ending a plan unlocks execution on the next turn. Native subagents
-appear in Agents with their own traces, attributed approvals, and stop controls.
-Usage attributes new native rounds to their engine/provider and preserves reported
-costs when Xratu pricing is edited.
-
-Historical edit/resend is available only with the built-in engine. OpenCode
-keeps the copy action and file-only checkpoint restore; its native history cannot
-be rewound by Xratu.
-
-Files selected from VS Code are delivered only to the chat that requested them.
-Switching chats during a file read discards that delayed delivery.
-
-Saved conversations keep their original workspace. Histories from other projects,
-missing folders, or legacy workspace markers remain readable. Execution and
-checkpoint restore are blocked until the original workspace is verified; open
-that folder or start a new chat here. Viewing history never rebinds its workspace.
-
-New chats save a nonsecret connection reference. If a restored chat's connection
-changed or was deleted, its transcript remains readable; select a connection in
-Providers explicitly before continuing. Legacy chats without a connection
-reference keep the current provider's model and do not overwrite its model memory.
-
-## Unsent drafts
-
-Unsent text stays with its conversation and workspace when switching chats or
-reloading the webview. A new chat keeps its draft when its first message assigns
-it a saved session ID. Cancelling a historical edit returns to the ordinary draft.
-Only the first 200,000 UTF-16 code units of each draft survive a composer reload.
-VS Code state retains up to 32 recent text drafts within 200,000 characters total;
-older drafts are evicted. Attachments are kept in memory only and must be
-attached again after reload, including session switches that reload the page. Normal sends stay in the composer until the host saves and acknowledges the
-pending turn. Acceptance clears only the submitted revision; newer typing stays.
-Rejected submissions keep their draft, and repeated request IDs are not executed twice.
-
-## OpenCode inside Xratu
-
-Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x
-installation, or installs a verified standalone 2.0.30 binary with one click.
-Managed installations offer **Update engine** when a newer verified release ships
-with Xratu, and **Remove engine**. Updating opens a fresh chat and keeps older
-binaries for saved sessions. Removal stops the managed runtime and switches chat
-to Xratu; runtimes referenced by saved chats, OpenCode credentials, settings, and history are preserved. Update or
-remove a custom/PATH installation using its original installer.
-Node and npm are not required. Open a project folder, select **Use in new chat**,
-and pick an OpenCode model. The free models work without an Xratu API key;
-their availability and rate limits are controlled by OpenCode.
-The model picker shows the provider after each name and defaults to **Free
-models only**. Turn that filter off to see paid models configured in OpenCode.
-If the selected model disappears, Xratu selects another verified free model.
-If none remain, choose a model explicitly; Xratu never automatically falls back
-to a paid model. An existing selection stays selected, including paid models.
-Opening the model picker checks every free model in parallel using small requests
-in separate temporary sessions. Results show availability or a rate limit with
-the check time. Recent onboarding checks are reused for 30 seconds. The check button beside each free model always lets you retry it manually.
-OpenCode uses its own saved credentials, including OpenRouter when selected;
-Xratu does not replace them or copy its provider keys into the engine.
-
-The installer supports Windows, macOS, and Linux on x64/arm64, with baseline
-x64 builds and Linux musl variants. It has progress, cancellation, retry, and
-a custom executable path. Managed binaries stay in VS Code global storage;
-existing installations remain available. OpenCode 1.x is detected but cannot
-run this engine. Back up your OpenCode configuration and history before
-migrating from 1.x: OpenCode owns its database migration.
-
-Switching engines starts a fresh conversation and preserves old Xratu
-history. Reopening an OpenCode conversation resumes its native session, tied
-to its original workspace and runtime. OpenCode manages authentication,
-configuration, tools, compaction, and native history. Its CLI sign-in and
-provider configuration apply here too; credentials are not copied into Xratu.
-
-Native permission requests use Xratu approval cards, and questions use its
-decision cards, including multiple selections. Plan mode deterministically
-denies mutation and unknown tools. YOLO permits native tools without approval.
-Native steering is delivered at OpenCode's next step boundary. Shell commands
-stream output and expose background/stop controls in Xratu's Background panel.
-Cancel waits for native execution to stop, then the same conversation can continue.
-Three consecutive failed native file edits stop the run, including in YOLO mode.
-Check the tool errors or choose another model before continuing the same chat.
-A successful tool result or a non-edit tool breaks the failure streak. Earlier
-changes stay in place; this does not repair malformed edits or roll them back.
-Code/text uploads and `@` references are saved as local attachment snapshots
-and passed to OpenCode as files, including during steering. They keep their
-full contents instead of the built-in engine's 24,000-character preview.
-Snapshots remain in Xratu's local storage so native history can read them
-after a restart; workspace references still pass Xratu's path validation.
-Enabled Xratu MCP servers, including the bundled defaults, are shared through
-an authenticated loopback bridge. Their transports, proxy routing, timeouts,
-images, and explicit auto-approval choices stay with Xratu. Changes apply on
-the next turn; shared MCP tools are denied in Plan mode. OpenCode keeps its
-native file and terminal tools and its separately configured MCP servers.
-Native subagents use OpenCode agent definitions and permissions. Stop one child
-from Agents or stop the whole tree from the composer; the parent turn stays active
-until nested/background work and reports settle. Plan mode denies delegation.
-Conversation rewind is unavailable; file-only shadow checkpoint restore remains available. Offline
-mode blocks this engine because Xratu cannot enforce network isolation on the
-OpenCode process. Xratu's file-path and web-fetch guards apply to its own tools;
-OpenCode's native tools use OpenCode's permission boundary.
-
-The engine interface leaves room for Codex and Claude Code adapters. This
-release implements OpenCode only. Lifecycle, event, permission, question, and
-managed installation logic is adapted from [T3 Code](https://github.com/pingdotgg/t3code)
-under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
-
-## Features
-
-- **Work surface** - Conversation, Changes, and Activity share one compact
-  composer. Finished tool calls fold into optional steps; Activity keeps the
-  full outputs in a read-only view, with timestamps in expanded footers and
-  on hover. Approvals and questions stay in Conversation. Review checkpoint
-  diffs inline, mark files reviewed, and add feedback to your draft before
-  sending. Wide panels show Changes alongside
-  the conversation by default. Drag Conversation, Activity, Changes, Agents, Background, or Browser between the main
-  tabs and sidebar, or use the tab menu. Placement and sidebar width are
-  remembered; narrow windows keep every view in the main tabs. Drag the
-  divider or use its arrow keys to resize. Conversation keeps its transcript
-  and composer together, so chat can sit in the sidebar beside a larger Browser.
-- **Sidebar pages** - providers, MCP servers, marketplace, skills, agent
-  files, usage, proxy, and settings stay one click away. Setup opens in a
-  focused side panel; Iranian providers remain visible. Drafts survive page
-  changes, and user bubbles stay on the right with automatic text direction.
-- **Agentic coding** - reads files, edits code, runs terminal commands,
-  searches the web. **Ask first** is the default. Review approval requests in
-  the conversation. You can enable **YOLO** in the composer to run file edits,
-  terminal commands, and MCP tools without asking. The composer saves your
-  choice. Checkpoints still snapshot before edits, and Plan mode blocks
-  mutations.
-- **Plan mode** - read-only planning with a task list. Mutating tools are
-  blocked in code, not by prompt.
-- **Checkpoints** - shadow-git snapshots before sends and edits. Use a turn's
-  **Review changes** button or **Changes** to inspect files inline and open
-  the full native diff. Restore a snapshot from the Command Palette with
-  **Xratu: Restore Checkpoint…**. Your real git repo is never touched.
-  Restore affects the whole workspace and preserves a safety snapshot. A stale
-  session/turn confirmation is rejected. Stop workspace background processes
-  from Background before restoring; files-only restore keeps the conversation.
-  A missing or unreadable session leaves the current chat intact. Branch
-  checkout waits until runs and session actions finish. Edits/resends and
-  session deletion use the same transaction queue; a failed new-chat creation
-  keeps the previous conversation.
-- **MCP servers** - stdio, WebSocket, or streamable HTTP/SSE, with
-  Cline-compatible files-based config.
-- **Agent Skills** - the open [agentskills.io](https://agentskills.io)
-  standard; skills can be shared with Claude Code, Roo Code, OpenCode, and
-  others.
-- **Subagents** - delegate a self-contained task to a named agent profile
-  running in its own context; several can run at once. See
-  [Subagents](#subagents).
-- **Long sessions** - steer mid-task, edit & resend any message, image and
-  PDF attachments, automatic context compaction.
-- **Proxy-aware** - follows your proxy settings, VS Code's, the environment,
-  or the OS system proxy; a scan finds the Clash/v2rayN client already
-  running on your machine. Per-MCP routing (auto / via proxy / direct).
-- **Persian-first** - fa UI, Jalali dates, Persian error explanations, and
-  colloquial Farsi replies when you ask for them.
-
-## Browser control
-
-Open the **Browser** tab, enter a website or a local dev-server URL, and interact
-with the live page. Move the tab to the sidebar to keep the conversation beside
-it. The agent uses the same page: it can inspect accessibility and console/network
-diagnostics, capture screenshots, navigate, click, type, scroll, run page JavaScript,
-and resize the viewport. Agent actions require approval unless YOLO is on; plan
-mode only allows inspection of an already-open browser.
-
-Xratu launches installed Chrome or Edge on demand, or uses the absolute executable
-path in `xratu.browserExecutablePath`. Chromium runs inside the extension host's
-environment with its sandbox enabled and an isolated, temporary profile. In a
-remote VS Code window, URLs such as `localhost:3000` refer to the remote host.
-There is no automatic browser download. Launch failures appear in the tab.
-
-The page survives tab moves and webview reloads within the same chat; switching
-chats, closing the browser, or reloading VS Code discards it. Offline mode closes
-existing browser connections and permits only loopback requests after reopening.
-This first version supports one page per chat; popups and downloads are blocked.
-
-## Models
-
-| Group | Providers |
-|-------|-----------|
-| Cloud | OpenAI, Google Gemini, OpenRouter, xAI, Groq, DeepSeek, Mistral, Perplexity, Cohere, Together, Fireworks, Cerebras, NVIDIA NIM, Hugging Face, SambaNova, Moonshot, Z.AI, OpenCode Zen |
-| Iranian | Kaya AI, Avalai, Metis AI, Liara AI, ArvanCloud AI, Navaan, GapGPT |
-| Local | Ollama, LM Studio, vLLM, llama.cpp |
-| Custom | Any OpenAI-compatible HTTPS endpoint |
-
-## For developers in Iran
-
-- **Iranian gateways as first-class presets** - Kaya AI, Avalai, Metis AI,
-  Liara AI, ArvanCloud AI, Navaan, and GapGPT sit in their own group in
-  Settings → Providers, take rial payment, and need no VPN. Usage costs show
-  in Toman on the Usage page.
-- **Proxy-native** - Iranian setups route through Clash/v2rayN "System
-  Proxy" mode; Xratu picks it up (no TUN needed), scans for the local
-  client and its ports, and routes MCP traffic per server.
-- **Persian in, Persian out** - fa UI, Jalali dates, Persian error
-  explanations, and with reply language set to Persian the agent writes
-  colloquial Farsi - the bundled `natural-farsi` skill is preloaded, so the
-  register holds from the first token.
-- **No circumvention advice** - when an endpoint is unreachable or a signup
-  fails, the agent maps working alternatives (domestic gateways, local
-  models, Iranian PaaS) instead of VPN guides.
-
-### Provider endpoints
-
-| Provider | Base URL | Notes |
-|----------|----------|-------|
-| Kaya AI | `https://kayaai.ir/api` | preset ships the endpoint |
-| Avalai | `https://api.avalai.ir/v1` | preset ships the endpoint |
-| GapGPT | `https://api.gapgpt.app/v1` | preset ships the endpoint |
-| Metis AI | per-service | paste the endpoint from your service page |
-| Liara AI | per-service | each AI service has its own URL |
-| ArvanCloud AI | per-service | paste the endpoint from your service page |
-| Navaan | per-service | paste the endpoint from your service page |
-
-All speak the OpenAI-compatible API. The first three work with nothing but
-the API key; the rest hand each service its own URL at signup.
-
-### Sign in with a ChatGPT subscription
-
-In **Providers**, choose **Add connection → Continue with ChatGPT** and approve
-plan access in the browser. If the callback cannot reach VS Code, paste the
-complete redirect URL from **Browser didn’t connect?**. Xratu stores the
-connection in VS Code SecretStorage. Older connections may need a fresh sign-in.
-
-Plan usage appears separately from API-key costs on the **Usage** page. See
-OpenAI's [sign-in integration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-for details.
-
+---
 
 ## Getting started
 
-Install from the VS Code Marketplace:
-[xratu.xratu](https://marketplace.visualstudio.com/items?itemName=xratu.xratu)
+Install Xratu from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=xratu.xratu), or download a `.vsix` package from [Releases](https://github.com/thesamehosuh/xratu/releases) and choose **Extensions → ⋯ → Install from VSIX…**.
 
-Prefer a manual install? Grab the latest `xratu-*.vsix` from
-[Releases](https://github.com/thesamehosuh/xratu/releases) and install it
-via **Code → Extensions → ⋯ → Install from VSIX…**
+1. Open your project folder in VS Code and click the Xratu icon in the activity bar.
+2. On first launch, choose one of three setup paths:
+   - **Start free** — installs OpenCode 2 with one click and checks available free models in parallel.
+   - **Use my provider** — connects a cloud API key, ChatGPT subscription, Iranian gateway, or custom OpenAI-compatible endpoint.
+   - **Run locally** — scans for Ollama, LM Studio, vLLM, or llama.cpp running on your machine.
+3. Select a model and click **Start chat**.
 
-1. Open the Xratu panel from the activity bar.
-2. Pick a preset or a local runtime, paste your API key, choose a model.
-3. Start a chat. Review edit and command approvals in the conversation.
+First-run setup appears only until you complete it once (unfinished setup resumes next time you open Xratu). After that, manage connections in **Settings → Providers** and switch engines in **Settings → Engines** (or via **Xratu: Set Up Xratu**).
 
-## MCP servers
+### Saved conversations and workspaces
 
-Xratu reads server config from two files:
+- **Workspace binding**: Each saved chat remembers the workspace folder it belongs to. You can read transcripts from other projects anytime, but running tools or restoring checkpoints stays blocked until you open that original folder (or start a new chat in the current folder).
+- **Connection reference**: New chats store a non-secret reference to the connection they used. If that connection was changed or removed, the transcript stays readable — pick a connection in **Providers** before continuing.
 
-- **Global**: `mcp.json` in the extension's global storage
-- **Workspace**: `.xratu/mcp.json` in the workspace root (overrides global
-  per server key)
+## Workspace and panels
 
-Format is Cline-compatible: `command`/`args`/`env` for stdio, `url` for
-remote. Tools surface to the agent as `mcp__<server>__<tool>` and follow the
-same approval flow as built-ins.
+Xratu gives you one workspace with a shared composer and eight dockable panels:
 
-Fresh installs enable the official [Zarinpal documentation MCP](https://www.zarinpal.com/docs/mcpDocs/)
-for payment integration docs and error lookup. It needs no API key and only
-reads public documentation. Existing MCP configuration is preserved; existing
-users can add Zarinpal from the curated marketplace. Web research is built in.
-Add **[Digikala](https://github.com/sepehr071/digikala-mcp),
-[Torob](https://github.com/mmdju/torob-mcp) and
-[Divar](https://github.com/mmdju/divar-mcp)** from the marketplace when you want them.
-These integrations require explicit opt-in before connecting or running local code. Iranian
-servers lead the curated marketplace list, and **Iranian** is the first tag
-filter. Digikala
-requires `uv`; Torob runs locally and requires Node.js and Git; Divar uses
-its hosted HTTP endpoint. Torob downloads and builds dependencies on its
-first launch; its startup budget is two minutes. If installation cannot finish
-within that budget, install the pinned package separately before enabling it. These unofficial integrations are read-only and
-need no API keys. Existing config (including disabled or removed servers)
-is preserved; existing users can add them from the marketplace.
+| Panel | Purpose |
+|-------|---------|
+| **Conversation** | Chat with the agent, approve tool requests, answer decision cards, and steer runs mid-turn. |
+| **Changes** | Review shadow-git diffs inline, mark files reviewed, add file-specific notes to your draft, or open the native VS Code diff. |
+| **Activity** | Read-only timeline of full tool outputs, commands, and timestamps while completed calls stay folded in Conversation. |
+| **Agents** | Follow built-in or OpenCode subagents, inspect live traces, send follow-ups, answer scoped approvals, or stop children individually. |
+| **Background** | Monitor live output from long-running shell commands and stop them when needed. |
+| **Downloads** | Track resumable file transfers for the current chat with continue, retry, and cancel controls. |
+| **Browser** | Share a live Chromium page with the agent for inspection, screenshots, and interaction. |
+| **Pull requests** | Follow linked GitHub PRs, CI checks, review decisions, and comments. |
 
-The bundled [`iranian-marketplaces` skill](../assets/skills/iranian-marketplaces/SKILL.md)
-helps the agent choose the right source, compare sellers and variants, and
-handle Toman prices, rental deposits and placeholder asking prices. It is
-available on both fresh installs and upgrades; enable or disable it on the
-Skills page independently of the servers.
+### Docking and layout
 
-### Marketplace
+- **Conversation** stays in the main area. Drag **Changes**, **Activity**, **Agents**, **Background**, **Downloads**, **Browser**, or **Pull requests** between the main tabs and the side dock, or use each tab's menu.
+- Wide panels show **Changes** beside **Conversation** by default. Narrow sidebar widths keep every view in the main tab bar.
+- Drag the divider (or use arrow keys while focused) to resize the side dock. Layout and width are remembered, and closing a tab never cancels running work.
 
-The MCP page also has a **Marketplace** tab, so you are not limited to servers
-you type in by hand:
+### Composer and session controls
 
-- **Sources** are configurable (`xratu.mcpMarketplaceSources`). Defaults are the
-  public catalog published by the Cline project (Apache-2.0) and the official
-  MCP registry; any http(s) catalog URL works, and an empty list turns remote
-  catalogs off.
-- Catalogs are fetched **host-side, through your proxy**, cached for 24 hours,
-  and always merged with a curated list that ships inside the extension, so the
-  tab keeps working offline.
-- Adding is **never silent**: the row shows the exact command or URL, and the
-  confirm step shows the config that will be written. Entries that need a
-  credential open the edit form instead. Tool auto-approval is never taken from
-  a catalog.
-- An entry a catalog ships without install metadata can be resolved from its
-  README on request; anything guessed that way is labelled and reviewed before
-  it is saved.
+- **Build vs Plan mode**: **Build** lets the agent edit files and run commands (subject to your approval setting). **Plan** mode is read-only planning with a task list — mutating tools, external MCP writes, and delegation are blocked in code, not just by prompt.
+- **Ask first vs YOLO**: **Ask first** is the default — edits, terminal commands, browser actions, and MCP tools prompt you in the conversation before running. Enable **YOLO** in the composer when you want uninterrupted execution across the agent tree (your choice is saved; checkpoints still run, and **Plan** mode still blocks mutations).
+- **Attachments and steering**: Attach images, PDFs, or code from the composer, use `@` to reference workspace files, or right-click files in VS Code Explorer and choose **Attach to Xratu Chat**. You can send steering messages while the agent is still working.
+- **Long sessions**: Automatic context compaction keeps long tasks moving without losing the thread, and the composer footer shows the active git branch and context-window meter. On the built-in engine, you can also edit and resend earlier messages.
+- **Unsent drafts**: Typed drafts stay with their conversation and workspace across page switches, chat switches, and webview reloads. File attachments stay in memory only and must be re-attached after a reload.
 
-## Agent Skills
+### Settings sidebar
 
-A skill is a folder with a `SKILL.md` file - YAML frontmatter
-(`name` + `description`) plus a markdown body. Only the name/description
-load up front; the agent pulls in the rest via its `skill` tool when your
-request matches. Search order (first match wins):
+Open Settings from the top bar to access three groups:
 
-- `.xratu/skills/<name>/SKILL.md`
-- `.agents/skills/<name>/SKILL.md` (shared with other agent tools)
-- `.claude/skills/<name>/SKILL.md` (Claude Code)
-- `~/.agents/skills/<name>/SKILL.md`
-- `~/.claude/skills/<name>/SKILL.md` (Claude Code)
+- **Models & engines**: **Providers**, **Engines**
+- **Agent resources**: **Servers** (MCP), **Marketplace**, **Skills**, **Agent files**
+- **Preferences**: **Usage**, **Proxy**, **Appearance**, **Settings**
 
-```markdown
----
-name: deploy-staging
-description: Deploy the app to staging; use when the user asks to deploy or ship to staging.
----
+On **Settings**, you can set the **Interface language** (English / Persian), **Reply language** (Auto / English / Persian), conversation detail level, thinking/command display, **Offline mode**, **Explain errors** (adds localized explanations for known provider errors without extra model calls), and **Clear history**.
 
-1. Run the test suite
-2. Build the app
-3. `npm run deploy:staging`
-```
+On **Appearance**, you can switch between following your VS Code theme or dark mode, pick a preset or custom accent color, tune saturation and contrast, adjust interface/text/code font sizes, choose content width and density, or reduce motion.
 
-Extra files (scripts, references, templates) go next to the `SKILL.md`.
-Enable/disable skills in Skills in the Xratu sidebar.
+**Providers**, **Servers**, **Skills**, and **Agent files** show which engine they configure. Browsing another engine's settings never changes the active chat.
 
-### First-party skills
+## Models and providers
 
-Xratu ships eight skills, seeded to `~/.agents/skills` when first introduced (so
-Claude Code, OpenCode, and the other agent tools see them too), editable
-like any skill, and switchable per skill from **Skills** in the Xratu sidebar.
+| Group | Providers |
+|-------|-----------|
+| **Cloud** | OpenAI, OpenRouter, OpenCode Zen, OpenCode Go, DeepSeek, Mistral, Google Gemini, Groq, xAI, Perplexity, Cohere, Together AI, Fireworks AI, Cerebras, NVIDIA NIM, Hugging Face, SambaNova, Moonshot AI, Z.AI |
+| **Iranian** | Kaya AI, Avalai, GapGPT, Metis AI, Liara AI, ArvanCloud AI, Navaan |
+| **Local** | Ollama, LM Studio, vLLM, llama.cpp |
+| **Custom** | Any OpenAI-compatible HTTPS endpoint |
 
-New bundled skills are added on upgrade. User-edited copies are preserved,
-and deleted skills stay deleted.
+### Sign in with a ChatGPT subscription
 
-| Skill | What it does |
-|-------|--------------|
-| `natural-farsi` | Writes Persian in the chosen formal or informal register, with shared house orthography and technical vocabulary. Preloaded when reply language is Persian. |
-| `finglish-normalize` | Reads Finglish (Persian in Latin script) as Persian and matches the reply language and script to you. |
-| `jalali-dates` | Jalali (Shamsi) dates in prose; machine-readable dates stay ISO. |
-| `iran-dev-access` | Research service availability, payment options, and alternatives from Iran. |
-| `iran-connectivity-fallback` | Diagnose repeated provider connection failures and explore appropriate alternatives and network fixes. |
-| `local-llm-low-ram` | Honest sizing math for running models locally on small machines. |
-| `native-downloads` | Managed downloads, route selection, verification, and recovery without discarding saved progress. |
-| `iranian-marketplaces` | Chooses Digikala, Torob or Divar tools for shopping and classifieds; compares sellers, variants and prices in Toman, and handles rental deposits and placeholder prices. |
+In **Settings → Providers**, choose **Add connection → Continue with ChatGPT** and approve access in your browser. If the loopback callback cannot reach VS Code, open **Browser didn’t connect?** and paste the full redirect URL. Tokens are stored in VS Code SecretStorage, and plan usage is shown separately from API-key spend on **Usage**. See OpenAI's [sign-in documentation](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) for account eligibility and details.
+
+### Local runtimes and offline mode
+
+Start Ollama, LM Studio, vLLM, or llama.cpp and scan for it in **Settings → Providers**.
+
+- For Ollama on `localhost:11434`, expand **Manage Ollama models** to pull or remove models inside Xratu. Other runtimes manage weights in their own apps.
+- Turn on **Offline mode** in **Settings** to restrict Xratu-managed network traffic to loopback (`localhost`, `127.0.0.1`, `::1`) and disable cloud providers, OpenCode, web research, and external MCP. Terminal commands remain unrestricted.
+
+For step-by-step setup and honest RAM/VRAM sizing guidance, see the bundled [Offline setup and local models guide](../assets/guides/offline.en.md).
+
+### For developers in Iran
+
+- **First-class Iranian gateways**: Kaya AI, Avalai, GapGPT, Metis AI, Liara AI, ArvanCloud AI, and Navaan have their own section in **Settings → Providers**, accept domestic payment, and work without a VPN.
+- **Toman cost tracking**: Configure per-host rates (`xratu.providerPricing`) or a fallback exchange rate (`xratu.tomanPerUsd`) to see costs in Toman on the **Usage** page.
+- **Latency benchmarking**: In **Providers**, expand **Compare connection latency** to send a tiny opt-in `"Reply with OK."` probe (32-token cap, no project context) to the active model and compare first-token time, total time, and estimated cost across connections.
+- **Proxy-native**: Works with Clash and v2rayN **System Proxy** mode out of the box — no TUN interface required.
+- **Persian-first**: Full RTL Persian UI, Jalali dates, localized error explanations, and natural Persian replies via the preloaded `natural-farsi` skill.
+
+| Provider | Base URL | Setup note |
+|----------|----------|------------|
+| Kaya AI | `https://kayaai.ir/api` | Pre-filled in preset; paste your API key |
+| Avalai | `https://api.avalai.ir/v1` | Pre-filled in preset; paste your API key |
+| GapGPT | `https://api.gapgpt.app/v1` | Pre-filled in preset; paste your API key |
+| Metis AI | Per-service | Paste the OpenAI-compatible URL from your service dashboard |
+| Liara AI | Per-service | Paste the URL assigned to your AI service |
+| ArvanCloud AI | Per-service | Paste the URL assigned to your AI service |
+| Navaan | Per-service | Paste the URL from your account dashboard |
+
+See the bundled [Provider comparison guide](../assets/guides/providers.en.md) for verified onboarding links, payment notes, and cost-comparison steps.
+
+## Engines
+
+Xratu supports two execution engines inside the same workspace UI. Switching engines starts a fresh chat and leaves earlier conversations intact; reopening any saved chat resumes it on its original engine.
+
+| Capability | Xratu (built-in) | OpenCode 2 |
+|------------|------------------|------------|
+| **Models & auth** | Cloud API keys, Iranian gateways, ChatGPT OAuth, local runtimes | OpenCode free models + OpenCode's own configured providers |
+| **Shared Xratu tools** | Built-in file/shell/web/archive/download/PR/browser tools, MCP, skills | Shares Xratu MCP servers, enabled skills, browser, downloads, PRs, web research, and task list; keeps OpenCode's native file/shell tools |
+| **Approvals & Plan mode** | Ask first / YOLO; Plan blocks mutations in code | Ask first / YOLO via Xratu cards; Plan blocks mutations & delegation |
+| **Subagents** | Built-in & custom `.md` profiles with persistent child history | OpenCode native agents with live traces, attributed approvals & Stop |
+| **Checkpoints & rewind** | Shadow checkpoints + message edit/resend & full rewind | Shadow checkpoints (file-only restore); no native conversation rewind |
+| **Offline mode** | Supported (loopback local runtimes) | Unavailable (Xratu cannot isolate OpenCode's network access) |
+
+### Installing and managing OpenCode 2
+
+Open **Settings → Engines → OpenCode 2**. Xratu detects an existing 2.x binary on your `PATH`, or installs a checksum-verified standalone `2.0.30` binary into VS Code global storage with one click — no Node.js or npm required.
+
+- Supports Windows, macOS, and Linux (x64/arm64, baseline x64, and Linux musl) with progress, cancellation, retry, and a custom executable path option.
+- Managed installs offer **Update engine** when a newer verified version ships and **Remove engine** to stop the runtime and switch chat back to Xratu (binaries referenced by saved chats plus OpenCode's credentials, settings, and history are preserved).
+- OpenCode 1.x is detected but not supported. Back up your OpenCode configuration and history before migrating from 1.x.
+
+### Free models and availability checks
+
+OpenCode's model picker shows each model's provider and defaults to **Free models only** (turn off the filter to view paid providers configured in OpenCode). Opening the picker tests every free model in parallel with a tiny isolated check and displays availability or rate limits with timestamps; use the retry button beside any model to check again. If a previously selected free model disappears, Xratu picks another verified free model and never silently falls back to a paid model.
+
+### How OpenCode runs inside Xratu
+
+- **Separate credentials & native sessions**: OpenCode uses its own saved credentials and CLI configuration; Xratu never copies its provider keys into OpenCode. In **Providers** (scoped to OpenCode), you can connect simple API-key and OAuth providers through the SDK; flows needing extra forms or commands use OpenCode's CLI.
+- **Shared Xratu capabilities**: Enabled Xratu MCP servers connect through an authenticated loopback bridge (respecting Xratu's proxy routing, timeouts, and auto-approval rules; denied in Plan mode). Enabled Xratu skills are available via the bridged skill tool, while OpenCode's own native MCP, skills, and agent inventories remain read-only.
+- **Approvals, steering, and safety**: Native permissions render as Xratu approval cards, questions as decision cards, and shell output streams into **Background**. Steering messages are delivered at OpenCode's next step boundary, and code/text attachments plus `@` references are passed as full local snapshots. Three consecutive failed native file edits automatically pause the run (even in YOLO mode) so you can inspect the error or switch models without rolling back earlier edits.
+
+## Checkpoints and reviewing changes
+
+Before each send and edit, Xratu snapshots your workspace into a separate **shadow git** repository inside extension storage. Your project's own `.git` index, working tree status, and commit history are never modified.
+
+- **Review inline**: Open **Changes** (or click **Review changes** on a turn) to inspect per-file diffs, mark files as reviewed, attach review notes to your composer draft, or open the full native VS Code diff editor.
+- **Restore**: Run **Xratu: Restore Checkpoint…** from the Command Palette. Restoring applies to the whole workspace and saves a safety snapshot first so you can undo a restore. Stop active workspace processes from **Background** before restoring. Files-only restore keeps your conversation transcript intact.
 
 ## Subagents
 
-The profile format below applies to the built-in engine. OpenCode uses its own
-native agent definitions; Xratu displays those as a read-only inventory.
+> The profile format and local persistence below apply to the built-in Xratu engine. OpenCode uses its own native agent definitions (shown read-only in Xratu).
 
-A subagent is a child conversation with its own history, assignment and model.
-The built-in coordinator stores child sessions on disk, so follow-ups and
-continuations reuse the same child after a window reload. A profile supplies
-the starting instructions and capabilities; changing its file does not rewrite
-children that already exist.
+A subagent is a child conversation with its own context, assignment, and optional model. The built-in coordinator persists child sessions on disk, so follow-ups can continue the same child even after a window reload. A profile provides starting instructions and tool access; editing a profile file does not alter children that already exist.
 
-| Profile | Capabilities |
-| --- | --- |
-| `explore` | Reads and searches files and web evidence; no shell or editing tools. |
-| `verify` | Runs approval-gated tests and commands; commands can write build artifacts. |
-| `general` | Inspects, edits, runs commands and verifies results. |
+| Built-in profile | Capabilities |
+|------------------|--------------|
+| `explore` | Reads and searches files and web evidence; no editing or terminal tools. |
+| `verify` | Runs approval-gated tests and commands (commands may produce build artifacts). |
+| `general` | Inspects, edits files, runs commands, and verifies results. |
 
-`xratu.maxParallelSubagents` (default 4) bounds active child executions. Extra
-assignments queue without being discarded. Mutation-capable children hold a
-shared-checkout writer lease; parent mutations wait for that lease too.
-Read-only exploration can run concurrently. This coordination is not a shell
-sandbox or file isolation; separate Git worktrees are not created automatically.
+`xratu.maxParallelSubagents` (default `4`, range `1–8`) limits simultaneous child runs; extra assignments queue automatically. Mutation-capable children and the parent coordinate through a shared-workspace writer lease, while read-only `explore` runs can overlap freely. This coordinates concurrent edits — it is not a shell sandbox and does not create separate Git worktrees.
 
 ### Working with child conversations
 
-Open **Agents** to choose a conversation. At sidebar width the list opens into
-a full-height child conversation; wide panels show both. Drafts survive child
-switches and are saved through VS Code's local webview state.
+Open the **Agents** tab to inspect and steer child conversations (on narrow sidebars, selecting a child opens full-height; on wide panels, the list stays visible beside it):
 
-- Send instructions directly to a running child; they are delivered at the next
-  safe model boundary. The parent can send follow-ups too.
-- Stop one child without stopping siblings. Continue the same conversation
-  after its execution settles.
-- Answer a child's scoped question or approval in its conversation. The same
-  decision can also appear in the parent, with one authoritative resolution.
-- Change its model, reasoning effort or round limit between executions.
-- Use **Report to parent** to hand back a manually launched investigation.
-  Delivery status records the handoff separately from execution completion.
+- **Steer or continue**: Send follow-up instructions directly to a running child (delivered at the next safe model boundary) or continue a settled child conversation.
+- **Independent stop**: Stop one child without interrupting siblings or the parent.
+- **Scoped approvals and questions**: Answer a child's approval or question card right inside its conversation (or from the parent — both resolve the same request once).
+- **Tune between runs**: Change a child's model, reasoning effort, or round cap between executions.
+- **Manual investigations**: Launch a fresh child directly from **Agent profiles** and click **Report to parent** when you want to hand its findings back to the main conversation.
 
-**Agent profiles** can launch a fresh child from an assignment or open a custom
-profile's source file. The parent has `spawn_agent`, `send_agent`,
-`inspect_agents`, `wait_agents` and `stop_agent`; `task` remains the foreground
-compatibility tool. Background launch returns immediately. Required results
-should be received with `wait_agents`, without polling the inspector.
+If VS Code reloads mid-run, built-in child executions are interrupted cleanly rather than silently replaying uncertain tool calls. Committed child history and reports survive reload, while restoring a checkpoint invalidates discarded child context.
 
-OpenCode keeps its native sessions, permissions and report inbox. The redesigned
-view supports native observations, attributed decisions and individual Stop.
-While a verified native child is running, direct messages enter its native
-inbox. Once the native tree settles, further work is delegated through the
-parent. Native history observations remain bounded, and built-in model/limit
-controls are not presented as native settings.
+With **OpenCode**, native subagents appear in **Agents** with live traces, attributed approvals/questions, direct inbox messages while active, and individual Stop controls. Plan mode denies delegation on both engines.
 
-A reload interrupts built-in execution rather than silently repeating tool
-calls. Committed child history and reports survive. A tool with an interrupted
-result is treated as having uncertain effects. Old traces remain readable;
-a trace without a saved child ledger is not offered as a resumable conversation.
-Checkpoint restore invalidates the discarded child's future context.
+### Writing a custom agent file
 
-Background processes still use the **Background** tab. Child executors cannot
-start unowned background jobs or control another session's processes.
+Run **Xratu: Agent Files…** from the Command Palette to inspect all loaded profiles (including load warnings and errors) or scaffold a new one. Profiles are Markdown files with YAML frontmatter; the body becomes the subagent's system prompt.
 
-### Writing an agent file
+Search order (first match wins):
 
-Run **Xratu: Agent Files** from the command palette to see every profile
-Xratu loaded - including the ones that failed and why - and to scaffold a new
-one. Files are plain markdown with YAML frontmatter; the body is the
-subagent's system prompt. Search order (first match wins):
-
-- `.xratu/agents/<name>.md`
-- `.agents/agents/<name>.md` (shared with other agent tools)
-- `.claude/agents/<name>.md` (Claude Code)
-- `~/.agents/agents/<name>.md`
-- `~/.claude/agents/<name>.md` (Claude Code)
+1. `.xratu/agents/<name>.md`
+2. `.agents/agents/<name>.md` (shared across agent tools)
+3. `.claude/agents/<name>.md` (Claude Code)
+4. `~/.agents/agents/<name>.md`
+5. `~/.claude/agents/<name>.md` (Claude Code)
 
 ```markdown
 ---
@@ -462,112 +203,176 @@ with a file path and line number, most severe first.
 
 | Field | Meaning |
 |-------|---------|
-| `name` | Optional; must match the file name (lowercase, digits, single hyphens). |
-| `description` | **Required.** When to delegate to this agent - the model picks profiles from this line. |
-| `tools` | Optional allow-list of tool names. Omit it for the child toolset. Parent orchestration, parent-session controls, `ask_user_question` and shared process control are always removed. Use `ask_session_question` for an attributed child question. |
-| `model` | Optional. Run this profile on a specific model (its context window and output cap follow that model). Default: the parent session's model. |
-| `reasoning_effort` | Optional: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| `max_rounds` | Optional loop budget for this profile (default 50). |
+| `name` | Optional; must match the filename (lowercase letters, digits, single hyphens). |
+| `description` | **Required.** Tells the parent model when to delegate to this profile. |
+| `tools` | Optional comma-separated allow-list of Xratu tool names. Omit for the default child toolset. Parent-session controls, delegation tools, `ask_user_question`, and shared process controls are always stripped; use `ask_session_question` for child questions. |
+| `model` | Optional model ID for this profile (context window and output cap follow that model). Defaults to the parent's model. |
+| `reasoning_effort` | Optional: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
+| `max_rounds` | Optional loop limit for this profile (default `50`). |
 
-`tools:` names are checked against the tools your install actually has when
-the file loads. Names that do not exist are dropped with a warning, and a
-list where **none** of the names exist is a hard error rather than a
-subagent that silently cannot do anything - worth knowing, because agent
-files written for other tools spell them `Read`, `Grep`, `Bash`. Run
-**Xratu: Agent Files** (or look in the **Xratu** output channel) to see
-these.
+**Load-time tool validation**: Every name in `tools:` is checked against Xratu's actual toolset when the file loads. Unknown names are dropped with a warning, and a list with **zero** valid names fails with an error rather than creating a silently tool-less agent (important when reusing files written for tools that spell names `Read`, `Grep`, or `Bash`). Use **Xratu: Agent Files…** or the **Xratu** output channel to inspect issues. Built-in children always keep real approval gates for edits and commands.
 
-Built-in children cannot delegate recursively or change the parent's task list
-or mode. Their writes and commands keep real approval gates. Agent tool
-restrictions must use the supported comma-separated syntax; unsupported YAML
-restriction forms are rejected rather than treated as unrestricted access.
-Child history does not contain provider keys; credentials remain in VS Code
-secret storage, and native credentials stay native.
+## Browser control
 
-## Proxy
+Open the **Browser** tab, enter a website or local dev-server URL, and interact with the live page. Dock **Browser** in the side panel to keep it beside **Conversation**.
 
-Settings → Proxy controls outbound routing:
+- **Shared control**: The agent works on the same page you see — it can inspect the accessibility tree, console, and network diagnostics, take screenshots, navigate, click, type, scroll, resize the viewport, and run page JavaScript.
+- **Approvals and Plan mode**: Interactive browser actions require approval unless **YOLO** is on. **Plan** mode allows read-only inspection of an already-open page only.
+- **Browser binary and isolation**: Xratu launches your installed Chrome or Edge on demand, or the Chromium executable specified in `xratu.browserExecutablePath`. Nothing is downloaded automatically. Chromium runs on the extension host with its sandbox enabled and an isolated temporary profile (in remote VS Code windows, `localhost` refers to the remote host).
+- **Session lifecycle**: Each chat gets one browser page (popups and browser downloads are blocked). The page survives tab moves and webview reloads within the same chat, and closes when you switch chats, close the browser, or reload VS Code. **Offline mode** closes existing browser connections and permits loopback URLs only.
 
-- **Modes** - `auto` (Xratu setting → VS Code → environment → OS system
-  proxy), `custom` (one explicit proxy URL plus a no-proxy list), or `off`.
-- **Local client scan** - finds the Clash family (Clash Verge Rev, mihomo,
-  Mihomo Party, Clash Nyanpasu, ClashX), v2rayN/v2rayA, or Surge already
-  running on your machine and locks to its ports. "System Proxy" mode is
-  enough - no TUN required.
-- **Web search** - use the configured proxy or connect directly, independently
-  of model routing.
-- **Per-MCP routing** - each MCP server can ride auto / via proxy /
-  direct, with a live connection test before you commit.
-- MCP marketplace catalogs are fetched host-side through the same proxy and
-  cached for 24 hours.
+## Downloads and archives
+
+Xratu includes managed HTTP(S) downloads plus offline file verification and safe archive extraction, available in both the built-in engine and OpenCode.
+
+### Managed downloads
+
+Ask the agent to download a file (via `start_download`, `control_download`, and `list_downloads`) and follow transfers in the **Downloads** tab.
+
+- **Per-chat isolation and controls**: **Downloads** shows transfers for the current chat with **Continue**, **Retry**, and **Cancel** buttons. Cancelling removes the partial file; completed files stay untouched on disk.
+- **Resumable and safe**: Interrupted transfers keep their progress and resume cleanly when the server supports HTTP `Range` validation. Opening a workspace never resumes downloads silently — continue them explicitly after a restart. Existing destination files are never overwritten, and source URLs (which may include signed tokens) are kept in VS Code SecretStorage rather than manifests or UI.
+- **Per-transfer routing**: Each download can use `auto` (your proxy settings), `proxy`, or `direct` without changing global proxy configuration. **Offline mode** cancels active transfers and blocks resumes.
+- **Large-file checkpoints**: Completed downloads of 50 MiB or larger are excluded from shadow checkpoints so later coding turns do not archive multi-gigabyte files.
+
+### File verification and archives
+
+- **`verify_file`** (read-only, works offline): Computes a workspace file's SHA-256 digest and optionally checks it against a publisher digest.
+- **`inspect_archive`** (read-only, works offline and in Plan mode): Lists entries in ZIP, TAR, and TAR.GZ/TGZ archives without writing to disk.
+- **`extract_archive`** (approval-gated, works offline): Extracts ZIP, TAR, and TAR.GZ/TGZ archives into a **new** workspace directory after taking a shadow checkpoint. Never overwrites existing files, rejects symlinks, path traversal, Windows-unsafe paths, and encrypted ZIPs, verifies ZIP CRCs (and optional publisher SHA-256), and never executes extracted files.
+
+## Pull requests
+
+Track GitHub pull requests directly inside Xratu from the **Pull requests** tab or via **Xratu: Pull Requests…**.
+
+- **Uses your local `gh` login**: Xratu reads PR metadata through the installed [GitHub CLI (`gh`)](https://cli.github.com/) using your existing authentication. No GitHub tokens enter prompts or the webview.
+- **Live status in one place**: See PR state (draft, open, merged, closed), branch pair, review decision, required and optional CI checks, and recent comments. Refresh, open on GitHub, or unlink from the row menu.
+- **Watch mode**: Enable **Watch** (or ask the agent to monitor a PR) to check every 30 seconds without model calls and automatically resume the idle session when CI checks fail or pass, reviewers comment or request changes, or merge conflicts appear. Watches survive VS Code reloads, stop automatically when the PR closes or merges, and are unavailable in **Plan** mode or **Offline mode**.
+
+## MCP servers
+
+Configure Model Context Protocol servers in **Settings → Servers** or directly in two Cline-compatible JSON files:
+
+- **Global**: `mcp.json` in Xratu's global storage directory
+- **Workspace**: `.xratu/mcp.json` in the workspace root (overrides global per server key; honored in trusted workspaces only)
+
+Supports `stdio` (`command`/`args`/`env`), `websocket`, and `streamableHttp`/`sse` (`url`/`headers`). Exposed tools appear as `mcp__<server>__<tool>` and follow the normal approval gate unless you explicitly enable per-tool auto-approval on the **Servers** page.
+
+### Default and curated Iranian servers
+
+- Fresh installs enable the official [Zarinpal documentation MCP](https://www.zarinpal.com/docs/mcpDocs/) (read-only public docs, no API key). Existing MCP configs are never overwritten.
+- Curated Iranian servers lead the **Marketplace** under the **Iranian** tag filter — including unofficial, read-only integrations for **[Digikala](https://github.com/sepehr071/digikala-mcp)** (requires `uv`), **[Torob](https://github.com/mmdju/torob-mcp)** (runs locally with Node.js + Git; first startup may take up to 2 minutes to install dependencies), and **[Divar](https://github.com/mmdju/divar-mcp)** (hosted HTTP). All require your explicit opt-in before connecting or running code.
+- The bundled [`iranian-marketplaces`](../assets/skills/iranian-marketplaces/SKILL.md) skill helps the agent pick between Digikala, Torob, and Divar and interpret Toman prices and rental deposits.
+
+### Marketplace
+
+Open **Settings → Marketplace** to browse and install servers without hand-editing JSON:
+
+- **Configurable sources** (`xratu.mcpMarketplaceSources`): Defaults to the Cline public catalog (Apache-2.0) and the official MCP registry. Add any `http(s)` catalog URL, or set an empty list to disable remote catalogs.
+- **Proxy-aware and offline-ready**: Catalogs fetch host-side through your configured proxy, cache for 24 hours, and always merge with Xratu's bundled curated list.
+- **Transparent installs**: Every row shows its exact command or URL, and confirmation displays the exact config before saving. Servers needing credentials open the edit form. Auto-approval is never imported from a catalog.
+- **README detection**: For catalog entries without install metadata, you can opt in to detect a command from the repo README — guessed commands are clearly labeled for review before saving.
+
+## Agent Skills
+
+Xratu supports the open [agentskills.io](https://agentskills.io) format so you can share skills with Claude Code, OpenCode, Roo Code, and other tools.
+
+A skill is a folder containing a `SKILL.md` file with YAML frontmatter (`name` and `description`) plus markdown instructions (and optional scripts, references, or templates alongside it). Only `name` and `description` load up front; the agent loads the full instructions on demand via the `skill` tool.
+
+Search order (first match wins):
+
+1. `.xratu/skills/<name>/SKILL.md`
+2. `.agents/skills/<name>/SKILL.md`
+3. `.claude/skills/<name>/SKILL.md`
+4. `~/.agents/skills/<name>/SKILL.md`
+5. `~/.claude/skills/<name>/SKILL.md`
+
+```markdown
+---
+name: deploy-staging
+description: Deploy the app to staging; use when the user asks to deploy or ship to staging.
+---
+
+1. Run the test suite
+2. Build the app
+3. `npm run deploy:staging`
+```
+
+Enable or disable individual skills in **Settings → Skills**. Enabled Xratu skills also work in OpenCode through the bridged skill tool.
+
+### Bundled first-party skills
+
+Xratu ships eight skills seeded into `~/.agents/skills` when first introduced (so other agent tools can see them too). New bundled skills are added on upgrade; your edits are preserved, and deleted skills stay deleted.
+
+| Skill | What it does |
+|-------|--------------|
+| `natural-farsi` | Writes natural Persian in your chosen formal or informal register with clean house orthography. Preloaded when reply language is Persian. |
+| `finglish-normalize` | Understands Finglish (Persian written in Latin script) and matches your language and script. |
+| `jalali-dates` | Uses Jalali (Shamsi) dates in Persian prose while keeping machine-readable dates in ISO format. |
+| `iran-dev-access` | Helps evaluate service availability, payment routes, and practical alternatives from Iran. |
+| `iran-connectivity-fallback` | Diagnoses repeated provider connection failures and suggests workable network or provider fallbacks. |
+| `local-llm-low-ram` | Honest RAM/VRAM sizing guidance for running local models on modest hardware. |
+| `native-downloads` | Guides managed downloads, route selection, checksum verification, and resume recovery. |
+| `iranian-marketplaces` | Helps choose Digikala, Torob, or Divar tools and handle Toman prices, variants, and rental deposits. |
+
+## Proxy and network routing
+
+Open **Settings → Proxy** to control outbound routing:
+
+- **Proxy modes**:
+  - `auto` (default): checks `xratu.proxyUrl` → VS Code `http.proxy` → environment variables (`HTTPS_PROXY`/`HTTP_PROXY`) → OS system proxy.
+  - `custom`: uses only your explicit HTTP/HTTPS proxy URL and `noProxy` bypass list.
+  - `off`: connects directly without a proxy.
+  *(SOCKS proxies are not supported yet.)*
+- **Local proxy scan**: Detects Clash clients (Clash Verge Rev, mihomo, Mihomo Party, Clash Nyanpasu, ClashX), v2rayN/v2rayA, or Surge running on your machine and picks up their active ports. **System Proxy** mode is enough — no TUN needed.
+- **Web search routing**: Route built-in web search via your proxy or directly (`xratu.webSearchUseProxy`), independently of model requests.
+- **Per-MCP routing**: Set each remote MCP server to `auto`, `proxy`, or `direct`, and verify with a live connection test before saving.
 
 ## Privacy
 
-Model API keys are stored in VS Code secrets storage. MCP header/environment
-values entered through Servers are saved as secret references. Existing or
-hand-edited MCP JSON may still contain raw secrets; do not commit it. Native
-credentials stay with OpenCode. Chat history and checkpoints live on your disk.
+- **Credentials and secrets**: Model API keys, ChatGPT OAuth tokens, and managed download source URLs are stored in VS Code SecretStorage. MCP header and environment values entered through **Settings → Servers** are saved as secret references. Manually edited `mcp.json` files can still contain raw secrets — never commit `.xratu/mcp.json` to version control. OpenCode stores its own credentials separately.
+- **Local storage and zero telemetry**: Chat history and shadow checkpoints stay on your machine. Xratu collects no telemetry, analytics, or crash reports.
+- **Automatic web research**: Web research runs automatically (including in Plan mode) with no account or search API key required.
+  - `web_search` sends public queries to anonymous Parallel Search MCP, falling back to anonymous Exa if unavailable or rate-limited.
+  - `fetch_url` reads public pages directly (returning Markdown, code, links, and bounded PDF text). Clean URLs observed in that chat's public search results can fall back to Parallel extraction; URLs with query strings or fragments stay direct-only.
+  - Hosted search services receive only the query (or eligible public URL) and a random per-chat ID — never provider keys, cookies, local paths, or native session IDs. Pages are held briefly in memory (5 minutes) and never cached to disk. OpenCode uses this same Xratu research layer.
+  - Legacy Brave/SearXNG search settings are retired; if you saved old search keys in VS Code settings, remove them manually.
+- **Offline mode**: Restricts Xratu-managed network traffic to loopback endpoints and disables cloud models, OpenCode, web research, and external MCP. Terminal commands and browser links you open yourself remain unrestricted.
+- **Reporting vulnerabilities**: Please report security issues privately through [SECURITY.md](../SECURITY.md), not in a public issue.
 
-Web research runs automatically, including in Plan mode. `web_search` sends
-public queries to anonymous Parallel Search MCP, falling back to anonymous
-Exa for availability or quota failures. There is no account or provider setup.
-Anonymous quotas can temporarily prevent research; failures remain visible.
-Legacy Brave/SearXNG/key settings are no longer used. Old key values are not
-silently erased; remove them from user/workspace settings if previously saved. Optional DDG and marketplace
-MCP presets are disabled on fresh installs; existing MCP files are not rewritten.
+## Commands and settings
 
-`fetch_url` reads public pages directly, preserving Markdown, code and links,
-and supports bounded PDF text extraction. Clean URLs observed in this chat's
-public search results can fall back to Parallel extraction. Other URLs and
-URLs with query strings/fragments stay direct-only. Hosted services receive
-only the query or eligible URL and a random per-chat identifier; no model
-analytics, provider keys, cookies, local paths or native session IDs are sent.
-URL heuristics do not prove confidentiality. Direct page reads use the normal
-proxy routing; the Proxy page's Web search buttons govern hosted research.
+### Command Palette commands
 
-Source rows record retrieved evidence and unknown dates, not a guarantee that
-the answer cited every row. Temporary page handles support `find` and character
-continuation and expire after five minutes. Documents are not cached on disk.
-Observed source metadata and outcomes remain in local chat history.
-OpenCode uses the same Xratu research executor; its legacy native search/fetch
-are denied. Native definitions may remain visible in custom runtimes.
-[Implementation and measured limits](web-research-delivery.md).
+| Command | Action |
+|---------|--------|
+| **Xratu: New Session** | Start a fresh conversation. |
+| **Xratu: Set Up Xratu** | Open setup (first run) or Engine settings. |
+| **Xratu: Open Settings** | Open Xratu's Settings page. |
+| **Xratu: Set LLM Credentials** | Jump straight to Providers. |
+| **Xratu: Agent Files…** | Inspect loaded subagent profiles, view validation issues, or create a new profile. |
+| **Xratu: Restore Checkpoint…** | Restore workspace files from a shadow checkpoint. |
+| **Xratu: Review Changes…** | Open inline diff review for the workspace. |
+| **Xratu: Pull Requests…** | Open the Pull requests panel. |
+| **Xratu: Attach Files…** | Pick files to attach to the current chat (also available via right-click **Attach to Xratu Chat** in Explorer). |
 
-MCP servers, skills, and agent files are read from your disk. There is no
-telemetry, no analytics, and no crash reporting in the extension. Report a
-vulnerability through [SECURITY.md](../SECURITY.md), not a public issue.
+### VS Code settings
 
-## Development
-
-```bash
-npm ci
-npm run compile        # host bundle (esbuild) + webview (vite)
-npm run test:webview
-```
-
-CI type-checks host and webview separately and runs the test suites on
-Ubuntu, Windows, and macOS. See [AGENTS.md](../AGENTS.md) for details.
-
-## Contributing
-
-Issues and PRs welcome. Open an issue before large changes. Conventional
-Commits, CI green, and code review required for every PR.
-
-### Local runtimes and connection comparison
-
-Use Ollama, LM Studio, vLLM, or llama.cpp by selecting a discovered runtime in
-**Providers**. The bundled [offline and hardware guide](../assets/guides/offline.en.md)
-covers setup and model sizing. **Offline mode** limits Xratu-managed requests
-to loopback services and disables web and external MCP tools. Terminal commands
-remain unrestricted.
-
-For Ollama at `localhost:11434`, **Manage Ollama models** can download or
-remove models. Manage models for other runtimes in their own apps.
-
-Iranian presets link to official onboarding pages. The bundled [provider comparison](../assets/guides/providers.en.md) separates verified pricing/payment information from unverified tariffs. **Compare connection latency** sends a small, opt-in request to the active model and shows first-text-token time, total time, and known rates/estimated cost. No project context is sent; requests may incur charges. Compare the same model across connections and repeat measurements instead of treating a single sample as a ranking.
-
-Marketplace visual regressions are CI-gated on Linux for fa/en at 420px/900px, including catalog, confirmation and offline states. Baselines use the bundled font and lockfile-pinned Chromium; the same layout checks run on Windows and macOS. To deliberately update them, review the generated images after running `XRATU_VISUAL=1 npx playwright test -c test/e2e/playwright.config.ts marketplace.spec.ts --grep 'visual contract' --update-snapshots` on Linux.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `xratu.proxyMode` | `"auto"` | Outbound proxy mode: `auto`, `custom`, or `off`. |
+| `xratu.proxyUrl` | `""` | Explicit HTTP/HTTPS proxy URL (e.g. `http://127.0.0.1:7890`). |
+| `xratu.noProxy` | `""` | Comma-separated hosts that bypass the proxy (`*` and `host:port` supported). |
+| `xratu.webSearchUseProxy` | `true` | Route built-in web search through the configured proxy. |
+| `xratu.maxAgentRounds` | `0` | Hard cap on agent rounds per turn (`0` = unlimited). |
+| `xratu.maxParallelSubagents` | `4` | Maximum concurrent subagents (`1–8`). |
+| `xratu.compactionTokenBudget` | `120000` | Working-context token budget before summarizing older turns. |
+| `xratu.autoCompactThreshold` | `90` | Context-window fill percentage that triggers compaction. |
+| `xratu.browserExecutablePath` | `""` | Absolute path to a Chromium executable (blank auto-detects Chrome/Edge). |
+| `xratu.mcpMarketplaceSources` | Cline + MCP registry | Remote catalog URLs for Marketplace (empty list disables remote catalogs). |
+| `xratu.modelPricing` | `{}` | Per-model price overrides per 1M tokens (`input`, `output`, `cachedInput`, `currency`). |
+| `xratu.providerPricing` | `{}` | Per-host gateway rates (`tomanPerUsd`, `markupPercent`). |
+| `xratu.tomanPerUsd` | `0` | Fallback Toman-per-USD rate for Iranian gateways without a host rate. |
 
 ## License
 
-[Apache-2.0](../LICENSE)
+[Apache-2.0](../LICENSE). Third-party attributions (including components adapted from [T3 Code](https://github.com/pingdotgg/t3code) under MIT) ship in [`THIRD_PARTY_NOTICES.txt`](../THIRD_PARTY_NOTICES.txt).

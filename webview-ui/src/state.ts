@@ -166,8 +166,31 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
             return { ...s, messages: s.messages.map(m => m.id === s.streamingId ? { ...m, requestId: msg.requestId } : m), busy: true };
         }
 
-        case 'compactionState':
+        case 'compactionState': {
+            if (!msg.active && msg.completed) {
+                const targetId = state.streamingId
+                    ?? [...state.messages].reverse().find((m) => m.role === 'assistant')?.id;
+                if (targetId) {
+                    const target = state.messages.find((m) => m.id === targetId);
+                    if (target && target.steps.at(-1)?.kind !== 'compacted') {
+                        const step: Step = {
+                            id: nextId(),
+                            kind: 'compacted',
+                            text: '',
+                            startedAt: msg.timestamp ?? Date.now(),
+                        };
+                        return {
+                            ...state,
+                            compacting: false,
+                            messages: state.messages.map((m) =>
+                                m.id === targetId ? { ...m, steps: [...m.steps, step] } : m
+                            ),
+                        };
+                    }
+                }
+            }
             return { ...state, compacting: msg.active };
+        }
         case 'chunk': {
             const { state: s, id } = ensureStreaming(state);
             return {
@@ -504,7 +527,7 @@ export function reduceChat(state: ChatState, msg: FromExtensionMessage): ChatSta
                 // entries and use the final streamed segment when available.
                 const tail = streaming.steps.at(-1);
                 const lastText = textSteps.at(-1);
-                if (tail?.kind === 'toolCall' || tail?.kind === 'toolResult') {
+                if (tail?.kind === 'toolCall' || tail?.kind === 'toolResult' || tail?.kind === 'compacted') {
                     if (msg.persian || msg.renderedHtml) steps = [...streaming.steps, {
                         id: nextId(), kind: 'text', text: msg.persian ?? '', html: msg.renderedHtml ?? undefined,
                     }];
