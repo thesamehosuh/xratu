@@ -1,6 +1,8 @@
 import type { NativeSetupState, ToExtensionMessage } from '../types';
 import { tOrRaw } from '../i18n';
 import { Dropdown } from './Dropdown';
+import { ProviderIcon } from './ProviderIcon';
+import { PrivateAccount } from './PrivateAccount';
 import { SidePanel } from './SidePanel';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -14,7 +16,6 @@ import {
     Eye,
     EyeOff,
     Laptop,
-    KeyRound,
     Link,
     Lock,
     LogOut,
@@ -22,7 +23,6 @@ import {
     Plus,
     RefreshCw,
     Search,
-    Server,
     Trash2,
     UserRound,
     X,
@@ -170,11 +170,10 @@ function isLocalishUrl(url: string): boolean {
         /^http:\/\/172\.(1[6-9]|2\d|3[01])\./.test(v);
 }
 
-function ProviderMark({ provider }: { provider: Preset }) {
-    const Icon = provider.group === 'local' ? Laptop : Server;
+function ProviderMark({ provider, label = presetLabel(provider) }: { provider: Preset; label?: string }) {
     return (
         <span className={`provider-mark provider-mark-${provider.group}`} aria-hidden="true">
-            <Icon size={15} />
+            <ProviderIcon id={provider.id} label={label} />
         </span>
     );
 }
@@ -345,7 +344,7 @@ export function CredentialsPage({
             <div key={rt.id} className="cred-local-runtime">
                 <div className="cred-local-runtime-info">
                     <span className="cred-local-runtime-name">
-                        <Laptop size={12} />
+                        <ProviderIcon id={rt.runtime} label={rt.name} />
                         <span>{rt.name}</span>
                     </span>
                     <span className="cred-local-runtime-meta" dir="ltr">
@@ -398,8 +397,8 @@ export function CredentialsPage({
                     return (
                         <div key={provider.providerId} className={`cred-oauth-row${accounts.length ? ' connected' : ''}${busy ? ' busy' : ''}`}>
                             <div className="cred-oauth-header">
-                                <span className="account-provider-icon" aria-hidden="true"><UserRound size={18} /></span><div className="cred-oauth-copy">
-                                    <span className="cred-oauth-name" dir="ltr">{provider.label}</span><span className="account-connection-status">{t(busy ? 'working' : accounts.length ? 'credOAuthConnected' : 'miniSignIn')}</span>
+                                <span className="account-provider-icon" aria-hidden="true"><ProviderIcon id={provider.providerId} label={provider.label} /></span><div className="cred-oauth-copy">
+                                    <span className="cred-oauth-name" dir="ltr">{provider.label}</span>{busy && <span className="account-connection-status">{t('working')}</span>}
                                 </div>
                                 <div className="cred-oauth-actions">
                                     {!busy && accounts.length > 0 && <button type="button" className="ghost-btn cred-oauth-action"
@@ -451,8 +450,8 @@ export function CredentialsPage({
                                     <div className={`cred-oauth-account-card${isAccountActive ? ' active' : ''}`} key={account.credentialId}>
                                         <div className="cred-oauth-account-head">
                                             <span className="cred-oauth-avatar" aria-hidden="true"><UserRound size={15} /></span>
-                                            <span className="cred-oauth-account" title={account.accountLabel}>
-                                                <bdi dir="auto">{account.accountLabel || t('credOAuthAccount')}</bdi>
+                                            <span className="cred-oauth-account">
+                                                <PrivateAccount value={account.accountLabel || t('credOAuthAccount')} />
                                             </span>
                                             {isAccountActive && <span className="cred-oauth-active"><Check size={11} /><span>{t('credActive')}</span></span>}
                                             <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
@@ -715,6 +714,7 @@ export function CredentialsPage({
                         className={`prov-card-inline${presetId === p.id ? ' selected' : ''}`}
                         onClick={() => pick(p.id)}
                     >
+                        <ProviderIcon id={p.id} label={presetLabel(p)} />
                         <span className="prov-label">{presetLabel(p)}</span>
                     </button>
                 ))}
@@ -739,6 +739,7 @@ export function CredentialsPage({
                             className={`prov-card-inline${presetId === p.id ? ' selected' : ''}`}
                             onClick={() => pick(p.id)}
                         >
+                            <ProviderIcon id={p.id} label={presetLabel(p)} />
                             <span className="prov-label">{presetLabel(p)}</span>
                         </button>
                     ))}
@@ -842,7 +843,7 @@ export function CredentialsPage({
                             <div key={credential.id} className={`saved-credential${isActive ? ' active' : ''}`} dir="ltr">
                                 {editing ? (
                                     <div className="saved-edit-row">
-                                        <ProviderMark provider={preset} />
+                                        <ProviderMark provider={preset} label={credential.label} />
                                         <input
                                             type="password"
                                             dir="ltr"
@@ -904,7 +905,7 @@ export function CredentialsPage({
                                         }}
                                         aria-pressed={inspected?.id === credential.id}
                                     >
-                                        <ProviderMark provider={preset} />
+                                        <ProviderMark provider={preset} label={credential.label} />
                                         <span className="saved-credential-copy">
                                             <span className="saved-credential-name" dir="ltr">
                                                 {/* Preset label (localized for the generic
@@ -1053,7 +1054,7 @@ export function CredentialsPage({
             <label className="inventory-search"><Search size={15} /><input type="search" dir="auto" value={connectionQuery} onChange={event => setConnectionQuery(event.target.value)} aria-label={t('surfaceSearchInventory')} placeholder={t('surfaceSearchInventory')} /></label>
             {renderSavedList()}
             {savedCredentials.length > 0 && visibleConnections.length === 0 && <div className="inventory-no-results" role="status">{t('surfaceNoMatches')}</div>}
-            {!addOpen && renderOauthSection()}
+            {renderOauthSection()}
             <section className="regional-providers"><h3>{t('surfaceRegionalProviders')}</h3><div className="regional-provider-list">{PRESETS.filter(preset => preset.group === 'iranian').map(preset => <button type="button" key={preset.id} onClick={() => { pick(preset.id); setAddOpen(true); }}><ProviderMark provider={preset} /><span><strong>{presetLabel(preset)}</strong><small>{t('credOpenAICompatible')}</small></span><span className="regional-connect">{t('credConnect')}</span></button>)}</div></section>
 
             <section className={`cred-card${localRuntimes.length > 0 ? ' open' : ''}`}>
@@ -1091,13 +1092,12 @@ export function CredentialsPage({
                 </header>
                 <div className="drawer-scroll">
                     {renderProviderForm(true)}
-                    {renderOauthSection()}
                 </div>
             </SidePanel>}
 
             </div>
             {inspected && <aside className="inventory-inspector provider-inspector" aria-label={t('surfaceConnectionDetails')}>
-                <h3 dir="ltr">{presetLabel(PRESETS.find(preset => preset.id === inspected.providerId) ?? presetForUrl(inspected.baseUrl) ?? PRESETS.find(preset => preset.id === 'custom')!)}</h3>
+                <h3 className="provider-brand-label" dir="ltr"><ProviderIcon id={inspected.providerId} label={inspected.label} /><span>{presetLabel(PRESETS.find(preset => preset.id === inspected.providerId) ?? presetForUrl(inspected.baseUrl) ?? PRESETS.find(preset => preset.id === 'custom')!)}</span></h3>
                 <div className="kv"><span>{t('surfaceStatus')}</span><span>{t(inspected.id === active?.id ? 'credActive' : 'credSavedHeading')}</span></div>
                 <label className="cred-field"><span>{t('credUrlLabel')}</span><input dir="ltr" readOnly value={inspected.baseUrl} /></label>
                 <label className="cred-field"><span>{t('credKeyLabel')}</span><input dir="ltr" readOnly value={inspected.maskedKey ?? ''} /></label>
@@ -1125,8 +1125,7 @@ function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPage
     const close = () => { setConnecting(false); setKey(''); setCode(''); if (state?.oauth) refresh(); };
     return <section className="settings-page native-config native-providers">
         <header className="settings-head"><h2>{t('providersTitle')}</h2>
-            <button type="button" className="page-add" disabled={locked} onClick={() => setConnecting(true)}><Plus size={14} /><span>{t('miniAdd')}</span></button>
-            <button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} title={t('surfaceRefresh')} onClick={refresh} disabled={state?.busy}><RefreshCw size={13} /></button>
+            <button type="button" className="page-add" disabled={locked} onClick={() => setConnecting(true)}><Plus size={14} /><span>{t('miniAdd')}</span></button><button type="button" className="icon-btn" aria-label={t('surfaceRefresh')} title={t('surfaceRefresh')} onClick={refresh} disabled={state?.busy}><RefreshCw size={13} /></button>
         </header>
         <div className="settings-scroll">
             {state?.errorKey && <p className="setup-error" role="alert">{tOrRaw(state.errorKey)}</p>}
@@ -1135,7 +1134,7 @@ function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPage
                 <div className="settings-section-head"><h3>{t('credSavedHeading')}</h3><span className="mcp-badge">{t('engineOpenCode')}</span></div>
                 <div className="native-connections-list">
                     {connections.map(entry => <div className="native-config-row" key={entry.id}>
-                        <KeyRound size={17} aria-hidden="true" /><div className="native-connection-copy"><strong dir="ltr">{entry.name}</strong>
+                        <ProviderIcon id={entry.id} label={entry.name} /><div className="native-connection-copy"><strong dir="ltr">{entry.name}</strong>
                             {entry.connections.map((connection, index) => <span className="native-connection" key={index}><span dir="auto">{connection.label === 'Personal account' ? t('nativePersonalAccount') : connection.label}</span><span>{t(connection.needsAuth ? 'nativeNeedsAuth' : 'nativeConfigured')}</span><span>{t(connection.source === 'env' ? 'nativeEnvironment' : 'nativeStored')}</span></span>)}
                         </div>
                     </div>)}
@@ -1154,7 +1153,7 @@ function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPage
                     send({ type: 'nativeConnect', requestId: state.requestId, integrationID, key: key.trim() }); setKey('');
                 }}>
                     <label htmlFor="native-provider">{t('credSelectProvider')}</label>
-                    <Dropdown id="native-provider" label={t('credSelectProvider')} value={integrationID} disabled={locked} onChange={setIntegrationID} options={[{ value: '', label: t('nativeChooseProvider') }, ...state.integrations.filter(entry => entry.key || entry.oauth.length).map(entry => ({ value: entry.id, label: entry.name }))]} />
+                    <Dropdown id="native-provider" label={t('credSelectProvider')} value={integrationID} disabled={locked} onChange={setIntegrationID} options={[{ value: '', label: t('nativeChooseProvider') }, ...state.integrations.filter(entry => entry.key || entry.oauth.length).map(entry => ({ value: entry.id, label: entry.name, icon: <ProviderIcon id={entry.id} label={entry.name} /> }))]} />
                     {selected?.key && <><label htmlFor="native-key">{t('credKeyLabel')}</label><input id="native-key" type="password" dir="ltr" autoComplete="off" value={key} disabled={locked} onChange={event => setKey(event.target.value)} /><button type="submit" className="primary-btn" disabled={locked || !key.trim()}>{t('credConnect')}</button></>}
                     {selected?.oauth.map(method => <button key={method.id} type="button" className="secondary-btn" disabled={locked} onClick={() => send({ type: 'nativeConnect', requestId: state.requestId, integrationID, methodID: method.id })}>{method.label}</button>)}
                 </form>}

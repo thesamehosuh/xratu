@@ -120,7 +120,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
 .saved-credential-name { font-size:var(--xratu-fs-base); font-weight:550; }
 .saved-credential-meta { font-size:var(--xratu-fs-sm); color:color-mix(in srgb, var(--page-canvas), var(--vscode-foreground) 68%); margin-block-start:3px; }
 .saved-credential-main .provider-mark { width:23px; height:23px; border-radius:5px; background:var(--xratu-accent-faint); color:var(--surface-accent); border-color:var(--xratu-action-border); }
-.saved-active { color:#9abca9; font-size:var(--xratu-fs-sm); font-weight:450; }
+.saved-active { color:var(--surface-accent); font-size:var(--xratu-fs-sm); font-weight:450; }
 .saved-credential-actions { border-inline-start:0; gap:1px; padding:3px; }
 .saved-credential-actions button { width:23px; height:25px; }
 .cred-local-runtime { background:transparent; border:0; border-radius:0; padding:8px 0; gap:7px; }
@@ -367,7 +367,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visi
  .cred-page .cred-oauth-header .cred-oauth-action { font-size:var(--xratu-fs-sm); padding-inline:5px; }
 }
 
-body:is(.vscode-light,.vscode-high-contrast-light) :is(.saved-active,.cred-local-connected,.inventory-status,.catalog-grid .mcp-added-pill,.catalog-grid .mcp-badge.verified svg,.iranian-providers .cred-provider-section-label) { color:#2e6a50; }
+body:is(.vscode-light,.vscode-high-contrast-light) :is(.cred-local-connected,.inventory-status,.catalog-grid .mcp-added-pill,.catalog-grid .mcp-badge.verified svg,.iranian-providers .cred-provider-section-label) { color:#2e6a50; }
 body:is(.vscode-light,.vscode-high-contrast-light) .route-node strong { color:var(--vscode-foreground); }
 body:is(.vscode-light,.vscode-high-contrast-light) .mcp-row-error { color:var(--vscode-errorForeground); }
 body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#98621b; }
@@ -568,11 +568,13 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .compact-dialog .drawer-scroll { display:block; padding:0; overflow:auto; }
 .compact-dialog .cred-field { margin-block:15px; }
 .compact-dialog .provider-picker-label { margin-block:0 7px; }
-.compact-dialog .cred-form-provider { border:0; padding:0; margin-block:12px 0; font-size:var(--xratu-fs-sm); }
-.compact-dialog .cred-form-provider > span:last-child { margin-inline-start:auto; }
+.compact-dialog.connection-drawer { width:min(calc(var(--interface-size,14px) * 34.2857),100%); }
+.compact-dialog .cred-form-provider { border:0; padding:0; margin-block:12px 0; font-size:var(--xratu-fs-sm); flex-wrap:wrap; }
+.compact-dialog .cred-form-provider strong { flex:none; white-space:nowrap; }
+.compact-dialog .cred-form-provider > span:last-child { flex:1 1 calc(var(--interface-size,14px) * 18); min-width:0; margin-inline-start:auto; }
 .compact-dialog .cred-form-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-block-start:20px; }
 .compact-dialog .cred-form-actions { display:flex; justify-content:flex-end; margin:0; order:1; flex-shrink:0; }
-.compact-dialog .cred-save { flex:none; width:auto; padding:8px 16px; min-height:35px; }
+.compact-dialog .cred-save { flex:none; width:auto; padding:6px 12px; min-height:30px; }
 .compact-dialog .cred-security-hint { margin:0; justify-content:flex-start; font-size:var(--xratu-fs-xs); min-width:0; line-height:1.6; }
 .compact-dialog .cred-security-hint > svg { flex-shrink:0; }
 .compact-dialog .cred-form-error { margin-block:16px 0; padding:10px 12px; border:1px solid color-mix(in srgb,var(--vscode-errorForeground) 45%,var(--page-line)); border-radius:7px; color:var(--vscode-errorForeground); font-size:var(--xratu-fs-sm); line-height:1.7; overflow-wrap:anywhere; }
@@ -868,3 +870,17 @@ body:is(.vscode-light,.vscode-high-contrast-light) .health-warning { color:#9862
 .marketplace-page .mp-row .mcp-row-title { max-inline-size:100%; }
 .marketplace-page .mp-row .mcp-row-meta { min-inline-size:0; max-inline-size:100%; white-space:normal; overflow-wrap:anywhere; }
 .marketplace-page .mp-row .mp-meta { min-inline-size:0; max-inline-size:100%; overflow-wrap:anywhere; }
+
+.provider-mark-iranian .provider-brand-initials { --provider-icon-size: 18px; }
+.regional-provider-list .provider-mark-iranian .provider-brand-initials { --provider-icon-size: 26px; }
+
+.provider-mark, .provider-mark-popular, .saved-credential-main .provider-mark, .regional-provider-list .provider-mark, .account-provider-icon { border:0; background:transparent; }
+
+/* Provider rows use the same visual scale as the regional provider marks. */
+.account-provider-icon .provider-brand-icon,
+.saved-credential-main .provider-brand-icon,
+.provider-inspector h3 .provider-brand-icon,
+.native-providers .native-config-row > .provider-brand-icon { --provider-icon-size: 24px; }
+.saved-credential-main .provider-mark { inline-size:28px; block-size:28px; }
+.cred-page .account-connections .cred-oauth-header > .cred-oauth-actions { flex:0 1 auto; padding-inline-start:0; margin-inline-start:auto; flex-wrap:wrap; }
+.cred-page .account-connections .cred-oauth-header .cred-oauth-action { min-height:32px; padding:6px 12px; gap:6px; }

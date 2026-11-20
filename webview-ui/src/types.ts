@@ -1,4 +1,6 @@
 import type { ChildSessionView } from '../../src/sessions/view';
+import type { ModelCapability, ModelFavorite, ProviderModelCatalog } from '../../src/modelPicker';
+export type { ModelCapability, ModelFavorite, ProviderModelCatalog } from '../../src/modelPicker';
 import type { AppearancePrefs } from '../../src/appearancePrefs';
 import type { ResearchEvidence } from '../../src/web/types';
 export type { ResearchEvidence } from '../../src/web/types';
@@ -83,6 +85,7 @@ export type ToExtensionMessage =
      *  the model is still busy. */
     | { type: 'steerRun'; value: string; attachments?: ComposerAttachment[]; steerId?: string }
     | { type: 'steerNow'; steerId: string }
+    | { type: 'updateQueuedSteer'; steerId: string; value?: string }
     | { type: 'toggleYolo' }
     | { type: 'togglePlanMode' }
     | { type: 'clearHistory' }
@@ -140,6 +143,10 @@ export type ToExtensionMessage =
     | { type: 'approvalDecision'; approvalId: string; decisions: Record<string, boolean>; sessionApprove?: boolean }
     | { type: 'listModels' }
     | { type: 'selectModel'; value: string }
+    | { type: 'browseProviderModels'; credentialId: string; requestId: string; refresh?: boolean }
+    | { type: 'selectProviderModel'; credentialId: string; model: string; requestId: string; sessionKey?: string }
+    | { type: 'modelFavoritesGet' }
+    | { type: 'modelFavoriteSet'; favorite: ModelFavorite; enabled: boolean }
     /** Persist a per-model context window override (null clears it). */
     | { type: 'setContextWindowOverride'; model: string; window: number | null }
     /** Persist a per-model reasoning-effort level (null = Default - omit the parameter). */
@@ -357,23 +364,6 @@ export interface OAuthHostState {
 }
 
 /** Slim session list entry (metadata only - never transcripts). */
-/** Per-model capability signals shown as badges in the model picker. Only
- *  informative signals are present: `vision` when supported, `noTools` when
- *  the model cannot drive the agent loop. */
-export interface ModelCapability {
-    provider?: string;
-    free?: boolean;
-    vision?: boolean;
-    noTools?: boolean;
-    /** Model supports configurable reasoning effort. */
-    reasoning?: boolean;
-    /** Authoritative "does not accept a reasoning parameter" signal. */
-    noReasoning?: boolean;
-    /** Provider-reported effort variants; absent = offer the default set. */
-    reasoningLevels?: ThinkingLevel[];
-    /** Native engine variant IDs, preserved without translating SDK settings. */
-    variants?: string[];
-}
 export interface ModelPingState {
     status: 'checking' | 'available' | 'rateLimited' | 'failed';
     checkedAt?: number;
@@ -448,6 +438,8 @@ export type FromExtensionMessage =
      *  settled, so the message starts an ordinary new turn (render a normal
      *  user bubble, not a steered one); `mode: 'drop'` discards the held
      *  bubble without rendering (session switched out from under it). */
+    | { type: 'steerDispatching'; steerId: string }
+    | { type: 'steerEditResult'; steerId: string; accepted: boolean; value?: string }
     | { type: 'steerApplied'; steerId: string; mode?: 'steer' | 'turn' | 'drop' }
     | { type: 'sendReceipt'; requestId: string; sessionKey: string; status: 'accepted' | 'rejected'; valueKey?: string }
     | { type: 'startResponse'; requestId?: string }
@@ -510,7 +502,10 @@ export type FromExtensionMessage =
     | { type: 'decisionResolved'; decision_id: string; answer: string | null }
     | { type: 'yoloMode'; enabled: boolean }
     | { type: 'planMode'; enabled: boolean }
-    | { type: 'modelInfo'; defaultModel: string; models: string[]; displayNames?: Record<string, string>; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; nativeVariants?: Record<string, string>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
+    | { type: 'modelInfo'; credentialId?: string | null; defaultModel: string; models: string[]; displayNames?: Record<string, string>; contextWindows?: Record<string, number>; overrides?: Record<string, number>; thinkingLevels?: Record<string, ThinkingLevel>; nativeVariants?: Record<string, string>; selectedModel?: string; visionCapable?: boolean; capabilities?: Record<string, ModelCapability> }
+    | { type: 'providerModels'; credentialId: string; requestId: string; catalog?: ProviderModelCatalog; errorKey?: string }
+    | { type: 'providerModelSelection'; requestId: string; errorKey?: string }
+    | { type: 'modelFavorites'; favorites: ModelFavorite[] }
     | { type: 'modelsRefreshing'; active: boolean }
     /** History was rewound to before the userIndex-th user message. */
     | { type: 'truncateFromUser'; userIndex: number }

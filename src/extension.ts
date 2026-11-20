@@ -175,6 +175,7 @@ import {
 import { discoverLocalRuntimes, probeCustomEndpoint, probeLocalEndpoint, fetchModelsDevCatalog, MODELS_DEV_URL, MODELS_DEV_TTL_MS, MODELS_DEV_RETRY_MS, modelIsLikelyVision, modelLikelySupportsTools } from './local/localModelClient';
 import type { DiscoveredLocalModel } from './local/localModelClient';
 import type { LocalModelInfo } from './local/localTypes';
+import type { ModelCapability, ProviderModelCatalog } from './modelPicker';
 import { THINKING_LEVELS, type ThinkingLevel } from './local/localTypes';
 import {
     cachedModelInfo,
@@ -518,7 +519,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             this._setupWorkspace = workspace;
             const phase = setupPhase({ engine, installed: this._engineSetup.phase === 'ready', hasWorkspace: !!workspace, offline: isOfflineMode(), hasCredential: !!credential, freeOnly: setupPath === 'free' });
-            state = { ...state, phase, credentialId: engine === 'xratu' ? credential?.id : undefined, providerName: engine === 'xratu' ? credential?.label : undefined };
+            state = { ...state, phase, credentialId: engine === 'xratu' ? credential?.id : undefined,
+                providerName: engine === 'xratu' ? credential?.label : undefined, providerId: engine === 'xratu' ? credential?.providerId : undefined };
             emit();
             if (phase !== 'checking') return;
             if (engine === 'opencode') {
@@ -564,7 +566,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     : await probeLocalEndpoint(credential.baseUrl, signal, auth.apiKey, getProxyDispatcher(credential.baseUrl), undefined, auth.headers);
                 signal.throwIfAborted();
                 if (!probed) throw new EngineError('localUnreachable');
-                state = { ...state, models: probed.models.filter((model) => !(isOpenCodeHost(credential.baseUrl) && isNonChatModel(model.id))).map((model) => ({ id: model.id, name: model.id, provider: credential.label, tools: model.supportsTools })), phase: probed.models.length ? 'ready' : 'model' };
+                state = { ...state, models: probed.models.filter((model) => !(isOpenCodeHost(credential.baseUrl) && isNonChatModel(model.id))).map((model) => ({ id: model.id, name: model.id, provider: credential.label, providerId: credential.providerId, tools: model.supportsTools })), phase: probed.models.length ? 'ready' : 'model' };
                 if (!state.models.length) state.phase = 'model';
                 emit();
             }
@@ -1034,6 +1036,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         images?: LocalImageAttachment[];
         meta?: AttachmentMeta[];
         carryAttachments?: ComposerAttachment[];
+        steerAttachments?: ComposerAttachment[];
         /** Webview id of the pending bubble to confirm on injection. Absent
          *  for steers routed from a plain askQuestion race (the webview
          *  already rendered that user row). */
@@ -2181,6 +2184,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // reconciles the index and opens this screen. Re-entering that queue
         // would leave startup (and Start chat) waiting on itself forever.
         await this._restoreLocalSessionNow();
+        await this._sendSavedCredentials();
         this._restoreChatUI();
         // workspaceKind picks the empty-state suggestion set: the default chips
         // all assume an established project ("tour this codebase", "hunt for
@@ -3364,7 +3368,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         llm_api_key?: string;
         llm_base_url?: string;
         extra_headers?: Record<string, string>;
-        discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>;
+        discoverModels?: () => Promise<{ models: LocalModelInfo[] }>;
+        credential?: StoredCredential;
     }> {
         const credentials = await this._getSavedCredentials();
         if (!credentials.length) return {};
@@ -3374,6 +3379,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (activeId === '') return {};
         const active = credentials.find((c) => c.id === activeId) ?? credentials[0];
         if (active.id !== activeId) await this._globalState.update('xratu.activeLlmCredentialId', active.id);
+        return this._modelListingCredentials(active);
+    }
+
+    private async _modelListingCredentials(active: StoredCredential): Promise<Awaited<ReturnType<XratuChatViewProvider['_getLlmCredentials']>>> {
         // An OAuth credential has no static key to hand the prober, and its
         // routing headers are part of auth: resolve them here or model
         // discovery 401s while the credential itself is perfectly usable.
@@ -3382,7 +3391,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const auth = await this._resolveCredentialAuth(active);
                 const handler = getOAuthProvider(active.oauthProviderId)!;
                 const tokens = auth.tokens;
-                return { llm_api_key: auth.apiKey ?? undefined, llm_base_url: active.baseUrl, extra_headers: auth.headers,
+                return { credential: active, llm_api_key: auth.apiKey ?? undefined, llm_base_url: active.baseUrl, extra_headers: auth.headers,
                     discoverModels: handler.discoverModels && tokens ? () => handler.discoverModels!(this._oauthContext(), tokens) : undefined };
             } catch {
                 // A dead/rejected token must not turn model listing into an
@@ -3390,7 +3399,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 return {};
             }
         }
-        return { llm_api_key: active.apiKey, llm_base_url: active.baseUrl };
+        return { credential: active, llm_api_key: active.apiKey, llm_base_url: active.baseUrl };
     }
 
     private async _sendSavedCredentials(): Promise<void> {
@@ -3625,12 +3634,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!(credId in map)) return;
         delete map[credId];
         await this._globalState.update('xratu.modelsByCredential', JSON.stringify(map));
-    }
-
-    private async _modelForActiveCredential(): Promise<string | null> {
-        const credId = await this._resolveActiveCredentialId();
-        if (!credId) return null;
-        return this._credentialModelMap()[credId] ?? null;
     }
 
     // --- Runtime selection (free vs BYOK) --------------------------------
@@ -4351,14 +4354,62 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  boundary. With no live run (race: the turn settled first) it
      *  degrades to an ordinary send. */
     private _localSteerInterrupt?: () => void;
-    private _preparingSteers = new Set<string>();
+    private _preparingSteers = new Map<string, { value: string; cancelled: boolean; epoch: number; hasAttachments: boolean }>();
     private _steerNowIds = new Set<string>();
 
     /** Interrupt the current model request or tool batch; children retain their own lifetime. */
-    _handleSteerNow(steerId: string): void {
-        if (!this._localRunActive || this._activeEngine !== 'xratu') return;
+    async _handleSteerNow(steerId: string): Promise<void> {
+        if (!this._localRunActive) return;
+        if (this._activeEngine === 'opencode') {
+            const index = this._localSteerQueue.findIndex(entry => entry.steerId === steerId);
+            const engine = this._openCodeEngine;
+            if (index < 0 || !engine || !this._nativeTurnActive) return;
+            const [entry] = this._localSteerQueue.splice(index, 1);
+            const view = this._view, epoch = this._sessionEpoch, turn = this._localTurnToken;
+            const current = () => view === this._view && epoch === this._sessionEpoch;
+            const reject = (valueKey: string, params?: Record<string, string>) => {
+                if (current()) view?.webview.postMessage({ type: 'composerError', valueKey, params, steerId });
+            };
+            view?.webview.postMessage({ type: 'steerDispatching', steerId });
+            try {
+                const attachments = entry.carryAttachments;
+                const error = await resolveReferenceAttachments(attachments) ?? validateHostAttachments(attachments);
+                if (!current()) return;
+                if (error) { reject(error.key, error.params); return; }
+                const extracted = await extractPdfAttachments(attachments ?? []);
+                if (!current()) return;
+                if (extracted.error) { reject(extracted.error.key, extracted.error.params); return; }
+                if (turn !== this._localTurnToken || !this._nativeTurnActive
+                    || !await engine.steer({ text: entry.text, attachments: extracted.attachments, steerId })) {
+                    reject('engineSteerCancelled');
+                }
+            } catch {
+                reject('engineSteerCancelled');
+            }
+            return;
+        }
         if (this._preparingSteers.has(steerId)) { this._steerNowIds.add(steerId); return; }
         if (this._localSteerQueue.some(entry => entry.steerId === steerId)) this._localSteerInterrupt?.();
+    }
+
+    _updateQueuedSteer(steerId: string, value?: string): void {
+        const preparing = this._preparingSteers.get(steerId);
+        const index = this._localSteerQueue.findIndex(entry => entry.steerId === steerId);
+        const entry = this._localSteerQueue[index];
+        const text = value?.trim();
+        let accepted = false;
+        if (preparing?.epoch === this._sessionEpoch && !preparing.cancelled
+            && (text === undefined || text || preparing.hasAttachments)) {
+            if (text === undefined) preparing.cancelled = true;
+            else preparing.value = text;
+            accepted = true;
+        } else if (entry && (text === undefined || text || entry.carryAttachments?.length || entry.steerAttachments?.length)) {
+            if (text === undefined) this._localSteerQueue.splice(index, 1);
+            else entry.text = this._activeEngine === 'opencode' ? text : buildLocalUserText(text, entry.steerAttachments);
+            accepted = true;
+        }
+        if (accepted && text === undefined) this._confirmSteer(steerId, 'drop');
+        else this._view?.webview.postMessage({ type: 'steerEditResult', steerId, accepted, value: text });
     }
 
     async _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
@@ -4367,9 +4418,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const reject = (valueKey = 'engineSteerCancelled', error?: unknown) => {
             if (current()) view?.webview.postMessage({ type: 'composerError', value: error instanceof Error ? error.message : '', valueKey: error instanceof Error ? undefined : valueKey, ...(steerId ? { steerId } : {}) });
         };
-        if (steerId) this._preparingSteers.add(steerId);
+        const preparing = { value: value.trim(), cancelled: false, epoch: sessionEpochAtEntry, hasAttachments: !!attachments?.length };
         try {
-            const text = value.trim();
+            const text = preparing.value;
             if (!text && !(attachments && attachments.length > 0)) {
                 this._confirmSteer(steerId, 'drop');
                 return;
@@ -4382,6 +4433,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 await this._degradeSteerToTurn(text, attachments, steerId);
                 return;
             }
+            // OpenCode gets ordinary follow-up turns after the current turn
+            // settles. Until then the raw prompt and files stay editable here.
+            if (this._activeEngine === 'opencode') {
+                this._localSteerQueue.push({ text, carryAttachments: attachments, steerId });
+                return;
+            }
+            if (steerId) this._preparingSteers.set(steerId, preparing);
             // Identity of the run this steer is AIMED at - captured before any
             // await. Attachment processing (reference resolution, PDF text
             // extraction) can take seconds; if the targeted run settles in that
@@ -4391,7 +4449,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // steer outright: its webview bubbles no longer exist to match.
             const turnToken = this._localTurnToken;
             const refError = await resolveReferenceAttachments(attachments);
-            if (!current()) return;
+            if (!current() || preparing.cancelled) return;
             if (refError) {
                 this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: refError.key, params: refError.params, ...(steerId ? { steerId } : {}) });
                 return;
@@ -4402,7 +4460,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 return;
             }
             const pdfExtraction = await extractPdfAttachments(attachments ?? []);
-            if (!current()) return;
+            if (!current() || preparing.cancelled) return;
             if (pdfExtraction.error) {
                 this._view?.webview.postMessage({ type: 'composerError', value: '', valueKey: pdfExtraction.error.key, params: pdfExtraction.error.params, ...(steerId ? { steerId } : {}) });
                 return;
@@ -4412,45 +4470,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // The targeted run settled while attachments were processed - the
                 // webview held the bubble, so confirm it as a plain turn (its own
                 // user row keeps the ledgers aligned) and run it standalone.
-                await this._degradeSteerToTurn(text, sendAttachments, steerId);
+                if (steerId) this._preparingSteers.delete(steerId);
+                await this._degradeSteerToTurn(preparing.value, sendAttachments, steerId);
                 return;
             }
             if (this._localTurnToken !== turnToken) { reject(); return; }
             const images = sendAttachments
                 ?.filter((a) => isImageAttachment(a.mimeType))
                 .map((a) => ({ name: a.name, mimeType: a.mimeType, dataBase64: a.dataBase64 }));
-            if (this._activeEngine === 'opencode') {
-                try {
-                    const accepted = await this._openCodeEngine?.steer({ text, attachments: sendAttachments, steerId });
-                    if (!current()) return;
-                    if (accepted) return;
-                    if (!this._localRunActive) {
-                        await this._degradeSteerToTurn(text, sendAttachments, steerId);
-                        return;
-                    }
-                    if (this._localTurnToken !== turnToken) { reject(); return; }
-                } catch (error) {
-                    reject('engineSteerCancelled', error);
-                    return;
-                }
-            }
-            const native = this._activeEngine === 'opencode';
-            const queuedAttachments = native ? sendAttachments : images;
             this._localSteerQueue.push({
-                text: native ? text : buildLocalUserText(text, sendAttachments),
-                ...(queuedAttachments?.length ? { images: queuedAttachments } : {}),
+                text: buildLocalUserText(preparing.value, sendAttachments),
+                steerAttachments: sendAttachments,
+                ...(images?.length ? { images } : {}),
                 ...(sendAttachments?.length ? {
                     meta: sendAttachments.map((a) => ({ name: a.name, mime_type: a.mimeType, size: a.size })),
-                    // Built-in text is already fenced; native turns need every
-                    // attachment's bytes so their tools can read the full file.
                     carryAttachments: sendAttachments
-                        .filter((a) => native || isImageAttachment(a.mimeType))
-                        .map((a) => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
+                        .filter(a => isImageAttachment(a.mimeType))
+                        .map(a => ({ id: a.id, name: a.name, mimeType: a.mimeType, size: a.size, dataBase64: a.dataBase64 })),
                 } : {}),
                 ...(steerId ? { steerId } : {}),
             });
             if (steerId && this._steerNowIds.delete(steerId)) this._localSteerInterrupt?.();
-        } catch (error) { reject('engineSteerCancelled', error); }
+        } catch (error) { if (!preparing.cancelled) reject('engineSteerCancelled', error); }
         finally {
             if (steerId) { this._preparingSteers.delete(steerId); this._steerNowIds.delete(steerId); }
         }
@@ -4458,12 +4499,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     /** A late correction becomes a normal turn, but its raw draft remains
      * recoverable if normal admission fails before the prompt is saved. */
-    private async _degradeSteerToTurn(text: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void> {
+    private async _degradeSteerToTurn(text: string, attachments?: ComposerAttachment[], steerId?: string, nativeFollowup = false): Promise<void> {
         const view = this._view, epoch = this._sessionEpoch;
         this._confirmSteer(steerId, 'turn');
         let accepted = false;
         try {
-            await this._handleChatRequest(text, attachments, steerId ? { onAccepted: () => { accepted = true; } } : undefined);
+            await this._handleChatRequest(text, attachments, { nativeFollowup, ...(steerId ? { requestId: steerId, onAccepted: () => { accepted = true; } } : {}) });
         } finally {
             if (steerId && !accepted && view === this._view && epoch === this._sessionEpoch) {
                 view?.webview.postMessage({ type: 'sendFailed', requestId: steerId, prompt: text, attachments, valueKey: 'engineSteerCancelled', silent: true });
@@ -5279,7 +5320,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._observeNativeShells(engine, session.nativeSessionId!, workspace);
                     await this._persistLocalSession();
                 },
-                steer: { drain: () => this._localSteerQueue.splice(0).map((entry) => ({ text: entry.text, attachments: entry.images, steerId: entry.steerId })) },
                 onChildInstructionReceipt: (sessionId,receipt,accepted) => {if(epoch===this._sessionEpoch)this._view?.webview.postMessage({type:'childSessionReceipt',rootId:this._researchConversationId,sessionId,receipt,accepted});},
                 onSteerRejected: (steerId) => this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId }),
                 onObservation: (callId, trace) => {
@@ -5612,22 +5652,28 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         }
     }
 
+    private _modelFetchSequence = 0;
+
     async _fetchModels(): Promise<boolean> {
         const view = this._view;
         if (!view) return false;
+        const epoch = this._sessionEpoch;
+        const engineId = this._activeEngine;
+        const sequence = ++this._modelFetchSequence;
+        const current = () => this._view === view && epoch === this._sessionEpoch &&
+            engineId === this._activeEngine && sequence === this._modelFetchSequence;
         const post = (message: unknown) => {
-            if (this._view === view) void Promise.resolve(view.webview.postMessage(message)).catch(() => undefined);
+            if (current()) void Promise.resolve(view.webview.postMessage(message)).catch(() => undefined);
         };
         if (this._activeEngine === 'opencode') {
             post({ type: 'modelsRefreshing', active: true });
             try {
-                const epoch = this._sessionEpoch;
                 const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                 if (!workspace) throw new EngineError('engineWorkspaceRequired');
                 const engine = await this._getOpenCodeEngine();
                 if (this._engineSession?.nativeSessionId) this._observeNativeShells(engine, this._engineSession.nativeSessionId, workspace);
                 const catalog = await engine.models(workspace);
-                if (this._activeEngine !== 'opencode' || epoch !== this._sessionEpoch) return false;
+                if (!current()) return false;
                 const models = catalog.map((model) => `${model.providerID}/${model.id}`);
                 if (!this._selectedModel || !models.includes(this._selectedModel)) {
                     const freeModels = catalog.filter(isFreeModel);
@@ -5635,6 +5681,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     this._selectedModel = fallback ? `${fallback.providerID}/${fallback.id}` : null;
                 }
                 await this._rememberModelForActiveCredential(this._selectedModel);
+                if (!current()) return false;
                 const contextWindows = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.limit.context]));
                 this._nativeModelWindows = contextWindows;
                 this._nativeModelVariants = Object.fromEntries(catalog.map((model) => [`${model.providerID}/${model.id}`, model.variants.map((variant) => variant.id).filter((id) => id !== 'default')]));
@@ -5651,23 +5698,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // away from. The legacy secret is the pre-multi-provider fallback.
         // With NO active credential there is nothing to restore: wipe instead,
         // or a deleted connection's model lingers in the picker forever.
-        if (await this._resolveActiveCredentialId()) {
-            this._selectedModel = (await this._modelForActiveCredential())
-                ?? this._selectedModel
-                ?? (await this._secrets.get('xratu.selectedModel') ?? null);
-        } else if (this._selectedModel) {
-            this._selectedModel = null;
-            await this._secrets.delete('xratu.selectedModel');
-        }
+        const credentialId = await this._resolveActiveCredentialId();
+        if (!current()) return false;
         // Let the picker spin its refresh button for the duration of the fetch.
         post({ type: 'modelsRefreshing', active: true });
         try {
             const llm = await this._getLlmCredentials();
+            if (!current() || (llm.credential && llm.credential.id !== credentialId)) return false;
             if (!llm.llm_base_url) {
+                if ((await this._resolveActiveCredentialId()) !== credentialId || !current()) return false;
+                if (!credentialId && this._selectedModel) {
+                    this._selectedModel = null;
+                    await this._secrets.delete('xratu.selectedModel');
+                }
                 // Nothing configured - the picker stays empty until a
                 // provider is connected.
                 post({
-                    type: 'modelInfo', defaultModel: '', models: [],
+                    type: 'modelInfo', credentialId, defaultModel: '', models: [],
                     visionCapable: this.isLocalModelVisionCapable(),
                     contextWindows: {},
                     overrides: this._contextWindowOverrides(),
@@ -5680,154 +5727,154 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Runtime collapse: every credential - remote BYOK or on-machine
             // runtime - is an OpenAI-compatible endpoint the extension probes
             // and chats with directly.
-            return await this._fetchLocalModels(llm.llm_base_url, llm.llm_api_key, llm.extra_headers, llm.discoverModels);
+            const entry = await this._probeLocalModelCatalog(llm.llm_base_url, llm, true);
+            const legacy = !this._selectedModel ? await this._secrets.get('xratu.selectedModel') : undefined;
+            const activeId = await this._resolveActiveCredentialId();
+            if (!current() || activeId !== credentialId) return false;
+            if (llm.credential && !entry.fromCache) this._cacheComposerCatalog(llm.credential, entry.models, epoch);
+            const catalog = this._describeLocalModels(llm.llm_base_url, entry.models);
+            const preferred = [this._credentialModelMap()[credentialId ?? ''], this._selectedModel, legacy]
+                .find(model => model && catalog.models.includes(model));
+            this._selectedModel = preferred ?? catalog.models[0] ?? null;
+            this._publishLocalModelCatalog(llm.llm_base_url, credentialId, entry, catalog);
+            return true;
         } catch (e) {
             // Probe failure - tell the user instead of failing silently.
-            post({
-                type: 'byokCredentialError',
-                value: e instanceof Error ? e.message : String(e)
-            });
+            post(e instanceof EngineError ? { type: 'byokCredentialError', valueKey: e.valueKey }
+                : { type: 'byokCredentialError', valueKey: 'localUnreachableDetail', params: { detail: e instanceof Error ? e.message : String(e) } });
             return false;
         } finally {
             post({ type: 'modelsRefreshing', active: false });
         }
     }
 
-    private async _fetchLocalModels(baseUrl: string, apiKey?: string, extraHeaders?: Record<string, string>, discoverModels?: () => Promise<{ models: import('./local/localTypes').LocalModelInfo[] }>): Promise<boolean> {
-        const view = this._view;
-        if (!view) return false;
-        const post = (message: unknown) => {
-            if (this._view === view) void Promise.resolve(view.webview.postMessage(message)).catch(() => undefined);
-        };
-        const insecureError = insecureRemoteHttpError(baseUrl, apiKey);
-        if (insecureError) {
-            post({ type: 'byokCredentialError', valueKey: insecureError });
-            return false;
+    private async _probeLocalModelCatalog(baseUrl: string, llm: Awaited<ReturnType<XratuChatViewProvider['_getLlmCredentials']>>, allowCached: boolean) {
+        const insecureError = insecureRemoteHttpError(baseUrl, llm.llm_api_key);
+        if (insecureError) throw new EngineError(insecureError);
+        const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl)) ? await this._ensureModelsDevCatalog() : null;
+        const probed = llm.discoverModels ? await llm.discoverModels()
+            : await probeLocalEndpoint(baseUrl, undefined, llm.llm_api_key, getProxyDispatcher(baseUrl), modelsDev, llm.extra_headers);
+        if (probed) return { models: probed.models, fromCache: false };
+        const cached = allowCached && catalogEntryFor(this._modelCatalog, baseUrlHost(baseUrl), Date.now());
+        if (cached) return { models: cached.models, fromCache: true };
+        throw new EngineError('localUnreachable');
+    }
+
+    private _describeLocalModels(baseUrl: string, entries: LocalModelInfo[]): ProviderModelCatalog {
+        const models = [...new Set(entries.map(model => model.id).filter(id => id && !(isOpenCodeHost(baseUrl) && isNonChatModel(id))))];
+        const contextWindows = new Map(Object.entries(this._contextWindowsFor(baseUrlHost(baseUrl))));
+        const capabilities = new Map<string, ModelCapability>();
+        for (const model of entries) {
+            if (!model.id) continue;
+            const window = model.contextWindow ?? knownContextWindow(model.id);
+            if (window && (model.contextWindowReported || !contextWindows.has(model.id))) contextWindows.set(model.id, window);
+            capabilities.set(model.id, {
+                vision: model.supportsVision ?? modelIsLikelyVision(model.id),
+                noTools: !(model.supportsTools ?? modelLikelySupportsTools(model.id)),
+                reasoning: model.supportsReasoning === true,
+                noReasoning: model.supportsReasoning === false,
+                reasoningLevels: model.reasoningLevels,
+            });
         }
-        // Deselect/switch may happen while the probe below is in flight -
-        // remember which credential started this fetch so a stale result
-        // never resurrects a selection the user just cleared (a stale model
-        // paired with the fallback credential would mislabel chat requests).
-        const fetchCredId = await this._resolveActiveCredentialId();
-        post({ type: 'modelsRefreshing', active: true });
-        try {
-            // Only providers the catalog covers trigger the request.
-            const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl))
-                ? await this._ensureModelsDevCatalog()
-                : null;
-            let probed = discoverModels ? await discoverModels() : await probeLocalEndpoint(baseUrl, undefined, apiKey, getProxyDispatcher(baseUrl), modelsDev, extraHeaders);
-            if (this._activeEngine !== 'xratu') return false;
-            if ((await this._resolveActiveCredentialId()) !== fetchCredId) {
-                return false;
-            }
-            // Offline / flaky network: serve the host's cached catalog rather
-            // than an empty picker. A stale-but-real list is strictly better
-            // than "unreachable", and a run still works when the endpoint
-            // comes back. The cache is NOT refreshed here (the fetch failed).
-            let fromCache = false;
-            if (!probed) {
-                const cached = catalogEntryFor(this._modelCatalog, baseUrlHost(baseUrl), Date.now());
-                if (cached) {
-                    probed = { models: cached.models };
-                    fromCache = true;
-                }
-            }
-            if (!probed) {
-                post({
-                    type: 'byokCredentialError',
-                    valueKey: 'localUnreachable',
-                });
-                return false;
-            }
+        return { models, contextWindows: Object.fromEntries(contextWindows), capabilities: Object.fromEntries(capabilities),
+            displayNames: Object.fromEntries(entries.flatMap(model => model.displayName ? [[model.id, model.displayName]] : [])) };
+    }
 
-            // OpenCode also lists non-chat models (Jev structured-decision,
-            // image, embedding, audio). They cannot drive the agent loop, so
-            // keep them out of the picker instead of letting the user select a
-            // model that always fails.
-            const models = probed.models
-                .map((m) => m.id)
-                .filter(Boolean)
-                .filter((id) => !(isOpenCodeHost(baseUrl) && isNonChatModel(id)));
-
+    private _publishLocalModelCatalog(baseUrl: string, credentialId: string | null, entry: { models: LocalModelInfo[]; fromCache: boolean }, catalog: ProviderModelCatalog): void {
+        if (!entry.fromCache) {
             const host = baseUrlHost(baseUrl);
-            // Cache the normalized metadata per HOST so the same model id on
-            // two providers never shares a window or a price, and a later run
-            // can resolve price/limit without re-probing. A cache-served list
-            // must not be re-stamped as freshly fetched.
-            if (!fromCache) {
-                this._modelCatalog = setCatalogEntry(this._modelCatalog, host, probed.models, Date.now());
-                void this._saveModelCatalog();
-                this._rememberContextWindows(host, probed.models);
-            }
+            this._modelCatalog = setCatalogEntry(this._modelCatalog, host, entry.models, Date.now());
+            void this._saveModelCatalog();
+            this._rememberContextWindows(host, entry.models);
+        }
+        this._setCostCurrencyFor(baseUrl);
+        this._view?.webview.postMessage({
+            type: 'modelInfo', credentialId, ...catalog, defaultModel: catalog.models[0] ?? '',
+            overrides: this._contextWindowOverrides(), thinkingLevels: this._thinkingLevels(),
+            selectedModel: this._selectedModel ?? '',
+            visionCapable: this._selectedModel ? catalog.capabilities[this._selectedModel]?.vision ?? this.isLocalModelVisionCapable() : false,
+        });
+        this._postSessionCost();
+    }
 
-            // What the picker/meter sees: provider-reported windows for this
-            // host, then the best window each probed model carries - which is
-            // provider-reported, else models.dev, else curated.
-            const servedWindows: Record<string, number> = { ...this._contextWindowsFor(host) };
-            for (const m of probed.models) {
-                if (!m.id || servedWindows[m.id]) continue;
-                const win = m.contextWindow ?? knownContextWindow(m.id);
-                if (win) servedWindows[m.id] = win;
-            }
+    private _composerCatalogs = new Map<string, { credential: StoredCredential; models: LocalModelInfo[]; epoch: number; fetchedAt: number }>();
 
-            // Per-model capability badges. Only informative signals are sent:
-            // vision when supported, "no tools" when the model cannot drive the
-            // agent loop, and reasoning support so the thinking selector can be
-            // hidden for models that do not accept the parameter.
-            const capabilities: Record<string, { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean; reasoningLevels?: ThinkingLevel[] }> = {};
-            for (const m of probed.models) {
-                if (!m.id) continue;
-                const vision = m.supportsVision ?? modelIsLikelyVision(m.id);
-                const tools = m.supportsTools ?? modelLikelySupportsTools(m.id);
-                const entry: { vision?: boolean; noTools?: boolean; reasoning?: boolean; noReasoning?: boolean; reasoningLevels?: ThinkingLevel[] } = {};
-                if (vision) entry.vision = true;
-                if (!tools) entry.noTools = true;
-                if (m.supportsReasoning === true) entry.reasoning = true;
-                else if (m.supportsReasoning === false) entry.noReasoning = true;
-                // Provider-reported (or curated) variants restrict the picker;
-                // absent = offer the default set.
-                if (m.reasoningLevels?.length) entry.reasoningLevels = m.reasoningLevels;
-                if (entry.vision || entry.noTools || entry.reasoning || entry.noReasoning || entry.reasoningLevels) {
-                    capabilities[m.id] = entry;
+    private _cacheComposerCatalog(credential: StoredCredential, models: LocalModelInfo[], epoch: number): void {
+        this._composerCatalogs.delete(credential.id);
+        this._composerCatalogs.set(credential.id, { credential, models, epoch, fetchedAt: Date.now() });
+        while (this._composerCatalogs.size > 16) this._composerCatalogs.delete(this._composerCatalogs.keys().next().value!);
+    }
+
+    private _sameModelCredential(a: StoredCredential, b: StoredCredential): boolean {
+        return a.id === b.id && a.baseUrl === b.baseUrl && a.apiKey === b.apiKey &&
+            a.oauthProviderId === b.oauthProviderId && a.oauthStorageKey === b.oauthStorageKey;
+    }
+
+    private async _loadComposerCatalog(credential: StoredCredential, epoch: number, refresh = false) {
+        if (isOfflineMode() && !isLoopbackUrl(credential.baseUrl)) throw new EngineError('offlineRemoteBlocked');
+        const cached = this._composerCatalogs.get(credential.id);
+        if (!refresh && cached?.epoch === epoch && Date.now() - cached.fetchedAt < 60_000 &&
+            this._sameModelCredential(cached.credential, credential)) return { models: cached.models, fromCache: false };
+        const llm = await this._modelListingCredentials(credential);
+        if (!llm.llm_base_url) throw new EngineError('localUnreachable');
+        // The fallback cache is keyed by host. An inactive account must show
+        // its own catalog, even when another saved account uses the same host.
+        const entry = await this._probeLocalModelCatalog(llm.llm_base_url, llm, false);
+        if (epoch === this._sessionEpoch && this._activeEngine === 'xratu') this._cacheComposerCatalog(credential, entry.models, epoch);
+        return entry;
+    }
+
+    async _browseProviderModels(credentialId: string, requestId: string, refresh: boolean): Promise<void> {
+        const view = this._view, epoch = this._sessionEpoch;
+        if (this._activeEngine !== 'xratu') return;
+        const reply = (result: { catalog: ProviderModelCatalog } | { errorKey: string }) => {
+            if (view === this._view && epoch === this._sessionEpoch && this._activeEngine === 'xratu') {
+                view?.webview.postMessage({ type: 'providerModels', credentialId, requestId, ...result });
+            }
+        };
+        try {
+            const credential = (await this._getSavedCredentials()).find(item => item.id === credentialId);
+            if (!credential || epoch !== this._sessionEpoch || this._activeEngine !== 'xratu') throw new EngineError('modelPickerUnavailable');
+            const entry = await this._loadComposerCatalog(credential, epoch, refresh);
+            reply({ catalog: this._describeLocalModels(credential.baseUrl, entry.models) });
+        } catch (error) {
+            reply({ errorKey: error instanceof EngineError ? error.valueKey : 'localUnreachable' });
+        }
+    }
+
+    async _selectProviderModel(credentialId: string, model: string, requestId: string, sessionKey?: string): Promise<void> {
+        const view = this._view, epoch = this._sessionEpoch;
+        const current = () => view === this._view && epoch === this._sessionEpoch && this._activeEngine === 'xratu' &&
+            (!sessionKey || sessionKey === this._browserSessionId());
+        let errorKey: string | undefined;
+        try {
+            await this._serializeSessionTransition(async () => {
+                if (!current()) throw new EngineError('sessionSwitchStale');
+                if (this._localRunActive) throw new EngineError('sessionSwitchBusy');
+                const credential = (await this._getSavedCredentials()).find(item => item.id === credentialId);
+                if (!credential) throw new EngineError('modelPickerUnavailable');
+                const entry = await this._loadComposerCatalog(credential, epoch);
+                const catalog = this._describeLocalModels(credential.baseUrl, entry.models);
+                const latest = (await this._getSavedCredentials()).find(item => item.id === credentialId);
+                if (!current()) throw new EngineError('sessionSwitchStale');
+                if (!latest || !this._sameModelCredential(credential, latest) || !catalog.models.includes(model)) {
+                    throw new EngineError('modelPickerUnavailable');
                 }
-            }
-
-            // Prefer the model remembered for this credential, then the
-            // in-memory selection; fall back to the provider's first model.
-            const remembered = await this._modelForActiveCredential();
-            const preferred = remembered && models.includes(remembered)
-                ? remembered
-                : this._selectedModel;
-            this._selectedModel = preferred && models.includes(preferred)
-                ? preferred
-                : (models[0] ?? null);
-            // The active provider is known here (even before any run), so the
-            // cost currency is correct for a reopened session.
-            this._setCostCurrencyFor(baseUrl);
-            post({
-                type: 'modelInfo',
-                defaultModel: models[0] ?? '',
-                models,
-                displayNames: Object.fromEntries(probed.models.filter((m) => m.displayName).map((m) => [m.id, m.displayName!])),
-                contextWindows: servedWindows,
-                overrides: this._contextWindowOverrides(),
-                thinkingLevels: this._thinkingLevels(),
-                selectedModel: this._selectedModel ?? '',
-                visionCapable: this.isLocalModelVisionCapable(),
-                capabilities,
+                await this._rememberModelForActiveCredential(model, credentialId);
+                await this._globalState.update('xratu.activeLlmCredentialId', credentialId);
+                this._selectedModel = model;
+                this._sessionConnectionConfirmed = true;
+                this._modelFetchSequence++;
+                view?.webview.postMessage({ type: 'modelsRefreshing', active: false });
+                this._publishLocalModelCatalog(credential.baseUrl, credentialId, entry, catalog);
             });
-            // Re-post the total in case it was shown in the wrong currency.
-            this._postSessionCost();
-            return true;
-        } catch (e) {
-            post({
-                type: 'byokCredentialError',
-                valueKey: 'localUnreachableDetail',
-                params: { detail: e instanceof Error ? e.message : String(e) },
-            });
-            return false;
-        } finally {
-            post({ type: 'modelsRefreshing', active: false });
+        } catch (error) {
+            errorKey = error instanceof EngineError ? error.valueKey : 'modelPickerUnavailable';
+        }
+        if (view === this._view) view?.webview.postMessage({ type: 'providerModelSelection', requestId, errorKey });
+        if (!errorKey && current()) {
+            await this._sendSavedCredentials();
+            await this._sendOAuthState();
         }
     }
 
@@ -7893,7 +7940,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: {
-        requestId?: string; baseSha?: string; steerCarry?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; hostChildReport?: boolean; onAccepted?: () => void;
+        requestId?: string; baseSha?: string; steerCarry?: boolean; nativeFollowup?: boolean; admittedEpoch?: number; hiddenPrompt?: boolean; hostChildReport?: boolean; onAccepted?: () => void;
         prepared?: { connection: NonNullable<Awaited<ReturnType<XratuChatViewProvider['_prepareLocalRun']>>>; attachments: ComposerAttachment[]; rulesContext: string };
     }): Promise<void> {
         if (!this._view) { return; }
@@ -7922,12 +7969,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // toggle during pre-flight can never expose mutating tools in an
         // already-started plan turn (or vice versa).
         const planModeAtStart = this._planMode;
+        const ownsRun = !opts?.steerCarry && !opts?.nativeFollowup;
         // A run is already live - NEVER run a second concurrent turn (the
         // shared stream buffers would corrupt both). Route the message
         // through the steer pipeline instead: it re-checks run identity and
         // queues for the live round boundary. (Internal carry turns are
         // exempt - their parent loop owns the flag.)
-        if (this._localRunActive && !opts?.steerCarry) {
+        if (this._localRunActive && ownsRun) {
             await this._handleSteer(prompt, attachments);
             return;
         }
@@ -7952,7 +8000,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._localSteerQueue.push({ text: notice, system: true });
             }
         }
-        if (!opts?.steerCarry) {
+        if (ownsRun) {
             // The run that OWNS _localRunActive publishes a settlement
             // deferred - session-wiping flows await it before exposing the
             // fresh session (steerCarry turns are owned by their parent
@@ -7974,6 +8022,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // queued above the floor - otherwise they linger in the shared queue
         // and get injected into an unrelated next turn.
         let agentStarted = false;
+        let nativeTurnSucceeded = false;
         try {
             // Seed the display title (server applies the same truncation rule);
             // an explicit rename always wins because this only fills a null.
@@ -8107,7 +8156,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const outcome = await this._runLocalAgent(prompt, rulesContext, sendAttachments, controller, planModeAtStart, opts?.hiddenPrompt, onAccepted, opts?.prepared?.connection, prePromptSha);
                 this._endLiveMarkdown();
                 if (!accepted) {
-                    this._discardQueuedSteers(steerQueueFloor);
+                    if (this._activeEngine === 'opencode') this._rejectQueuedSteers();
+                    else this._discardQueuedSteers(steerQueueFloor);
                     return;
                 }
                 // Final pass over the run-lifetime ledger before either
@@ -8158,6 +8208,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     await this._persistLocalSession().catch((e) => {
                         console.error('xratu: local session persist failed:', e);
                     });
+                    if (this._activeEngine === 'opencode') {
+                        nativeTurnSucceeded = true;
+                        while (ownsRun && this._localSteerQueue.length && epoch === this._sessionEpoch) {
+                            const queued = this._localSteerQueue.shift()!;
+                            if (queued.system) { this._holdJobNotice(queued.text); continue; }
+                            await this._degradeSteerToTurn(queued.text, queued.carryAttachments, queued.steerId, true);
+                        }
+                        return;
+                    }
                     // Steers typed while the model streamed its FINAL text never
                     // reached a round boundary - carry each as its own follow-up
                     // turn. The user row is ledgered HERE (steerCarry skips the
@@ -8227,7 +8286,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                         console.error('xratu: local session persist failed:', e);
                     });
                 }
-                this._discardQueuedSteers();
+                if (this._activeEngine === 'opencode') this._rejectQueuedSteers();
+                else this._discardQueuedSteers();
                 this._view?.webview.postMessage({ type: 'error', valueKey: 'localNoResponse' });
             }
             } finally {
@@ -8243,9 +8303,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 // here would let a steer arriving between carry turns start a
                 // CONCURRENT second turn.
                 if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
-                else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
+                else if (this._activeEngine === 'opencode') {
+                    if (ownsRun || !nativeTurnSucceeded) this._rejectQueuedSteers();
+                } else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
                 else this._rejectQueuedSteers();
-                if (!opts?.steerCarry) {
+                if (ownsRun) {
                     this._localRunActive = false;
                     this._settleLocalRun();
                 }
@@ -8259,8 +8321,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Idempotent - the inner finally performs the same bookkeeping
             // once the controller is registered.
             if (epoch !== this._sessionEpoch) this._discardQueuedSteers();
+            else if (!agentStarted && this._activeEngine === 'opencode') this._rejectQueuedSteers();
             else if (!agentStarted) this._discardQueuedSteers(steerQueueFloor);
-            if (!opts?.steerCarry) {
+            if (ownsRun) {
                 this._localPendingTurn = null;
                 if (this._localPartialTimer) { clearTimeout(this._localPartialTimer); this._localPartialTimer = null; }
                 this._localRunActive = false;
@@ -8268,7 +8331,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 this._settleLocalRun();
             }
             this._abortControllers.delete('chat');
-            if (!opts?.steerCarry) void this._pullRequests?.resume(false).catch(error => diagnosticsChannel?.appendLine(`PR continuation: ${String(error)}`));
+            if (ownsRun) void this._pullRequests?.resume(false).catch(error => diagnosticsChannel?.appendLine(`PR continuation: ${String(error)}`));
         }
 }
 
@@ -8344,7 +8407,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             ? { type: 'result', ...(outcome.errorEvent.error_key ? { error_key: outcome.errorEvent.error_key } : { error: outcome.errorEvent.error }) }
             : { type: 'result', error_key: outcome.aborted ? 'requestCancelled' : 'localNoResponse' });
         this._history.push({ role: 'assistant', events: displayEvents, content: '' });
-        while (this._localSteerQueue.length > 0) {
+        while (this._activeEngine !== 'opencode' && this._localSteerQueue.length > 0) {
             const carry = this._localSteerQueue.shift()!;
             if (carry.system) { this._holdJobNotice(carry.text); continue; }
             // Never reached a round boundary before the cancel/error: release

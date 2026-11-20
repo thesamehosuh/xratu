@@ -589,7 +589,7 @@ try {
     const source = await readFile(new URL('../src/extension.ts', import.meta.url), 'utf8');
     const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
     const cls = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'XratuChatViewProvider');
-    const names = ['_requestLocalApproval', '_processNeedsApproval', '_requestLocalDecision', '_resolveLocalDecision', '_releaseDecisionCard', '_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_rememberModelForActiveCredential'];
+    const names = ['_requestLocalApproval', '_processNeedsApproval', '_requestLocalDecision', '_resolveLocalDecision', '_releaseDecisionCard', '_runOpenCodeAgent', '_commitUnfinishedLocalTurn', '_displayAssistantResponse', '_handleToolApproval', '_resolveLocalApproval', '_releaseApprovalCard', '_pingFreeModel', '_cancelModelPings', '_setupAvailability', '_engineSelect', '_openSetup', '_showStartScreen', '_nativeVariants', '_setNativeVariant', '_nativeModelVariants', '_sendEnginesState', '_checkEngine', '_engineSetPath', '_engineInstall', '_engineRemove', '_resetOpenCodeEngine', '_getOpenCodeEngine', '_nativeServiceExecutor', '_nativeServiceDefinitions', '_handleToolDecision', '_fetchModels', '_modelFetchSequence', '_browseProviderModels', '_selectProviderModel', '_sameModelCredential', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_rememberModelForActiveCredential'];
     const members = cls.members.filter((node) => node.name && names.includes(node.name.getText(file)));
     const moduleLoad = Module._load;
     let sharedExecutorModule;
@@ -870,6 +870,44 @@ try {
         assert.equal(messages.at(-1).valueKey, 'modelStreamInvalid', 'own errors stay localized when optional provider explanations are disabled');
         assert.equal(messages.at(-1).value, undefined, 'internal English detail is not sent as raw UI copy');
     }
+    const pickerHost = new sandbox.Host(), pickerMessages = [];
+    const pickState = new Map([['xratu.activeLlmCredentialId', 'first']]);
+    const savedConnections = [
+        { id: 'first', baseUrl: 'https://example.test/first', apiKey: 'test-first' },
+        { id: 'second', baseUrl: 'https://example.test/second', apiKey: 'test-second' },
+    ];
+    Object.assign(pickerHost, {
+        _activeEngine: 'xratu', _sessionEpoch: 1, _selectedModel: 'old-model',
+        _view: { webview: { postMessage: message => pickerMessages.push(message) } },
+        _globalState: { get: key => pickState.get(key), update: async (key, value) => { pickState.set(key, value); } },
+        _getSavedCredentials: async () => savedConnections,
+        _browserSessionId: () => 'composer-session',
+        _loadComposerCatalog: async credential => ({ models: [{ id: 'shared', displayName: credential.id }], fromCache: false }),
+        _describeLocalModels: (_baseUrl, models) => ({ models: models.map(model => model.id) }),
+        _rememberModelForActiveCredential: async (model, id) => { pickState.set(id, model); },
+        _publishLocalModelCatalog: (_baseUrl, id) => {
+            assert.equal(pickState.get('xratu.activeLlmCredentialId'), id, 'published connection is active');
+            assert.equal(pickerHost._selectedModel, pickState.get(id), 'published model belongs to the active connection');
+        },
+        _sendSavedCredentials: async () => {}, _sendOAuthState: async () => {},
+    });
+    await pickerHost._browseProviderModels('second', 'browse', false);
+    assert.equal(pickerMessages.at(-1).type, 'providerModels');
+    assert.equal(pickerMessages.at(-1).credentialId, 'second');
+    assert.equal(pickState.get('xratu.activeLlmCredentialId'), 'first', 'browsing does not activate another connection');
+    assert.equal(pickerHost._selectedModel, 'old-model');
+    await pickerHost._selectProviderModel('second', 'missing', 'missing');
+    assert.equal(pickerMessages.at(-1).errorKey, 'modelPickerUnavailable');
+    assert.equal(pickState.get('xratu.activeLlmCredentialId'), 'first');
+    await pickerHost._selectProviderModel('second', 'shared', 'stale', 'another-session');
+    assert.equal(pickerMessages.at(-1).errorKey, 'sessionSwitchStale');
+    assert.equal(pickState.get('xratu.activeLlmCredentialId'), 'first');
+    await pickerHost._selectProviderModel('second', 'shared', 'select', 'composer-session');
+    assert.equal(pickerMessages.at(-1).errorKey, undefined);
+    assert.equal(pickState.get('xratu.activeLlmCredentialId'), 'second');
+    assert.equal(pickerHost._sessionConnectionConfirmed, true);
+    assert.equal(pickerHost._sessionTransitionsPending, 0);
+    console.log('ok composer provider browsing is read-only and selection commits the validated connection/model pair');
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;

@@ -1,17 +1,15 @@
 import { Dropdown } from './Dropdown';
+import { ComposerModelPicker, type ComposerModelPickerConnections } from './ComposerModelPicker';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { processPdf, PDF_SCAN_MAX_PAGES } from '../pdfClient';
 import {
     Brain,
-    Activity,
     ChevronDown,
     ShieldCheck,
     ListChecks,
     Check,
     ChevronUp,
     Cpu,
-    Eye,
-    Filter,
     File,
     Link,
     Paperclip,
@@ -19,7 +17,6 @@ import {
     PencilLine,
     Plus,
     RefreshCw,
-    Search,
     Send,
     Square,
     TriangleAlert,
@@ -27,7 +24,7 @@ import {
 } from 'lucide-react';
 import type { ComposerAttachment, ModelCapability, ModelPingState, ThinkingLevel, TokenUsage } from '../types';
 import { applyMentionPick, detectMention, filterFiles, type MentionState } from '../mention';
-import { getLocale, t, tf, tOrRaw } from '../i18n';
+import { getLocale, t, tf } from '../i18n';
 import { prefersReducedMotion } from '../motion';
 import { readComposerDraft, saveComposerDraft, readComposerRecoveries, saveComposerRecoveries, type ComposerRecovery } from '../composerDrafts';
 
@@ -212,12 +209,6 @@ async function processPdfAttachment(a: ComposerAttachment): Promise<ComposerAtta
     }));
 }
 
-/** Separator-insensitive matching: "glm 52" and "glm52" must find
- *  "glm-5.2" - punctuation in model ids never gates the query. */
-function normalizeModelQuery(value: string): string {
-    return value.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
-}
-
 /** Resolve a reliable MIME type: browsers frequently report an empty or
  *  generic type for code/config files, so fall back to the extension. */
 function mimeForFile(file: File): string {
@@ -260,7 +251,7 @@ async function convertWebpToPng(dataBase64: string): Promise<{ dataBase64: strin
     }
 }
 
-interface InputBarProps {
+interface InputBarProps extends ComposerModelPickerConnections {
     draftKey: string;
     /** Re-measure the same textarea when conversation typography changes. */
     typographyKey?: string;
@@ -287,7 +278,7 @@ interface InputBarProps {
     modelWindows?: Record<string, number>;
     selectedModel?: string | null;
     modelSelectionRequired?: boolean;
-    onSelectModel?: (model: string) => void;
+    onSelectModel?: (model: string, credentialId?: string) => void;
     onRefreshModels?: () => void;
     /** True while the host is re-fetching the model list (spin the button). */
     refreshing?: boolean;
@@ -331,7 +322,9 @@ interface InputBarProps {
     /** Message loaded into the composer for editing (pencil flow): the
      *  composer prefills its text; sending performs the rewind-resend
      *  instead of opening a new turn. Null = normal compose mode. */
-    editDraft?: { userIndex: number; value: string } | null;
+    editDraft?: { value: string; attachments?: ComposerAttachment[] } | null;
+    editingQueued?: boolean;
+    queuedEditPending?: boolean;
     /** Leave edit mode (Escape or the banner's cancel button). */
     onCancelEdit?: () => void;
     /** Workspace file list for the @-mention popup (host-provided; null
@@ -355,6 +348,8 @@ export function InputBar({
     modelDisplayNames,
     modelCapabilities,
     engineLabel, activeEngine, onSelectEngine, engineSwitchDisabled, modelPings,
+    pickerCredentials, activePickerCredential, providerModels, selectingModel, modelSelectionError,
+    modelFavorites, onBrowseProvider, onToggleModelFavorite,
     onPingModel,
     modelWindows,
     selectedModel,
@@ -383,6 +378,8 @@ export function InputBar({
     hostError,
     onHostErrorApplied,
     editDraft,
+    editingQueued,
+    queuedEditPending,
     onCancelEdit,
     workspaceFiles,
     onRequestFiles,
@@ -393,8 +390,6 @@ export function InputBar({
     const [recoveryDrafts, setRecoveryDrafts] = useState<ComposerRecovery[]>(() => readComposerRecoveries(draftKey));
     const [pickerOpen, setPickerOpen] = useState(false);
     const [engineOpen, setEngineOpen] = useState(false);
-    const [filter, setFilter] = useState('');
-    const [freeOnly, setFreeOnly] = useState(true);
     const autoPinged = useRef(new Set<string>());
     useEffect(() => {
         if (!pickerOpen) { autoPinged.current.clear(); return; }
@@ -512,8 +507,9 @@ export function InputBar({
     // stop square only while the composer is EMPTY - the moment there is
     // text (or an attachment) to send it reverts to Send, so steering never
     // requires firing the cancel button by mistake.
-    const canSend = !modelSelectionRequired && (!!value.trim() || attachments.length > 0);
-    const stopping = busy && !canSend;
+    const canSend = (editingQueued ? !queuedEditPending : !modelSelectionRequired && !selectingModel)
+        && (!!value.trim() || attachments.length > 0);
+    const stopping = busy && !canSend && !editingQueued;
 
     const totalAttachBytes = useMemo(
         () => attachments.reduce((sum, a) => sum + a.size, 0),
@@ -637,9 +633,10 @@ export function InputBar({
         setValue(editDraft.value);
         // An unsent normal draft must not ride along: the edit starts from
         // the historical message alone, attachments are added fresh.
-        setAttachments([]);
+        setAttachments(editDraft.attachments ?? []);
         setAttachError(null);
         setMention(null);
+        setAttachMenuOpen(false);
         ref.current?.focus();
     }, [editDraft, clearInjectionTimers]);
 
@@ -716,12 +713,6 @@ export function InputBar({
             document.fonts?.removeEventListener('loadingdone', resizeTextarea);
         };
     }, [resizeTextarea]);
-
-    const filteredModels = useMemo(() => {
-        const q = normalizeModelQuery(filter);
-        const hasPricing = models.some((m) => modelCapabilities?.[m]?.free !== undefined);
-        return models.filter((m) => (!hasPricing || !freeOnly || modelCapabilities?.[m]?.free === true) && (!q || normalizeModelQuery(`${m} ${modelDisplayNames?.[m] ?? ''} ${modelCapabilities?.[m]?.provider ?? ''}`).includes(q)));
-    }, [filter, models, modelDisplayNames, modelCapabilities, freeOnly]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
         setAttachError(null);
@@ -872,11 +863,11 @@ export function InputBar({
         const next = e.target.value;
         setValue(next);
         // Track the `@token` under the caret as the user types.
-        setMention(detectMention(next, e.target.selectionStart ?? next.length));
+        setMention(editingQueued ? null : detectMention(next, e.target.selectionStart ?? next.length));
     };
 
     const submit = () => {
-        if (modelSelectionRequired) return;
+        if (!canSend) return;
         const text = value.trim();
         // Attachments are a valid user turn even when no text is supplied.
         // No busy guard here: while a run streams, onSend QUEUES the turn
@@ -949,14 +940,9 @@ export function InputBar({
             // Escape exits edit mode first; only otherwise does it cancel a
             // live run - and only with an empty composer, so Escape never
             // kills a run the user is mid-steering (mirrors the button).
-            if (editDraft) onCancelEdit?.();
+            if (editDraft) { if (!queuedEditPending) onCancelEdit?.(); }
             else if (stopping) onCancel();
         }
-    };
-
-    const pickModel = (m: string) => {
-        setFilter('');
-        onSelectModel?.(m);
     };
 
     const pickCtx = (win: number | null) => {
@@ -986,7 +972,7 @@ export function InputBar({
     useLayoutEffect(() => { hostAttachmentsApplied.current = onInjectedAttachmentsApplied; });
     // Host-read attachments arriving from an explorer drag (attachUris flow).
     useEffect(() => {
-        if (!injectedAttachments || injectedAttachments.length === 0) return;
+        if (editingQueued || !injectedAttachments?.length) return;
         let cancelled = false;
         void (async () => {
             // A new attach always supersedes the previous inline error.
@@ -1030,7 +1016,7 @@ export function InputBar({
             hostAttachmentsApplied.current?.(injectedAttachments);
         })();
         return () => { cancelled = true; };
-    }, [injectedAttachments]);
+    }, [injectedAttachments, editingQueued]);
 
     // Host-side attachment rejections render inline in the composer (with the
     // same auto-dismiss as local errors) - never as chat bubbles.  Keyed by
@@ -1112,11 +1098,12 @@ export function InputBar({
                 {editDraft && (
                     <div className="composer-edit-banner">
                         <PencilLine size={12} aria-hidden="true" />
-                        <span>{t('editRewindHint')}</span>
+                        <span>{t(editingQueued ? 'steerEditQueued' : 'editRewindHint')}</span>
                         <button
                             type="button"
                             className="composer-edit-cancel"
                             onClick={onCancelEdit}
+                            disabled={queuedEditPending}
                             aria-label={t('editCancel')}
                             title={t('editCancel')}
                         >
@@ -1161,7 +1148,7 @@ export function InputBar({
                                     {a.size > 0 && (
                                         <span className="attach-chip-size" dir="ltr">{fmtCompact(a.size)}</span>
                                     )}
-                                    <button
+                                    {!editingQueued && <button
                                         type="button"
                                         className="attach-chip-remove"
                                         onClick={() => removeAttachment(a.id)}
@@ -1169,7 +1156,7 @@ export function InputBar({
                                         title={t('removeAttachment')}
                                     >
                                         <X size={11} />
-                                    </button>
+                                    </button>}
                                 </span>
                             );
                         })}
@@ -1184,13 +1171,14 @@ export function InputBar({
                     className="composer-input"
                     rows={1}
                     dir={value ? 'auto' : getLocale() === 'fa' ? 'rtl' : 'ltr'}
-                    placeholder={busy ? t('inputPlaceholderBusy') : t('inputPlaceholder')}
+                    placeholder={busy ? t(activeEngine === 'opencode' ? 'inputPlaceholderQueued' : 'inputPlaceholderBusy') : t('inputPlaceholder')}
                     value={value}
                     autoFocus
                     onFocus={() => setAttachMenuCollapsed(false)}
                     onChange={onValueChange}
                     onKeyDown={onKeyDown}
-                    onPaste={onPaste}
+                    readOnly={editingQueued && queuedEditPending}
+                    onPaste={editingQueued ? undefined : onPaste}
                     aria-label={t('inputSrLabel')}
                 />
                 <div className="composer-actions">
@@ -1198,6 +1186,7 @@ export function InputBar({
                     <button
                         type="button"
                         className="attach-btn"
+                        disabled={editingQueued}
                         ref={attachBtnRef}
                         onMouseDown={event => { if (event.button === 0) event.preventDefault(); }}
                         onClick={() => { setAttachMenuCollapsed((composerRef.current?.querySelector('.composer-actions')?.getBoundingClientRect().height ?? 36) < 2); setAttachMenuOpen((s) => !s); }}
@@ -1273,14 +1262,14 @@ export function InputBar({
                         className="chip-btn picker-chip"
                         ref={pickerRef}
                         onClick={() => setPickerOpen((s) => !s)}
-                        aria-haspopup="listbox"
                         aria-expanded={pickerOpen}
+                        aria-busy={selectingModel || undefined}
                         aria-label={t('pickModel')}
                         title={t('pickModel')}
                     >
                         {!onSelectEngine && <Cpu size={12} />}
                         {engineLabel && !onSelectEngine && <span className="composer-engine" dir="ltr">{engineLabel}</span>}
-                        <span dir="ltr" className="chip-model-name">
+                        <span dir="ltr" className="chip-model-name" title={selectedModel ?? undefined}>
                             {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}
                         </span>
                         {activeThinking && modelCapabilities?.[selectedModel ?? '']?.noReasoning !== true && (
@@ -1288,7 +1277,7 @@ export function InputBar({
                                 className={`chip-think lvl-${activeThinking}`}
                                 title={t('thinkingLevel')}
                             >
-                                <Brain size={11} />
+                                <Brain size={14} />
                                 {thinkingLabel(activeThinking)}
                             </span>
                         )}
@@ -1371,102 +1360,27 @@ export function InputBar({
                             onMouseDown={event => { if (event.button === 0) event.preventDefault(); }}
                             onClick={stopping ? onCancel : submit}
                             disabled={!stopping && !canSend}
-                            aria-label={stopping ? t('stopAria') : editDraft ? t('editSave') : t('sendAria')}
-                            title={stopping ? t('stopTitle') : modelSelectionRequired ? t('engineModelMissing') : editDraft ? t('editSave') : t('sendTitle')}
+                            aria-label={stopping ? t('stopAria') : editingQueued ? t('steerSaveQueued') : editDraft ? t('editSave') : t('sendAria')}
+                            title={stopping ? t('stopTitle') : editingQueued ? t('steerSaveQueued') : modelSelectionRequired ? t('engineModelMissing') : editDraft ? t('editSave') : t('sendTitle')}
                         >
-                            {stopping ? <Square size={14} /> : editDraft ? <RefreshCw size={14} /> : <Send size={15} />}
+                            {stopping ? <Square size={14} /> : editingQueued ? <Check size={16} /> : editDraft ? <RefreshCw size={14} /> : <Send size={15} />}
                         </button>
                     </div>
                 </div>
 
                 {pickerOpen && (
-                    <div className="model-pop" role="listbox" aria-label={t('modelListAria')} ref={popRef}>
-                        <div className="model-pop-head">
-                            <div className="model-search">
-                                <Search size={13} />
-                                <input
-                                    type="text"
-                                    dir={filter ? 'auto' : getLocale() === 'fa' ? 'rtl' : 'ltr'}
-                                    placeholder={t('searchModel')}
-                                    value={filter}
-                                    onChange={(e) => setFilter(e.target.value)}
-                                    autoFocus
-                                    aria-label={t('searchModelAria')}
-                                />
-                            </div>
-                            {models.some((m) => modelCapabilities?.[m]?.free !== undefined) && (
-                                <button type="button" className={`model-free-filter${freeOnly ? ' active' : ''}`} aria-label={t('modelFreeOnly')} title={t('modelFreeOnly')} aria-pressed={freeOnly} onClick={() => setFreeOnly((value) => !value)}>
-                                    <Filter size={14} />
-                                </button>
-                            )}
-                            <button
-                                type="button"
-                                className="ghost-btn small"
-                                onClick={onRefreshModels}
-                                disabled={refreshing}
-                                aria-busy={refreshing || undefined}
-                                aria-label={t('refreshModels')}
-                                title={t('refreshTitle')}
-                            >
-                                <RefreshCw size={13} className={refreshing ? 'spinning' : undefined} />
-                            </button>
-                        </div>
-                        <div className="model-list" role="presentation">
-                            {filteredModels.length === 0 && (
-                                <p className="model-empty">{t('noModels')}</p>
-                            )}
-                            {filteredModels.map((m) => (
-                                <div className="model-row" key={m}>
-                                <button
-                                    key={m}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={m === selectedModel}
-                                    className={`model-item${m === selectedModel ? ' selected' : ''}`}
-                                    onClick={() => pickModel(m)}
-                                >
-                                    <span dir="ltr" className="model-item-label" title={m}><span className="model-item-name">{modelDisplayNames?.[m] ?? m}</span>{modelCapabilities?.[m]?.provider && <span className="model-provider">{modelCapabilities[m].provider}</span>}</span>
-                                    <span className="model-badges">
-                                        {modelWindows?.[m] ? (
-                                            <span className="model-badge" dir="ltr" title={t('modelWindowTitle')} aria-label={t('modelWindowTitle')}>
-                                                {fmtWindow(modelWindows[m])}
-                                            </span>
-                                        ) : null}
-                                        {modelCapabilities?.[m]?.vision && (
-                                            <span className="model-badge" title={t('modelVisionBadge')} aria-label={t('modelVisionBadge')}>
-                                                <Eye size={11} />
-                                            </span>
-                                        )}
-                                        {modelCapabilities?.[m]?.noTools && (
-                                            <span className="model-badge" title={t('modelNoToolsBadge')} aria-label={t('modelNoToolsBadge')}>
-                                                <Wrench size={11} />
-                                            </span>
-                                        )}
-                                    </span>
-                                    {m === selectedModel && (
-                                        <Check size={13} className="model-check" />
-                                    )}
-                                </button>
-                                {modelCapabilities?.[m]?.free === true && onPingModel && <button
-                                    type="button"
-                                    className={`model-ping ${modelPings?.[m]?.status ?? ''}`}
-                                    disabled={modelPings?.[m]?.status === 'checking'}
-                                    onClick={() => onPingModel(m)}
-                                    aria-label={tf('modelPingAction', { model: modelDisplayNames?.[m] ?? m })}
-                                    title={[t('modelPing'), modelPings?.[m] && t(`modelPing${modelPings[m].status === 'rateLimited' ? 'Limited' : modelPings[m].status === 'available' ? 'Available' : modelPings[m].status === 'checking' ? 'Checking' : 'Failed'}`), modelPings?.[m]?.checkedAt && new Date(modelPings[m].checkedAt!).toLocaleTimeString(getLocale()), modelPings?.[m]?.detail && tOrRaw(modelPings[m].detail!)].filter(Boolean).join(' · ')}
-                                >
-                                    {modelPings?.[m]?.status === 'checking' ? <RefreshCw size={12} className="spinning" /> : <Activity size={12} />}
-                                    {modelPings?.[m]?.status === 'available' && <span>{t('modelPingAvailable')}</span>}
-                                    {modelPings?.[m]?.status === 'rateLimited' && <span>{t('modelPingLimited')}</span>}
-                                    {modelPings?.[m]?.status === 'failed' && <span>{t('modelPingFailed')}</span>}
-                                </button>}
-                                </div>
-                            ))}
-                        </div>
-                        {selectedModel && onSetThinkingLevel && modelCapabilities?.[selectedModel]?.noReasoning !== true && (
+                    <ComposerModelPicker
+                        popupRef={popRef} engine={activeEngine ?? 'xratu'} models={models} names={modelDisplayNames}
+                        capabilities={modelCapabilities} windows={modelWindows} selected={selectedModel} pings={modelPings}
+                        refreshing={refreshing} onRefresh={onRefreshModels} onPing={onPingModel} onSelect={onSelectModel}
+                        formatWindow={fmtWindow} selectionDisabled={busy}
+                        pickerCredentials={pickerCredentials} activePickerCredential={activePickerCredential}
+                        providerModels={providerModels} selectingModel={selectingModel} modelSelectionError={modelSelectionError}
+                        modelFavorites={modelFavorites} onBrowseProvider={onBrowseProvider} onToggleModelFavorite={onToggleModelFavorite}
+                        footer={selectedModel && onSetThinkingLevel && modelCapabilities?.[selectedModel]?.noReasoning !== true && (
                             <div className="thinking-row" role="radiogroup" aria-label={t('thinkingLevel')}>
                                 <span className="thinking-row-label">
-                                    <Brain size={12} />
+                                    <Brain size={14} />
                                     <span>{t('thinkingLevel')}</span>
                                 </span>
                                 <div className="thinking-seg">
@@ -1474,21 +1388,23 @@ export function InputBar({
                                         const active = activeThinking === lvl;
                                         return (
                                             <button
+                                                disabled={selectingModel}
                                                 key={lvl ?? 'default'}
                                                 type="button"
                                                 role="radio"
+                                                title={lvl === null ? t('thinkingDefault') : thinkingLabel(lvl)}
                                                 aria-checked={active}
                                                 className={`thinking-seg-opt${active ? ' selected' : ''}`}
                                                 onClick={() => onSetThinkingLevel(lvl)}
                                             >
-                                                {lvl === null ? t('thinkingDefault') : thinkingLabel(lvl)}
+                                                <span dir={lvl !== null && !Object.prototype.hasOwnProperty.call(THINKING_KEYS, lvl) ? 'ltr' : undefined}>{lvl === null ? t('thinkingDefault') : thinkingLabel(lvl)}</span>
                                             </button>
                                         );
                                     })}
                                 </div>
                             </div>
                         )}
-                    </div>
+                    />
                 )}
                 {mention && (
                     <div className="model-pop mention-pop" role="listbox" aria-label={t('fileSearchAria')}>

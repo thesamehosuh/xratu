@@ -7,6 +7,7 @@ import type { DiscoveredLocalRuntime, EngineSetupState, LocalModelOperation, Run
 import { LocalModelManager } from './LocalModelManager';
 import { OpenCodeSetup } from './OpenCodeSetup';
 import { SetupModelPicker } from './SetupModelPicker';
+import { ProviderIcon } from './ProviderIcon';
 import './onboarding.css';
 
 interface WelcomeProps {
@@ -86,7 +87,7 @@ export function Welcome(props: WelcomeProps) {
                     <ChevronRight size={15} className={locale === 'fa' ? 'rtl-flip' : undefined} />
                 </button>)}
             </div> : <section className="setup-body" aria-busy={starting || state?.phase === 'checking'}>
-                {!(path === 'local' && !hasModels) && <div className="setup-context"><span dir="ltr">{path === 'free' ? 'OpenCode 2' : 'Xratu'}</span>{state?.providerName && <span dir="auto">{state.providerName}</span>}<button type="button" className="ghost-btn small" aria-label={t('setupCheckAgain')} title={t('setupCheckAgain')} onClick={props.onRetry} disabled={starting || state?.phase === 'checking' || engineState?.phase === 'installing'}><RefreshCw size={13} className={state?.phase === 'checking' ? 'spinning' : undefined} /></button></div>}
+                {!(path === 'local' && !hasModels) && <div className="setup-context"><span dir="ltr">{path === 'free' ? 'OpenCode 2' : 'Xratu'}</span>{state?.providerName && <span className="provider-brand-label"><ProviderIcon id={state.providerId} label={state.providerName} /><span dir="auto">{state.providerName}</span></span>}<button type="button" className="ghost-btn small" aria-label={t('setupCheckAgain')} title={t('setupCheckAgain')} onClick={props.onRetry} disabled={starting || state?.phase === 'checking' || engineState?.phase === 'installing'}><RefreshCw size={13} className={state?.phase === 'checking' ? 'spinning' : undefined} /></button></div>}
                 {path !== 'local' && (!state || state.phase === 'checking') && <div className="setup-status" role="status"><RefreshCw size={14} className="spinning" /><span>{t('setupChecking')}</span></div>}
                 {path === 'free' && state?.phase === 'install' && <OpenCodeSetup state={engineState} send={send} />}
                 {state?.phase === 'workspace' && <button type="button" className="primary-btn" onClick={() => send({ type: 'setupOpenFolder' })}><FolderOpen size={14} /><span>{t('setupOpenFolder')}</span></button>}
@@ -109,7 +110,7 @@ export function Welcome(props: WelcomeProps) {
                     <div className="setup-local-head"><span>{t(!state || state.phase === 'checking' || props.localModelsScanning ? 'setupChecking' : props.localRuntimes.length ? 'setupDetected' : 'setupLocalNotFound')}</span><button type="button" className="ghost-btn small" onClick={props.onRescan} disabled={props.localModelsScanning} aria-label={t('credLocalRescan')}><RefreshCw size={13} className={props.localModelsScanning ? 'spinning' : undefined} /></button></div>
                     {props.localScanError && <p className="setup-error" role="alert">{t('credScanFailed')}</p>}
                     {props.localRuntimes.map((runtime) => <div key={runtime.id} className="setup-runtime">
-                        <div className="setup-runtime-head"><Laptop size={15} /><strong dir="ltr">{runtime.name}</strong><span className="setup-muted">{runtime.modelCount ? `${runtime.modelCount}` : t('setupNoModels')}</span><button type="button" className="secondary-btn" disabled={!runtime.modelCount || starting} onClick={() => props.onConnectRuntime(runtime)}>{t('credConnect')}</button></div>
+                        <div className="setup-runtime-head"><ProviderIcon id={runtime.runtime} label={runtime.name} /><strong dir="ltr">{runtime.name}</strong><span className="setup-muted">{runtime.modelCount ? `${runtime.modelCount}` : t('setupNoModels')}</span><button type="button" className="secondary-btn" disabled={!runtime.modelCount || starting} onClick={() => props.onConnectRuntime(runtime)}>{t('credConnect')}</button></div>
                         <span className="setup-runtime-url" dir="ltr">{runtime.baseUrl}</span>
                         {!runtime.modelCount && runtime.runtime === 'ollama' && <LocalModelManager runtime={runtime} operation={props.localModelOperation} offline={props.offline} onManage={(action, baseUrl, model) => send({ type: 'manageLocalModel', action, baseUrl, model })} />}
                         {!runtime.modelCount && runtime.runtime !== 'ollama' && <p className="setup-muted">{t('setupLoadLocalModel')}</p>}

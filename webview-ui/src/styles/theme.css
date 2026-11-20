@@ -4013,78 +4013,57 @@ pre.tool-cmd {
     margin-inline-start: auto;
 }
 
-/* Queued steer chips: a message sent while the run is busy waits for the
-   current tool call to end. Compact chips above the composer keep each one
-   visible until the host injects it; the real user bubble then replaces the
-   chip. Logical/symmetric spacing keeps RTL correct. */
+/* Pending messages share the transcript measure and the user bubble shape. */
 .queued-steers {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    /* Same column as the composer card below it (max 700px, centered):
-       full-width chips misaligned with the card on wide screens. */
+    flex-direction: column;
+    gap: 8px;
     width: calc(100% - 2 * var(--composer-inset, 13px));
-    max-width: 700px;
     margin-inline: auto;
-    padding: 8px 3px 0;
-    background: var(--xratu-shell);
+    padding-block: 4px 8px;
 }
 
-.queued-steer-chip {
-    display: inline-flex;
+.queued-message {
+    align-self: flex-end;
+    max-inline-size: 92%;
+    min-inline-size: min(260px, 92%);
+    padding: 9px 18px 12px;
+    border: 1px dashed var(--page-line);
+    border-radius: 10px;
+    background: var(--xratu-input);
+}
+
+.app[dir=rtl] .queued-message { align-self: flex-start; }
+.queued-message-head, .queued-message-status, .queued-message-actions {
+    display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 100%;
-    min-width: 0;
-    padding: 3px 10px;
-    border: 1px dashed var(--vscode-widget-border);
-    border-radius: 999px;
-    background: var(--xratu-input);
-    color: var(--vscode-descriptionForeground);
-    font-size: var(--xratu-fs-sm);
-    line-height: 1.6;
 }
 
-.queued-steer-chip svg {
-    flex-shrink: 0;
-    animation: xratu-queued-pulse 1.4s ease-in-out infinite;
-}
+.queued-message-head { justify-content: space-between; flex-wrap: wrap; }
+.queued-message-status { color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-sm); }
+.queued-message-actions { justify-content: flex-end; margin-inline-start: auto; }
+.queued-message-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-block-start: 4px; }
 
-.queued-steer-label {
-    flex-shrink: 0;
-    font-size: var(--xratu-fs-xs);
-    opacity: 0.85;
-}
-
-.queued-steer-now {
+.queued-steer-now, .queued-message-action {
     display: inline-flex;
     align-items: center;
-    flex-shrink: 0;
-    padding: 2px 6px;
+    justify-content: center;
+    min-block-size: 28px;
+    padding: 3px 8px;
     border: 0;
-    border-radius: 6px;
+    border-radius: 5px;
     background: transparent;
     color: var(--vscode-foreground);
     font: inherit;
+    font-size: var(--xratu-fs-sm);
     cursor: pointer;
 }
 
-.queued-steer-now:hover { background: var(--vscode-toolbar-hoverBackground); }
-.queued-steer-now:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
-
-.queued-steer-text {
-    min-width: 0;
-    max-width: 42ch;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-@keyframes xratu-queued-pulse {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 0.9; }
-}
-
+.queued-message-action { inline-size: 28px; padding: 0; }
+.queued-message-action:last-child:hover:not(:disabled) { color: var(--vscode-errorForeground); }
+:is(.queued-steer-now, .queued-message-action):hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
+:is(.queued-steer-now, .queued-message-action):disabled { opacity: .5; cursor: default; }
 /* ---------------------------------------------------------------------------
    Composer - Cursor-like card with embedded action row
    --------------------------------------------------------------------------- */
@@ -4132,13 +4111,17 @@ pre.tool-cmd {
     padding: 0;
     border: none;
     border-radius: var(--xratu-radius-xs);
-    background: #b42332;
-    color: #fff;
+    background: transparent;
+    color: var(--surface-accent);
     cursor: pointer;
 }
 
-.composer-edit-cancel:hover {
-    background: #d12d3e;
+.composer-edit-cancel:hover:not(:disabled) {
+    color: var(--surface-accent-strong);
+}
+
+.composer-edit-cancel:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
 }
 
 .composer {
@@ -4587,10 +4570,6 @@ pre.tool-cmd {
 .model-row .model-item { flex: 1; min-width: 0; }
 .model-item-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
 .model-provider { color: var(--vscode-descriptionForeground); font-size: var(--xratu-fs-xs); font-weight: 400; flex: 0 0 auto; }
-.model-free-filter { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 26px; height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: none; border-radius: 4px; padding: 0; cursor: pointer; }
-.model-free-filter:hover { background: var(--vscode-list-hoverBackground); }
-.model-free-filter.active { color: var(--xratu-accent); background: var(--xratu-accent-faint); }
-.model-free-filter:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .model-ping { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; margin-inline-end: 8px; padding: 5px 4px; border: none; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: var(--xratu-fs-xs); }
 .model-ping:hover { background: var(--vscode-list-hoverBackground); }
 .model-ping.available { color: var(--xratu-accent); }
@@ -5781,6 +5760,37 @@ pre.tool-cmd {
     background: var(--xratu-surface-inset);
     color: var(--vscode-descriptionForeground);
 }
+
+.provider-brand-icon {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:none;
+    inline-size:var(--provider-icon-size,14px);
+    block-size:var(--provider-icon-size,14px);
+}
+
+.provider-brand-logo {
+    background:currentColor;
+    mask-size:contain;
+    mask-position:center;
+    mask-repeat:no-repeat;
+}
+
+.provider-brand-initials {
+    background:transparent;
+}
+
+.provider-brand-initials::before {
+    content:attr(data-initials);
+    font-size:calc(var(--provider-icon-size,14px) * .62);
+    font-weight:650;
+    line-height:1;
+}
+
+.provider-brand-initials[data-initials=""] { border:0; }
+.provider-brand-label { display:inline-flex; align-items:center; gap:5px; min-inline-size:0; }
+.provider-brand-label > .provider-brand-text { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; }
 
 .provider-mark-popular {
     color: var(--vscode-descriptionForeground);
@@ -9194,3 +9204,7 @@ button:not(:disabled):active,
     font-size: var(--xratu-fs-sm);
     line-height: var(--xratu-line-ui);
 }
+
+.private-account { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: start; min-inline-size: 0; }
+.private-account:hover { text-decoration: underline; }
+.private-account:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }

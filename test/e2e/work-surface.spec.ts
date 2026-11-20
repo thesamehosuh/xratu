@@ -898,6 +898,7 @@ test.describe('work surface', () => {
         await expect(page.getByRole('dialog')).toHaveCount(0);
         await post(page, { type: 'savedCredentials', credentials: [{ id: 'one', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true }] });
         await expect(page.locator('.saved-credential')).toHaveCount(1);
+        await expect(page.locator('.saved-credential .provider-brand-logo')).toBeVisible();
         await expect(page.getByRole('dialog')).toHaveCount(0);
 
         // Provider save-error retains the exact input node and clears on successful save.
@@ -906,7 +907,10 @@ test.describe('work surface', () => {
         await expect(page.locator('.compact-dialog .cred-provider-box input')).toBeVisible();
         await page.keyboard.press('Shift+Tab');
         expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
+        await page.locator('.compact-dialog .cred-provider-box input').fill('OpenAI');
+        await expect(page.locator('.cred-provider-option-label').filter({ hasText: /^OpenAI$/ }).locator('..').locator('.provider-brand-logo')).toBeVisible();
         await page.locator('.compact-dialog .cred-provider-box input').fill('Avalai');
+        await expect(page.getByRole('option').filter({ hasText: 'Avalai' }).locator('.provider-brand-initials')).toHaveAttribute('data-initials', 'A');
         await page.keyboard.press('Enter');
         const apiKey = page.getByRole('dialog').getByRole('textbox', { name: /^API key/ });
         await apiKey.fill('test-key');

@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, KeyRound, RefreshCw, SquareTerminal, Trash2 } from 'lucide-react';
 import brandMark from '../../../assets/brand/logo-outline.svg';
 import { OpenCodeSetup } from './OpenCodeSetup';
+import { ProviderIcon } from './ProviderIcon';
 import { getLocale, t } from '../i18n';
 import type { SetupEngine } from '../../../src/engines/setup';
-import type { ConnectionStatus, EngineSetupState, ToExtensionMessage } from '../types';
+import type { ConnectionStatus, EngineSetupState, SavedCredential, ToExtensionMessage } from '../types';
 import './enginesPage.css';
 
 export function EnginesPage({ state, send, onConfigure, model, plan, provider, connection }: {
-    provider: string | null; connection: ConnectionStatus; model: string | null; plan: boolean;
+    provider?: Pick<SavedCredential, 'providerId' | 'label'>; connection: ConnectionStatus; model: string | null; plan: boolean;
     onConfigure: (engine: SetupEngine) => void; state: EngineSetupState | null; send: (message: ToExtensionMessage) => void;
 }) {
     const [customPath, setCustomPath] = useState(state?.customPath ?? '');
@@ -27,17 +28,19 @@ export function EnginesPage({ state, send, onConfigure, model, plan, provider, c
                 <div className="engine-heading"><span className="xratu-brand-mark" style={{ maskImage: `url("${brandMark}")` }} aria-hidden="true" /><h3 dir="ltr">{t('engineXratu')}</h3>{state?.active === 'xratu' && <span className="engine-active"><Check size={11} /><span>{t('engineActive')}</span></span>}</div>
                 <div className="engine-features"><span>{t('engineBuiltIn')}</span><span>{t('engineByok')}</span><span>{t('engineLocal')}</span></div>
                 <div className="engine-facts">
-                    <div className="kv"><span>{t('miniProvider')}</span><span dir="ltr">{provider || '—'}</span></div>
+                    <div className="kv"><span>{t('miniProvider')}</span>{provider ? <span className="provider-brand-label">
+                        <ProviderIcon id={provider.providerId} label={provider.label} /><span dir="auto">{provider.label}</span>
+                    </span> : <span>—</span>}</div>
                     <div className="kv"><span>{t('surfaceModel')}</span><span dir="ltr">{state?.active === 'xratu' ? model || '—' : '—'}</span></div>
                     <div className="kv"><span>{t('proxyCardConnection')}</span><span>{state?.active === 'xratu' ? t(connection === 'connected' ? 'surfaceReady' : 'surfaceDisconnected') : '—'}</span></div>
                 </div>
-                <div className="engine-footer">{state?.active !== 'xratu' && switchButton('xratu')}<button type="button" className="engine-action" data-configure-engine="xratu" onClick={() => onConfigure('xratu')}><KeyRound size={14} /><span>{t('engineManageProviders')}</span></button></div>
+                <div className="engine-footer">{state?.active !== 'xratu' && switchButton('xratu')}{state?.active === 'xratu' && <button type="button" className="engine-action" data-configure-engine="xratu" onClick={() => onConfigure('xratu')}><KeyRound size={14} /><span>{t('engineManageProviders')}</span></button>}</div>
             </section>
             <section className={`engine-card${state?.active === 'opencode' ? ' selected' : ''}`}>
                 <div className="engine-heading"><SquareTerminal size={22} /><h3 dir="ltr">{t('engineOpenCode')}</h3><span className={`engine-status ${phase}`} role="status">{t(phase === 'ready' && state?.active === 'opencode' ? 'engineActive' : statusKey[phase])}</span></div>
                 <div className="engine-features"><span>{t('engineNative')}</span><span>{t('engineFreeModels')}</span></div>
                 <div className="engine-facts"><div className="kv"><span>{t('engineBinary')}</span><code dir="ltr">{state?.binaryPath || state?.customPath || '—'}</code></div><div className="kv"><span>{t('engineAuthentication')}</span><span>{t('engineManagedAuthentication')}</span></div></div>
-                {phase === 'ready' ? <div className="engine-footer">{state?.active !== 'opencode' && switchButton('opencode')}<button type="button" className="engine-action" data-configure-engine="opencode" disabled={locked} onClick={() => onConfigure('opencode')}>{t('surfaceConfigure')}</button></div> : <OpenCodeSetup state={state} send={send} />}
+                {phase === 'ready' ? <div className="engine-footer">{state?.active !== 'opencode' && switchButton('opencode')}{state?.active === 'opencode' && <button type="button" className="engine-action" data-configure-engine="opencode" disabled={locked} onClick={() => onConfigure('opencode')}>{t('surfaceConfigure')}</button>}</div> : <OpenCodeSetup state={state} send={send} />}
             </section>
             {state?.busy && <p role="status">{t('engineBusyHint')}</p>}
         </div><aside className="inventory-inspector engine-inspector">

@@ -512,8 +512,8 @@ test('steering queues during tools and delegated work without cancelling and ren
     const assistantBefore = await page.locator('.msg.assistant').count();
     await page.locator('.composer-input').fill('also check b.txt');
     await page.locator('.composer-input').press('Enter');
-    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
-    await expect(page.locator('.queued-steer-chip')).toContainText('also check b.txt');
+    await expect(page.locator('.queued-message')).toHaveCount(1);
+    await expect(page.locator('.queued-message')).toContainText('also check b.txt');
     const chipsBox = await page.locator('.queued-steers').boundingBox();
     const composerBox = await page.locator('.composer').boundingBox();
     expect(Math.abs(chipsBox!.x - composerBox!.x)).toBeLessThanOrEqual(1);
@@ -529,13 +529,13 @@ test('steering queues during tools and delegated work without cancelling and ren
     const controls = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
     expect(controls.filter(message => message.type === 'steerNow')).toEqual([{ type: 'steerNow', steerId }]);
     expect(controls.some(message => message.type === 'cancelRequest')).toBe(false);
-    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+    await expect(page.locator('.queued-message')).toHaveCount(1);
 
     await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: 'r', callId: 'c1' });
     await hostMessage(page, { type: 'steerApplied', steerId });
     await expect(page.locator('.msg.user.steered')).toHaveCount(1);
     await expect(page.locator('.msg.user.steered')).toContainText('also check b.txt');
-    await expect(page.locator('.queued-steer-chip')).toHaveCount(0);
+    await expect(page.locator('.queued-message')).toHaveCount(0);
 
     // Delegated task steering in narrow RTL keeps Steer now inside bounds and stacks multiple steers.
     await hostMessage(page, { type: 'locale', locale: 'fa' });
@@ -544,7 +544,7 @@ test('steering queues during tools and delegated work without cancelling and ren
     await input.fill('اول تست ها رو بررسی کن');
     await input.press('Enter');
     await expect(input).toHaveValue('');
-    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+    await expect(page.locator('.queued-message')).toHaveCount(1);
     const now = page.locator('.queued-steer-now');
     await expect(now).toBeVisible();
     const box = await now.boundingBox();
@@ -553,7 +553,25 @@ test('steering queues during tools and delegated work without cancelling and ren
     await now.click();
     await input.fill('A second correction');
     await input.press('Enter');
-    await expect(page.locator('.queued-steer-chip')).toHaveCount(2);
+    await expect(page.locator('.queued-message')).toHaveCount(2);
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    const lastQueued = page.locator('.queued-message').last();
+    await input.fill('Keep this ordinary draft');
+    await lastQueued.getByRole('button', { name: 'Edit queued message' }).click();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue('A second correction');
+    await input.fill('An edited correction');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    const mutation = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId: string; value?: string }>);
+    const edit = mutation.find(m => m.type === 'updateQueuedSteer')!;
+    expect(edit.value).toBe('An edited correction');
+    await hostMessage(page, { type: 'steerEditResult', accepted: true, steerId: edit.steerId, value: edit.value });
+    await expect(lastQueued).toContainText('An edited correction');
+    await expect(input).toHaveValue('Keep this ordinary draft');
+    await lastQueued.getByRole('button', { name: 'Cancel queued message' }).click();
+    await expect(page.locator('.queued-message')).toHaveCount(2);
+    await hostMessage(page, { type: 'steerApplied', mode: 'drop', steerId: edit.steerId });
+    await expect(page.locator('.queued-message')).toHaveCount(1);
     const afterDelegated = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string }>);
     expect(afterDelegated.filter(message => message.type === 'steerRun')).toHaveLength(3);
     expect(afterDelegated.filter(message => message.type === 'steerNow')).toHaveLength(2);
@@ -611,7 +629,7 @@ test('reasoning body stays LTR in fa while pill label stays RTL, and hidden moni
     await expect(page.locator('article.msg.user')).toHaveCount(1);
     await expect(page.locator('.transcript-pane')).not.toContainText('PR monitor notification');
     await expect(page.locator('.transcript-pane')).toContainText('I checked the new review.');
-    await expect(page.locator('.queued-steer-chip,.pr-indicator')).toHaveCount(0);
+    await expect(page.locator('.queued-message,.pr-indicator')).toHaveCount(0);
 });
 
 test('calm entry hides chips, workspaceKind switches chip sets, and fresh workspace accepts prompts', async ({ page }) => {

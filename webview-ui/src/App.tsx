@@ -1,9 +1,11 @@
+import { QueuedMessage } from './components/QueuedMessage';
 import { nativeChildSessions } from './nativeChildSessions';
 import { MessageItem } from './components/MessageItem';
 import { ChildSessionsPanel } from './components/ChildSessionsPanel';
 import type { ChildSessionView } from '../../src/sessions/view';
 import { EngineScope, NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
+import { MAX_MODEL_FAVORITES, modelFavoriteKey } from '../../src/modelPicker';
 import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
 import { DownloadsPanel } from './components/DownloadsPanel';
@@ -29,7 +31,7 @@ import { NewTabPanel } from './components/NewTabPanel';
 import { ActivityPanel } from './components/ActivityPanel';
 import type { AgentProfileView, ReviewChange } from './types';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { X, BookOpen, WifiOff, ChevronDown, CornerDownRight, Link, ListChecks } from 'lucide-react';
+import { X, BookOpen, WifiOff, ChevronDown, Link, ListChecks } from 'lucide-react';
 import { getWebviewState, patchWebviewState, postMessage } from './vscode';
 import { composerDraftKey, promoteComposerDraft } from './composerDrafts';
 import type {
@@ -47,6 +49,7 @@ import type {
     McpServerPayload,
     McpServerView,
     ModelCapability,
+    ModelFavorite,
     ModelPingState,
     NotificationItem,
     OpenDiffEdit,
@@ -119,6 +122,7 @@ export function App() {
     const nativeRequest = useRef<string | null>(null);
     const [engineState, setEngineState] = useState<EngineSetupState | null>(null);
     const settingsEngine = settingsEngineOverride ?? engineState?.active ?? 'xratu';
+    const pageEngine = screen === 'credentials' ? engineState?.active ?? 'xratu' : settingsEngine;
     const [chat, dispatch] = useReducer(reduceChat, undefined, createInitialChatState);
     /** Host-echoed current task list (user edits merged; null = none). The
      *  interactive checklist shows this over the newest update_task_list
@@ -174,6 +178,7 @@ export function App() {
     const [workspaceKind, setWorkspaceKind] = useState<'empty' | 'bare' | 'project'>('project');
     const [showJump, setShowJump] = useState(false);
     const [modelInfo, setModelInfo] = useState<{
+        credentialId?: string | null;
         defaultModel: string;
         models: string[];
         displayNames: Record<string, string>;
@@ -181,6 +186,12 @@ export function App() {
         capabilities: Record<string, ModelCapability>;
     } | null>(null);
     const [selectedModel, setSelectedModel] = useState<string | null>(null);
+    const [modelFavorites, setModelFavorites] = useState<ModelFavorite[]>([]);
+    const [providerModels, setProviderModels] = useState<Extract<FromExtensionMessage, { type: 'providerModels' }> | null>(null);
+    const providerModelsRequest = useRef<string | null>(null);
+    const pendingModelSelection = useRef<string | null>(null);
+    const [selectingModel, setSelectingModel] = useState(false);
+    const [modelSelectionError, setModelSelectionError] = useState<string>();
     const [modelPings, setModelPings] = useState<Record<string, ModelPingState>>({});
     // User's explicit per-model context-window overrides (mirrored from the
     // host's persisted map on every modelInfo).
@@ -352,13 +363,13 @@ export function App() {
         return () => { setupRequestId.current = ''; send({ type: 'setupCancel' }); };
     }, [screen, setupPath, setupCredentialId, setupRefresh, send]);
     useEffect(() => {
-        if (!ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
+        if (!ENGINE_CAPABILITIES[pageEngine].nativeConfiguration || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
         const requestId = crypto.randomUUID();
         nativeRequest.current = requestId;
         setNativeState(null);
         send({ type: 'nativeGetState', requestId });
         return () => { nativeRequest.current = null; send({ type: 'nativeCancel' }); };
-    }, [screen, settingsEngine, nativeRefresh, send]);
+    }, [screen, pageEngine, nativeRefresh, send]);
     useEffect(() => {
         if (setupScreenRef.current && previousInstallPhase.current === 'installing' && engineState?.phase === 'ready') setSetupRefresh((value) => value + 1);
         previousInstallPhase.current = engineState?.phase;
@@ -414,16 +425,25 @@ export function App() {
      *  host, with the webview's own attachments (image previews intact). */
     const pendingSteers = useRef(new Map<string, { value: string; attachments: AttachmentMeta[]; rawAttachments: ComposerAttachment[] }>());
     const steerSeq = useRef(0);
-    /** Mirror of the pending map for RENDERING: a compact "queued" chip while
-     *  the steer waits for the current tool call to finish. The ref stays the
-     *  source of truth for the message handler (registered once). */
-    const [queuedSteers, setQueuedSteers] = useState<Array<{ id: string; label: string }>>([]);
-    /** Release a held steer: drop it from the map and the visible chips. */
+    const [queuedSteers, setQueuedSteers] = useState<Array<{ id: string; value: string; attachments: AttachmentMeta[] }>>([]);
+    const [queuedEdit, setQueuedEdit] = useState<{ id: string; value: string; attachments: ComposerAttachment[] } | null>(null);
+    const [dispatchingSteers, setDispatchingSteers] = useState<string[]>([]);
+    const [queuedAction, setQueuedAction] = useState<string | null>(null);
+    const queuedActionRef = useRef<string | null>(null);
+    const updateQueuedSteer = useCallback((id: string, value?: string) => {
+        if (queuedActionRef.current) return;
+        queuedActionRef.current = id;
+        setQueuedAction(id);
+        send({ type: 'updateQueuedSteer', steerId: id, value });
+    }, [send]);
+    /** Release a held steer and its pending controls. */
     const releasePendingSteer = useCallback((id: string) => {
         const entry = pendingSteers.current.get(id);
         if (!entry) return undefined;
         pendingSteers.current.delete(id);
         setQueuedSteers((prev) => prev.filter((s) => s.id !== id));
+        setQueuedEdit(previous => previous?.id === id ? null : previous);
+        setDispatchingSteers(previous => previous.filter(item => item !== id));
         return entry;
     }, []);
 
@@ -813,6 +833,10 @@ export function App() {
                     dispatch(msg);
                     pendingSteers.current.clear();
                     setQueuedSteers([]);
+                    setQueuedEdit(null);
+                    setDispatchingSteers([]);
+                    queuedActionRef.current = null;
+                    setQueuedAction(null);
                     pendingSend.current = null;
                     setAcceptedSend(null);
                     setComposerRestore([]);
@@ -823,6 +847,11 @@ export function App() {
                     setReviewFiles(undefined);
                     setModelInfo(null);
                     setSelectedModel(null);
+                    providerModelsRequest.current = null;
+                    pendingModelSelection.current = null;
+                    setProviderModels(null);
+                    setSelectingModel(false);
+                    setModelSelectionError(undefined);
                     break;
                 case 'showChat':
                     send({type:'childSessionsGet'});
@@ -871,7 +900,15 @@ export function App() {
                         setHostAttachments(null);
                     }
                     const mount = composerDraftKey(msg.workspace ?? '', live);
-                    if (previous.mount !== mount) { pendingSend.current = null; setAcceptedSend(null); }
+                    if (previous.mount !== mount) {
+                        pendingSend.current = null;
+                        setAcceptedSend(null);
+                        providerModelsRequest.current = null;
+                        pendingModelSelection.current = null;
+                        setProviderModels(null);
+                        setSelectingModel(false);
+                        setModelSelectionError(undefined);
+                    }
                     draftIdentity.current = { key, mount, live, id: msg.id };
                     setComposerMountKey(mount);
                     setDraftKey(key);
@@ -935,6 +972,7 @@ export function App() {
                     break;
                 case 'modelInfo':
                     setModelInfo({
+                        credentialId: msg.credentialId,
                         defaultModel: msg.defaultModel,
                         models: msg.models,
                         displayNames: msg.displayNames ?? {},
@@ -948,6 +986,19 @@ export function App() {
                     setNativeVariants(msg.nativeVariants ?? {});
                     setByokHint(false);
                     setByokError(null);
+                    break;
+                case 'providerModels':
+                    if (providerModelsRequest.current === msg.requestId) setProviderModels(msg);
+                    break;
+                case 'providerModelSelection':
+                    if (pendingModelSelection.current === msg.requestId) {
+                        pendingModelSelection.current = null;
+                        setSelectingModel(false);
+                        setModelSelectionError(msg.errorKey);
+                    }
+                    break;
+                case 'modelFavorites':
+                    setModelFavorites(msg.favorites);
                     break;
                 case 'nativeSetupState':
                     if (msg.state.requestId === nativeRequest.current) setNativeState(msg.state);
@@ -1005,10 +1056,31 @@ export function App() {
                 case 'fileList':
                     setWorkspaceFiles(msg.files);
                     break;
+                case 'steerDispatching':
+                    if (pendingSteers.current.has(msg.steerId)) setDispatchingSteers(previous => [...previous, msg.steerId]);
+                    break;
+                case 'steerEditResult': {
+                    if (queuedActionRef.current !== msg.steerId) break;
+                    queuedActionRef.current = null;
+                    setQueuedAction(null);
+                    const pending = pendingSteers.current.get(msg.steerId);
+                    if (msg.accepted && pending && msg.value !== undefined) {
+                        pending.value = msg.value;
+                        setQueuedEdit(previous => previous?.id === msg.steerId ? null : previous);
+                        setQueuedSteers(prev => prev.map(item => item.id === msg.steerId ? { ...item, value: pending.value } : item));
+                    } else if (!msg.accepted) {
+                        setComposerError(prev => ({ id: (prev?.id ?? 0) + 1, value: '', valueKey: 'steerUpdateMissed' }));
+                    }
+                    break;
+                }
                 case 'steerApplied': {
                     // Host injected the steer at a round boundary (or degraded
                     // it to a fresh turn). Only NOW does the bubble render and
-                    // the queued chip clear.
+                    // the queued preview clear.
+                    if (msg.mode === 'drop' && queuedActionRef.current === msg.steerId) {
+                        queuedActionRef.current = null;
+                        setQueuedAction(null);
+                    }
                     const pending = releasePendingSteer(msg.steerId);
                     if (!pending || msg.mode === 'drop') break;
                     dispatch({
@@ -1021,7 +1093,7 @@ export function App() {
                 }
                 case 'composerError':
                     // A steer rejected during validation never reaches the
-                    // queue - drop its held bubble + chip so it cannot render.
+                    // queue - drop its held bubble and preview so it cannot render.
                     if (msg.steerId) {
                         const pending = releasePendingSteer(msg.steerId);
                         if (pending) setComposerRestore(previous => [...previous, { id: msg.steerId!, value: pending.value, attachments: pending.rawAttachments }]);
@@ -1133,6 +1205,7 @@ export function App() {
         };
 
         window.addEventListener('message', handler);
+        send({ type: 'modelFavoritesGet' });
         return () => window.removeEventListener('message', handler);
     }, [send, setSurfaceTab]);
 
@@ -1149,8 +1222,12 @@ export function App() {
 
     const handleSend = useCallback(
         (text: string, attachments: ComposerAttachment[], revision = 0) => {
-            if (pendingSend.current) return false;
+            if (pendingSend.current || pendingModelSelection.current) return false;
             const value = text.trim();
+            if (queuedEdit) {
+                if (pendingSteers.current.has(queuedEdit.id)) updateQueuedSteer(queuedEdit.id, value);
+                return false;
+            }
             // An attachment-only turn is a valid send even with no text -
             // the attachment hint instructs the model.
             if ((!value && attachments.length === 0)) return;
@@ -1163,18 +1240,16 @@ export function App() {
                 send({ type: 'editMessage', requestId, sessionKey, userIndex: editDraft.userIndex, value, attachments });
                 return false;
             }
-            if (chat.busy) {
+            if (chat.busy || queuedSteers.length) {
                 // The agent loop lives in the extension - STEER the live run.
                 // The message is held as PENDING: it joins the conversation
                 // only after the current tool call finishes (the host's next
                 // round boundary) and confirms via `steerApplied`, so the
                 // timeline is not split while the model is still busy.
                 const steerId = `steer-${Date.now()}-${steerSeq.current++}`;
-                pendingSteers.current.set(steerId, { value, attachments: toAttachmentMeta(attachments), rawAttachments: attachments });
-                setQueuedSteers((prev) => [...prev, {
-                    id: steerId,
-                    label: value || attachments.map((a) => a.name).join(', '),
-                }]);
+                const meta = toAttachmentMeta(attachments);
+                pendingSteers.current.set(steerId, { value, attachments: meta, rawAttachments: attachments });
+                setQueuedSteers(prev => [...prev, { id: steerId, value, attachments: meta }]);
                 send({ type: 'steerRun', value, attachments, steerId });
                 return;
             }
@@ -1199,7 +1274,7 @@ export function App() {
             send({ type: 'askQuestion', requestId, sessionKey, value, attachments });
             return false;
         },
-        [chat.busy, send, editDraft]
+        [chat.busy, send, editDraft, queuedEdit, queuedSteers.length, updateQueuedSteer]
     );
 
     const handleCancel = useCallback(() => {
@@ -1389,7 +1464,7 @@ export function App() {
     };
     let overlay: JSX.Element | null = null;
     if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={prefs => { setAppearance(prefs); send({ type: 'appearanceSet', prefs }); }} onTheme={() => send({ type: 'selectColorTheme' })} />;
-    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
+    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active)} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={() => { setCredReturnTo('chat'); setScreen('credentials'); if (engineState?.active !== 'opencode') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
         overlay = <AgentsPage canLaunch={engineState?.active !== 'opencode'} launchReady={Boolean(childSessions?.rootId)} onLaunch={(profile, prompt) => { if (!childSessions?.rootId) return; send({type:'childSessionAction',rootId:childSessions.rootId,sessionId:profile.name,action:'create',text:prompt,receipt:crypto.randomUUID()});setScreen('chat');dock.activate('agents'); }} profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
@@ -1398,7 +1473,7 @@ export function App() {
     const renderCredentials = (embedded?: 'provider' | 'local') => (
                 <CredentialsPage
                     embedded={embedded}
-                    native={!embedded && settingsEngine === 'opencode' ? { state: nativeState, send, refresh: () => setNativeRefresh((value) => value + 1) } : undefined}
+                    native={!embedded && pageEngine === 'opencode' ? { state: nativeState, send, refresh: () => setNativeRefresh((value) => value + 1) } : undefined}
                     key={credNonce}
                     reason={credReason}
                     error={byokError}
@@ -1613,9 +1688,8 @@ export function App() {
     if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
         if (ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
         overlay = <div className="scoped-page">
-            {(screen !== 'capabilities' || capabilityTab !== 'marketplace') && <EngineScope engine={settingsEngine} onChange={engine => {
+            {screen !== 'credentials' && (screen !== 'capabilities' || capabilityTab !== 'marketplace') && <EngineScope engine={settingsEngine} onChange={engine => {
                 setSettingsEngine(engine);
-                if (engine === 'xratu' && screen === 'credentials') send({ type: 'openCredentials' });
             }} />}
             {overlay}
         </div>;
@@ -1870,24 +1944,21 @@ export function App() {
                     </button>
                 </div>
             )}
-            {/* Steers sent while busy wait for the current tool call to end.
-                A compact chip keeps each one visible until the host injects
-                it (then the real user bubble takes over). */}
             {queuedSteers.length > 0 && (
                 <div className="queued-steers" aria-label={t('steerQueued')}>
-                    {queuedSteers.map((s) => (
-                        <span className="queued-steer-chip" key={s.id} title={t('steerQueuedTitle')}>
-                            <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
-                            <span className="queued-steer-label">{t('steerQueued')}</span>
-                            <span className="queued-steer-text" dir="auto">{s.label}</span>
-                            {engineState?.active !== 'opencode' && (
-                                <button type="button" className="queued-steer-now" title={t('steerNowTitle')}
-                                    onMouseDown={event => event.preventDefault()}
-                                    onClick={() => send({ type: 'steerNow', steerId: s.id })}>
-                                    <span>{t('steerNow')}</span>
-                                </button>
-                            )}
-                        </span>
+                    {queuedSteers.map(item => (
+                        <QueuedMessage key={item.id} value={item.value} attachments={item.attachments}
+                            native={engineState?.active === 'opencode'}
+                            active={queuedEdit?.id === item.id}
+                            dispatching={dispatchingSteers.includes(item.id)}
+                            busy={queuedAction !== null || dispatchingSteers.includes(item.id)}
+                            onEdit={() => {
+                                const pending = pendingSteers.current.get(item.id);
+                                if (pending) setQueuedEdit({ id: item.id, value: pending.value, attachments: pending.rawAttachments });
+                            }}
+                            onCancel={() => updateQueuedSteer(item.id)}
+                            onSendNow={() => send({ type: 'steerNow', steerId: item.id })}
+                        />
                     ))}
                 </div>
             )}
@@ -1919,6 +1990,27 @@ export function App() {
                 modelDisplayNames={modelInfo?.displayNames}
                 modelCapabilities={modelInfo?.capabilities}
                 modelPings={modelPings}
+                pickerCredentials={savedCredentials}
+                activePickerCredential={modelInfo?.credentialId === undefined ? savedCredentials.find(item => item.active)?.id ?? null : modelInfo.credentialId}
+                providerModels={providerModels}
+                selectingModel={selectingModel}
+                modelSelectionError={modelSelectionError}
+                modelFavorites={modelFavorites}
+                onBrowseProvider={(credentialId, refresh) => {
+                    const requestId = crypto.randomUUID();
+                    providerModelsRequest.current = requestId;
+                    setProviderModels({ type: 'providerModels', credentialId, requestId });
+                    setModelSelectionError(undefined);
+                    send({ type: 'browseProviderModels', credentialId, requestId, refresh });
+                }}
+                onToggleModelFavorite={(favorite, enabled) => {
+                    const key = modelFavoriteKey(favorite);
+                    setModelFavorites(previous => {
+                        const rest = previous.filter(item => modelFavoriteKey(item) !== key);
+                        return enabled ? [favorite, ...rest].slice(0, MAX_MODEL_FAVORITES) : rest;
+                    });
+                    send({ type: 'modelFavoriteSet', favorite, enabled });
+                }}
                 activeEngine={engineState?.active}
                 engineSwitchDisabled={chat.busy || engineState?.busy}
                 onSelectEngine={engine => send({ type: 'engineSelect', engine })}
@@ -1927,7 +2019,16 @@ export function App() {
                 modelWindows={modelWindowsMerged}
                 selectedModel={selectedModel}
                 modelSelectionRequired={engineState?.active === 'opencode' && !selectedModel && !chat.busy}
-                onSelectModel={(m) => {
+                onSelectModel={(m, credentialId) => {
+                    if (credentialId) {
+                        if (pendingModelSelection.current || pendingSend.current || chat.busy) return;
+                        const requestId = crypto.randomUUID();
+                        pendingModelSelection.current = requestId;
+                        setSelectingModel(true);
+                        setModelSelectionError(undefined);
+                        send({ type: 'selectProviderModel', credentialId, model: m, requestId, sessionKey: draftIdentity.current.live ?? undefined });
+                        return;
+                    }
                     setSelectedModel(m);
                     send({ type: 'selectModel', value: m });
                 }}
@@ -1969,8 +2070,10 @@ export function App() {
                 })}
                 hostError={composerError}
                 onHostErrorApplied={() => setComposerError(null)}
-                editDraft={editDraft}
-                onCancelEdit={() => setEditDraft(null)}
+                editDraft={queuedEdit ?? editDraft}
+                editingQueued={!!queuedEdit}
+                queuedEditPending={queuedAction === queuedEdit?.id}
+                onCancelEdit={() => queuedEdit ? setQueuedEdit(null) : setEditDraft(null)}
                 workspaceFiles={workspaceFiles}
                 onRequestFiles={() => send({ type: 'requestFileList' })}
                 branchPicker={gitPickerOpen && !chat.busy ? (

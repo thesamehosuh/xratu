@@ -161,6 +161,7 @@ test('provider settings scope lists native connections and does not switch the c
     const req = await request(page, 'nativeGetState');
     await post(page, { type: 'nativeSetupState', state: { requestId: req.requestId, phase: 'ready', integrations: [{ id: 'openrouter', name: 'OpenRouter', key: true, oauth: [], connections: [{ label: 'OPENROUTER_API_KEY', source: 'env', needsAuth: false }] }], servers: [], skills: [] } });
     await expect(page.locator('.native-connection')).toContainText('Environment');
+    await expect(page.locator('.native-connections-list .provider-brand-logo')).toBeVisible();
     await page.setViewportSize({ width: 420, height: 800 });
     await post(page, { type: 'locale', locale: 'fa' });
     await page.locator('.toolbar > .sidebar-toggle').click();
@@ -171,7 +172,10 @@ test('provider settings scope lists native connections and does not switch the c
     await expect(page.locator('.native-providers .compact-dialog')).toBeVisible();
     await expect(page.locator('#native-provider')).toBeFocused();
     await page.locator('#native-provider').click();
-    await page.getByRole('option', { name: 'OpenRouter', exact: true }).click();
+    const providerOption = page.getByRole('option', { name: 'OpenRouter', exact: true });
+    await expect(providerOption.locator('.provider-brand-logo')).toBeVisible();
+    await providerOption.click();
+    await expect(page.locator('#native-provider .provider-brand-logo')).toBeVisible();
     await page.locator('#native-key').fill('test-only-key');
     await page.locator('.native-provider-form .primary-btn').click();
     expect(await messages(page)).toContainEqual({ type: 'nativeConnect', requestId: req.requestId, integrationID: 'openrouter', key: 'test-only-key' });

@@ -8,6 +8,7 @@ export interface SetupModel {
     id: string;
     name: string;
     provider: string;
+    providerId?: string;
     free?: boolean;
     tools?: boolean;
     availability?: ModelAvailability;
@@ -22,6 +23,7 @@ export interface RuntimeSetupState {
     phase: 'checking' | 'install' | 'workspace' | 'offline' | 'connect' | 'model' | 'ready' | 'attention';
     credentialId?: string;
     providerName?: string;
+    providerId?: string;
     models: SetupModel[];
     errorKey?: string;
     detail?: string;
