@@ -38,7 +38,7 @@ import { join } from 'node:path';
 const OUT = join(__dirname, 'screenshots');
 
 test.beforeEach(async ({ page }) => {
-    mkdirSync(OUT, { recursive: true });
+    if (process.env.XRATU_SCREENSHOTS) mkdirSync(OUT, { recursive: true });
     await page.addInitScript(() => {
         const sent: unknown[] = [];
         (window as Record<string, unknown>).__xratuHostMessages = sent;
@@ -501,168 +501,50 @@ test.describe('theme contract', () => {
     // UTC must not disagree about what is on screen.
     test.use({ timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce' });
 
-    for (const { name, drive } of SCREENS) {
-        for (const locale of LOCALES) {
-            for (const [widthLabel, width] of WIDTHS) {
-                test(`${name} ${locale} ${widthLabel}`, async ({ page }) => {
-                    await freezeClock(page);
-                    // The standalone page has NO VS Code theme, so the real
-                    // tokens go in FIRST - and before goto, or every surface
-                    // renders transparent while still looking plausible.
-                    await installVscodeTheme(page);
-                    await page.setViewportSize({ width, height: BASELINE_HEIGHT });
-                    await page.goto('/');
+    for (const locale of LOCALES) {
+        for (const [widthLabel, width] of WIDTHS) {
+            test(`all 8 screens obey theme tokens, root direction, and viewport width (${locale} ${widthLabel})`, async ({ page }) => {
+                await freezeClock(page);
+                await installVscodeTheme(page);
+                await page.setViewportSize({ width, height: BASELINE_HEIGHT });
+                await page.goto('/');
+                await freezeFonts(page);
+
+                for (const [token, expected] of BRAND_TOKENS) {
+                    const actual = await page.evaluate(
+                        (t) => getComputedStyle(document.documentElement).getPropertyValue(t).trim(),
+                        token,
+                    );
+                    expect(actual, `document token ${token}`).toBe(expected);
+                }
+
+                for (const { name, drive } of SCREENS) {
+                    const backToWork = page.locator('.toolbar-back-work');
+                    if (await backToWork.isVisible()) await backToWork.click();
+                    const conversation = page.locator('.surface-tabs').getByRole('tab', {
+                        name: locale === 'fa' ? 'گفتگو' : 'Conversation', exact: true,
+                    });
+                    if (await conversation.isVisible()) await conversation.click();
+                    await host(page, { type: 'resetConversation' });
                     const subject = await drive(page, locale);
                     await expect(subject).toBeVisible();
-                    await freezeFonts(page);
-                    if (process.env.XRATU_SCREENSHOTS) await page.screenshot({ path: join(OUT, `page-${name}-${locale}-${widthLabel}.png`) });
+                    if (process.env.XRATU_SCREENSHOTS) {
+                        await page.screenshot({ path: join(OUT, `page-${name}-${locale}-${widthLabel}.png`) });
+                    }
 
-                    // R3: direction is locale-driven on the root, never
-                    // hardcoded on an inner component.
-                    await expect(page.locator('.app'), 'root direction follows the locale')
+                    // R3: direction is locale-driven on the root, never hardcoded on an inner component.
+                    await expect(page.locator('.app'), `${name}: root direction follows locale`)
                         .toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
 
-                    for (const [token, expected] of BRAND_TOKENS) {
-                        const actual = await page.evaluate(
-                            (t) => getComputedStyle(document.documentElement).getPropertyValue(t).trim(),
-                            token,
-                        );
-                        expect(actual, `document token ${token}`).toBe(expected);
-                    }
-
-                    // Layout: the subject must fit its viewport horizontally.
-                    // Pixel-independent, and the classic sidebar-width
-                    // regression (a 900px-fixed panel breaking at 420px).
                     const box = await subject.boundingBox();
-                    expect(box, 'the subject has a box').toBeTruthy();
+                    expect(box, `${name}: subject has a bounding box`).toBeTruthy();
                     if (box) {
-                        expect(box.x, `${name} starts inside the viewport`).toBeGreaterThanOrEqual(-1);
-                        expect(box.x + box.width, `${name} ends inside the viewport`)
+                        expect(box.x, `${name} starts inside viewport`).toBeGreaterThanOrEqual(-1);
+                        expect(box.x + box.width, `${name} ends inside viewport`)
                             .toBeLessThanOrEqual(width + 1);
                     }
-                });
-            }
+                }
+            });
         }
     }
 });
-
-/* ===========================================================================
- * Manual review harness (opt-in, never a CI gate)
- * ========================================================================= */
-
-test.describe('background process UI', () => {
-    test.skip(!process.env.XRATU_SCREENSHOTS, 'set XRATU_SCREENSHOTS=1 to write review PNGs (npm run build:webview first)');
-
-    const JOBS = [
-        { jobId: 'job-1', command: 'npm run dev', running: true, uptimeSeconds: 142 },
-        { jobId: 'job-2', command: 'npx tailwindcss --watch', running: true, uptimeSeconds: 37 },
-    ];
-    
-    /** The shape that used to break the strip: a whole shell loop on one line.
-     *  Chips sized themselves to this and pushed the strip past the panel edge, so
-     *  every width/locale combination screenshots it. */
-    const LONG_JOB = {
-        jobId: 'job-3',
-        command: 'for i in $(seq 1 15); do echo "tick $i at $(date +%H:%M:%S)"; sleep 2; done; echo "job finished cleanly"',
-        running: true,
-        uptimeSeconds: 4210,
-    };
-    
-    
-    /** Tasks do not steal focus - open their tab before shooting the rows. */
-    async function openDock(page: Page): Promise<void> {
-        await page.locator('#surface-tab-background').click();
-        await page.locator('.bg-job').first().waitFor();
-    }
-    
-    for (const locale of ['fa', 'en'] as const) {
-        for (const [label, width] of [['sidebar', 420], ['wide', 900]] as const) {
-            test(`${locale} ${label}: running command with the background button`, async ({ page }) => {
-                await page.setViewportSize({ width, height: 900 });
-                // The standalone page has NO VS Code theme; without the real
-                // tokens every surface renders transparent and the screenshots
-                // look plausible while proving nothing.
-                await installVscodeTheme(page);
-                await page.goto('/');
-                await host(page, { type: 'locale', locale });
-                await host(page, { type: 'showChat' });
-                await host(page, { type: 'startResponse' });
-                await host(page, { type: 'toolOutput', callId: 'call-1', value: '> vite v5.4.0\n> Local: http://localhost:5173/\n' });
-                await host(page, {
-                    type: 'toolCall',
-                    tool: 'run_terminal_command',
-                    args: JSON.stringify({ command: 'npm run dev' }),
-                    callId: 'call-1',
-                });
-                await page.locator('.step.running').waitFor();
-                await host(page, { type: 'backgroundJobs', jobs: [JOBS[0]!] });
-                await page.locator('.bg-jobs').waitFor();
-                // Folded is the resting state a reviewer must see first.
-                await page.screenshot({ path: join(OUT, `bg-folded-${locale}-${label}.png`) });
-                await openDock(page);
-                await page.screenshot({ path: join(OUT, `bg-running-${locale}-${label}.png`) });
-            });
-    
-            test(`${locale} ${label}: backgrounded row with the stop control`, async ({ page }) => {
-                await page.setViewportSize({ width, height: 900 });
-                // The standalone page has NO VS Code theme; without the real
-                // tokens every surface renders transparent and the screenshots
-                // look plausible while proving nothing.
-                await installVscodeTheme(page);
-                await page.goto('/');
-                await host(page, { type: 'locale', locale });
-                await host(page, { type: 'showChat' });
-                await host(page, { type: 'startResponse' });
-                await host(page, { type: 'toolOutput', callId: 'call-1', value: '> vite v5.4.0\n> Local: http://localhost:5173/\n' });
-                await host(page, {
-                    type: 'toolCall',
-                    tool: 'run_terminal_command',
-                    args: JSON.stringify({ command: 'npm run dev' }),
-                    callId: 'call-1',
-                });
-                await page.locator('.step.running').waitFor();
-                await host(page, { type: 'terminalBackgrounded', callId: 'call-1', jobId: 'job-1', byUser: true });
-                await host(page, { type: 'backgroundJobs', jobs: JOBS });
-                await openDock(page);
-                await page.locator('.bg-job').nth(1).hover();
-                await page.screenshot({ path: join(OUT, `bg-stop-${locale}-${label}.png`) });
-            });
-    
-            test(`${locale} ${label}: long commands truncate inside the card`, async ({ page }) => {
-                await page.setViewportSize({ width, height: 900 });
-                await installVscodeTheme(page);
-                await page.goto('/');
-                await host(page, { type: 'locale', locale });
-                await host(page, { type: 'showChat' });
-                await host(page, { type: 'backgroundJobs', jobs: [LONG_JOB] });
-                await page.locator('.bg-jobs').waitFor();
-                await page.screenshot({ path: join(OUT, `bg-long-folded-${locale}-${label}.png`) });
-                await host(page, { type: 'backgroundJobs', jobs: [LONG_JOB, ...JOBS] });
-                await openDock(page);
-                await page.locator('.bg-job').nth(2).hover();
-                await page.screenshot({ path: join(OUT, `bg-long-${locale}-${label}.png`) });
-            });
-    
-            test(`${locale} ${label}: the process tool managing both jobs`, async ({ page }) => {
-                await page.setViewportSize({ width, height: 900 });
-                // The standalone page has NO VS Code theme; without the real
-                // tokens every surface renders transparent and the screenshots
-                // look plausible while proving nothing.
-                await installVscodeTheme(page);
-                await page.goto('/');
-                await host(page, { type: 'locale', locale });
-                await host(page, { type: 'showChat' });
-                await host(page, { type: 'startResponse' });
-                await host(page, { type: 'toolCall', tool: 'process', args: JSON.stringify({ action: 'list' }), callId: 'call-2' });
-                await host(page, {
-                    type: 'toolResult',
-                    tool: 'process',
-                    output: '2 job(s), 1 still running:\n\njob-1  background  running 142s (pid 4417)\n  $ npm run dev\njob-2  background  exited with code 0\n  $ npm run build',
-                    callId: 'call-2',
-                });
-                await host(page, { type: 'backgroundJobs', jobs: [JOBS[0]!] });
-                await page.locator('.step').first().waitFor();
-                await page.screenshot({ path: join(OUT, `bg-process-${locale}-${label}.png`) });
-            });
-        }
-    }});

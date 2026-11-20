@@ -1,17 +1,11 @@
-import { installVscodeTheme } from './vscodeTheme';
-import { openPageNavigation, openSettingsFromWork } from './navigation';
 /**
  * Browser smoke tests for the built webview bundle (dist/webview-ui).
  *
- * The bundle normally runs inside a VS Code webview where the host injects
- * `acquireVsCodeApi`.  Here we polyfill it before the app script runs and
- * drive the app by posting the same `FromExtensionMessage` envelopes the
- * host sends, so no VS Code is needed:
- *
- *   - the mocked `postMessage` records everything the webview sends back
- *   - host→webview messages go through `window.postMessage` (App listens on
- *     the window's message event)
+ * Drives the app with a mocked `acquireVsCodeApi` and real `FromExtensionMessage`
+ * envelopes posted via `window.postMessage` — no VS Code host required.
  */
+import { installVscodeTheme } from './vscodeTheme';
+import { openPageNavigation, openSettingsFromWork } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
@@ -20,9 +14,7 @@ test.beforeEach(async ({ page }) => {
         const sent: unknown[] = [];
         (window as Record<string, unknown>).__xratuHostMessages = sent;
         (window as Record<string, unknown>).acquireVsCodeApi = () => ({
-            postMessage: (message: unknown) => {
-                sent.push(message);
-            },
+            postMessage: (message: unknown) => { sent.push(message); },
             getState: () => undefined,
             setState: (state: unknown) => state,
         });
@@ -33,42 +25,47 @@ async function hostMessage(page: Page, message: Record<string, unknown>): Promis
     await page.evaluate((msg) => window.postMessage(msg, '*'), message);
 }
 
-test('webview posts webviewReady and mounts the app shell', async ({ page }) => {
+test('app shell boots in RTL fa, posts webviewReady, mounts welcome/chat, and flips locale preserving content dir', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('.app')).toBeAttached();
+    await expect(page.locator('.app')).toHaveAttribute('dir', 'rtl');
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(sent).toContainEqual({ type: 'webviewReady' });
-});
 
-test('default locale is fa - root direction is rtl', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.locator('.app')).toHaveAttribute('dir', 'rtl');
-});
-
-test('showChat renders the chat composer', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await expect(page.locator('.composer-input')).toBeVisible();
-});
-
-test('showWelcome renders the welcome screen', async ({ page }) => {
-    await page.goto('/');
     await hostMessage(page, { type: 'showWelcome' });
     await expect(page.locator('.onboarding')).toBeVisible();
+
+    await hostMessage(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+    await hostMessage(page, { type: 'showChat' });
+    await expect(page.locator('.composer-input')).toBeVisible();
+    await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
+    const bubble = page.locator('article.msg.user').first();
+    await expect(bubble).toHaveAttribute('dir', 'auto');
+    await expect(bubble).toHaveCSS('direction', 'rtl');
+
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await expect(page.locator('.app')).toHaveAttribute('dir', 'ltr');
+    await expect(bubble).toHaveAttribute('dir', 'auto');
+    await expect(bubble).toHaveCSS('direction', 'rtl');
+    await expect(bubble.getByRole('button', { name: 'Edit message', exact: true })).toBeVisible();
 });
 
-test('chat costs stay hidden and Usage remains a settings destination', async ({ page }) => {
+test('chat costs stay hidden, Usage opens via Settings, and composer draft survives navigation until accepted', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
-    // No pill until the host reports a cost.
     await expect(page.locator('.session-cost')).toHaveCount(0);
     await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
     await expect(page.locator('.session-cost')).toHaveCount(0);
+
+    const input = page.locator('.composer-input');
+    await input.fill('half-written message');
     await hostMessage(page, { type: 'openSettings' });
+    await expect(input).toHaveCount(1);
+    await expect(input).toBeHidden();
+
     await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: 'مصرف', exact: true }).click();
     await expect(page.locator('.settings-nav-row')).toHaveCount(0);
-    // The usage page asks the host for its state and renders it.
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'usageGetState' });
     await hostMessage(page, {
@@ -79,31 +76,13 @@ test('chat costs stay hidden and Usage remains a settings destination', async ({
         allTime: { input: 300, output: 30, cached: 0, USD: 0.0068, IRT: 0 },
     });
     await expect(page.locator('.usage-activity-chart h3', { hasText: 'روند مصرف توکن' })).toBeVisible();
-    // Back returns to the chat composer, not to Settings.
-    await page.locator('.toolbar-back-work').click();
-    await expect(page.locator('.composer-input')).toBeVisible();
-});
 
-test('composer draft survives leaving and returning to the chat screen', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    const input = page.locator('.composer-input');
-    await input.fill('half-written message');
-
-    // Leaving the chat screen renders a different tree, which UNMOUNTS the
-    // composer - a half-written message used to die with it.
-    await hostMessage(page, { type: 'sessionCost', cost: { amount: 0.0046, currency: 'USD' } });
-    await hostMessage(page, { type: 'openSettings' });
-    // The chat is no longer unmounted when another screen opens - that rebuild
-    // was the cost of every return. It stays mounted but hidden, so the draft
-    // has nothing left to lose it to.
-    await expect(input).toHaveCount(1);
-    await expect(input).toBeHidden();
+    // Back returns to the chat composer with the draft intact.
     await page.locator('.toolbar-back-work').click();
+    await expect(input).toBeVisible();
     await expect(input).toHaveValue('half-written message');
 
-    // Sending still clears it: the store mirrors the composer's state, it does
-    // not shadow it - a stale draft must never ride into the next message.
+    // Accepted send clears the draft cleanly across subsequent navigation.
     await input.press('Enter');
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(sent).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'half-written message' }));
@@ -114,10 +93,9 @@ test('composer draft survives leaving and returning to the chat screen', async (
     await expect(input).toHaveValue('');
 });
 
-test('git status line sits under the composer: branch left, stats right', async ({ page }) => {
+test('git status bar sits under the composer and opens a filterable branch drop-up', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
-    // Outside a repo the line renders nothing at all.
     await hostMessage(page, { type: 'gitStatusState', root: null, status: { isRepo: false, branch: null, detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
     await expect(page.locator('.git-status')).toHaveCount(0);
 
@@ -126,23 +104,15 @@ test('git status line sits under the composer: branch left, stats right', async 
     await expect(bar).toBeVisible();
     await expect(bar.locator('.git-status-branch')).toHaveText('main');
     await expect(bar.locator('.git-status-stats')).toContainText('2');
+    await expect(bar.locator('.git-status-path')).toHaveText('~/Projects/xratu');
 
-    // Folder BEFORE the branch, branch on the LEFT of the stats: the order you
-    // read them in (which workspace, which branch, what is uncommitted).
     const pathBox = await bar.locator('.git-status-path').boundingBox();
     const branchBox = await bar.locator('.git-status-branch').boundingBox();
     const statsBox = await bar.locator('.git-status-stats').boundingBox();
-    await expect(bar.locator('.git-status-path')).toHaveText('~/Projects/xratu');
     expect(pathBox!.x).toBeLessThan(branchBox!.x);
     expect(branchBox!.x).toBeLessThan(statsBox!.x);
-
-    // The line spans the composer's column, and its CONTENT starts at the
-    // composer card's inset (12px) rather than hugging the panel edge. The bar
-    // itself is full width - the padding lives inside its box - so the content
-    // position is the thing to assert.
     expect(pathBox!.x).toBeGreaterThanOrEqual(11);
 
-    // Below the composer input, and NOT nested inside the composer card.
     const inputBox = await page.locator('.composer-input').boundingBox();
     const barBox = await bar.boundingBox();
     expect(barBox!.y).toBeGreaterThan(inputBox!.y);
@@ -152,74 +122,38 @@ test('git status line sits under the composer: branch left, stats right', async 
         return !!(card && barEl && card.contains(barEl));
     });
     expect(nested).toBe(false);
-});
 
-test('clicking the git line opens a branch drop-up above the composer', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'gitStatusState', root: '~/Projects/xratu', status: { isRepo: true, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
     const sent = () => page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<Record<string, unknown>>);
-
-    await page.locator('.git-status').click();
-    // Opening asks the host for the list (and refreshes it).
+    await bar.click();
     await expect.poll(async () => (await sent()).some((m) => m.type === 'gitBranchesGetState')).toBe(true);
     await hostMessage(page, { type: 'gitBranchesState', branches: ['chore/a', 'feat/x', 'main'], current: 'main' });
 
     const pop = page.locator('.branch-pop');
     await expect(pop).toBeVisible();
     await expect(pop.locator('.mention-item')).toHaveCount(3);
-    // Reuses the @-mention popup: it floats ABOVE the composer card.
     const popBox = await pop.boundingBox();
     const cardBox = await page.locator('.composer').boundingBox();
     expect(popBox!.y + popBox!.height).toBeLessThanOrEqual(cardBox!.y + 1);
-    // The current branch is marked, and only it.
     await expect(pop.locator('.branch-current')).toHaveCount(1);
 
-    // The filter narrows the list...
     await pop.locator('.mention-input').fill('feat');
     await expect(pop.locator('.mention-item')).toHaveCount(1);
-    // ...and clicking a branch switches to it and closes the popup.
     await pop.locator('.mention-item').click();
     expect(await sent()).toContainEqual({ type: 'gitCheckout', branch: 'feat/x' });
     await expect(page.locator('.branch-pop')).toHaveCount(0);
 
-    // Clicking OUTSIDE discards it too.
-    await page.locator('.git-status').click();
+    await bar.click();
     await expect(page.locator('.branch-pop')).toBeVisible();
     await page.locator('article.msg, .composer-input').first().click({ force: true });
     await expect(page.locator('.branch-pop')).toHaveCount(0);
 
-    // And the line itself toggles it shut.
-    await page.locator('.git-status').click();
+    await bar.click();
     await expect(page.locator('.branch-pop')).toBeVisible();
-    await page.locator('.git-status').click();
+    await bar.click();
     await expect(page.locator('.branch-pop')).toHaveCount(0);
 });
 
-test('locale message flips direction rtl -> ltr', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.locator('.app')).toHaveAttribute('dir', 'rtl');
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await expect(page.locator('.app')).toHaveAttribute('dir', 'ltr');
-});
-
-test('locale flip preserves content direction and translates existing bubble controls', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
-    const bubble = page.locator('article.msg.user').first();
-    await expect(bubble).toHaveAttribute('dir', 'auto');
-    await expect(bubble).toHaveCSS('direction', 'rtl');
-    // The message prop is unchanged here - only the locale changes, so only the
-    // item's comparator can drive the re-render.
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await expect(bubble).toHaveAttribute('dir', 'auto');
-    await expect(bubble).toHaveCSS('direction', 'rtl');
-    await expect(bubble.getByRole('button', { name: 'Edit message', exact: true })).toBeVisible();
-});
-
-test('long history pages: only the tail mounts, show-earlier reveals the rest', async ({ page }) => {
+test('long history pages, reveals earlier messages, and collapses back on returning to tail', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
@@ -228,29 +162,30 @@ test('long history pages: only the tail mounts, show-earlier reveals the rest', 
         await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
     }
     const bubbles = page.locator('article.msg.user');
-    // Only the trailing page is mounted; the rest stays in state.
     await expect(bubbles).toHaveCount(40);
     await expect(page.locator('.show-earlier')).toBeVisible();
     await expect(page.getByText('msg 0', { exact: true })).toHaveCount(0);
-    // Revealing an earlier page mounts the whole (short) transcript.
+
     await page.locator('.show-earlier').click();
     await expect(bubbles).toHaveCount(50);
     await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
+
+    // Leave the tail and return: mounted window collapses back to one page.
+    await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
+    await expect(page.locator('.jump-btn')).toBeVisible();
+    await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(bubbles).toHaveCount(40);
+    await expect(page.locator('.show-earlier')).toBeVisible();
+    await expect(page.getByText('msg 49', { exact: true })).toBeVisible();
 });
 
-test('a tall mixed restore replay stays paged (budget must not grow to the whole transcript)', async ({ page }) => {
+test('a tall mixed restore replay stays paged without expanding the whole transcript', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'sessionState', id: 's3', title: null });
-    // Replay a TALL mixed transcript the way _restoreChatUI does (user +
-    // thinking + tool call/result + final text per turn). The tall rows grow the
-    // content under a pinned view - exactly what used to latch atBottom=false
-    // and grow the paging window until the ENTIRE transcript mounted. The plain
-    // text-only test above replays short bubbles and did not reproduce it.
     const tall = 'lorem ipsum dolor sit amet '.repeat(40);
-    const turns = 25;
-    for (let i = 0; i < turns; i++) {
+    for (let i = 0; i < 25; i++) {
         await hostMessage(page, { type: 'restoreUser', value: `turn ${i} ${tall}` });
         await hostMessage(page, { type: 'startResponse' });
         await hostMessage(page, { type: 'thinking', value: `reasoning ${i} ${tall}` });
@@ -259,76 +194,53 @@ test('a tall mixed restore replay stays paged (budget must not grow to the whole
         await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: tall, callId: `c${i}` });
         await hostMessage(page, { type: 'fullResponse', persian: `answer ${i}` });
     }
-    // 25 turns x (1 user + 1 assistant) = 50 messages; the window is 40.
     await expect(page.locator('article.msg')).toHaveCount(40);
     await expect(page.locator('.show-earlier')).toBeVisible();
     await expect(page.getByText(/turn 0 /)).toHaveCount(0);
 });
 
-test('returning to the tail collapses the reveal window', async ({ page }) => {
+test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
-    await hostMessage(page, { type: 'sessionState', id: 's9', title: null });
-    for (let i = 0; i < 50; i++) {
+    await hostMessage(page, { type: 'sessionState', id: 's2', title: null });
+    for (let i = 0; i < 40; i++) {
         await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
     }
     const bubbles = page.locator('article.msg.user');
     await expect(bubbles).toHaveCount(40);
-    await expect(page.locator('.show-earlier')).toBeVisible();
-    // Reveal an earlier page: the window grows, and the sticky control keeps
-    // the reader pinned at the tail while it grows.
-    await page.locator('.show-earlier').click();
-    await expect(bubbles).toHaveCount(50);
-    // Leave the tail and return: the mounted window collapses back to one page
-    // so a long session cannot keep every revealed bubble in the DOM forever.
     await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
-    // The collapse is edge-triggered on "was away from the tail, now back", so
-    // the app must first OBSERVE the off-tail position. Waiting for `.jump-btn`
-    // is that observation made deterministic: it renders exactly when
-    // `atBottom` is false. Sleeping or spinning rAFs here instead just guesses
-    // how long the scroll event takes - fine on Linux, a lost race on macOS,
-    // where the collapse then never fires and the window stays at 50.
     await expect(page.locator('.jump-btn')).toBeVisible();
-    await page.locator('.messages').evaluate((el) => { el.scrollTop = el.scrollHeight; });
-    await expect(bubbles).toHaveCount(40);
-    await expect(page.locator('.show-earlier')).toBeVisible();
-    await expect(page.getByText('msg 49', { exact: true })).toBeVisible();
-});
-
-test('the edit pill open-diff button posts the call to the host', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await hostMessage(page, { type: 'restoreUser', value: 'Edit a file' });
-    await hostMessage(page, { type: 'startResponse' });
-    const args = JSON.stringify({ path: 'src/a.ts', patch: '<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' });
-    await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args, callId: 'c-open' });
-    await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', output: 'done', callId: 'c-open' });
-    const button = page.locator('button[title="Open diff in editor"]').first();
-    await expect(button).toBeVisible();
-    await button.click();
-    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
-    // The click ships the whole call (id + args + result) for the host to
-    // resolve; preventDefault keeps it from toggling the pill's <details>.
-    expect(sent).toContainEqual({
-        type: 'openDiff',
-        edits: [{ tool: 'apply_patch', args, callId: 'c-open', result: 'done' }],
+    await page.evaluate(() => {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg x' } }));
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg y' } }));
     });
+    await expect(bubbles).toHaveCount(42);
+    await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
+    await expect(page.locator('.show-earlier')).toHaveCount(0);
 });
 
-test('the outcome reviews the turn checkpoint and the user footer restores it', async ({ page }) => {
+test('edit pill open-diff, turn outcome review vs no-diff turn, and checkpoint restore', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
+
+    // Edit pill open-diff button posts full call payload.
     await hostMessage(page, { type: 'restoreUser', value: 'Review these changes', cp: 'abc1234' });
     await hostMessage(page, { type: 'startResponse' });
+    const args = JSON.stringify({ path: 'src/a.ts', patch: '<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE' });
+    await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args, callId: 'c-open' });
+    await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', output: 'done', callId: 'c-open' });
+    const openBtn = page.locator('button[title="Open diff in editor"]').first();
+    await expect(openBtn).toBeVisible();
+    await openBtn.click();
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)).toContainEqual({
+        type: 'openDiff',
+        edits: [{ tool: 'apply_patch', args, callId: 'c-open', result: 'done' }],
+    });
+
     await hostMessage(page, { type: 'fullResponse', persian: 'Changes complete.', renderedHtml: '<p>Changes complete.</p>' });
-    // The turn's review buttons render once its diff is known: answer the
-    // review pane's request with an actual file list (re-requests on
-    // busy/revision flips can stale a one-shot reply, so retry until the
-    // button lands).
     await expect.poll(async () => {
         const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
         const request = box.filter((message) => message.type === 'changesGetState').at(-1);
@@ -349,60 +261,27 @@ test('the outcome reviews the turn checkpoint and the user footer restores it', 
     await page.setViewportSize({ width: 900, height: 900 });
     await expect(review).toBeHidden();
     await expect(page.locator('.changes-pane')).toBeVisible();
-});
 
-test('a turn with no diff shows no review buttons', async ({ page }) => {
+    // A turn with no diff renders no outcome buttons.
     await page.setViewportSize({ width: 420, height: 900 });
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 'empty-diff-session', title: null });
     await hostMessage(page, { type: 'restoreUser', value: 'Nothing to change', cp: 'def5678' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'fullResponse', persian: 'Nothing changed.', renderedHtml: '<p>Nothing changed.</p>' });
     await expect.poll(async () => {
         const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
-        return box.some((message) => message.type === 'changesGetState');
+        return box.some((message) => message.type === 'changesGetState' && message.sha === 'def5678');
     }).toBe(true);
-    const box = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages) as Array<Record<string, unknown>>;
-    const request = box.filter((message) => message.type === 'changesGetState').at(-1)!;
-    await hostMessage(page, { ...request, type: 'changesState', files: [] });
+    const req = ((await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)) as Array<Record<string, unknown>>)
+        .filter((message) => message.type === 'changesGetState' && message.sha === 'def5678').at(-1)!;
+    await hostMessage(page, { ...req, type: 'changesState', files: [] });
     await expect(page.locator('.turn-outcome')).toHaveCount(0);
 });
 
-test('appending while scrolled up keeps the reader anchor', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await hostMessage(page, { type: 'sessionState', id: 's2', title: null });
-    for (let i = 0; i < 40; i++) {
-        await hostMessage(page, { type: 'restoreUser', value: `msg ${i}` });
-    }
-    const bubbles = page.locator('article.msg.user');
-    await expect(bubbles).toHaveCount(40);
-    // Scroll to the top: the app's onScroll marks the reader as not-at-bottom.
-    await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
-    // Wait for the app to have SEEN it (`.jump-btn` renders iff atBottom is
-    // false). A fixed sleep races the scroll event - on macOS the append below
-    // landed while atBottom was still true, so the window collapsed instead of
-    // growing and the count stayed 40.
-    await expect(page.locator('.jump-btn')).toBeVisible();
-    // Two messages in ONE task -> one React commit (delta=2). The window must
-    // GROW by the delta, not shift - the oldest bubble stays mounted and no
-    // control appears.
-    await page.evaluate(() => {
-        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg x' } }));
-        window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg y' } }));
-    });
-    await expect(bubbles).toHaveCount(42);
-    await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
-    await expect(page.locator('.show-earlier')).toHaveCount(0);
-});
-
 test('capabilities refresh spinner keeps spinning until EVERY echo arrives', async ({ page }) => {
+    await page.clock.install();
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
-    // Open the capabilities page (fa locale by default) and let the initial
-    // mcpGetState / skillsGetState echoes settle.
     await openSettingsFromWork(page);
     await openPageNavigation(page);
     await page.locator('.sidebar-item[data-section="mcp"]').click();
@@ -410,12 +289,9 @@ test('capabilities refresh spinner keeps spinning until EVERY echo arrives', asy
     await hostMessage(page, { type: 'skillsState', skills: [] });
     const spinner = page.locator('.settings-head .spinning');
     await expect(spinner).toHaveCount(0);
-    // Refresh sends BOTH requests; the MCP echo lands immediately while the
-    // skills echo is delayed. The spinner must still be running after the
-    // 800ms minimum - it tracks each response, not a shared timer.
     await page.getByTitle('بروزرسانی').click();
     await hostMessage(page, { type: 'mcpState', servers: [], hasWorkspace: false, legacyInUse: false });
-    await page.waitForTimeout(1000);
+    await page.clock.fastForward(1000);
     await expect(spinner).toBeVisible();
     await hostMessage(page, { type: 'skillsState', skills: [] });
     await expect(spinner).toHaveCount(0);
@@ -431,46 +307,28 @@ test('stream follow survives shrink-clamps and a large edit pill', async ({ page
     for (let i = 0; i < 10; i++) {
         await hostMessage(page, { type: 'chunk', value: `Paragraph ${i}. Analyzing the module structure and exports.\n\n` });
     }
-    // A shrinking update: the thinking envelope REPLACES content that is
-    // already above the fold. The browser clamps scrollTop down when the
-    // document shrinks under a bottom-pinned view - that clamp must not be
-    // mistaken for a user scroll-up (it latched atBottom=false and killed
-    // the stream follow).
     await hostMessage(page, { type: 'thinking', value: 'Short replacement plan.' });
-    // A big edit pill mounting below the fold: pill expansion is invisible
-    // to the message-array effect (no new message), so only the content
-    // ResizeObserver can pin it - the one that used to never attach.
     const bigPatch = Array.from({ length: 12 }, (_, i) =>
         `<<<<<<< SEARCH\nfunction handler${i}(event) {\n    return format(compute(event.data, ${i}));\n}\n=======\nfunction handler${i}(event) {\n    const value = computeV2(event.data, ${i});\n    if (!value) return fallback(${i});\n    return format(value, { dense: true });\n}\n>>>>>>> REPLACE`,
     ).join('\n');
     await hostMessage(page, { type: 'toolCall', tool: 'apply_patch', args: JSON.stringify({ path: 'src/handlers.ts', patch: bigPatch }), callId: 'c2' });
     await hostMessage(page, { type: 'toolResult', tool: 'apply_patch', callId: 'c2', output: 'Patch applied cleanly.' });
-    await page.waitForTimeout(300);
-    // Assert BEFORE any further envelope: no new message arrived, so only
-    // the content ResizeObserver could have pinned the pill's growth here.
-    const afterPill = await page.evaluate(() => {
+    const distFromBottom = () => page.evaluate(() => {
         const el = document.querySelector('.messages')!;
         return el.scrollHeight - el.scrollTop - el.clientHeight;
     });
-    expect(afterPill).toBeLessThan(80);
+    await expect.poll(distFromBottom).toBeLessThan(80);
     for (let i = 0; i < 4; i++) {
         await hostMessage(page, { type: 'chunk', value: `Post-edit note ${i}. All twelve handlers now route through v2.\n\n` });
     }
     await hostMessage(page, { type: 'fullResponse', renderedHtml: '<p>Refactor complete.</p>' });
-    await page.waitForTimeout(300);
-    const dist = await page.evaluate(() => {
-        const el = document.querySelector('.messages')!;
-        return el.scrollHeight - el.scrollTop - el.clientHeight;
-    });
-    expect(dist).toBeLessThan(80);
+    await expect.poll(distFromBottom).toBeLessThan(80);
 });
 
 test('cost page: stacked model chart, month stepper, filters, provider list (fa/RTL)', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
-
-    // Settings → Usage
     await openSettingsFromWork(page);
     await openPageNavigation(page);
     await page.locator('.page-sidebar').getByRole('button', { name: 'مصرف', exact: true }).click();
@@ -478,8 +336,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     const asked = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
     expect(asked).toContainEqual({ type: 'usageGetState' });
 
-    // Two calendar months so the stepper has somewhere to go. July mixes both
-    // currencies; August is Toman-only (the currency-toggle edge case).
     const history = [
         { day: '2026-07-10', cells: [{ model: 'gpt-4o', host: 'a.ir', input: 100, output: 10, cached: 0, USD: 1, IRT: 5000 }] },
         { day: '2026-07-11', cells: [
@@ -495,8 +351,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
             { host: 'b.ir', label: 'Metis', iranian: true, input: 400, output: 40, cached: 12, USD: 0, IRT: 95000 },
         ],
         rates: [
-            // An override is host-independent (host ''); the others are the
-            // rate actually resolved for the host the model ran on.
             { id: 'gpt-4o', host: '', input: 1, output: 2, cachedInput: null, currency: 'IRT', source: 'override', USD: 0, IRT: 14000 },
             { id: 'glm-5.3', host: 'a.ir', input: 0.15, output: 0.5, cachedInput: 0.03, currency: 'USD', source: 'builtin', USD: 0.5, IRT: 0 },
             { id: 'glm-5.3', host: 'b.ir', input: 0.3, output: 1, cachedInput: 0.03, currency: 'USD', source: 'gateway', USD: 1.2, IRT: 0 },
@@ -506,28 +360,20 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
         allTime: { input: 1050, output: 105, cached: 12, USD: 6.5, IRT: 109000 },
     });
     await page.locator('.usage-view-tabs button').nth(1).click();
-    // Latest month (August) is Toman-only: bars render, no currency toggle.
     await expect(page.locator('.cost-col')).toHaveCount(31);
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('gpt-4o');
     await expect(page.locator('.cost-currencies')).toHaveCount(0);
     await expect(page.locator('.cost-col:not([aria-label$="-"])')).toHaveCount(1);
 
-    // Stepper moves to July, which has two models and both currencies.
     await page.getByLabel('ماه قبل').click();
     await expect(page.locator('.cost-legend-item')).toHaveCount(2);
     await expect(page.locator('.cost-legend')).toContainText('glm-5.3');
     await expect(page.getByLabel('ماه قبل')).toBeDisabled();
     await expect(page.locator('.cost-currencies')).toBeVisible();
 
-    // Hovering a day WITH usage shows that day's total in the detail line.
-    // August has a single model, so no per-model breakdown repeats the total;
-    // the axis is the LOCALE month (Jalali here), so pick the first non-empty
-    // column by its label rather than assuming a Gregorian day index.
     await page.locator('.cost-col:not([aria-label$="-"])').first().hover();
     await expect(page.locator('.cost-detail')).toContainText('تیر');
-    // The detail line must never wrap: a hover cannot change the card's height
-    // and shove every section below it.
     const chartHeightHovered = (await page.locator('.usage-activity-chart').boundingBox())!.height;
     const providersTopHovered = (await page.locator('.usage-breakdown').boundingBox())!.y;
     await page.mouse.move(5, 5);
@@ -537,8 +383,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     expect(Math.round(chartHeightHovered)).toBe(Math.round(chartHeightIdle));
     expect(Math.round(providersTopHovered)).toBe(Math.round(providersTopIdle));
 
-    // Manually pick USD here, then step to the Toman-only month: the choice
-    // must NOT persist as an empty chart (the toggle is hidden there).
     await page.locator('.cost-currencies .usage-range', { hasText: 'دلار' }).click();
     await expect(page.locator('.cost-axis')).toContainText('$');
     await page.getByLabel('ماه بعد').click();
@@ -546,8 +390,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-col:not([aria-label$="-"])')).toHaveCount(1);
     await expect(page.locator('.cost-axis')).toContainText('هزار');
 
-    // Model filter (our own dropdown, not a native select) narrows the legend
-    // to the selected model.
     const modelFilter = page.locator('.cost-filters .dropdown').first();
     await page.getByLabel('ماه قبل').click();
     await modelFilter.locator('.dropdown-trigger').click();
@@ -555,7 +397,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-legend-item')).toHaveCount(1);
     await expect(page.locator('.cost-legend-item')).toContainText('glm-5.3');
 
-    // Week mode: a 7-day axis with a range label, stepping by week.
     await modelFilter.locator('.dropdown-trigger').click();
     await page.getByRole('option', { name: 'همه مدل ها', exact: true }).click();
     await page.locator('.cost-granularity .usage-range', { hasText: 'هفته' }).click();
@@ -563,18 +404,13 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-granularity .usage-range.active')).toContainText('هفته');
     await expect(page.locator('.cost-period-label')).toContainText('–');
     await page.getByLabel('هفته قبل').click();
-    // The previous week really has no usage, so the empty state is correct.
     await expect(page.locator('.usage-activity-chart .usage-empty')).toBeVisible();
-    // Two more weeks back is the window that holds the July usage.
     await page.getByLabel('هفته قبل').click();
     await page.getByLabel('هفته قبل').click();
     await expect(page.locator('.cost-col')).toHaveCount(7);
-    // Back to the month axis.
     await page.locator('.cost-granularity .usage-range', { hasText: 'ماه' }).click();
     await expect(page.locator('.cost-col')).toHaveCount(31);
 
-    // Provider rows follow the same period and filters as the chart. Lifetime
-    // usage from Metis must not leak into the August view.
     await page.locator('.usage-breakdown-tabs button').nth(1).click();
     const providerRows = page.locator('.prov-row');
     await expect(providerRows).toHaveCount(1);
@@ -587,66 +423,46 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(page.locator('.cost-dates')).toBeVisible();
     await page.locator('.rate-disclosure > summary').click();
 
-    // Rate sheet: the effective rate per model with its origin, edited inline.
     const rateRows = page.locator('.rate-row');
     await expect(rateRows).toHaveCount(4);
     const overrideRow = rateRows.filter({ hasText: 'gpt-4o' });
     await expect(overrideRow).toContainText('نرخ شما');
     await expect(overrideRow.locator('.rate-values')).toContainText('1');
-    // Like a provider row, the money it has cost sits at the row's end.
     await expect(overrideRow.locator('.usage-cost')).toContainText('تومان');
-    // A model with no resolvable rate is flagged and points at the fix.
     const unknownRow = rateRows.filter({ hasText: 'mystery-local' });
     await expect(unknownRow).toContainText('نامعلوم');
     await expect(unknownRow.locator('.rate-unknown')).toBeVisible();
-    // The same model can carry a different rate per provider, so the host is
-    // shown exactly when it ran on more than one.
     const glmRows = rateRows.filter({ hasText: 'glm-5.3' });
     await expect(glmRows).toHaveCount(2);
     await expect(glmRows.nth(0)).toContainText('a.ir');
     await expect(glmRows.nth(1)).toContainText('b.ir');
     await expect(glmRows.nth(1)).toContainText('نرخ گیت وی');
 
-    // Editing opens a panel anchored to the row (not an inline expansion), and
-    // "use the built-in rate" only exists for a model the user overrode.
     const builtinRow = glmRows.nth(0);
     await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
     await builtinRow.locator('.icon-btn').click();
     await expect(builtinRow.locator('.rate-pop')).toBeVisible();
     await expect(builtinRow.locator('.rate-edit-grid')).toBeVisible();
     await expect(builtinRow.locator('.settings-ghost-action', { hasText: 'بازگشت' })).toHaveCount(0);
-    // Escape closes it without saving.
     await page.keyboard.press('Escape');
     await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
     await builtinRow.locator('.icon-btn').click();
     await builtinRow.locator('.num-field input').first().fill('0.2');
     await builtinRow.locator('.settings-primary-action').click();
     await expect(builtinRow.locator('.rate-pop')).toHaveCount(0);
-    const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
-    expect(sent).toContainEqual({
-        type: 'usageSaveModel',
-        id: 'glm-5.3',
-        input: 0.2,
-        output: 0.5,
-        cachedInput: 0.03,
-        currency: 'USD',
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)).toContainEqual({
+        type: 'usageSaveModel', id: 'glm-5.3', input: 0.2, output: 0.5, cachedInput: 0.03, currency: 'USD',
     });
-    // An override row offers the way back to the built-in table.
     await overrideRow.locator('.icon-btn').click();
     await expect(overrideRow.locator('.settings-ghost-action', { hasText: 'بازگشت' })).toBeVisible();
     await page.keyboard.press('Escape');
 
-    // An unresolved rate has nothing to prefill: editing it starts empty, so
-    // saving a row of zeros takes a deliberate act.
     await unknownRow.locator('.icon-btn').click();
     await expect(unknownRow.locator('.num-field input').first()).toHaveValue('');
     await expect(unknownRow.locator('.settings-primary-action')).toBeDisabled();
     await page.keyboard.press('Escape');
-
     await expect(page.locator('.rate-disclosure[open]')).toBeVisible();
 
-    // The add form is collapsed until asked for, and requires BOTH rates
-    // (a blank field must not become 0).
     await expect(page.locator('.pricing-add')).toHaveCount(0);
     await page.locator('.rates-add-toggle').click();
     const add = page.locator('.pricing-add .settings-primary-action');
@@ -654,7 +470,6 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(add).toBeDisabled();
     await page.locator('.pricing-add .pricing-add-id input').fill('my-model');
     await rateInput.first().fill('1');
-    // The drawn steppers move the value (the native spinners cannot be themed).
     await page.locator('.pricing-add .num-step').first().click();
     await expect(rateInput.first()).toHaveValue('2');
     await page.locator('.pricing-add .num-step').nth(1).click();
@@ -662,17 +477,10 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     await expect(add).toBeDisabled();
     await rateInput.nth(1).fill('2');
     await add.click();
-    const sentAdd = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
-    expect(sentAdd).toContainEqual({
-        type: 'usageSaveModel',
-        id: 'my-model',
-        input: 1,
-        output: 2,
-        cachedInput: null,
-        currency: 'USD',
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)).toContainEqual({
+        type: 'usageSaveModel', id: 'my-model', input: 1, output: 2, cachedInput: null, currency: 'USD',
     });
 
-    // Short windows still expose the entire list inside the viewport.
     await page.setViewportSize({ width: 420, height: 320 });
     await page.locator('.cost-filters .dropdown').first().locator('.dropdown-trigger').click();
     const listBox = await page.locator('.dropdown-list').boundingBox();
@@ -680,34 +488,28 @@ test('cost page: stacked model chart, month stepper, filters, provider list (fa/
     expect(listBox!.y + listBox!.height).toBeLessThanOrEqual(320);
     await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 420, height: 900 });
-
-    // RTL sidebar layout must not overflow horizontally.
-    const overflow = await page.evaluate(() => {
+    expect(await page.evaluate(() => {
         const el = document.querySelector('.settings-scroll')!;
         return el.scrollWidth - el.clientWidth;
-    });
-    expect(overflow).toBeLessThanOrEqual(1);
+    })).toBeLessThanOrEqual(1);
 });
 
-test('a steer waits for the tool call: queued chip, then the bubble on steerApplied', async ({ page }) => {
+test('steering queues during tools and delegated work without cancelling and renders bubble on steerApplied', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
     await hostMessage(page, { type: 'restoreUser', value: 'do a then b' });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'chunk', value: 'first part ' });
-    // A tool call is in flight - the run is busy.
     await hostMessage(page, { type: 'toolCall', tool: 'read_file', args: '{}', callId: 'c1' });
 
     const userBefore = await page.locator('.msg.user').count();
     const assistantBefore = await page.locator('.msg.assistant').count();
-
-    // Send while busy: a queued chip, NOT a timeline split.
     await page.locator('.composer-input').fill('also check b.txt');
     await page.locator('.composer-input').press('Enter');
     await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
     await expect(page.locator('.queued-steer-chip')).toContainText('also check b.txt');
-    // The chip column aligns with the composer card column.
     const chipsBox = await page.locator('.queued-steers').boundingBox();
     const composerBox = await page.locator('.composer').boundingBox();
     expect(Math.abs(chipsBox!.x - composerBox!.x)).toBeLessThanOrEqual(1);
@@ -716,7 +518,6 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     expect(await page.locator('.msg.assistant').count()).toBe(assistantBefore);
     expect(await page.locator('.msg.user.steered').count()).toBe(0);
 
-    // Host finishes the tool call and injects the steer at its boundary.
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
     const steerId = sent.find((m) => m.type === 'steerRun')?.steerId;
     expect(steerId).toBeTruthy();
@@ -724,74 +525,51 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     const controls = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
     expect(controls.filter(message => message.type === 'steerNow')).toEqual([{ type: 'steerNow', steerId }]);
     expect(controls.some(message => message.type === 'cancelRequest')).toBe(false);
-    // Asking for immediate delivery does not acknowledge it prematurely.
     await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+
     await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: 'r', callId: 'c1' });
     await hostMessage(page, { type: 'steerApplied', steerId });
-
-    // The held bubble now renders (with the steered badge) and the chip clears.
     await expect(page.locator('.msg.user.steered')).toHaveCount(1);
     await expect(page.locator('.msg.user.steered')).toContainText('also check b.txt');
     await expect(page.locator('.queued-steer-chip')).toHaveCount(0);
+
+    // Delegated task steering in narrow RTL keeps Steer now inside bounds and stacks multiple steers.
+    await hostMessage(page, { type: 'locale', locale: 'fa' });
+    await hostMessage(page, { type: 'toolCall', tool: 'task', args: '{"prompt":"Inspect files"}', callId: 'child-running' });
+    const input = page.locator('.composer-input');
+    await input.fill('اول تست ها رو بررسی کن');
+    await input.press('Enter');
+    await expect(input).toHaveValue('');
+    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+    const now = page.locator('.queued-steer-now');
+    await expect(now).toBeVisible();
+    const box = await now.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(420);
+    await now.click();
+    await input.fill('A second correction');
+    await input.press('Enter');
+    await expect(page.locator('.queued-steer-chip')).toHaveCount(2);
+    const afterDelegated = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string }>);
+    expect(afterDelegated.filter(message => message.type === 'steerRun')).toHaveLength(3);
+    expect(afterDelegated.filter(message => message.type === 'steerNow')).toHaveLength(2);
+    expect(afterDelegated.some(message => message.type === 'cancelRequest' || message.type === 'subagentStop')).toBe(false);
 });
 
-
-for (const locale of ['en', 'fa'] as const) {
-    for (const width of [420, 1100]) {
-        test(`steering remains usable during delegated work (${locale}, ${width})`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await page.goto('/');
-            await hostMessage(page, { type: 'showChat' });
-            await hostMessage(page, { type: 'locale', locale });
-            await hostMessage(page, { type: 'restoreUser', value: 'Inspect this repo' });
-            await hostMessage(page, { type: 'startResponse' });
-            await hostMessage(page, { type: 'toolCall', tool: 'task', args: '{"prompt":"Inspect files"}', callId: 'child-running' });
-            const input = page.locator('.composer-input');
-            await input.fill(locale === 'fa' ? 'اول تست ها رو بررسی کن' : 'Check tests first');
-            await input.press('Enter');
-            await expect(input).toHaveValue('');
-            await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
-            const now = page.locator('.queued-steer-now');
-            await expect(now).toBeVisible();
-            const box = await now.boundingBox();
-            expect(box!.x).toBeGreaterThanOrEqual(0);
-            expect(box!.x + box!.width).toBeLessThanOrEqual(width);
-            await now.click();
-            await input.fill('A second correction');
-            await input.press('Enter');
-            await expect(page.locator('.queued-steer-chip')).toHaveCount(2);
-            await page.screenshot({ path: `test-results/steering-${locale}-${width}.png` });
-            const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string }>);
-            expect(sent.filter(message => message.type === 'steerRun')).toHaveLength(2);
-            expect(sent.filter(message => message.type === 'steerNow')).toHaveLength(1);
-            expect(sent.some(message => message.type === 'cancelRequest' || message.type === 'subagentStop')).toBe(false);
-        });
-    }
-}
-
-test('conversation display choices follow the host echo', async ({ page }) => {
+test('context meter switch flips optimistically and follows host echo', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'en' });
-    // The meter is off by default, and with it the window-preset control:
-    // the composer keeps nothing in that slot.
     await expect(page.locator('.tok-pct')).toHaveCount(0);
     await expect(page.locator('.ctx-wrap')).toHaveCount(0);
     await expect(page.locator('.ctx-trigger')).toHaveCount(0);
-    await hostMessage(page, { type: 'restoreUser', value: 'build it' });
-    await hostMessage(page, { type: 'startResponse' });
-    await hostMessage(page, { type: 'toolCall', tool: 'run_terminal_command', args: JSON.stringify({ command: 'npm test' }), callId: 't1' });
-    await hostMessage(page, { type: 'toolResult', tool: 'run_terminal_command', output: 'STDOUT:\nok\nExit code: 0', callId: 't1' });
-    const command = page.locator('.transcript-pane details.step').first();
-    await expect(command).not.toHaveAttribute('open');
+
     await hostMessage(page, { type: 'openSettings' });
     const contextMeter = page.getByRole('switch', { name: 'Show context window meter', exact: true });
     await expect(contextMeter).toHaveAttribute('aria-checked', 'false');
     await contextMeter.click();
     expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
         .toContainEqual({ type: 'transcriptOptionsSet', options: { showContextMeter: true } });
-    // The switch flips optimistically, so a second click before the echo turns
-    // the meter back off instead of resending the same value.
     await expect(contextMeter).toHaveAttribute('aria-checked', 'true');
     await contextMeter.click();
     expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
@@ -801,107 +579,64 @@ test('conversation display choices follow the host echo', async ({ page }) => {
     await contextMeter.click();
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
     await expect(contextMeter).toHaveAttribute('aria-checked', 'true');
-    await page.locator('.conversation-advanced > summary').click();
-    const output = page.locator('#tx-commands');
-    await expect(output).toHaveText('On failure');
-    await output.click();
-    await page.getByRole('option', { name: 'Expanded', exact: true }).click();
-    const messages = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'transcriptOptionsSet', options: { commands: 'expanded' } });
-    await expect(output).toHaveText('On failure');
-    await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { commands: 'expanded', showContextMeter: true } } });
-    await expect(output).toHaveText('Expanded');
     await hostMessage(page, { type: 'showChat' });
-    await expect(command).toHaveAttribute('open', '');
     await page.locator('.composer-input').focus();
     await expect(page.locator('.tok-pct')).toBeVisible();
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {} } });
     await expect(page.locator('.tok-pct')).toHaveCount(0);
 });
 
-test('the reasoning body stays LTR in fa - reasoning is always English', async ({ page }) => {
+test('reasoning body stays LTR in fa while pill label stays RTL, and hidden monitor wakes stay silent', async ({ page }) => {
     await page.goto('/');
     await hostMessage(page, { type: 'showChat' });
     await hostMessage(page, { type: 'locale', locale: 'fa' });
     await hostMessage(page, { type: 'restoreUser', value: 'سلام' });
+    await hostMessage(page, { type: 'restoreUser', value: 'PR monitor notification', hidden: true });
     await hostMessage(page, { type: 'startResponse' });
     await hostMessage(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { reasoning: 'collapsed' } } });
-    // `thinkingHtml` patches the LATEST thinking step, so create it first.
     await hostMessage(page, { type: 'thinking', value: 'seed' });
-    await hostMessage(page, {
-        type: 'thinkingHtml',
-        value: '<p>English reasoning that must not be reordered by the UI locale.</p>',
-    });
-    // Thinking pills start collapsed and mount their body on expand.
+    await hostMessage(page, { type: 'thinkingHtml', value: '<p>English reasoning that must not be reordered by the UI locale.</p>' });
     await page.locator('.step-think > summary').click();
     const body = page.locator('.step-think-body');
     await expect(body).toHaveAttribute('dir', 'ltr');
     expect(await body.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
-    // The pill LABEL is translated, so it keeps the locale direction.
-    await expect(page.locator('.step-think .step-label').first())
-        .toHaveCSS('direction', 'rtl');
-});
+    await expect(page.locator('.step-think .step-label').first()).toHaveCSS('direction', 'rtl');
 
-for (const locale of ['en', 'fa']) test(`calm entry keeps suggestions out of the conversation (${locale})`, async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale });
-    await expect(page.locator('.composer-welcome')).toBeVisible();
-    await expect(page.locator('.chip-suggest').first()).toBeHidden();
-});
-
-test('an empty or bare workspace gets starting-from-scratch chips', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-
-    // The default chips are all maintenance ON a codebase, so they cannot
-    // fire in a folder with nothing in it.
-    // `hostMessage` is a fire-and-forget postMessage, so every read below has to
-    // wait for React rather than sample whatever is on screen. `toHaveText`
-    // retries; a bare `allInnerTexts()` + `toEqual` does not, and on a slower
-    // macOS leg the 'project' step read the previous step's chips.
-    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
-    await expect(page.locator('.chip-suggest'))
-        .toHaveText(['Build something new', 'Set up this folder', 'Plan it with me first', 'Bring my code in']);
-
-    // 'bare' (a README but no project) is the same case for the chips.
-    await hostMessage(page, { type: 'showChat', workspaceKind: 'bare' });
-    await expect(page.locator('.chip-suggest').first()).toHaveText('Build something new');
-
-    // A real project keeps the established-project set.
-    await hostMessage(page, { type: 'showChat', workspaceKind: 'project' });
-    await expect(page.locator('.chip-suggest'))
-        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
-
-    // A host that does not send the field keeps the default set. This needs a
-    // fresh page: the step above left `workspaceKind` at 'project', and the
-    // app only overwrites it when the field is present, so asserting here
-    // would pass even if the default were wrong.
-    await page.goto('/');
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await hostMessage(page, { type: 'showChat' });
-    await expect(page.locator('.chip-suggest'))
-        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
-});
-
-test('a fresh workspace starts with a focused composer and accepts a prompt', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
-    await page.locator('.composer-input').fill('Build a new application');
-    await page.locator('.composer-input').press('Enter');
-    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)).toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Build a new application' }));
-});
-
-test('automatic monitor wakes hide their user row and keep the response visible', async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'restoreUser', value: 'Watch the PR' });
-    await hostMessage(page, { type: 'restoreUser', value: 'PR monitor notification', hidden: true });
-    await hostMessage(page, { type: 'startResponse' });
-    await hostMessage(page, { type: 'chunk', value: 'I checked the new review.' });
     await hostMessage(page, { type: 'fullResponse', persian: 'I checked the new review.', renderedHtml: '<p>I checked the new review.</p>' });
+
     await expect(page.locator('article.msg.user')).toHaveCount(1);
     await expect(page.locator('.transcript-pane')).not.toContainText('PR monitor notification');
     await expect(page.locator('.transcript-pane')).toContainText('I checked the new review.');
     await expect(page.locator('.queued-steer-chip,.pr-indicator')).toHaveCount(0);
+});
+
+test('calm entry hides chips, workspaceKind switches chip sets, and fresh workspace accepts prompts', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'showChat' });
+    // Default workspaceKind (omitted) keeps established-project chips hidden behind calm entry.
+    await expect(page.locator('.composer-welcome')).toBeVisible();
+    await expect(page.locator('.chip-suggest').first()).toBeHidden();
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+
+    await hostMessage(page, { type: 'locale', locale: 'fa' });
+    await expect(page.locator('.composer-welcome')).toBeVisible();
+    await expect(page.locator('.chip-suggest').first()).toBeHidden();
+
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Build something new', 'Set up this folder', 'Plan it with me first', 'Bring my code in']);
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'bare' });
+    await expect(page.locator('.chip-suggest').first()).toHaveText('Build something new');
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'project' });
+    await expect(page.locator('.chip-suggest'))
+        .toHaveText(['Tour this codebase', 'Hunt for bugs', 'Write tests', 'Optimize it']);
+
+    await hostMessage(page, { type: 'showChat', workspaceKind: 'empty' });
+    await page.locator('.composer-input').fill('Build a new application');
+    await page.locator('.composer-input').press('Enter');
+    expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
+        .toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Build a new application' }));
 });

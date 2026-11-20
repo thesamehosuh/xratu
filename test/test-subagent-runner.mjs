@@ -994,7 +994,6 @@ function childContext(extra = {}) {
     }
 }
 
-console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
 // Child-owned questions retain attribution and wait in the child's trace.
 {
     const {ctx} = childContext();
@@ -1020,4 +1019,5 @@ console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
     ok('scoped question resumes the child',result.output.includes('existing API'));
 }
 
+console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILURE(S)`);
 process.exit(failed === 0 ? 0 : 1);

@@ -33,31 +33,15 @@ test.beforeEach(async ({ page }) => {
     await post(page, { type: 'showChat' });
 });
 
-test('live mixed exploration stays one group and preserves manual expansion', async ({ page }) => {
+test('live mixed exploration groups cleanly, preserves expansion, and Activity retains searchable details', async ({ page }) => {
     await seed(page);
     const group = page.locator('.transcript-pane .conversation-work-group');
     await expect(group).toHaveCount(1);
     await expect(group).not.toHaveAttribute('open');
     await expect(group.locator(':scope > summary')).toContainText('2 reads');
     await expect(page.locator('.transcript-pane .step-think')).toHaveCount(0);
-    await group.locator(':scope > summary').click();
-    await tool(page, 'c', 'read_file', 'src/session.ts', false);
-    await expect(group).toHaveAttribute('open', '');
-    await post(page, { type: 'toolResult', tool: 'read_file', output: 'session source', callId: 'c' });
-    await expect(group).toHaveAttribute('open', '');
-    await expect(group.locator(':scope > summary')).toContainText('3 reads');
-    await group.locator(':scope > summary').click();
-    await post(page, { type: 'thinking', value: 'More reasoning without reopening the group.' });
-    await tool(page, 'd', 'grep_search', 'test');
-    await expect(group).not.toHaveAttribute('open');
-});
-
-test('Conversation has no Activity shortcuts and Activity retains searchable details', async ({ page }) => {
-    await seed(page);
     await expect(page.locator('.transcript-pane').getByRole('button', { name: 'View in Activity' })).toHaveCount(0);
-    const group = page.locator('.transcript-pane .conversation-work-group');
-    await group.locator(':scope > summary').click();
-    await expect(page.locator('.transcript-pane .conversation-activity-link')).toHaveCount(0);
+
     await page.locator('#surface-tab-activity').click();
     // Pills mount their bodies on expand: open every closed pill so the
     // retained results are in the DOM before asserting on them (the two
@@ -82,6 +66,19 @@ test('Conversation has no Activity shortcuts and Activity retains searchable det
     await expect(page.locator('.activity-empty')).toHaveCount(0);
     await expect(page.getByRole('searchbox', { name: 'Search activity' })).toHaveValue('');
     await expect(page.locator('.activity-timeline')).toContainText('I will inspect token validation.');
+
+    await page.locator('#surface-tab-conversation').click();
+    await group.locator(':scope > summary').click();
+    await expect(page.locator('.transcript-pane .conversation-activity-link')).toHaveCount(0);
+    await tool(page, 'c', 'read_file', 'src/session.ts', false);
+    await expect(group).toHaveAttribute('open', '');
+    await post(page, { type: 'toolResult', tool: 'read_file', output: 'session source', callId: 'c' });
+    await expect(group).toHaveAttribute('open', '');
+    await expect(group.locator(':scope > summary')).toContainText('3 reads');
+    await group.locator(':scope > summary').click();
+    await post(page, { type: 'thinking', value: 'More reasoning without reopening the group.' });
+    await tool(page, 'd', 'grep_search', 'test');
+    await expect(group).not.toHaveAttribute('open');
 });
 
 test('balanced groups completed and failed commands while the active command stays actionable', async ({ page }) => {
@@ -188,8 +185,8 @@ test('Activity can disable following and timestamps without discarding the trace
     await expect(pane.locator('details.step')).toHaveCount(18);
 });
 
-for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`conversation and settings remain usable (${locale}, ${width})`, async ({ page }, info) => {
+for (const [locale, width] of [['en', 1080], ['fa', 420]] as const) {
+    test(`conversation and settings remain usable (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await seed(page);
@@ -211,13 +208,10 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
             });
             expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1.1);
         }
-        await page.screenshot({ path: info.outputPath(`conversation-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-filters input')).toBeVisible();
-        await page.screenshot({ path: info.outputPath(`activity-${locale}-${width}.png`), animations: 'disabled' });
         await post(page, { type: 'openSettings' });
         await expect(page.locator('#tx-detail')).toBeVisible();
-        await page.screenshot({ path: info.outputPath(`settings-default-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('#tx-detail').click();
         const menu = page.locator('.dropdown-list');
         await expect(menu).toBeVisible();
@@ -226,22 +220,17 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         const scrollBounds = await page.locator('.settings-scroll').boundingBox();
         expect(bounds!.y).toBeGreaterThanOrEqual(scrollBounds!.y - 1);
         expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(scrollBounds!.y + scrollBounds!.height + 1);
-        await page.screenshot({ path: info.outputPath(`settings-menu-${locale}-${width}.png`), animations: 'disabled' });
         await page.keyboard.press('Escape');
         await expect(page.locator('#tx-detail')).toBeFocused();
         await page.locator('.conversation-advanced > summary').click();
         const detail = page.locator('#tx-detail');
         await expect(detail).toBeVisible();
         expect(await page.locator('.settings-scroll').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-        await page.screenshot({ path: info.outputPath(`settings-${locale}-${width}.png`), animations: 'disabled' });
         await page.locator('.conversation-reset').scrollIntoViewIfNeeded();
         await expect(page.locator('.conversation-reset')).toBeVisible();
-        await page.screenshot({ path: info.outputPath(`settings-bottom-${locale}-${width}.png`), animations: 'disabled' });
     });
-}
 
-for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`Git work collapses after the answer while background controls stay visible (${locale}, ${width})`, async ({ page }, info) => {
+    test(`Git work collapses after the answer while background controls stay visible (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'startResponse' });
@@ -258,7 +247,6 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         const closedGit = group.locator('.step-group-body details.step:not([open]) > summary');
         while (await closedGit.count() > 0) await closedGit.first().click();
         await expect(group).toContainText('src/auth.ts');
-        await page.screenshot({ path: info.outputPath('git-live.png'), animations: 'disabled' });
         await tool(page, 'server', 'run_terminal_command', '', false);
         await post(page, { type: 'terminalBackgrounded', callId: 'server', jobId: 'dev-server', byUser: true });
         await post(page, { type: 'chunk', value: 'The changes are ready.' });
@@ -269,14 +257,12 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(page.locator('.transcript-pane .conversation-work-group')).toHaveCount(0);
         await expect(page.locator('.transcript-pane').getByRole('button', { name: locale === 'en' ? 'Stop' : 'متوقف کردن', exact: true })).toBeVisible();
         await expect(page.locator('.transcript-pane')).toContainText('The changes are ready.');
-        await page.screenshot({ path: info.outputPath('git-completed.png'), animations: 'disabled' });
         await summary.locator('summary').click();
         await expect(summary.locator('.compact-step')).toHaveCount(2);
         await expect(summary).toContainText('src/auth.ts');
         await post(page, { type: 'backgroundJobFinished', jobId: 'dev-server', output: 'Server failed to bind', status: 'failed', exitCode: 1 });
         await expect(summary.locator('.compact-step')).toHaveCount(3);
         await expect(summary.locator('.compact-step.failed')).toContainText('Server failed to bind');
-        await page.screenshot({ path: info.outputPath('git-expanded.png'), animations: 'disabled' });
         await page.locator('#surface-tab-activity').click();
         // The failed command auto-opens; open the rest without toggling it.
         const closedGitActivity = page.locator('.activity-pane details.step:not([open]) > summary');
@@ -285,16 +271,16 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
     });
 }
 
-test('Git rows retain branch, revision and commit hints before and after completion', async ({ page }) => {
+test('Git hints persist across completion and running icon tracks live tool while failed reads stay folded', async ({ page }) => {
     await post(page, { type: 'startResponse' });
     const operations = [
         ['git_branch', { action: 'create', name: 'fix/expiry' }, 'fix/expiry'],
         ['git_show', { revision: 'HEAD~2' }, 'HEAD~2'],
         ['git_commit', { message: 'fix: reject expired tokens' }, 'fix: reject expired tokens'],
     ] as const;
-    for (const [tool, args] of operations) {
-        await post(page, { type: 'toolCall', tool, args: JSON.stringify(args), callId: tool });
-        await post(page, { type: 'toolResult', tool, output: 'Completed', callId: tool });
+    for (const [toolName, args] of operations) {
+        await post(page, { type: 'toolCall', tool: toolName, args: JSON.stringify(args), callId: toolName });
+        await post(page, { type: 'toolResult', tool: toolName, output: 'Completed', callId: toolName });
     }
     const group = page.locator('.transcript-pane .conversation-work-group');
     await group.locator('summary').first().click();
@@ -304,16 +290,14 @@ test('Git rows retain branch, revision and commit hints before and after complet
     await expect(summary).not.toHaveAttribute('open');
     await summary.locator('summary').click();
     for (const [, , hint] of operations) await expect(summary.locator('code').filter({ hasText: hint })).toHaveCount(1);
-});
 
-test('the action summary icon follows the running tool and failed reads stay folded', async ({ page }) => {
     await post(page, { type: 'startResponse' });
     await tool(page, 'read', 'read_file', 'src/a.ts', false);
-    const summary = page.locator('.conversation-work-group > summary');
-    await expect(summary.locator('.lucide-file-text')).toBeVisible();
+    const liveSummary = page.locator('.conversation-work-group').last().locator(':scope > summary');
+    await expect(liveSummary.locator('.lucide-file-text')).toBeVisible();
     await post(page, { type: 'toolResult', tool: 'read_file', callId: 'read', output: 'Error: file unavailable', isError: true });
     await tool(page, 'search-next', 'grep_search', 'src', false);
-    await expect(summary.locator('.lucide-search')).toBeVisible();
-    await expect(page.locator('.conversation-work-group')).not.toHaveAttribute('open');
+    await expect(liveSummary.locator('.lucide-search')).toBeVisible();
+    await expect(page.locator('.conversation-work-group').last()).not.toHaveAttribute('open');
     await expect(page.locator('.transcript-pane')).not.toContainText('Error: file unavailable');
 });

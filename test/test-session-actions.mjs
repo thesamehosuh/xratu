@@ -563,3 +563,109 @@ console.log('ok unused engine placeholders retain the selected model and stale e
     assert.deepEqual(deleted, ['A']);
 }
 console.log('ok deleting an empty native chat leaves an unsaved conversation on the same engine');
+
+// --- Context-window override capping (merged from test-context-window-override, reuses parsed extension.ts AST) ---
+{
+    const cwNames = ['_setContextWindowOverride', '_contextWindowHint', '_modelContextWindowMax'];
+    const cwMethods = cls.members.filter(node => node.name && cwNames.includes(node.name.getText(file))).map(node => node.getText(file)).join('\n');
+    const Subject = vm.runInNewContext(ts.transpile(`class Subject { ${cwMethods} }; Subject`, { target: ts.ScriptTarget.ES2022 }), {
+        baseUrlHost: () => 'provider', modelsDevModelInfo: () => undefined, providerIdForUrl: () => 'provider',
+        cachedModelInfo: () => undefined, knownContextWindow: () => 128000,
+    });
+    const subject = new Subject();
+    let overrides = { coder: 1048576 };
+    subject._selectedModel = 'coder';
+    subject._contextWindowOverrides = () => ({ ...overrides });
+    subject._contextWindowsFor = () => ({ coder: 32768 });
+    subject._globalState = { update: async (_key, value) => { overrides = JSON.parse(value); } };
+    assert.equal(subject._contextWindowHint(), 32768, 'oversized saved overrides must be capped at runtime');
+    await subject._setContextWindowOverride('coder', 1048576);
+    assert.equal(overrides.coder, 32768, 'new overrides are capped before persistence');
+    await subject._setContextWindowOverride('coder', 16384);
+    assert.equal(subject._contextWindowHint(), 16384);
+    subject._activeEngine = 'opencode'; subject._nativeModelWindows = { coder: 8192 };
+    assert.equal(subject._contextWindowHint(), 8192, 'native limits also cap saved overrides');
+    await subject._setContextWindowOverride('coder', null);
+    assert.equal(subject._contextWindowHint(), 8192);
+    await subject._setContextWindowOverride('coder', Infinity);
+    assert.equal(overrides.coder, undefined);
+}
+
+// --- Session connection binding & carrier isolation (merged from test-session-connection, reuses parsed AST) ---
+{
+    const { mkdtempSync, rmSync } = require('node:fs');
+    const { tmpdir } = require('node:os');
+    const { LocalSessionStore } = require('../out/local/localSessionStore.js');
+    const connNames = ['_restoreSessionConnection', '_rememberModelForActiveCredential', '_selectLlmCredential', '_handleChatRequest', '_bindRunConnection'];
+    const connMethods = cls.members.filter(node => connNames.includes(node.name?.getText(file)));
+    const connSandbox = {};
+    vm.runInNewContext(ts.transpileModule(`class Host { ${connMethods.map(node => node.getText(file)).join('\n')} }; globalThis.Host = Host;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, connSandbox);
+    function connHost(active) {
+        const h = new connSandbox.Host(), state = new Map([['xratu.activeLlmCredentialId', active]]), writes = [], messages = [];
+        h._sessionWorkspaceMatches = () => true; h._activeEngine = 'xratu'; h._selectedModel = 'current-model'; h._sessionEpoch = 1;
+        h._view = { webview: { postMessage: message => messages.push(message) } };
+        h._globalState = { get: key => state.get(key), update: async (key, value) => { state.set(key, value); writes.push([key, value]); } };
+        h._credentialModelMap = () => JSON.parse(state.get('xratu.modelsByCredential') ?? '{"A":"model-a","B":"model-b"}');
+        h._secrets = { store: async () => { throw Error('restoring history must not overwrite the legacy active model'); } };
+        h._getSavedCredentials = async () => [{ id: 'A' }, { id: 'B' }];
+        h._fetchModels = h._sendSavedCredentials = h._sendOAuthState = async () => {};
+        h.notifyBanner = () => {};
+        return { h, state, writes, messages };
+    }
+    const mismatch = connHost('B');
+    mismatch.h._restoreSessionConnection({ workspace: 'default', connectionId: 'A', model: 'historical-model' });
+    assert.equal(mismatch.h._selectedModel, 'current-model');
+    assert.equal(mismatch.h._sessionConnectionConfirmed, false);
+    assert.deepEqual(mismatch.writes, []);
+    await mismatch.h._handleChatRequest('continue');
+    assert.equal(mismatch.messages.at(-1).valueKey, 'sessionConnectionMismatch');
+    await mismatch.h._selectLlmCredential('A');
+    assert.equal(mismatch.h._sessionConnectionConfirmed, true);
+    assert.equal(mismatch.state.get('xratu.activeLlmCredentialId'), 'A');
+    const confirmCurrent = connHost('B');
+    confirmCurrent.h._sessionConnectionConfirmed = false;
+    await confirmCurrent.h._selectLlmCredential('B');
+    assert.equal(confirmCurrent.h._sessionConnectionConfirmed, true);
+    const matched = connHost('A');
+    matched.h._restoreSessionConnection({ workspace: 'default', connectionId: 'A', model: 'historical-model' });
+    await Promise.resolve();
+    assert.equal(matched.h._selectedModel, 'historical-model');
+    const legacy = connHost('B');
+    legacy.h._restoreSessionConnection({ model: 'unbound-model' });
+    assert.equal(legacy.h._selectedModel, 'current-model');
+    assert.equal(legacy.h._sessionConnectionConfirmed, true);
+    const replay = connHost('A');
+    replay.h._sessionConnectionId = 'A'; replay.h._sessionConnectionModel = 'original';
+    const rows = [{ role: 'assistant', content: 'portable answer', tool_calls: [{ id: 'call' }], providerBlocks: [{ type: 'reasoning', encrypted_content: 'opaque' }], reasoningContent: 'provider reasoning', contextNote: 'retained note' }];
+    replay.h._localHistory = rows;
+    replay.h._bindRunConnection('A', 'original');
+    assert.equal(replay.h._localHistory, rows);
+    for (const [connection, model] of [['A', 'replacement'], ['B', 'replacement']]) {
+        replay.h._localHistory = rows;
+        replay.h._bindRunConnection(connection, model);
+        assert.equal(replay.h._localHistory[0].providerBlocks, undefined);
+        assert.equal(replay.h._localHistory[0].reasoningContent, undefined);
+        assert.equal(replay.h._localHistory[0].content, 'portable answer');
+        assert.equal(replay.h._localHistory[0].contextNote, 'retained note');
+    }
+    const root = mkdtempSync(path.join(tmpdir(), 'xratu-connection-'));
+    try {
+        const store = new LocalSessionStore(root), session = await store.create('default');
+        await store.save(session.id, { connectionId: 'A', model: 'model-a', summary: null, localHistory: [], uiHistory: [] });
+        assert.equal((await store.load(session.id)).connectionId, 'A');
+        await store.save(session.id, { connectionId: 'A', model: 'model-a', summary: null, localHistory: [], uiHistory: [], pendingTurn: { prompt: 'interrupted', cp: 'a'.repeat(40), events: [], text: '', thinking: '' } });
+        assert.equal((await store.load(session.id)).pendingTurn.cp, 'a'.repeat(40));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+    const stale = connHost('B');
+    let releaseCredentials;
+    stale.h._getSavedCredentials = () => new Promise(resolve => { releaseCredentials = resolve; });
+    const selecting = stale.h._selectLlmCredential('A');
+    stale.h._sessionEpoch++;
+    stale.h._sessionConnectionConfirmed = true;
+    releaseCredentials([{ id: 'A' }, { id: 'B' }]);
+    await selecting;
+    assert.equal(stale.state.get('xratu.activeLlmCredentialId'), 'B');
+    assert.equal(stale.h._selectedModel, 'current-model');
+    assert.deepEqual(stale.writes, []);
+}
+console.log('ok context-window override caps and session-connection isolation passed');

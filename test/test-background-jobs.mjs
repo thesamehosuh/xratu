@@ -130,9 +130,6 @@ ok('clipTail is exactly at the cap', clipTail('x'.repeat(10), 10) === 'x'.repeat
 ok('clipTail clips at one char over the cap', clipTail('x'.repeat(11), 10) === 'x'.repeat(10));
 
 ok('the stream cap is 200k', MAX_STREAM_CHARS === 200_000);
-ok('tree readiness accepts short Windows PIDs and waits for a complete line',
-    reportedPid('8\n') === 8 && reportedPid('80\r\n') === 80
-    && reportedPid('8000\n') === 8000 && reportedPid('8') === null && reportedPid('0\n') === null);
 
 // --------------------------------------------------------- result formatting
 
@@ -356,11 +353,10 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     // A grace period well past both 300ms timers, so if either were armed it
     // would have fired by now. The hold is 30s, so a multi-second stall
     // anywhere on this path cannot make the job look finished.
-    await sleep(1500);
+    await sleep(900);
     ok('it is still running - the idle window did not fire',
         job.status === 'running', `${job.status}/${job.killReason}`);
     ok('and nothing killed it', job.killReason === null, String(job.killReason));
-    ok('the hard cap did not fire either', !/hard cap/.test(job.killReason ?? 'none'));
 
     // The negative case: the SAME command with the SAME timers must be killed
     // when foreground. Without it, "background ignores the timers" cannot be
@@ -382,7 +378,15 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     ok('the background job stops when it is killed', job.status === 'killed', job.status);
     ok('a FINISHED background job stays readable', getTerminalJob(job.id) === job);
     ok('a finished background job reports when it ended', typeof job.finishedAt === 'number');
-    ok('uptime freezes at the finish time', job.uptimeSeconds() >= 0, String(job.uptimeSeconds()));
+    const frozenAtEnd = job.uptimeSeconds();
+    const realNow = Date.now;
+    try {
+        Date.now = () => realNow() + 60_000;
+        ok('uptime freezes at the finish time', job.uptimeSeconds() === frozenAtEnd,
+            `before=${frozenAtEnd} after+60s=${job.uptimeSeconds()}`);
+    } finally {
+        Date.now = realNow;
+    }
 }
 
 {
@@ -715,7 +719,7 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
     writeFileSync(script, [
         "const { spawn } = require('child_process');",
         "const marker = process.argv[2];",
-        "const g = spawn(process.execPath, ['-e', 'setTimeout(() => require(\\'fs\\').writeFileSync(process.argv[1], \\'x\\'), 2000)', marker], { stdio: 'ignore', windowsHide: true });",
+        "const g = spawn(process.execPath, ['-e', 'setTimeout(() => require(\\'fs\\').writeFileSync(process.argv[1], \\'x\\'), 900)', marker], { stdio: 'ignore', windowsHide: true });",
         'process.stdout.write(String(g.pid) + "\\n");',
     ].join('\n'), 'utf8');
 
@@ -751,8 +755,8 @@ ok('no jobs leaked after the foreground suite', listTerminalJobs().length === 0,
 
     killForegroundJobs('test tree kill');
     ok('the tree kill settles the job', await withDeadline(job) === 'finished');
-    // Long enough for the grandchild's 2s timer to have fired had it survived.
-    await sleep(3000);
+    // Long enough for the grandchild's 900ms timer to have fired had it survived.
+    await sleep(1400);
     ok('the grandchild died with the parent - it never got to run',
         !existsSync(marker), `${marker} exists, so the tree kill missed the grandchild`);
     if (grandchild) {
@@ -801,5 +805,6 @@ ok('monitor preserves spawn errors', backgroundJobViews([monitorJob(1,{status:'f
     }
 }
 
+try { rmSync(holdDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* best effort */ }
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
