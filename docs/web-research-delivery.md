@@ -98,7 +98,7 @@ user's choice to require approvals. Plan still deterministically rejects mutatio
 - Live anonymous smoke searches returned official FastAPI sources via both
   adapters (Parallel 3.8 s; Exa 4.9 s on this machine). Parallel page extraction
   returned full content separately from excerpts; the reader preserves that body.
-- The opt-in [40-query retrieval run](completion/web-research-evaluation.json)
+- The opt-in [40-query retrieval run](https://github.com/thesamehosuh/xratu/blob/2c940c9a3a5afa82029e72a044ed7c0a35fc753c/docs/completion/web-research-evaluation.json)
   returned 11 successes, one availability failure, then quota/cooldown failures.
   This burst run **did not meet** the proposed 95% retrieval gate. Nine of 19
   official-source cases retrieved an official source in the first five; remaining
