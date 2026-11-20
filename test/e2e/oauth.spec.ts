@@ -143,7 +143,9 @@ test('account actions, local-runtime sync, remembered reconnect, and delete-as-s
     // Deleting a saved OAuth connection invokes sign-out rather than deleteLlmCredential.
     await post(page, { type: 'oauthState', state: { providers: [], accounts: [] } });
     await post(page, { type: 'savedCredentials', credentials: [{ id: 'oauth', providerId: provider.providerId, baseUrl: 'https://api.openai.com/v1', maskedKey: '', label: 'ChatGPT', active: true, oauth: true }], activeId: 'oauth' });
-    const button = page.locator('.saved-delete');
+    const rows = page.locator('.saved-credential');
+    await expect(rows).toHaveCount(1);
+    const button = rows.locator('.saved-delete');
     await button.click();
     await button.click();
     const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type: string }> }).__xratuHostMessages);
