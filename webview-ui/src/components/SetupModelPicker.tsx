@@ -1,6 +1,7 @@
 import { Check, Circle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { t, tOrRaw } from '../i18n';
 import type { SetupModel } from '../../../src/engines/setup';
+import { ProviderIcon } from './ProviderIcon';
 
 export function SetupModelPicker({ models, selected, freeOnly, onSelect }: { models: SetupModel[]; selected: string; freeOnly: boolean; onSelect: (id: string) => void }) {
     return <div className="setup-models" role="radiogroup" aria-label={t('setupChooseModel')}>
@@ -14,7 +15,7 @@ export function SetupModelPicker({ models, selected, freeOnly, onSelect }: { mod
                 className={`setup-model${model.id === selected ? ' selected' : ''}`} onClick={() => onSelect(model.id)}
                 title={model.detail ? tOrRaw(model.detail) : t(label)}>
                 <span className="setup-model-radio" aria-hidden="true">{model.id === selected ? <Check size={12} /> : <Circle size={12} />}</span>
-                <span className="setup-model-copy" dir="ltr"><span className="setup-model-name" dir="ltr">{model.name}<span className="model-provider">{model.provider}</span></span>
+                <span className="setup-model-copy" dir="ltr"><span className="setup-model-name" dir="ltr">{model.name}<span className="model-provider provider-brand-label"><ProviderIcon id={model.providerId ?? model.provider} label={model.provider} /><span>{model.provider}</span></span></span>
                     <span className="setup-model-status">{Status && <Status size={11} className={checking ? 'spinning' : undefined} />}{t(label)}</span></span>
                 {model.free && <span className="setup-free">{t('setupFreeBadge')}</span>}
             </button>;

@@ -118,10 +118,9 @@ test('OpenCode cancellation releases the composer and shared MCPs retain their s
     await expect(page.locator('.native-config-row').filter({ hasText: 'native-docs' })).toBeVisible();
     await openPageNavigation(page);
     await page.locator('[data-section=engines]').click();
-    await page.locator('[data-configure-engine=xratu]').click();
     await openPageNavigation(page);
     await page.locator('[data-section=mcp]').click();
     await post(page, { type: 'mcpState', servers: [], hasWorkspace: true, legacyInUse: false });
-    await expect(page.locator('.native-inventory')).toHaveCount(0);
+    await expect(page.locator('.native-inventory')).toBeVisible();
     expect((await sent(page)).some((message) => message.type === 'engineSelect'), 'editing shared MCP settings does not switch the conversation engine').toBe(false);
 });

@@ -22,6 +22,7 @@ import type { ExternalMcpManager } from './externalMcp';
 import type { DiscoveredLocalModel } from './local/localModelClient';
 import type { LocalSessionStore } from './local/localSessionStore';
 import type { ThinkingLevel } from './local/localTypes';
+import { MAX_MODEL_FAVORITES, modelFavoriteKey, readModelFavorite, readModelFavorites } from './modelPicker';
 import type { ExternalServerConfig, McpConfigStore, McpSaveTarget } from './mcpConfig';
 import { isDir, isKnownSkillsPath, openSkillFile } from './skillsHost';
 import type { TaskListItem } from './taskList';
@@ -84,6 +85,8 @@ export interface WebviewMessageHost {
     _deleteSkillFolder(dirPath: string): Promise<void>;
     _detectProxies(): Promise<void>;
     _fetchModels(): Promise<boolean>;
+    _browseProviderModels(credentialId: string, requestId: string, refresh: boolean): Promise<void>;
+    _selectProviderModel(credentialId: string, model: string, requestId: string, sessionKey?: string): Promise<void>;
     _pingFreeModel(model: string, automatic?: boolean): Promise<void>;
     _sendRuntimePreferences(): void;
     _setOfflineMode(enabled: boolean): Promise<void>;
@@ -95,7 +98,8 @@ export interface WebviewMessageHost {
     _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string, editIndex?: number): Promise<void>;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
     _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void>;
-    _handleSteerNow(steerId: string): void;
+    _handleSteerNow(steerId: string): Promise<void>;
+    _updateQueuedSteer(steerId: string, value?: string): void;
     _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove?: boolean, _retryCount?: number): Promise<void>;
     _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void;
     _history: HistoryMessage[];
@@ -353,8 +357,13 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         // bubble, or its chip sticks forever.
                         .catch(() => host._confirmSteer(data.steerId, 'drop'));
                     break;
+                case 'updateQueuedSteer':
+                    if (typeof data.steerId === 'string' && (data.value === undefined || typeof data.value === 'string')) {
+                        host._updateQueuedSteer(data.steerId, data.value);
+                    }
+                    break;
                 case 'steerNow':
-                    if (typeof data.steerId === 'string') host._handleSteerNow(data.steerId);
+                    if (typeof data.steerId === 'string') void host._handleSteerNow(data.steerId);
                     break;
                 case 'requestFileList':
                     void host._pushFileList();
@@ -497,6 +506,28 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'listModels':
                     await host._fetchModels();
                     break;
+                case 'browseProviderModels':
+                    if (typeof data.credentialId === 'string' && typeof data.requestId === 'string') {
+                        await host._browseProviderModels(data.credentialId, data.requestId, data.refresh === true);
+                    }
+                    break;
+                case 'selectProviderModel':
+                    if (typeof data.credentialId === 'string' && typeof data.model === 'string' && typeof data.requestId === 'string') {
+                        await host._selectProviderModel(data.credentialId, data.model, data.requestId, typeof data.sessionKey === 'string' ? data.sessionKey : undefined);
+                    }
+                    break;
+                case 'modelFavoritesGet':
+                    host._view?.webview.postMessage({ type: 'modelFavorites', favorites: readModelFavorites(host._globalState.get('xratu.modelFavorites')) });
+                    break;
+                case 'modelFavoriteSet': {
+                    const favorite = readModelFavorite(data.favorite);
+                    if (!favorite || typeof data.enabled !== 'boolean') break;
+                    const key = modelFavoriteKey(favorite);
+                    const favorites = readModelFavorites(host._globalState.get('xratu.modelFavorites')).filter(item => modelFavoriteKey(item) !== key);
+                    if (data.enabled) favorites.unshift(favorite);
+                    await host._globalState.update('xratu.modelFavorites', favorites.slice(0, MAX_MODEL_FAVORITES));
+                    break;
+                }
                 case 'selectModel': {
                     host._selectedModel = data.value;
                     void host._rememberModelForActiveCredential(data.value);

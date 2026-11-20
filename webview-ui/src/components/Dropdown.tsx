@@ -58,7 +58,7 @@ export function Dropdown({
     describedBy?: string;
     disabled?: boolean;
     value: string;
-    options: Array<{ value: string; label: string }>;
+    options: Array<{ value: string; label: string; icon?: ReactNode }>;
     onChange: (value: string) => void;
     side?: 'auto' | 'top';
     showCaret?: boolean;
@@ -154,7 +154,7 @@ export function Dropdown({
                     }
                 }}
             >
-                {leadingIcon}
+                {leadingIcon ?? current?.icon}
                 <span className="dropdown-value" dir="auto">{current?.label ?? ''}</span>
                 {showCaret && <Caret size={12} className="dropdown-caret" aria-hidden="true" />}
             </button>
@@ -191,7 +191,7 @@ export function Dropdown({
                             aria-selected={option.value === value}
                             onClick={() => pick(option.value)}
                         >
-                            {option.label}
+                            {option.icon ? <span className="provider-brand-label">{option.icon}<span className="provider-brand-text" dir="auto">{option.label}</span></span> : option.label}
                         </button>
                     ))}
                 </div>, rootRef.current.closest('.app') ?? document.body

@@ -154,11 +154,14 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
+        await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
         await post(page, { type: 'modelInfo', defaultModel: 'opencode/free', selectedModel: 'opencode/free', models: ['opencode/free', 'openrouter/free', 'opencode/paid'], displayNames: { 'opencode/free': 'Free Model', 'openrouter/free': 'Router Free', 'opencode/paid': 'Paid Model' }, capabilities: { 'opencode/free': { provider: 'opencode', free: true }, 'openrouter/free': { provider: 'openrouter', free: true }, 'opencode/paid': { provider: 'opencode', free: false } } });
         await page.locator('.picker-chip').click();
-        await expect(page.locator('.model-pop-head .model-free-filter')).toHaveCount(1);
+        await expect(page.locator('.model-picker-scope').nth(1)).toHaveText(locale === 'en' ? 'Free models' : 'مدل های رایگان');
+        await page.locator('.model-picker-scope').nth(1).click();
+        await expect(page.locator('.model-picker-scope').nth(1)).toHaveAttribute('aria-pressed', 'true');
         await expect(page.getByRole('option')).toHaveCount(2);
-        await expect(page.locator('.model-provider').filter({ hasText: 'openrouter' })).toBeVisible();
+        await expect(page.locator('.model-picker-scope').filter({ hasText: 'OpenRouter' }).locator('.provider-brand-logo')).toHaveCSS('mask-image', /data:image\/svg\+xml/);
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toEqual([{ type: 'pingFreeModel', model: 'opencode/free', automatic: true }, { type: 'pingFreeModel', model: 'openrouter/free', automatic: true }]);
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'selectModel')).toHaveLength(0);
         await post(page, { type: 'modelPing', model: 'opencode/free', state: { status: 'checking' } });
@@ -174,8 +177,8 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toHaveLength(3);
         await post(page, { type: 'modelPing', model: 'opencode/free', state: { status: 'available', checkedAt: Date.now() } });
         await expect(page.locator('.model-ping').first()).toHaveClass(/available/);
-        await page.locator('.model-free-filter').click();
-        await expect(page.getByRole('option')).toHaveCount(3);
+        await page.getByRole('button', { name: 'OpenCode Zen', exact: true }).click();
+        await expect(page.getByRole('option')).toHaveCount(2);
         await expect(page.locator('.model-row').filter({ hasText: 'Paid Model' }).locator('.model-ping')).toHaveCount(0);
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toHaveLength(3);
         expect(await page.locator('.model-pop').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
@@ -215,7 +218,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await page.locator('.picker-chip').click();
         await expect(page.getByRole('option')).toHaveCount(0);
         expect((await sent(page)).some((message) => (message as { type: string }).type === 'selectModel')).toBe(false);
-        await page.locator('.model-free-filter').click();
+        await page.getByRole('button', { name: 'OpenCode Zen', exact: true }).click();
         await page.getByRole('option').click();
         expect(await sent(page)).toContainEqual({ type: 'selectModel', value: 'opencode/paid' });
         await expect(page.locator('.picker-chip')).toContainText('Paid Model');
@@ -254,12 +257,72 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await post(page, { type: 'modelInfo', defaultModel: model, models: [model], capabilities: { [model]: { provider: 'opencode', free: true, variants: [], noReasoning: true } } });
         await expect(page.locator('.thinking-row')).toHaveCount(0);
     });
+
+    test(`composer provider browsing, favorites and draft (${locale}, ${width})`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await post(page, { type: 'locale', locale });
+        await post(page, { type: 'showChat' });
+        await post(page, { type: 'savedCredentials', credentials: [
+            { id: 'first', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true },
+            { id: 'second', providerId: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', maskedKey: '••••', active: false },
+        ] });
+        const catalog = { models: ['reasoner'], displayNames: { reasoner: 'Same model' }, contextWindows: { reasoner: 128000 },
+            capabilities: { reasoner: { reasoningLevels: ['low', 'high'] } } };
+        await post(page, { type: 'modelInfo', credentialId: 'first', defaultModel: 'reasoner', selectedModel: 'reasoner', ...catalog });
+        await page.locator('.composer-input').fill('Keep this draft');
+        await page.locator('.picker-chip').click();
+        const rail = page.locator('.model-picker-rail');
+        await expect(rail.getByRole('button').first()).toHaveText(locale === 'en' ? 'Favorites' : 'علاقه مندی ها');
+        await expect(page.locator('.model-picker-catalog .model-search')).toBeVisible();
+        await rail.getByRole('button', { name: 'OpenAI' }).click();
+        await page.locator('.model-favorite').click();
+        await rail.getByRole('button', { name: 'OpenRouter' }).click();
+        const browse = (await sent(page)).find((message) => (message as { type: string }).type === 'browseProviderModels') as { requestId: string };
+        expect(browse).toMatchObject({ credentialId: 'second' });
+        await post(page, { type: 'providerModels', requestId: 'stale', credentialId: 'second', catalog });
+        await expect(page.getByRole('option')).toHaveCount(0);
+        await post(page, { type: 'providerModels', requestId: browse.requestId, credentialId: 'second', catalog });
+        await expect(page.getByRole('option')).toHaveAttribute('aria-selected', 'false');
+        await expect(page.locator('.model-row')).toHaveCSS('direction', 'ltr');
+        await expect(page.locator('.picker-chip')).not.toContainText('OpenAI');
+        await page.locator('.model-favorite').click();
+        await rail.getByRole('button').first().click();
+        await expect(page.getByRole('option')).toHaveCount(2);
+        await expect(page.locator('.model-provider')).toHaveText(['OpenRouter', 'OpenAI']);
+        await expect(page.getByRole('option').filter({ hasText: 'OpenAI' })).toHaveAttribute('aria-selected', 'true');
+        const label = page.getByRole('option').filter({ hasText: 'OpenRouter' }).locator('.model-item-label');
+        const [modelBox, providerBox] = await Promise.all([
+            label.locator('.model-item-name').boundingBox(), label.locator('.model-provider').boundingBox(),
+        ]);
+        expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(providerBox!.x);
+        expect(Math.abs(modelBox!.y - providerBox!.y)).toBeLessThan(5);
+        await page.getByRole('option').filter({ hasText: 'OpenRouter' }).click();
+        const select = (await sent(page)).find((message) => (message as { type: string }).type === 'selectProviderModel') as { requestId: string };
+        expect(select).toMatchObject({ credentialId: 'second', model: 'reasoner' });
+        await expect(page.locator('.send-btn')).toBeDisabled();
+        await post(page, { type: 'modelInfo', credentialId: 'second', defaultModel: 'reasoner', selectedModel: 'reasoner', ...catalog });
+        await post(page, { type: 'providerModelSelection', requestId: select.requestId });
+        await expect(page.locator('.picker-chip')).not.toContainText('OpenRouter');
+        await expect(page.getByRole('option').filter({ hasText: 'OpenRouter' })).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');
+        await expect(page.locator('.send-btn')).toBeEnabled();
+        await expect(page.locator('.thinking-seg-opt')).toHaveCount(3);
+        const favoriteActions = (await sent(page)).filter((message) => (message as { type: string }).type === 'modelFavoriteSet');
+        expect(favoriteActions).toMatchObject([
+            { favorite: { engine: 'xratu', provider: 'first', model: 'reasoner' }, enabled: true },
+            { favorite: { engine: 'xratu', provider: 'second', model: 'reasoner' }, enabled: true },
+        ]);
+        await page.getByRole('option').filter({ hasText: 'OpenRouter' }).locator('..').locator('.model-favorite').click();
+        await expect(page.getByRole('option')).toHaveCount(1);
+    });
 }
 
 test('arriving models probe eligible free entries once and paid-only catalogs stay explicit', async ({ page }) => {
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
+    await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
     await page.locator('.picker-chip').click();
+    await page.getByRole('button', { name: 'Free models' }).click();
     const info = { type: 'modelInfo', models: ['opencode/free', 'opencode/paid', 'opencode/unknown'], capabilities: { 'opencode/free': { provider: 'opencode', free: true }, 'opencode/paid': { provider: 'opencode', free: false }, 'opencode/unknown': { provider: 'opencode' } } };
     await post(page, info);
     await expect.poll(async () => (await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toEqual([{ type: 'pingFreeModel', model: 'opencode/free', automatic: true }]);
@@ -270,9 +333,9 @@ test('arriving models probe eligible free entries once and paid-only catalogs st
 
     // Switching to a paid-only catalog keeps free-only filter explicit and never pings paid models.
     await post(page, { type: 'modelInfo', defaultModel: 'opencode/paid', selectedModel: 'opencode/paid', models: ['opencode/paid'], capabilities: { 'opencode/paid': { provider: 'opencode', free: false } } });
-    await expect(page.locator('.model-free-filter')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: 'Free models' })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('option')).toHaveCount(0);
-    await page.locator('.model-free-filter').click();
+    await page.getByRole('button', { name: 'OpenCode Zen', exact: true }).click();
     await expect(page.getByRole('option')).toHaveCount(1);
     expect((await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toHaveLength(1);
 });
@@ -335,4 +398,56 @@ test('first-run OpenCode entry, busy/path guards, and engine-aware historical ed
         await expect(page.locator('.composer-edit-cancel')).toHaveCount(0);
         await expect(page.locator('.composer-input')).toHaveValue('Ordinary draft');
     }
+});
+
+test('favorites remain visible when the active model catalog changes', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    await post(page, { type: 'savedCredentials', credentials: [
+        { id: 'first', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: '••••', active: true },
+    ] });
+    await post(page, { type: 'modelFavorites', favorites: [
+        { engine: 'xratu', provider: 'first', model: 'one', label: 'One' },
+        { engine: 'xratu', provider: 'first', model: 'two', label: 'Two' },
+    ] });
+    await post(page, { type: 'modelInfo', credentialId: 'first', defaultModel: 'one', selectedModel: 'one', models: ['one', 'two'], displayNames: { one: 'One', two: 'Two' } });
+    await page.locator('.picker-chip').click();
+    await expect(page.getByRole('option')).toHaveCount(2);
+    await page.getByRole('option').filter({ hasText: 'One' }).click();
+    await post(page, { type: 'modelInfo', credentialId: 'first', defaultModel: 'one', selectedModel: 'one', models: ['one'], displayNames: { one: 'One' } });
+    await expect(page.getByRole('option')).toHaveCount(2);
+    await expect(page.getByRole('option').filter({ hasText: 'Two' })).toBeVisible();
+});
+
+test('failed discovery clears the previous account models and keeps the error', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    const credentials = [
+        { id: 'first', providerId: 'openai', label: 'First', baseUrl: 'https://example.test/v1', maskedKey: '••••', active: true },
+        { id: 'second', providerId: 'openai', label: 'Second', baseUrl: 'https://example.test/v1', maskedKey: '••••', active: false },
+    ];
+    await post(page, { type: 'savedCredentials', credentials });
+    await post(page, { type: 'modelInfo', credentialId: 'first', defaultModel: 'first-only', selectedModel: 'first-only', models: ['first-only'] });
+    await post(page, { type: 'openCredentials' });
+    await post(page, { type: 'modelInfo', credentialId: 'second', defaultModel: '', selectedModel: '', models: [] });
+    await post(page, { type: 'byokCredentialError', value: 'Discovery failed' });
+    await post(page, { type: 'savedCredentials', credentials: credentials.map(c => ({ ...c, active: c.id === 'second' })) });
+    await post(page, { type: 'credentialsSaved' });
+    await expect(page.getByRole('alert').filter({ hasText: 'Discovery failed' })).toBeVisible();
+    await expect(page.locator('.cred-page')).not.toContainText('first-only');
+});
+
+test('providers follow the active engine without a separate selector', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+    await post(page, { type: 'openCredentials' });
+    await expect(page.locator('.cred-page')).toBeVisible();
+    await expect(page.locator('.scoped-page > .engine-scope')).toHaveCount(0);
+    await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+    await expect(page.locator('.native-providers')).toBeVisible();
+    await expect.poll(async () => (await sent(page)).some(message => (message as { type: string }).type === 'nativeGetState')).toBe(true);
+    await post(page, { type: 'enginesState', state: { active: 'xratu', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
+    await expect(page.locator('.cred-page')).toBeVisible();
+    await expect(page.locator('.engine-scope')).toHaveCount(0);
 });

@@ -23,6 +23,7 @@ for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
     test(`OAuth controls and connected accounts fit cleanly in ${locale} at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
+        if (width === 420 && await page.locator('.workbench.navigation-open').count()) await page.locator('.toolbar > .sidebar-toggle').click();
         for (const method of [null, 'browser', 'device', 'connected']) {
             await post(page, { type: 'oauthState', state: {
                 providers: [provider],
@@ -66,7 +67,7 @@ for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
         await expect(page.locator('.cred-oauth-account-card')).toHaveCount(2);
         await expect(page.locator('.cred-oauth-registration')).toHaveCount(0);
         await expect(page.locator('.saved-credential')).toHaveCount(1);
-        await expect(page.locator('.cred-oauth-account').first()).toHaveAttribute('title', accounts[0].accountLabel);
+        await expect(page.locator('.cred-oauth-account').first()).not.toContainText(accounts[0].accountLabel);
         const overflow = await page.locator('.cred-oauth-row').evaluate((row) => row.scrollWidth > row.clientWidth + 1);
         expect(overflow).toBe(false);
         const overlap = await page.locator('.cred-oauth-account-head').evaluateAll((heads) => heads.some((head) => {
@@ -87,7 +88,6 @@ for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
 }
 
 test('account actions, local-runtime sync, remembered reconnect, and delete-as-signout', async ({ page }) => {
-    await page.locator('.drawer-head .icon-btn').click();
     // Neutral subscription subtitle and browser-only provider check.
     await post(page, { type: 'oauthState', state: { providers: [{ ...provider, methods: ['browser'] }] } });
     await expect(page.getByText('Use your provider subscription instead of an API key', { exact: true })).toHaveCount(1);
@@ -110,7 +110,7 @@ test('account actions, local-runtime sync, remembered reconnect, and delete-as-s
         { providerId: provider.providerId, credentialId: 'two', accountLabel: 'second@example.test', active: false },
     ];
     await post(page, { type: 'oauthState', state: { providers: [provider], accounts } });
-    const second = page.locator('.cred-oauth-account-card').filter({ hasText: 'second@example.test' });
+    const second = page.locator('.cred-oauth-account-card').nth(1);
     await second.getByRole('button', { name: 'Use account' }).click();
     await second.getByRole('button', { name: 'Sign out', exact: true }).click();
     expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
@@ -129,7 +129,7 @@ test('account actions, local-runtime sync, remembered reconnect, and delete-as-s
         providers: [provider],
         accounts: [{ providerId: provider.providerId, credentialId: 'oauth-1', accountLabel: 'sub@example.test', active: true }],
     } });
-    const subCard = page.locator('.cred-oauth-account-card').filter({ hasText: 'sub@example.test' });
+    const subCard = page.locator('.cred-oauth-account-card').first();
     await expect(subCard).not.toHaveClass(/active/);
     await subCard.getByRole('button', { name: 'Use account' }).click();
     const byokRow = page.locator('.saved-credential').filter({ hasText: 'OpenAI' });

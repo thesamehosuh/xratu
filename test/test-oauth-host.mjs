@@ -100,7 +100,7 @@ assert.equal(disposed, 2);
 const tmp = mkdtempSync(join(tmpdir(), 'xratu-oauth-host-'));
 try {
     const handler = { providerId: 'test', storageKey: 'test', revoke: async () => { throw new Error('offline'); } };
-    const h = hostMethods(['_deleteLlmCredential', '_oauthSignOut'], { getOAuthProvider: () => handler });
+    const h = hostMethods(['_deleteLlmCredential', '_deleteLlmCredentialNow', '_oauthSignOut', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending'], { getOAuthProvider: () => handler });
     let credentials = [{ id: 'oauth', oauthProviderId: 'test', oauthStorageKey: 'test', baseUrl: 'https://test.invalid', apiKey: '' }];
     let tokens = { accessToken: 'access', expiresAt: Date.now() + 3600000 };
     const store = { read: async () => tokens, write: async (_key, next) => { tokens = next; } };
