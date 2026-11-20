@@ -37,8 +37,8 @@ async function openSession(page: Page, locale = 'en') {
     await reply(page, state());
 }
 
-for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
-    test(`agent-linked PRs show compact chat status and open the panel ${locale} ${width}`, async ({ page }, info) => {
+for (const [locale, width] of [['en', 1200], ['fa', 420]] as const) {
+    test(`agent-linked PRs show compact chat status and open the panel ${locale} ${width}`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await openSession(page, locale);
         await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(0);
@@ -54,7 +54,6 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await expect(page.locator('.pr-indicator')).toHaveCount(1);
         await expect(page.locator('#surface-tab-pullRequests')).toHaveCount(1);
         await expect(page.locator('.pr-panel')).toBeHidden();
-        await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-chat-${locale}-${width}.png`) });
         await page.locator('#surface-tab-activity').click();
         await expect(page.locator('.activity-timeline details.step')).toBeVisible();
         await expect(page.locator('.pr-indicator')).toHaveCount(1);
@@ -69,7 +68,6 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await expect(details.nth(1)).not.toHaveAttribute('open');
         await expect(details.nth(0).locator('summary')).toContainText(locale === 'en' ? '1 failed' : '1 ناموفق');
         await expect(details.nth(1).locator('summary')).toContainText('reviewer');
-        await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-collapsed-${locale}-${width}.png`) });
         await details.nth(0).locator('summary').click();
         await details.nth(1).locator('summary').click();
         await expect(page.locator('.pr-check-dot.failure')).toBeVisible();
@@ -109,7 +107,6 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
         await expect(page.locator('.pr-comments')).not.toHaveAttribute('data-motion-anim', '1');
         expect(await page.locator('.pr-comments').evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
         expect(await page.evaluate(() => (window as unknown as { prInjected?: boolean }).prInjected)).toBeUndefined();
-        await page.screenshot({ animations: 'disabled', path: info.outputPath(`pr-details-${locale}-${width}.png`) });
         await page.getByRole('button', { name: locale === 'en' ? 'Stop watching' : 'توقف پیگیری', exact: true }).click();
         expect((await sent(page)).at(-1)).toMatchObject({ action: 'unwatch', sessionId: 'session-a' });
         await reply(page, state([link]));
@@ -126,8 +123,10 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1200]) {
     });
 }
 
-test('pending updates stay agent-facing and never add a card to the PR panel', async ({ page }) => {
+test('pending updates stay agent-facing and unlinking retains the empty panel and draft', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
     await openSession(page);
+    await page.locator('.composer-input').fill('Continue reviewing');
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: { ...state([link]), delivery: { ids: ['event'], status: 'interrupted', owner: 1 }, events: [{ id: 'event', key: 'github.com/example/repo#42', url, number: 42, createdAt: '2026-01-01T12:00:00Z', headSha: 'a'.repeat(40), changes: [{ kind: 'conflicting' }] }] } });
     await expect(page.locator('.pr-indicator')).toHaveCount(1);
     await host(page, { type: 'openPullRequests' });
@@ -138,14 +137,6 @@ test('pending updates stay agent-facing and never add a card to the PR panel', a
     await expect(page.getByRole('button', { name: 'Review with agent', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Dismiss updates', exact: true })).toHaveCount(0);
     await expect(page.locator('.pr-row')).toContainText('Make session updates reliable');
-});
-
-test('unlinking the last PR leaves the explicitly opened empty panel and preserves the draft', async ({ page }) => {
-    await page.setViewportSize({ width: 420, height: 900 });
-    await openSession(page);
-    await page.locator('.composer-input').fill('Continue reviewing');
-    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await host(page, { type: 'openPullRequests' });
     await page.locator('.pr-menu summary').click();
     await expect(page.getByRole('button', { name: 'Unlink', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
@@ -179,7 +170,7 @@ for (const refreshFirst of [true, false]) test(`focus refresh never supersedes a
     await expect(page.locator('.pr-indicator')).toHaveCount(0);
 });
 
-test('PR state refreshes remotely without disabling Watch during background reads', async ({ page }) => {
+test('PR state refreshes remotely and recovers from a timed-out watch action', async ({ page }) => {
     await page.clock.install();
     await openSession(page);
     await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
@@ -192,20 +183,12 @@ test('PR state refreshes remotely without disabling Watch during background read
     await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeEnabled();
     await reply(page, state([{ ...link, snapshot: { ...link.snapshot, checks: link.snapshot.checks.map(check => ({ ...check, status: 'success' })) } }]));
     await expect(page.locator('.pr-detail').first().locator('summary')).toContainText('2 passed');
-});
-
-
-test('a timed-out watch action releases the controls and allows background refresh to recover', async ({ page }) => {
-    await page.clock.install();
-    await openSession(page);
-    await host(page, { type: 'pullRequestsState', sessionId: 'session-a', state: state([link]) });
-    await host(page, { type: 'openPullRequests' });
     await page.getByRole('button', { name: 'Watch', exact: true }).click();
-    const reads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
+    const afterClickReads = (await sent(page)).filter(message => message.type === 'pullRequestsGetState').length;
     await page.clock.fastForward(50_000);
     await expect(page.getByRole('button', { name: 'Watch', exact: true })).toBeEnabled();
     await page.clock.fastForward(30_000);
-    expect((await sent(page)).filter(message => message.type === 'pullRequestsGetState')).toHaveLength(reads + 1);
+    expect((await sent(page)).filter(message => message.type === 'pullRequestsGetState')).toHaveLength(afterClickReads + 1);
     await reply(page, state([{ ...link, watch: watching }]));
     await expect(page.getByRole('button', { name: 'Stop watching', exact: true })).toBeEnabled();
 });

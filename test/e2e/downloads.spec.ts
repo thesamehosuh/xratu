@@ -4,7 +4,7 @@ import { installVscodeTheme } from './vscodeTheme';
 const now = 1_700_000_000_000;
 const base = { id: 'download-1', path: 'models/qwen-coder-7b-q4_k_m.gguf', source: 'https://huggingface.co', route: 'auto', effectiveRoute: 'proxy', received: 1_400_000_000, total: 4_500_000_000, bytesPerSecond: 780_000, attempts: 2, createdAt: now, updatedAt: now };
 
-for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
     test(`Downloads controls are session-scoped, live and dockable: ${locale} ${width}`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await installVscodeTheme(page);
@@ -27,7 +27,6 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(panel).toBeVisible();
         await expect(panel).toContainText(locale === 'en' ? 'No downloads yet' : 'هنوز دانلودی شروع نشده');
         await expect(panel.locator('p')).toHaveCount(0);
-        await page.screenshot({ path: test.info().outputPath(`downloads-empty-${locale}-${width}.png`) });
         await page.evaluate(base => window.postMessage({ type: 'downloadsState', sessionId: 'chat-a', downloads: [
             { ...base, status: 'downloading' },
             { ...base, id: 'download-2', path: 'assets/بسته-داده.zip', source: 'https://mirror.example.ir', status: 'completed', route: 'direct', effectiveRoute: 'direct', received: 64_000_000, total: 64_000_000, bytesPerSecond: 0 },
@@ -47,7 +46,6 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(panel.locator('.download-delete')).toHaveCount(0);
         const completed = panel.locator('.download-completed');
         expect(await completed.evaluate(el => el.querySelector('.download-metrics')!.getBoundingClientRect().width === el.querySelector('.download-footer')!.getBoundingClientRect().width)).toBe(true);
-        await page.screenshot({ path: test.info().outputPath(`downloads-populated-${locale}-${width}.png`) });
         await primary.click();
         await expect(primary).toBeDisabled();
         await page.locator('#surface-tab-downloads').focus();

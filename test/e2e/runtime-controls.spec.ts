@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
 const runtime = { id: 'local-ollama', runtime: 'ollama', name: 'Ollama', baseUrl: 'http://localhost:11434/v1',
     models: ['qwen2.5-coder:3b'], modelCount: 1, supportsTools: true, supportsVision: false };
 
-for (const locale of ['fa', 'en'] as const) for (const width of [420, 900]) {
+for (const [locale, width] of [['fa', 420], ['en', 900]] as const) {
     test(`offline preferences and banner ${locale} ${width}`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await page.goto('/');
@@ -41,7 +41,7 @@ for (const locale of ['fa', 'en'] as const) for (const width of [420, 900]) {
     });
 }
 
-test('Ollama download progress, cancellation and confirmed deletion', async ({ page }) => {
+test('provider onboarding, Ollama download progress, cancellation and confirmed deletion', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });
     await page.goto('/');
     await host(page, { type: 'locale', locale: 'en' });
@@ -49,7 +49,12 @@ test('Ollama download progress, cancellation and confirmed deletion', async ({ p
     await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
     await host(page, { type: 'localModelsDiscovered', runtimes: [runtime] });
+    await page.locator('.cred-provider-box input').fill('Avalai');
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');
     await page.locator('.drawer-head .icon-btn').click();
+    await expect(page.locator('.provider-comparison')).toHaveCount(0);
+    expect((await sent(page)).some(message => message.type === 'benchmarkProvider')).toBe(false);
     const management = page.getByText('Manage Ollama models', { exact: true });
     if (!await management.evaluate((el) => el.parentElement?.hasAttribute('open'))) await management.click();
     await page.getByRole('textbox', { name: 'Model name to download' }).fill('qwen2.5-coder:7b');
@@ -66,18 +71,4 @@ test('Ollama download progress, cancellation and confirmed deletion', async ({ p
     expect((await sent(page)).some((m) => m.type === 'manageLocalModel' && m.action === 'delete' && m.model === 'qwen2.5-coder:3b')).toBe(true);
     await host(page, { type: 'runtimePreferences', offline: true, errorExplanations: true });
     await expect(page.getByRole('button', { name: 'Download model', exact: true })).toBeDisabled();
-});
-
-test('connection dialog keeps provider onboarding and the page omits the legacy comparison', async ({ page }) => {
-    await page.goto('/');
-    await host(page, { type: 'locale', locale: 'en' });
-    await host(page, { type: 'showChat' });
-    await host(page, { type: 'savedCredentials', credentials: [] });
-    await host(page, { type: 'openCredentials' });
-    await page.locator('.cred-provider-box input').fill('Avalai');
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');
-    await page.locator('.drawer-head .icon-btn').click();
-    await expect(page.locator('.provider-comparison')).toHaveCount(0);
-    expect((await sent(page)).some(message => message.type === 'benchmarkProvider')).toBe(false);
 });

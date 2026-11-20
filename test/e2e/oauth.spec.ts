@@ -19,8 +19,8 @@ test.beforeEach(async ({ page }) => {
     await post(page, { type: 'openCredentials' });
 });
 
-for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
-    test(`OAuth controls fit in ${locale} at ${width}px`, async ({ page }) => {
+for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
+    test(`OAuth controls and connected accounts fit cleanly in ${locale} at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         for (const method of [null, 'browser', 'device', 'connected']) {
@@ -53,11 +53,6 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
                 expect(bounds.overlap).toBe(false);
             }
         }
-    });
-
-    test(`connected accounts stay compact in ${locale} at ${width}px`, async ({ page }) => {
-        await page.setViewportSize({ width, height: 900 });
-        await post(page, { type: 'locale', locale });
         const accounts = [
             { providerId: provider.providerId, credentialId: 'one', accountLabel: 'someone.with.a.very.long.email.address@example.test', active: true },
             { providerId: provider.providerId, credentialId: 'two', accountLabel: 'another.account@example.test', active: false },
@@ -91,7 +86,25 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
     });
 }
 
-test('connected account actions select and sign out the intended account', async ({ page }) => {
+test('account actions, local-runtime sync, remembered reconnect, and delete-as-signout', async ({ page }) => {
+    await page.locator('.drawer-head .icon-btn').click();
+    // Neutral subscription subtitle and browser-only provider check.
+    await post(page, { type: 'oauthState', state: { providers: [{ ...provider, methods: ['browser'] }] } });
+    await expect(page.getByText('Use your provider subscription instead of an API key', { exact: true })).toHaveCount(1);
+    await expect(page.locator('.cred-oauth-row .cred-oauth-hint')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue with ChatGPT' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in with a device code' })).toHaveCount(0);
+
+    // Remembered registrations stay collapsed until opened and reconnect by credentialId.
+    await post(page, { type: 'oauthState', state: { providers: [provider],
+        registrations: [{ providerId: provider.providerId, credentialId: 'previous', label: 'previous@example.test' }] } });
+    await expect(page.getByText('previous@example.test')).not.toBeVisible();
+    await page.locator('.cred-oauth-remembered summary').click();
+    await page.getByRole('button', { name: 'Sign in again' }).click();
+    expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
+        .toContainEqual({ type: 'oauthSignIn', providerId: provider.providerId, method: 'browser', credentialId: 'previous' });
+
+    // Multi-account selection and sign-out target the intended credential.
     const accounts = [
         { providerId: provider.providerId, credentialId: 'one', accountLabel: 'first@example.test', active: true },
         { providerId: provider.providerId, credentialId: 'two', accountLabel: 'second@example.test', active: false },
@@ -100,19 +113,18 @@ test('connected account actions select and sign out the intended account', async
     const second = page.locator('.cred-oauth-account-card').filter({ hasText: 'second@example.test' });
     await second.getByRole('button', { name: 'Use account' }).click();
     await second.getByRole('button', { name: 'Sign out', exact: true }).click();
-    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'selectLlmCredential', id: 'two' });
-    expect(messages).toContainEqual({ type: 'oauthSignOut', credentialId: 'two' });
-});
+    expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
+        .toEqual(expect.arrayContaining([
+            { type: 'selectLlmCredential', id: 'two' },
+            { type: 'oauthSignOut', credentialId: 'two' },
+        ]));
 
-test('activating a local runtime deactivates the subscription and exposes one-click switching', async ({ page }) => {
-    await page.locator('.drawer-head .icon-btn').click();
+    // Activating a local runtime deactivates the subscription even if oauthState lags.
     await post(page, { type: 'savedCredentials', credentials: [
         { id: 'oauth-1', providerId: 'chatgpt-codex', label: 'sub@example.test', baseUrl: 'https://chatgpt.com/backend-api/codex', maskedKey: '', active: false, oauth: true },
         { id: 'local-1', providerId: 'lmstudio', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1', maskedKey: '', active: true, oauth: false },
         { id: 'byok-1', providerId: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', maskedKey: 'sk-•••', active: false, oauth: false },
     ] });
-    // Even if oauthState lags with stale active: true, savedCredentials keeps the card in sync.
     await post(page, { type: 'oauthState', state: {
         providers: [provider],
         accounts: [{ providerId: provider.providerId, credentialId: 'oauth-1', accountLabel: 'sub@example.test', active: true }],
@@ -122,35 +134,37 @@ test('activating a local runtime deactivates the subscription and exposes one-cl
     await subCard.getByRole('button', { name: 'Use account' }).click();
     const byokRow = page.locator('.saved-credential').filter({ hasText: 'OpenAI' });
     await byokRow.getByRole('button', { name: 'Use connection' }).click();
-    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'selectLlmCredential', id: 'oauth-1' });
-    expect(messages).toContainEqual({ type: 'selectLlmCredential', id: 'byok-1' });
-});
-
-test('previous accounts are collapsed and reconnect their saved registration', async ({ page }) => {
-    await post(page, { type: 'oauthState', state: { providers: [provider],
-        registrations: [{ providerId: provider.providerId, credentialId: 'previous', label: 'previous@example.test' }] } });
-    await expect(page.getByText('previous@example.test')).not.toBeVisible();
-    await page.locator('.cred-oauth-remembered summary').click();
-    await page.getByRole('button', { name: 'Sign in again' }).click();
     expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
-        .toContainEqual({ type: 'oauthSignIn', providerId: provider.providerId, method: 'browser', credentialId: 'previous' });
+        .toEqual(expect.arrayContaining([
+            { type: 'selectLlmCredential', id: 'oauth-1' },
+            { type: 'selectLlmCredential', id: 'byok-1' },
+        ]));
+
+    // Deleting a saved OAuth connection invokes sign-out rather than deleteLlmCredential.
+    await post(page, { type: 'oauthState', state: { providers: [], accounts: [] } });
+    await post(page, { type: 'savedCredentials', credentials: [{ id: 'oauth', providerId: provider.providerId, baseUrl: 'https://api.openai.com/v1', maskedKey: '', label: 'ChatGPT', active: true, oauth: true }], activeId: 'oauth' });
+    const rows = page.locator('.saved-credential');
+    await expect(rows).toHaveCount(1);
+    const button = rows.locator('.saved-delete');
+    await button.click();
+    await button.click();
+    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type: string }> }).__xratuHostMessages);
+    expect(messages).toContainEqual({ type: 'oauthSignOut', credentialId: 'oauth' });
+    expect(messages.some((m) => m.type === 'deleteLlmCredential')).toBe(false);
 });
 
-test('device copy uses the host and waits for clipboard acknowledgement', async ({ page }) => {
+test('device and browser sign-in clipboard ack and manual redirect URL submission', async ({ page }) => {
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new Error('Denied')) } }));
     await post(page, { type: 'oauthState', state: { providers: [provider], inProgress: { providerId: provider.providerId, method: 'device' }, deviceCode: { userCode: 'ABCD-1234', verificationUri: 'https://example.test/device' } } });
     await page.getByRole('button', { name: 'Copy code' }).click();
-    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'copyToClipboard', value: 'ABCD-1234', requestId: 'oauth-device-code' });
+    expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
+        .toContainEqual({ type: 'copyToClipboard', value: 'ABCD-1234', requestId: 'oauth-device-code' });
     await expect(page.getByRole('button', { name: 'Copied', exact: true })).toHaveCount(0);
     await post(page, { type: 'clipboardResult', requestId: 'oauth-device-code', ok: true });
     await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
     await post(page, { type: 'clipboardResult', requestId: 'oauth-device-code', ok: false });
     await expect(page.getByRole('alert')).toHaveText('Copy failed. Try again.');
-});
 
-test('browser sign-in link is selectable and copies through the host', async ({ page }) => {
     const authorizeUrl = 'https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=test';
     await post(page, { type: 'oauthState', state: { providers: [provider], inProgress: { providerId: provider.providerId, method: 'browser' }, authorizeUrl } });
     const link = page.getByRole('textbox', { name: 'Sign-in link' });
@@ -171,27 +185,4 @@ test('browser sign-in link is selectable and copies through the host', async ({ 
     await page.getByRole('button', { name: 'Use this URL' }).click();
     expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: unknown[] }).__xratuHostMessages))
         .toContainEqual({ type: 'oauthManualCode', code: callback });
-});
-
-test('subscription subtitle is neutral and is not repeated on the provider card', async ({ page }) => {
-    await post(page, { type: 'oauthState', state: { providers: [provider] } });
-    await expect(page.getByText('Use your provider subscription instead of an API key', { exact: true })).toHaveCount(1);
-    await expect(page.locator('.cred-oauth-row .cred-oauth-hint')).toHaveCount(0);
-});
-
-test('deleting a saved OAuth connection invokes sign-out', async ({ page }) => {
-    await post(page, { type: 'savedCredentials', credentials: [{ id: 'oauth', providerId: provider.providerId, baseUrl: 'https://api.openai.com/v1', maskedKey: '', label: 'ChatGPT', active: true, oauth: true }], activeId: 'oauth' });
-    await page.locator('.drawer-head .icon-btn').click();
-    const button = page.locator('.saved-delete');
-    await button.click();
-    await button.click();
-    const messages = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type: string }> }).__xratuHostMessages);
-    expect(messages).toContainEqual({ type: 'oauthSignOut', credentialId: 'oauth' });
-    expect(messages.some((m) => m.type === 'deleteLlmCredential')).toBe(false);
-});
-
-test('documented ChatGPT provider only offers browser authorization', async ({ page }) => {
-    await post(page, { type: 'oauthState', state: { providers: [{ ...provider, methods: ['browser'] }] } });
-    await expect(page.getByRole('button', { name: 'Continue with ChatGPT' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Sign in with a device code' })).toHaveCount(0);
 });

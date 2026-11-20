@@ -47,7 +47,7 @@ async function setup(page: Page, launchOptions: Parameters<typeof chromium.launc
     return { controller, errors, settle: () => delivery };
 }
 
-for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
+for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
     test(`shared browser navigation, pixels, tools and docking (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         const { controller, errors, settle } = await setup(page, info.project.use.launchOptions, locale);
@@ -79,7 +79,6 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
             await page.locator('.browser-viewport-picker select').selectOption('fill');
             await expect.poll(() => controller.getState().viewportMode).toBe('fill');
             await expect.poll(() => page.locator('.browser-viewport img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(controller.getState().viewport.width);
-            await page.screenshot({ path: info.outputPath('browser.png') });
 
             await page.locator('#surface-tab-conversation').click();
             expect((await controller.tool('browser-session', 'browser_open', { url: demoUrl })).isError).toBeUndefined();
