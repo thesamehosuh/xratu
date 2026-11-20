@@ -236,9 +236,10 @@ Inspect the actual UI in both locales at narrow and wide widths as above.
 
 ## Releasing
 
-Pushing a `v*` tag is the whole release. `.github/workflows/release.yml` builds
-the VSIX behind the same gate as CI and then creates the GitHub Release with
-that exact artifact attached — no manual download/upload step.
+Pushing a `v*` tag starts `.github/workflows/release.yml`. The workflow runs
+the host and webview type checks and webview unit tests, builds the VSIX, and
+attaches it to the GitHub Release. Pull request CI also runs lint, host tests,
+and browser tests before changes land on `main`.
 
 Bump `version` in `package.json` in the same PR as the user-visible change (it
 is what the packaged VSIX reports), then tag `main`:
