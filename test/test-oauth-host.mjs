@@ -253,7 +253,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
 
 {
     const policy = require('../out/networkPolicy.js');
-    const h = hostMethods(['_setOfflineMode'], { setOfflineMode: policy.setOfflineMode, externalMcpInstance: null });
+    const h = hostMethods(['_setOfflineMode', '_resetOpenCodeEngine'], { setOfflineMode: policy.setOfflineMode, externalMcpInstance: null });
     h._globalState = { update: async () => {} };
     h._sendRuntimePreferences = () => {};
     h._cancelOAuthSignIn = async () => {};
@@ -263,8 +263,11 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     h._modelManagementAction = 'delete';
     let browserClosed = 0;
     h._browser = { close: () => { browserClosed++; } };
-    let downloadsPaused = 0, nativeResets = 0;
-    h._resetOpenCodeEngine = async () => { nativeResets++; };
+    let downloadsPaused = 0, nativeDisposals = 0;
+    h._activeEngine = 'xratu';
+    h._cancelSetup = h._cancelNativeSetup = h._cancelModelPings = h._postBackgroundJobs = () => {};
+    h._setupAvailability = new Map();
+    h._openCodeEngine = { dispose: async () => { nativeDisposals++; } };
     h._downloads = { pauseForOffline: async () => { downloadsPaused++; } };
     try {
         policy.setOfflineMode(false);
@@ -273,7 +276,8 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
         await h._setOfflineMode(true);
         assert.equal(browserClosed, 1, 'offline closes existing browser connections');
         assert.equal(downloadsPaused, 1, 'offline pauses managed downloads');
-        assert.equal(nativeResets, 1, 'offline stops native services even when Xratu owns the chat');
+        assert.equal(nativeDisposals, 1, 'offline waits for native engine disposal while Xratu owns the chat');
+        assert.equal(h._openCodeEngine, undefined);
         assert.equal(remote.aborted, true, 'offline policy cancels remote requests');
         assert.equal(local.aborted, false, 'offline policy preserves loopback benchmarks');
         assert.equal(h._modelManagementController.signal.aborted, false, 'local deletion remains permitted');

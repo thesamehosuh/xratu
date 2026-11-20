@@ -38,6 +38,10 @@ try {
     const partialRepo = join(storageRoot, 'checkpoints', createHash('sha1').update(work).digest('hex').slice(0, 16));
     mkdirSync(partialRepo, { recursive: true });
     execFileSync('git', ['init', '--bare', '--quiet', partialRepo], { windowsHide: true });
+    const staleIndex = join(partialRepo, 'index.lock');
+    writeFileSync(staleIndex, '');
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(staleIndex, old, old);
     const recovered = await store.createCheckpoint(work, 'recover interrupted initialization');
     ok('an unborn shadow HEAD is seeded on retry', /^[a-f0-9]{12}$/.test(recovered));
 

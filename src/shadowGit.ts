@@ -259,6 +259,7 @@ export class ShadowCheckpointStore {
                 throw new Error(`Could not initialize checkpoint storage: ${init.stderr}`);
             }
         }
+        this.clearStaleLocks(dir);
         const head = await this.gitAsync(['rev-parse', '--verify', '--quiet', 'HEAD'], workspaceRoot);
         if (head.code !== 0 && head.code !== 1) throw new Error(`Could not read checkpoint HEAD: ${head.stderr}`);
         if (head.code === 1) {
@@ -283,7 +284,6 @@ export class ShadowCheckpointStore {
         const lines = new Set(excludes.split(/\r?\n/));
         const missing = SHADOW_EXCLUDES.filter(pattern => !lines.has(pattern));
         if (missing.length) fs.appendFileSync(excludePath, `${excludes && !excludes.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, 'utf-8');
-        this.clearStaleLocks(dir);
     }
 
     /** Large downloaded artifacts are data, not checkpoint blobs. Only the

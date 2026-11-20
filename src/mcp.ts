@@ -109,11 +109,10 @@ function ripgrepTargets(platform: NodeJS.Platform, arch: string): string[] {
  * Probing only the old layout is what made Windows search hard-error with
  * "rg is not installed" on a VS Code that had it bundled all along.
  */
-function stripSearchRoot(line: string, root: string): string {
-    const prefix = root.endsWith(path.sep) ? root : root + path.sep;
-    const start = line.slice(0, prefix.length);
-    const matches = process.platform === 'win32' ? start.toLowerCase() === prefix.toLowerCase() : start === prefix;
-    return matches ? line.slice(prefix.length) : line;
+function searchOperand(root: string, file: string): string {
+    const relative = path.relative(root, file);
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return file;
+    return relative || '.';
 }
 
 export function ripgrepCandidates(opts: {
@@ -1045,7 +1044,8 @@ async function dispatchTool(
         const searchPath = args.path || '.';
         const pattern = args.pattern;
         const include = args.include || '';
-        const fullPath = sanitizePath(searchPath, workspaceRoot);
+        const searchRoot = workspaceRoot && resolvedPath(workspaceRoot);
+        const fullPath = sanitizePath(searchPath, searchRoot);
         const rgArgs = ['-n', '--no-heading', '--color=never', '--max-columns=300', '--sort=path'];
         if (args.literal) rgArgs.push('-F');
         if (args.case_sensitive === false) rgArgs.push('-i');
@@ -1057,18 +1057,16 @@ async function dispatchTool(
         // `--` stops option parsing: a pattern like `--pre` must be taken
         // as the pattern (rg treats unknown `--x` flags as options - the
         // `--pre` preprocessing command would even EXECUTE a file).
-        rgArgs.push('--', pattern, fullPath);
+        rgArgs.push('--', pattern, searchOperand(searchRoot, fullPath));
         const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
         const limit = Math.max(1, Math.min(2000, Math.floor(Number(args.limit) || 200)));
-        const searchRoot = resolvedPath(workspaceRoot);
-        const results = (lines: string[]) => lines.map(line => stripSearchRoot(line, searchRoot));
         const run = await runRipgrepWindow(rg, rgArgs, searchRoot, offset, limit, 15_000, signal);
         if (run.spawnError) {
             if (signal?.aborted) throw run.spawnError;
             return { content: [{ type: 'text', text: `Error: ${run.spawnError.message}` }], isError: true };
         }
         if (run.timedOut) {
-            return { content: [{ type: 'text', text: JSON.stringify({ results: results(run.lines), truncated: true, next_offset: null, notice: 'Search timed out before completing; narrow pattern or path before continuing.' }) }], isError: true };
+            return { content: [{ type: 'text', text: JSON.stringify({ results: run.lines, truncated: true, next_offset: null, notice: 'Search timed out before completing; narrow pattern or path before continuing.' }) }], isError: true };
         }
         if (!run.more && run.lines.length === 0 && (run.exitCode === 1 || run.stderr.includes('no matches'))) {
             return { content: [{ type: 'text', text: 'No matches found.' }] };
@@ -1076,7 +1074,7 @@ async function dispatchTool(
         if (!run.more && run.exitCode && run.exitCode !== 1 && run.lines.length === 0) {
             return { content: [{ type: 'text', text: `Error: ${run.stderr || `ripgrep exited with code ${run.exitCode}`}` }], isError: true };
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ results: results(run.lines), truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ results: run.lines, truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
     } else if (name === 'edit_file') {
         const fullPath = sanitizePath(args.path, workspaceRoot);
         const target = pathIdentity(fullPath);
@@ -1111,12 +1109,12 @@ async function dispatchTool(
         }
         return { content: [{ type: 'text', text: `Applied ${edits.length} replacements to ${args.path}` + await diagnosticsSummary(vscode.Uri.file(fullPath)) }] };
     } else if (name === 'list_files') {
-        const root = sanitizePath(args.path || '.', workspaceRoot);
+        const listingRoot = workspaceRoot && resolvedPath(workspaceRoot);
+        const root = sanitizePath(args.path || '.', listingRoot);
         const depth = Math.max(1, Math.min(12, Number(args.max_depth) || 1));
         const limit = Math.max(1, Math.min(5000, Number(args.max_entries) || 200));
         const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
         const rows: string[] = []; let seen = 0; let more = false;
-        const listingRoot = resolvedPath(workspaceRoot);
         const kept = depth > 1 && args.include_ignored !== true ? await gitWorkspaceFiles(listingRoot) : null;
         const directories = new Set<string>();
         if (kept) {
@@ -1148,24 +1146,23 @@ async function dispatchTool(
         }
         const searchPath = args.path || '.';
         const pattern = args.pattern;
-        const fullPath = sanitizePath(searchPath, workspaceRoot);
+        const searchRoot = workspaceRoot && resolvedPath(workspaceRoot);
+        const fullPath = sanitizePath(searchPath, searchRoot);
         if (!fs.existsSync(fullPath)) {
             return { content: [{ type: 'text', text: `Error: path not found: ${searchPath}` }], isError: true };
         }
         const rgArgs = ['--files', '--sort=path', '--glob', pattern];
         if (args.hidden) rgArgs.push('--hidden', '-g', '!.git/**');
-        rgArgs.push('--', fullPath);
+        rgArgs.push('--', searchOperand(searchRoot, fullPath));
         const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
         const limit = Math.max(1, Math.min(2000, Math.floor(Number(args.limit) || 200)));
-        const searchRoot = resolvedPath(workspaceRoot);
-        const results = (lines: string[]) => lines.map(line => stripSearchRoot(line, searchRoot));
         const run = await runRipgrepWindow(rg, rgArgs, searchRoot, offset, limit, 15_000, signal);
         if (run.spawnError) {
             if (signal?.aborted) throw run.spawnError;
             return { content: [{ type: 'text', text: `Error: ${run.spawnError.message}` }], isError: true };
         }
         if (run.timedOut) {
-            return { content: [{ type: 'text', text: JSON.stringify({ paths: results(run.lines), truncated: true, next_offset: null }) }], isError: true };
+            return { content: [{ type: 'text', text: JSON.stringify({ paths: run.lines, truncated: true, next_offset: null }) }], isError: true };
         }
         if (!run.more && run.lines.length === 0 && (run.exitCode === 1 || run.stderr.includes('no matches'))) {
             return { content: [{ type: 'text', text: 'No matching files found.' }] };
@@ -1173,7 +1170,7 @@ async function dispatchTool(
         if (!run.more && run.exitCode && run.exitCode !== 1 && run.lines.length === 0) {
             return { content: [{ type: 'text', text: `Error: ${run.stderr || `ripgrep exited with code ${run.exitCode}`}` }], isError: true };
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ paths: results(run.lines), truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
+        return { content: [{ type: 'text', text: JSON.stringify({ paths: run.lines, truncated: run.more, next_offset: run.more ? offset + run.lines.length : null }) }] };
     } else if (name === 'skill') {
         // Agent Skills: progressive disclosure - return the SKILL.md body
         // (read-only, like read_file; available in plan mode). Bundled files

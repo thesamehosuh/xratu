@@ -297,6 +297,9 @@ export async function processIdentityStatusAsync(identity: ProcessIdentity): Pro
 let selfIdentity: Promise<ProcessIdentity> | undefined;
 export function captureSelfIdentity(): Promise<ProcessIdentity> {
     return selfIdentity ??= (process.platform === 'win32'
-        ? windowsStartTokenAsync(process.pid).then(token => ({pid: process.pid, token: token ?? 'unverified'}))
+        ? windowsStartTokenAsync(process.pid).then(token => {
+            if (token === null) selfIdentity = undefined;
+            return { pid: process.pid, token: token ?? 'unverified' };
+        })
         : Promise.resolve(captureIdentity(process.pid)!));
 }

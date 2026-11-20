@@ -941,7 +941,7 @@ export function App() {
                         contextWindows: msg.contextWindows ?? {},
                         capabilities: msg.capabilities ?? {},
                     });
-                    setSelectedModel((c) => msg.selectedModel === undefined ? c ?? (msg.defaultModel || null) : msg.selectedModel || null);
+                    setSelectedModel((c) => msg.selectedModel === undefined ? c ?? (msg.defaultModel || null) : msg.selectedModel || msg.defaultModel || null);
                     setVisionCapable(msg.visionCapable ?? null);
                     if (msg.overrides) setCtxOverrides(msg.overrides);
                     setThinkingLevels(msg.thinkingLevels ?? {});

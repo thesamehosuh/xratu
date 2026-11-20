@@ -11,8 +11,13 @@ export function resolvedPath(file: string): string {
 }
 
 export function pathIdentity(file: string): string {
-    const resolved = resolvedPath(file);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    if (process.platform !== 'win32') return resolvedPath(file);
+    let canonical: string;
+    // The native resolver reads the filesystem spelling while preserving
+    // distinct entries in Windows directories with case sensitivity enabled.
+    try { canonical = fs.realpathSync.native(file); }
+    catch { canonical = path.resolve(file); }
+    return canonical.replace(/^[a-z]:/i, drive => drive.toUpperCase());
 }
 
 export function isPortablePathComponent(part: string): boolean {
