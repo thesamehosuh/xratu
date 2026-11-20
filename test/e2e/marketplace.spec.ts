@@ -423,3 +423,29 @@ for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
         expect(save).toMatchObject({ target: 'global', servers: [{ name: 'zarinpal', url: 'https://www.zarinpal.com/docs/mcp' }] });
     });
 }
+
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1080]) {
+    test(`dirty server drafts can be discarded inside the webview (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.addInitScript(() => { window.confirm = () => false; });
+        await openMarketplace(page, locale);
+        const fa = locale === 'fa';
+        await openPageNavigation(page);
+        await page.locator('.page-sidebar').getByRole('button', { name: fa ? 'سرور ها' : 'Servers', exact: true }).click();
+        await page.getByRole('button', { name: fa ? 'افزودن سرور' : 'Add server', exact: true }).first().click();
+        const drawer = page.getByRole('dialog');
+        const input = drawer.getByRole('textbox').first();
+        await input.fill('local-docs');
+        await page.screenshot({ path: info.outputPath('dirty-server-draft.png') });
+        await page.keyboard.press('Escape');
+        const keep = drawer.getByRole('button', { name: fa ? 'ادامه ویرایش' : 'Keep editing' });
+        await expect(keep).toBeFocused();
+        await page.screenshot({ path: info.outputPath('discard-server-draft.png') });
+        await keep.click();
+        await expect(input).toHaveValue('local-docs');
+        await drawer.getByRole('button', { name: fa ? 'انصراف' : 'Cancel', exact: true }).last().click();
+        await drawer.getByRole('button', { name: fa ? 'دور ریختن تغییرات' : 'Discard changes' }).click();
+        await expect(drawer).toHaveCount(0);
+        expect((await sentMessages(page)).some(message => message.type === 'mcpSave')).toBe(false);
+    });
+}

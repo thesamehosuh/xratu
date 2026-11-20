@@ -4,6 +4,8 @@
  * so this only formats and sums. Currencies are never converted.
  */
 
+import { getLocale, t } from './i18n';
+
 export interface Cost {
     amount: number;
     currency: 'USD' | 'IRT';
@@ -15,7 +17,8 @@ export function formatCost(cost: Cost | null | undefined): string | null {
     if (cost.currency === 'IRT') {
         const toman = Math.round(cost.amount);
         // Below half a Toman there is nothing to show.
-        return toman > 0 ? `${toman.toLocaleString('fa-IR')} تومان` : null;
+        const persian = getLocale() === 'fa';
+        return toman > 0 ? `${toman.toLocaleString(persian ? 'fa-IR' : 'en-US')} ${t('usageCurrencyToman')}` : null;
     }
     const usd = cost.amount;
     // Anything that would render as $0.0000 is effectively nothing - showing

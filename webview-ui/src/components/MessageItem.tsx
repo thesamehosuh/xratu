@@ -1,3 +1,4 @@
+import { postMessage } from '../vscode';
 import { ToolDetails, toolArgs } from './ToolDetails';
 import { AgentNavigation } from './AgentNavigation';
 import { ToolImages } from './ToolImages';
@@ -2187,14 +2188,10 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
     const showUserFooter = role === 'user' && status === 'done';
     const showEditBtn =
         showUserFooter && !busy && userIndex !== undefined && !!onEditMessage;
-    const copyAnswer = async () => {
-        try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-        } catch {
-            /* clipboard unavailable */
-        }
+    const copyAnswer = () => {
+        postMessage({ type: 'copyToClipboard', value: text });
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
     };
 
     if (readOnly && isSystem) return null;

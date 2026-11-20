@@ -123,7 +123,7 @@ export function BrowserPanel({ onAvailable, visible, panelClass, sessionKey }: P
                 <button type="button" className="icon-btn" title={t('browserReload')} aria-label={t('browserReload')} disabled={!ready || starting} onClick={() => command({ action: 'reload' })}>{state?.loading ? <LoaderCircle size={15} className="spinning" /> : <RotateCw size={15} />}</button>
             </div>
             <input className="browser-address" dir="ltr" aria-label={t('browserAddress')} placeholder={t('browserAddressHint')} value={url} onChange={event => setUrl(event.target.value)} disabled={!state || starting} spellCheck={false} />
-            <button className="browser-go" type="submit" disabled={!state || starting || !url.trim()} aria-label={t('browserGo')} title={t('browserGo')}><ArrowRight size={15} /></button>
+            <button className="browser-go" type="submit" disabled={!state || starting || !url.trim()} aria-label={t('browserGo')} title={t('browserGo')}><Forward size={15} /></button>
         </form>
         <div className="browser-options">
             <span className="browser-page-title" dir="auto">{state?.title || t('surfaceBrowser')}</span>

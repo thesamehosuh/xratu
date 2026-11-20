@@ -190,11 +190,16 @@ async function processPdfAttachment(a: ComposerAttachment): Promise<ComposerAtta
     const result = await processPdf(a.dataBase64);
     if (result.kind === 'text') {
         const block = `[Attached PDF: ${a.name} - text layer extracted]\n\n${result.text}`;
+        const bytes = new TextEncoder().encode(block);
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        }
         return [{
             ...a,
             mimeType: 'text/plain',
-            size: new Blob([block]).size,
-            dataBase64: btoa(String.fromCharCode(...new TextEncoder().encode(block))),
+            size: bytes.length,
+            dataBase64: btoa(binary),
         }];
     }
     const suffix = result.pageCount > PDF_SCAN_MAX_PAGES ? ` (first ${PDF_SCAN_MAX_PAGES} of ${result.pageCount} pages)` : '';
@@ -318,7 +323,7 @@ interface InputBarProps {
     onRestoreApplied?: (ids: string[]) => void;
     /** Files the host read for attachment (picker/commands via attachUris). */
     injectedAttachments?: ComposerAttachment[] | null;
-    onInjectedAttachmentsApplied?: () => void;
+    onInjectedAttachmentsApplied?: (attachments: ComposerAttachment[]) => void;
     /** Host-side attachment rejection - shown inline, auto-dismissed.
      *  Keyed: every host post is a fresh error object. */
     hostError?: { id: number; value: string; valueKey?: string; params?: Record<string, string> } | null;
@@ -988,6 +993,8 @@ export function InputBar({
         onHostErrorApplied?.();
     }, [hostError, onHostErrorApplied]);
 
+    const hostAttachmentsApplied = useRef(onInjectedAttachmentsApplied);
+    useLayoutEffect(() => { hostAttachmentsApplied.current = onInjectedAttachmentsApplied; });
     // Host-read attachments arriving from an explorer drag (attachUris flow).
     useEffect(() => {
         if (!injectedAttachments || injectedAttachments.length === 0) return;
@@ -1007,16 +1014,16 @@ export function InputBar({
                         const converted = await convertWebpToPng(a.dataBase64);
                         normalized.push({ ...a, mimeType: 'image/png', size: converted.size, dataBase64: converted.dataBase64 });
                     } else if (isImageMime(a.mimeType) && sniffImageMime(a.dataBase64) !== a.mimeType) {
-                        setAttachError(t('attachUnsupported').replace('{name}', a.name));
+                        if (!cancelled) setAttachError(t('attachUnsupported').replace('{name}', a.name));
                     } else {
                         normalized.push(a);
                     }
                 } catch {
-                    setAttachError(t('attachReadError').replace('{name}', a.name));
+                    if (!cancelled) setAttachError(t('attachReadError').replace('{name}', a.name));
                 }
             }
-            if (cancelled || normalized.length === 0) return;
-            setAttachments((prev) => {
+            if (cancelled) return;
+            if (normalized.length) setAttachments((prev) => {
                 const next = [...prev];
                 let bytes = prev.reduce((sum, a) => sum + a.size, 0);
                 let dropped = 0;
@@ -1031,10 +1038,10 @@ export function InputBar({
                 if (dropped > 0) setAttachError(t('attachTooMany'));
                 return next;
             });
-            onInjectedAttachmentsApplied?.();
+            hostAttachmentsApplied.current?.(injectedAttachments);
         })();
         return () => { cancelled = true; };
-    }, [injectedAttachments, onInjectedAttachmentsApplied]);
+    }, [injectedAttachments]);
 
     // Paste image data from clipboard.
     const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {

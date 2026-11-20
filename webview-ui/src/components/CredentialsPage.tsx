@@ -1164,7 +1164,7 @@ function NativeCredentials({ state, send, refresh }: NonNullable<CredentialsPage
                         event.preventDefault(); if (!code.trim() || state.busy) return;
                         send({ type: 'nativeOAuthCode', requestId: state.requestId, code: code.trim() }); setCode('');
                     }}><input name="oauthCode" aria-label={t('nativeAuthCode')} value={code} disabled={state.busy} onChange={event => setCode(event.target.value)} autoComplete="off" /><button type="submit" className="secondary-btn" disabled={!code.trim() || state.busy}>{t('nativeSubmitCode')}</button></form>}
-                    <button type="button" className="secondary-btn" onClick={close}>{t('engineCancel')}</button>
+                    <button type="button" className="secondary-btn" onClick={close}>{t('notifCancel')}</button>
                 </div>}
             </div>
         </SidePanel>}

@@ -2,7 +2,7 @@ import { nativeChildSessions } from './nativeChildSessions';
 import { MessageItem } from './components/MessageItem';
 import { ChildSessionsPanel } from './components/ChildSessionsPanel';
 import type { ChildSessionView } from '../../src/sessions/view';
-import { NativeConfiguration } from './components/EngineScope';
+import { EngineScope, NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
 import { BackgroundTasksPanel } from './components/BackgroundTasksPanel';
@@ -113,11 +113,12 @@ export function App() {
     const setupScreenRef = useRef(false);
     setupScreenRef.current = screen === 'welcome';
     const previousInstallPhase = useRef<string>();
-    const [settingsEngine, setSettingsEngine] = useState<SetupEngine>('xratu');
+    const [settingsEngineOverride, setSettingsEngine] = useState<SetupEngine | null>(null);
     const [nativeState, setNativeState] = useState<NativeSetupState | null>(null);
     const [nativeRefresh, setNativeRefresh] = useState(0);
     const nativeRequest = useRef<string | null>(null);
     const [engineState, setEngineState] = useState<EngineSetupState | null>(null);
+    const settingsEngine = settingsEngineOverride ?? engineState?.active ?? 'xratu';
     const [chat, dispatch] = useReducer(reduceChat, undefined, createInitialChatState);
     /** Host-echoed current task list (user edits merged; null = none). The
      *  interactive checklist shows this over the newest update_task_list
@@ -350,13 +351,6 @@ export function App() {
         send({ type: 'setupGetState', requestId, engine: setupPath === 'free' ? 'opencode' : 'xratu', path: setupPath, credentialId: setupCredentialId, onboarding: true });
         return () => { setupRequestId.current = ''; send({ type: 'setupCancel' }); };
     }, [screen, setupPath, setupCredentialId, setupRefresh, send]);
-    const settingsScopeInitialized = useRef(false);
-    useEffect(() => {
-        if (engineState && !settingsScopeInitialized.current) {
-            settingsScopeInitialized.current = true;
-            setSettingsEngine(engineState.active);
-        }
-    }, [engineState]);
     useEffect(() => {
         if (!ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration || !['credentials', 'capabilities', 'agents'].includes(screen)) return;
         const requestId = crypto.randomUUID();
@@ -947,7 +941,7 @@ export function App() {
                         contextWindows: msg.contextWindows ?? {},
                         capabilities: msg.capabilities ?? {},
                     });
-                    setSelectedModel((c) => msg.selectedModel ?? c ?? (msg.defaultModel || null));
+                    setSelectedModel((c) => msg.selectedModel === undefined ? c ?? (msg.defaultModel || null) : msg.selectedModel || null);
                     setVisionCapable(msg.visionCapable ?? null);
                     if (msg.overrides) setCtxOverrides(msg.overrides);
                     setThinkingLevels(msg.thinkingLevels ?? {});
@@ -1006,7 +1000,7 @@ export function App() {
                     });
                     break;
                 case 'attachmentsFromHost':
-                    setHostAttachments(msg.attachments);
+                    setHostAttachments(current => [...(current ?? []), ...msg.attachments]);
                     break;
                 case 'fileList':
                     setWorkspaceFiles(msg.files);
@@ -1395,7 +1389,7 @@ export function App() {
     };
     let overlay: JSX.Element | null = null;
     if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={prefs => { setAppearance(prefs); send({ type: 'appearanceSet', prefs }); }} onTheme={() => send({ type: 'selectColorTheme' })} />;
-    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { settingsScopeInitialized.current = true; setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
+    if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
         overlay = <AgentsPage canLaunch={engineState?.active !== 'opencode'} launchReady={Boolean(childSessions?.rootId)} onLaunch={(profile, prompt) => { if (!childSessions?.rootId) return; send({type:'childSessionAction',rootId:childSessions.rootId,sessionId:profile.name,action:'create',text:prompt,receipt:crypto.randomUUID()});setScreen('chat');dock.activate('agents'); }} profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
@@ -1618,7 +1612,13 @@ export function App() {
 
     if (overlay && ['credentials', 'capabilities', 'agents'].includes(screen)) {
         if (ENGINE_CAPABILITIES[settingsEngine].nativeConfiguration && screen === 'agents') overlay = <NativeConfiguration state={nativeState} send={send} refresh={() => setNativeRefresh((value) => value + 1)} onManageXratu={() => setSettingsEngine('xratu')} />;
-        overlay = <div className="scoped-page">{overlay}</div>;
+        overlay = <div className="scoped-page">
+            {(screen !== 'capabilities' || capabilityTab !== 'marketplace') && <EngineScope engine={settingsEngine} onChange={engine => {
+                setSettingsEngine(engine);
+                if (engine === 'xratu' && screen === 'credentials') send({ type: 'openCredentials' });
+            }} />}
+            {overlay}
+        </div>;
     }
     const taskControl = taskProgress && taskListView && (
                 <div className="task-list-chip-wrap">
@@ -1859,9 +1859,11 @@ export function App() {
                             type="button"
                             className="chip-btn"
                             onClick={() => {
+                                setSettingsEngine('xratu');
                                 setCredReason(null);
                                 setCredReturnTo('chat');
                                 setScreen('credentials');
+                                send({ type: 'openCredentials' });
                             }}
                         >
                         {t('credFix')}
@@ -1961,7 +1963,10 @@ export function App() {
                 restoreDraft={composerRestore}
                 onRestoreApplied={ids => setComposerRestore(previous => previous.filter(entry => !ids.includes(entry.id)))}
                 injectedAttachments={hostAttachments}
-                onInjectedAttachmentsApplied={() => setHostAttachments(null)}
+                onInjectedAttachmentsApplied={(applied) => setHostAttachments(current => {
+                    const pending = current?.filter(attachment => !applied.some(item => item.id === attachment.id));
+                    return pending?.length ? pending : null;
+                })}
                 hostError={composerError}
                 onHostErrorApplied={() => setComposerError(null)}
                 editDraft={editDraft}

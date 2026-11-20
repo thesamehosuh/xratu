@@ -20,6 +20,13 @@ export function getUiLocale(): UiLocale {
 }
 
 const STRINGS: Record<string, { fa: string; en: string }> = {
+    oauthBadResponse: { fa: 'پاسخ ورود معتبر نیست. دوباره امتحان کن.', en: 'Invalid sign-in response. Try again.' },
+    attachToXratu: { fa: 'پیوست به Xratu', en: 'Attach to Xratu' },
+    attachDialogTitle: { fa: 'پیوست فایل به گفتگوی Xratu', en: 'Attach files to Xratu chat' },
+    approvalInvalidPath: { fa: 'مسیر فایل معتبر نیست: {path}', en: 'Invalid file path: {path}' },
+    setupOwnershipXratu: { fa: 'این تنظیمات رو Xratu مدیریت میکنه. سرورها و مهارت ها توی OpenCode هم در دسترسن.', en: 'Xratu manages these settings. Servers and skills are also available in OpenCode.' },
+    gitCheckoutFailed: { fa: 'سوئیچ شاخه ناموفق بود: {error}', en: 'Switching branch failed: {error}' },
+    sessionDeleteFailed: { fa: 'گفتگو پاک نشد. اجراهای فعال توی پنجره های دیگه رو ببند و دوباره امتحان کن.', en: 'Could not delete the conversation. Close active runs in other windows and try again.' },
     engineCompacting: { fa: "OpenCode داره سابقه گفتگو رو فشرده میکنه.", en: "OpenCode is compacting conversation history." },
     engineCompacted: { fa: "فشرده سازی سابقه OpenCode تموم شد.", en: "OpenCode history compaction finished." },
     engineCompactionFailed: { fa: "فشرده سازی سابقه OpenCode انجام نشد: {error}", en: "OpenCode history compaction failed: {error}" },

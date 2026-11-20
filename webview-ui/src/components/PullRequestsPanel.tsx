@@ -45,7 +45,6 @@ export function PullRequestsPanel({ visible, panelClass, state, pending, error, 
                         <GitPullRequest size={22} />
                     </div>
                     <strong className="pr-empty-title">{t('prEmptyTitle')}</strong>
-                    <p className="pr-empty-hint">{t('prEmptyHint')}</p>
                 </div>
             )}
             {state.links.map(link => {

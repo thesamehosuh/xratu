@@ -1228,7 +1228,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _webviewSubscriptions: vscode.Disposable[] = [];
     private readonly _startupPage = new StartupPageIntent();
 
-    _completeWebviewStartup(): void { this._startupPage.complete(); }
+    private _attachmentReady = false;
+    private _pendingUriAttachments: string[] = [];
+
+    _completeWebviewStartup(): void {
+        this._startupPage.complete();
+        this._attachmentReady = true;
+        if (this._pendingUriAttachments.length) void this._handleUriAttachments(this._pendingUriAttachments.splice(0));
+    }
 
     public provideTextDocumentContent(uri: vscode.Uri): string {
         return this._virtualDocuments.get(uri.toString()) || '';
@@ -2112,6 +2119,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  composer (explorer context menu + palette file dialog paths - the
      *  sidebar webview view cannot receive drag-and-drop, by VS Code design). */
     public async attachUrisPublic(uris: string[]): Promise<void> {
+        if (!this._attachmentReady) {
+            this._pendingUriAttachments.push(...uris.slice(0, Math.max(0, ATTACH_MAX_COUNT - this._pendingUriAttachments.length)));
+            await this.ensureView();
+            return;
+        }
         await this.ensureView();
         await this._handleUriAttachments(uris);
     }
@@ -5881,6 +5893,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private _clearWebview(): void {
         this._view = undefined;
+        this._attachmentReady = false;
         this._startupPage.reset();
         for (const sub of this._webviewSubscriptions.splice(0)) sub.dispose();
 
@@ -8410,7 +8423,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // Pre-denied calls still have an open timeline row from
                     // their streamed tool_call event - they need closing too.
                     closeItems.push({ tool_call_id: approval.tool_call_id, tool_name: toolName });
-                    this._view?.webview.postMessage({ type: 'error', value: `Path is outside the workspace: ${approval.args?.path}` });
+                    this._view?.webview.postMessage({ type: 'error', valueKey: 'approvalInvalidPath', params: { path: String(approval.args?.path ?? '') } });
                     // Keep the item in the payload (flagged pre-denied) - the
                     // approval card renders it with a denied tag instead of
                     // showing an empty card.
@@ -8746,22 +8759,21 @@ export function activate(context: vscode.ExtensionContext) {
             const picks = await vscode.window.showOpenDialog({
                 canSelectMany: true,
                 canSelectFolders: false,
-                openLabel: 'Attach to Xratu',
-                title: 'Attach files to Xratu chat',
+                openLabel: ui('attachToXratu'),
+                title: ui('attachDialogTitle'),
             });
             if (picks?.length) {
                 await provider.attachUrisPublic(picks.map((u) => u.toString()));
             }
         }),
-        vscode.commands.registerCommand('xratu.attachFromExplorer', async (uriOrContext: vscode.Uri | { selectedUri?: vscode.Uri } | undefined) => {
+        vscode.commands.registerCommand('xratu.attachFromExplorer', async (uriOrContext: vscode.Uri | { selectedUri?: vscode.Uri } | undefined, selection?: vscode.Uri[]) => {
             // Explorer right-click → "Attach to Xratu". The menu passes the
             // selected resource URI.
             const uri = uriOrContext instanceof vscode.Uri
                 ? uriOrContext
                 : uriOrContext?.selectedUri;
-            if (uri) {
-                await provider.attachUrisPublic([uri.toString()]);
-            }
+            const files = Array.isArray(selection) && selection.length ? selection.filter(item => item instanceof vscode.Uri) : uri ? [uri] : [];
+            if (files.length) await provider.attachUrisPublic(files.map(item => item.toString()));
         })
     );
 
