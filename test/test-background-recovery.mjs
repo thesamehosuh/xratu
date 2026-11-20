@@ -351,7 +351,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     // A3: the id must be reserved, or the next spawn steals it.
     const fresh = spawnTerminalJob({
         workspaceRoot: process.cwd(),
-        command: sh('sleep 30', 'ping -n 31 127.0.0.1 > nul'),
+        command: holdsForQuiet(),
         background: true,
     });
     ok('a new job cannot reuse a recovered id', fresh.id !== 'job-900', fresh.id);
@@ -368,8 +368,9 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     ]);
     ok('killing a recovered job settles `finished`', settled === 'settled', settled);
     ok('and it reports as killed', adopted.status === 'killed', adopted.status);
-    if (!isWindows) ok('the recovered process tree is actually gone', await waitDead(pid), `pid ${pid}`);
-    else child.kill();
+    const dead = await waitDead(pid);
+    ok('the recovered process tree is actually gone', dead, `pid ${pid}`);
+    if (!dead) { try { child.kill(); } catch { /* cleanup */ } }
 }
 
 {
@@ -397,7 +398,30 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
     ok('and it settles rather than hanging',
         await Promise.race([adopted.finished.then(() => 'settled'), sleep(3000).then(() => 'HUNG')]) === 'settled');
     ok('it is not reported as killed by us', adopted.killReason === null, String(adopted.killReason));
-    if (!isWindows) ok('and no signal was delivered to the recycled pid', await waitDead(child.pid, 5000));
+
+    // Recycled-PID proof: a LIVE unrelated process holding the same PID with a
+    // different start token must NOT be signalled by adopted.kill().
+    const bystander = spawnSleeper();
+    try {
+        const realIdentity = captureIdentity(bystander.pid);
+        const mismatched = adoptDetachedJob({
+            id: 'job-recycled-pid', command: 'old server', cwd: tmp,
+            identity: { ...realIdentity, token: `${realIdentity.token}-mismatched` },
+            startedAt: Date.now(), uptimeSeconds: 1, backgroundedByUser: true,
+            status: 'running', exitCode: null,
+        });
+        mismatched.kill('must not kill bystander with different token');
+        await Promise.race([mismatched.finished, sleep(2000)]);
+        await sleep(150);
+        ok('mismatched start token never kills the live bystander process', alive(bystander.pid), `pid ${bystander.pid}`);
+        ok('mismatched kill leaves killReason null', mismatched.killReason === null, String(mismatched.killReason));
+    } finally {
+        const exited = new Promise((r) => bystander.once('exit', r));
+        if (alive(bystander.pid)) {
+            await killTree(bystander.pid);
+            await Promise.race([exited, sleep(3000)]);
+        }
+    }
 }
 
 {
@@ -483,5 +507,6 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
 }
 
 cleanup();
+try { rmSync(holdFile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* best effort */ }
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

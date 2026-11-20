@@ -37,6 +37,7 @@ const check = (name, actual, expected) => {
 };
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-skills-'));
+process.on('exit', () => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
 const makeSkill = (base, rel, name, description = 'Does things', body = 'Do the thing.', extraFrontmatter = '') => {
     const dir = path.join(base, rel);
     fs.mkdirSync(dir, { recursive: true });

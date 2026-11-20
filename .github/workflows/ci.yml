@@ -42,21 +42,28 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
 
-      # Cheapest signal first: this is the gate that encodes AGENTS.md's
-      # "Non-negotiable rules" (killTree, cross-spawn, logical CSS props, dir
-      # handling) as AST rules, so they cannot be forgotten in review.
+      # Static analysis (ESLint + TypeScript across host, webview, and webview
+      # tests) is OS-independent: run once on Linux to save Windows/macOS time
+      # while keeping the exact `build (<os>)` required status check names.
       - name: Lint (eslint)
+        if: runner.os == 'Linux'
         run: npm run lint
 
       - name: Type-check host (tsc --noEmit)
+        if: runner.os == 'Linux'
         run: node_modules/.bin/tsc --noEmit -p tsconfig.json
 
       # SEPARATE project - host tsc does NOT cover webview-ui. Skipping this
       # step is exactly how CI-only type failures happen.
       - name: Type-check webview (tsc --noEmit)
+        if: runner.os == 'Linux'
         run: npx tsc --noEmit -p webview-ui/tsconfig.json
+
+      - name: Type-check webview tests (tsc --noEmit)
+        if: runner.os == 'Linux'
+        run: npx tsc --noEmit -p webview-ui/tsconfig.test.json
 
       - name: Build host bundle (esbuild)
         run: node esbuild.js
@@ -64,32 +71,47 @@ jobs:
       - name: Webview tests
         run: npm run test:webview
 
-      # Browser E2E for the webview bundle. Linux runners need the system
-      # libraries (sudo is available); Windows and macOS runners ship them
-      # already, so `--with-deps` is Linux-only here.
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      # Host-side suites (pure-node logic, Windows/macOS/Linux process trees,
+      # path/SSRF guards, shadow git, VSIX contents). `test:host` compiles
+      # `out/` itself once and auto-discovers every `test:*` script.
+      - name: Host-side test suites
+        run: npm run test:host
+
+      # Browser E2E drives the standalone webview bundle with a mocked
+      # `acquireVsCodeApi` (no OS or extension-host code), plus Chromium
+      # visual snapshots pinned to Linux. Running it once on Linux with a
+      # cached Chromium binary removes ~45 minutes of duplicate macOS/Windows
+      # browser runtime per PR without dropping cross-OS host coverage.
+      - name: Resolve Playwright version
+        id: playwright-version
         if: runner.os == 'Linux'
+        run: echo "version=$(node -p "require('./node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Install Playwright Chromium (Windows)
-        run: npx playwright install chromium
-        if: runner.os == 'Windows'
+      - name: Cache Playwright Chromium
+        id: playwright-cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
 
-      - name: Install Playwright Chromium (macOS)
-        run: npx playwright install chromium
-        if: runner.os == 'macOS'
+      - name: Install Playwright Chromium
+        if: runner.os == 'Linux' && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cached browser)
+        if: runner.os == 'Linux' && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: Webview E2E (Playwright)
+        if: runner.os == 'Linux'
         env:
-          # Pixel baselines use the bundled font and lockfile-pinned Chromium.
-          # Other OS legs still run the same locale/width layout assertions.
-          XRATU_VISUAL: ${{ runner.os == 'Linux' && '1' || '' }}
+          XRATU_VISUAL: '1'
         run: npm run test:e2e
 
-      # Keep screenshots for visual review even when assertions pass, along
-      # with error contexts and traces for any failures.
+      # Upload Playwright traces/screenshots only when E2E fails.
       - name: Upload Playwright results
-        if: ${{ !cancelled() }}
+        if: ${{ failure() && runner.os == 'Linux' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-${{ matrix.os }}
@@ -98,16 +120,3 @@ jobs:
             playwright-report/
           retention-days: 14
           if-no-files-found: ignore
-
-      # Host-side suites (pure-node logic + security heuristics). Compile the
-      # host first - the suites resolve `../out/*.js` (endpoint-guard needs
-      # out/endpointGuard.js, etc.).
-      - name: Compile host for node test suites
-        run: npx tsc -p . --outDir out
-
-      # ONE step, auto-discovering every `test:*` npm script (see
-      # test/run-host-tests.mjs). The hand-maintained step list this replaces
-      # had already drifted: test:model-metadata was never wired in at all,
-      # so 90 assertions only ran on machines where someone typed it.
-      - name: Host-side test suites
-        run: npm run test:host

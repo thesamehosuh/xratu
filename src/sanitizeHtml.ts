@@ -3,7 +3,7 @@
  * regex-based XSS filter (blocklists are inherently bypassable): only
  * known-safe tag/attribute constructs pass through. Split out of
  * extension.ts, which imports `_sanitizeHtml` for the markdown path;
- * test/test-sanitizer.mjs keeps an inline copy of the logic in sync.
+ * test/test-sanitizer.mjs exercises this compiled module directly.
  */
 
 export function escapeHtml(str: string): string {
@@ -45,7 +45,7 @@ const ALLOWED_ATTRS: Record<string, Set<string>> = {
     'span': new Set(['class', 'style']),  // shiki token colors
     'col': new Set(['span']),
     'abbr': new Set(['title']),
-    'svg': new Set(['xmlns', 'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'class']),
+    'svg': new Set(['xmlns', 'width', 'height', 'viewbox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'class']),
     'path': new Set(['d', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin']),
     'rect': new Set(['width', 'height', 'x', 'y', 'rx', 'ry', 'fill', 'stroke']),
     'polyline': new Set(['points', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin']),
@@ -78,9 +78,11 @@ function sanitizeStyle(value: string): string {
 }
 
 export function _sanitizeHtml(html: string): string {
-    // Tokenize HTML into tags, text, and comments using a regex that captures
-    // opening tags, closing tags, self-closing tags, and comments.
-    const TOKEN_RE = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*?)(\/?)>|([^<]+)/g;
+    // Tokenize HTML into tags, text, and comments. Attribute capture consumes
+    // quoted values as atomic units so `>` inside `"..."` / `'...'` (such as
+    // `href="data:text/html,<script>..."`) cannot prematurely terminate the
+    // tag and smuggle an unclosed quote past the URI protocol checks.
+    const TOKEN_RE = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>|([^<]+)/g;
 
     let result = '';
     let match: RegExpExecArray | null;

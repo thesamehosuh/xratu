@@ -8,7 +8,8 @@
  */
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { editDiffFromArgs, hunkSummaries } = require('../out/editDiff.js');
+const { editDiffFromArgs, hunkSummaries, applyMarkerPatch, computeDiffHunks, MAX_DIFF_LCS_CELLS } = require('../out/editDiff.js');
+const { parsePatchBlocks, repairPatchMarkers } = require('../out/paths.js');
 
 let failed = 0;
 const check = (name, fn) => {
@@ -136,6 +137,49 @@ check('hunkSummaries: pure removal samples the removed line', () => {
     eq(hunks[0].added, 0, 'added');
     eq(hunks[0].removed, 1, 'removed');
     eq(hunks[0].sample, 'two', 'sample');
+});
+
+check('write_file create and overwrite handling', () => {
+    const created = editDiffFromArgs('write_file', JSON.stringify({
+        path: 'src/new.ts', mode: 'create', content: 'export const v = 1;\n',
+    }));
+    eq(created.before, '', 'write_file create before');
+    eq(created.after, 'export const v = 1;\n', 'write_file create after');
+    const overwrite = editDiffFromArgs('write_file', JSON.stringify({
+        path: 'src/old.ts', mode: 'overwrite', content: 'replaced',
+    }), 'Successfully updated src/old.ts');
+    eq(overwrite, null, 'write_file overwrite refuses without snapshot');
+});
+
+check('computeDiffHunks and hunkSummaries return null over MAX_DIFF_LCS_CELLS', () => {
+    const side = Math.ceil(Math.sqrt(MAX_DIFF_LCS_CELLS)) + 10;
+    const before = Array.from({ length: side }, (_, i) => `old-${i}`).join('\n');
+    const after = Array.from({ length: side }, (_, i) => `new-${i}`).join('\n');
+    eq(computeDiffHunks(before, after), null, 'computeDiffHunks over budget');
+    eq(hunkSummaries(before, after), null, 'hunkSummaries over budget');
+});
+
+check('parsePatchBlocks + repairPatchMarkers + applyMarkerPatch handle normal, BOM/CRLF, truncated closer, and malformed markers', () => {
+    const crlf = parsePatchBlocks('\uFEFF<<<<<<< SEARCH\r\nold\r\n=======\r\nnew\r\n>>>>>>> REPLACE');
+    eq(crlf.length, 1, 'crlf block count');
+    eq(crlf[0].search, 'old', 'crlf search');
+    eq(crlf[0].replace, 'new', 'crlf replace');
+
+    const repaired = repairPatchMarkers('<<<<<<< SEARCH\nalpha\n=======\nbeta\n');
+    const blocks = parsePatchBlocks(repaired.patch);
+    eq(blocks.length, 1, 'repaired missing closer');
+    eq(blocks[0].replace, 'beta', 'repaired replace');
+
+    const chevron = repairPatchMarkers('<<<<< SEARCH\nalpha\n=====\nbeta\n>>>>> REPLACE');
+    eq(parsePatchBlocks(chevron.patch)[0].replace, 'beta', 'repaired 5-chevron markers');
+
+    const applied = applyMarkerPatch('line1\nalpha\nline3', '<<<<<<< SEARCH\nalpha\n=======\nbeta\n');
+    eq(applied, 'line1\nbeta\nline3', 'applyMarkerPatch applies repaired block');
+    eq(applyMarkerPatch('line1\nalpha\n', '<<<<<<< SEARCH\nmissing\n=======\nbeta\n>>>>>>> REPLACE'), null, 'applyMarkerPatch misses cleanly');
+
+    let threw = false;
+    try { parsePatchBlocks('<<<<<<< SEARCH\nold\n=======\nnew\n=======\nextra\n>>>>>>> REPLACE'); } catch { threw = true; }
+    eq(threw, true, 'embedded marker in body is refused');
 });
 
 if (failed) {

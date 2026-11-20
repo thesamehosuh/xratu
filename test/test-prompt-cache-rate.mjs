@@ -28,7 +28,7 @@
  * Run: node test/test-prompt-cache-rate.mjs   (after `npx tsc -p . --outDir out`)
  */
 import { createRequire } from 'module';
-import { mkdtempSync, readFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 const require = createRequire(import.meta.url);
@@ -355,10 +355,12 @@ async function runScenario(style, { reasoning = false, legacyReplay = false, dro
 // ---------------------------------------------------------------------------
 // Live path: prefix reuse is stable on every transport, plain and thinking.
 // ---------------------------------------------------------------------------
+const baselineResults = new Map();
 for (const style of ['chat', 'messages', 'responses', 'google']) {
     for (const reasoning of [false, true]) {
         const mode = reasoning ? 'thinking' : 'plain';
         const result = await runScenario(style, { reasoning });
+        baselineResults.set(`${style}/${mode}`, result);
         const label = `${style}/${mode}`;
         ok(`${label}: every request retains the complete previous prompt, including status notes`,
             result.minCover >= 0.999,
@@ -391,9 +393,9 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 for (const style of ['chat', 'messages', 'responses', 'google']) {
     for (const reasoning of [false, true]) {
         const mode = reasoning ? 'thinking' : 'plain';
-        const legacy = await runScenario(style, { reasoning, legacyReplay: true });
-        const fixed = await runScenario(style, { reasoning });
         const label = `${style}/${mode}`;
+        const legacy = await runScenario(style, { reasoning, legacyReplay: true });
+        const fixed = baselineResults.get(label);
         // On plain non-chat transports the lossy carriers happened to be a
         // no-op (successful tool rows carry no `is_error`), so only assert the
         // strict improvement where the legacy path actually regresses.
@@ -434,7 +436,7 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 // hardest) reuses the previous turn's final request.
 // ---------------------------------------------------------------------------
 {
-    const plain = await runScenario('chat');
+    const plain = baselineResults.get('chat/plain');
     const boundary = plain.rows[ROUNDS_PER_TURN];
     ok('chat: the turn boundary reuses the previous turn instead of re-sending it',
         boundary != null && boundary.cover >= 0.95,
@@ -448,6 +450,7 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 // ---------------------------------------------------------------------------
 {
     const root = mkdtempSync(join(tmpdir(), 'xratu-cache-'));
+    process.on('exit', () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ } });
     const store = new LocalSessionStore(root);
     const small = await store.create('/ws-small');
     await store.save(small.id, {

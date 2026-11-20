@@ -84,6 +84,7 @@ const ok = (name, cond, detail = '') => {
 
 // --- discoverSubagents ---
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-subagents-'));
+process.on('exit', () => { try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {} });
 const tmpHome = path.join(tmpRoot, 'home');
 const tmpWs = path.join(tmpRoot, 'ws');
 fs.mkdirSync(path.join(tmpHome, '.agents', 'agents'), { recursive: true });

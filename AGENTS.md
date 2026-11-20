@@ -98,6 +98,7 @@ Rules that exist because their absence was a real failure mode:
 npm run lint
 node_modules/.bin/tsc --noEmit -p tsconfig.json
 npx tsc --noEmit -p webview-ui/tsconfig.json   # SEPARATE project — host tsc does NOT cover it
+npx tsc --noEmit -p webview-ui/tsconfig.test.json
 node esbuild.js
 npm run test:webview
 ```

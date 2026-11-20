@@ -3,12 +3,15 @@
  *
  * Extracted from `MessageItem.tsx` so the approval card's diff view and the
  * transcript's code pills share ONE highlighter, ONE cache and ONE theme
- * observer. Two highlighter instances meant two caches and two observer
- * lifecycles; the card's cache missed every hit the transcript had already
- * paid for, so opening an approval re-tokenized the same file.
+ * observer. Uses `shiki/core` + the pure-JS regex engine with only the two
+ * GitHub themes and curated coding grammars so the single-file webview bundle
+ * avoids shipping 200+ unused grammars, 60 themes, and the unused WASM binary.
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { createJavaScriptRegexEngine, getSingletonHighlighter } from 'shiki';
+import { createHighlighterCore, type HighlighterCore, type LanguageRegistration } from 'shiki/core';
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
+import githubDark from '@shikijs/themes/github-dark';
+import githubLight from '@shikijs/themes/github-light';
 
 /** Pure-JS regex engine: the webview CSP has no 'wasm-unsafe-eval', so the
  *  default oniguruma (WASM) engine silently fails and every highlighted
@@ -20,6 +23,122 @@ const SHIKI_ENGINE = createJavaScriptRegexEngine({ forgiving: true });
  *  theme the webview is rendered under (body carries vscode-light/-dark). */
 const SHIKI_DARK_THEME = 'github-dark';
 const SHIKI_LIGHT_THEME = 'github-light';
+
+type LangModule = { default: LanguageRegistration[] };
+
+const LANG_LOADERS: Record<string, () => Promise<LangModule>> = {
+    bash: () => import('@shikijs/langs/bash'),
+    bat: () => import('@shikijs/langs/bat'),
+    c: () => import('@shikijs/langs/c'),
+    cmake: () => import('@shikijs/langs/cmake'),
+    cpp: () => import('@shikijs/langs/cpp'),
+    csharp: () => import('@shikijs/langs/csharp'),
+    css: () => import('@shikijs/langs/css'),
+    dart: () => import('@shikijs/langs/dart'),
+    diff: () => import('@shikijs/langs/diff'),
+    dockerfile: () => import('@shikijs/langs/dockerfile'),
+    elixir: () => import('@shikijs/langs/elixir'),
+    go: () => import('@shikijs/langs/go'),
+    graphql: () => import('@shikijs/langs/graphql'),
+    haskell: () => import('@shikijs/langs/haskell'),
+    html: () => import('@shikijs/langs/html'),
+    ini: () => import('@shikijs/langs/ini'),
+    java: () => import('@shikijs/langs/java'),
+    javascript: () => import('@shikijs/langs/javascript'),
+    json: () => import('@shikijs/langs/json'),
+    jsx: () => import('@shikijs/langs/jsx'),
+    kotlin: () => import('@shikijs/langs/kotlin'),
+    lua: () => import('@shikijs/langs/lua'),
+    makefile: () => import('@shikijs/langs/makefile'),
+    markdown: () => import('@shikijs/langs/markdown'),
+    nginx: () => import('@shikijs/langs/nginx'),
+    perl: () => import('@shikijs/langs/perl'),
+    php: () => import('@shikijs/langs/php'),
+    powershell: () => import('@shikijs/langs/powershell'),
+    python: () => import('@shikijs/langs/python'),
+    r: () => import('@shikijs/langs/r'),
+    ruby: () => import('@shikijs/langs/ruby'),
+    rust: () => import('@shikijs/langs/rust'),
+    scala: () => import('@shikijs/langs/scala'),
+    scss: () => import('@shikijs/langs/scss'),
+    sql: () => import('@shikijs/langs/sql'),
+    svelte: () => import('@shikijs/langs/svelte'),
+    swift: () => import('@shikijs/langs/swift'),
+    toml: () => import('@shikijs/langs/toml'),
+    tsx: () => import('@shikijs/langs/tsx'),
+    typescript: () => import('@shikijs/langs/typescript'),
+    vue: () => import('@shikijs/langs/vue'),
+    xml: () => import('@shikijs/langs/xml'),
+    yaml: () => import('@shikijs/langs/yaml'),
+    zig: () => import('@shikijs/langs/zig'),
+};
+
+const LANG_ALIASES: Record<string, string> = {
+    js: 'javascript',
+    ts: 'typescript',
+    py: 'python',
+    rs: 'rust',
+    sh: 'bash',
+    shell: 'bash',
+    zsh: 'bash',
+    yml: 'yaml',
+    cs: 'csharp',
+    'c#': 'csharp',
+    'c++': 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    h: 'c',
+    hpp: 'cpp',
+    md: 'markdown',
+    ps1: 'powershell',
+    pwsh: 'powershell',
+    cmd: 'bat',
+    batch: 'bat',
+    docker: 'dockerfile',
+    kt: 'kotlin',
+    rb: 'ruby',
+    gql: 'graphql',
+    jsonc: 'json',
+    hs: 'haskell',
+    ex: 'elixir',
+    pl: 'perl',
+    make: 'makefile',
+};
+
+let highlighterPromise: Promise<HighlighterCore> | null = null;
+const loadedLangs = new Set<string>();
+const pendingLangs = new Map<string, Promise<void>>();
+
+function resolveLang(lang: string): string | null {
+    const normalized = lang.trim().toLowerCase();
+    if (!normalized || normalized === 'text' || normalized === 'plaintext' || normalized === 'plain') return null;
+    const canonical = LANG_ALIASES[normalized] ?? normalized;
+    return canonical in LANG_LOADERS ? canonical : null;
+}
+
+function getHighlighter(): Promise<HighlighterCore> {
+    if (!highlighterPromise) {
+        highlighterPromise = createHighlighterCore({
+            themes: [githubDark, githubLight],
+            langs: [],
+            engine: SHIKI_ENGINE,
+        });
+    }
+    return highlighterPromise;
+}
+
+async function ensureLang(highlighter: HighlighterCore, canonical: string): Promise<void> {
+    if (loadedLangs.has(canonical)) return;
+    let pending = pendingLangs.get(canonical);
+    if (!pending) {
+        pending = LANG_LOADERS[canonical]()
+            .then((mod) => highlighter.loadLanguage(mod.default))
+            .then(() => { loadedLangs.add(canonical); })
+            .finally(() => { pendingLangs.delete(canonical); });
+        pendingLangs.set(canonical, pending);
+    }
+    await pending;
+}
 
 function currentShikiTheme(): string {
     if (typeof document === 'undefined') return SHIKI_DARK_THEME;
@@ -84,15 +203,15 @@ function cacheKey(theme: string, lang: string, code: string): string {
 }
 
 export async function highlightedLines(code: string, lang: string, theme: string): Promise<string[]> {
-    if (!code || lang === 'text' || code.length > HIGHLIGHT_MAX_CHARS) return [];
-    const key = cacheKey(theme, lang, code);
+    const canonical = resolveLang(lang);
+    if (!code || !canonical || code.length > HIGHLIGHT_MAX_CHARS) return [];
+    const key = cacheKey(theme, canonical, code);
     const hit = HIGHLIGHT_CACHE.get(key);
     if (hit) return hit;
     try {
-        const highlighter = await getSingletonHighlighter({
-            themes: [SHIKI_DARK_THEME, SHIKI_LIGHT_THEME], langs: [lang], engine: SHIKI_ENGINE,
-        });
-        const html = highlighter.codeToHtml(code, { lang, theme });
+        const highlighter = await getHighlighter();
+        await ensureLang(highlighter, canonical);
+        const html = highlighter.codeToHtml(code, { lang: canonical, theme });
         const match = html.match(/<code>([\s\S]*?)<\/code>/);
         if (!match) return [];
         const lines = match[1].replace(/<span class="line">/g, '').replace(/<\/span>\s*(?=<span class="line">|$)/g, '').split('\n');
@@ -109,10 +228,11 @@ export async function highlightedLines(code: string, lang: string, theme: string
 
 export function useHighlightedCode(code: string, lang: string): string[] {
     const theme = useShikiTheme();
-    const key = cacheKey(theme, lang, code);
+    const canonical = resolveLang(lang) ?? '';
+    const key = cacheKey(theme, canonical, code);
     const [highlighted, setHighlighted] = useState(() => ({ key, lines: HIGHLIGHT_CACHE.get(key) ?? [] }));
     useEffect(() => {
-        if (!code || lang === 'text' || code.length > HIGHLIGHT_MAX_CHARS) {
+        if (!code || !canonical || code.length > HIGHLIGHT_MAX_CHARS) {
             setHighlighted({ key, lines: [] });
             return;
         }
@@ -122,13 +242,13 @@ export function useHighlightedCode(code: string, lang: string): string[] {
             return;
         }
         let cancelled = false;
-        highlightedLines(code, lang, theme).then((lines) => {
+        highlightedLines(code, canonical, theme).then((lines) => {
             if (cancelled) return;
             setHighlighted({ key, lines });
         }).catch(() => {
             if (!cancelled) setHighlighted({ key, lines: [] });
         });
         return () => { cancelled = true; };
-    }, [code, lang, theme, key]);
+    }, [code, canonical, theme, key]);
     return highlighted.key === key ? highlighted.lines : HIGHLIGHT_CACHE.get(key) ?? [];
 }
