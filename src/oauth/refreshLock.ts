@@ -3,9 +3,9 @@
  * Every version acquires the same path with an atomic mkdir. Each new
  * holder writes a unique owner file before entering its critical section.
  *
- * Recovery unlinks only the observed owner's filename. Only the contender
- * that removed this marker may remove the resulting empty directory. A
- * directory with no owner record is recoverable after its grace period.
+ * Cleanup claims serialize removal of a directory generation, including a
+ * directory which has no owner file. The live lock path always uses mkdir
+ * because older hosts can reserve it before writing an owner file.
  * The lock directory contains no credentials.
  */
 import { createHash, randomUUID } from 'crypto';
@@ -67,19 +67,19 @@ function readOwner(lockPath: string): { name: string; record: OwnerRecord | null
     }
 }
 
-function ownerIsGone(owner: OwnerRecord): boolean {
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || owner.pid > 0x7fffffff) return false;
-    try { process.kill(owner.pid, 0); return false; }
+function processIsGone(pid: number): boolean {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return false;
+    try { process.kill(pid, 0); return false; }
     catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
 }
 
-function sameDirectory(lockPath: string, original: fs.Stats): boolean {
-    const current = fs.lstatSync(lockPath, { throwIfNoEntry: false });
+function sameDirectory(lockPath: string, original: fs.BigIntStats): boolean {
+    const current = fs.lstatSync(lockPath, { bigint: true, throwIfNoEntry: false });
     return Boolean(current?.isDirectory() && current.dev === original.dev && current.ino === original.ino
-        && current.birthtimeMs === original.birthtimeMs);
+        && current.birthtimeNs === original.birthtimeNs);
 }
 
-function removeEmptyLock(lockPath: string, directory: fs.Stats): boolean {
+function removeEmptyLock(lockPath: string, directory: fs.BigIntStats): boolean {
     if (!sameDirectory(lockPath, directory)) return false;
     fs.rmdirSync(lockPath);
     return true;
@@ -90,34 +90,98 @@ function isRemovalBusy(error: unknown): boolean {
     return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ENOTEMPTY';
 }
 
-function claimStaleLock(lockPath: string, opts: LockOptions, now: number, staleMs: number): fs.Stats | undefined {
+interface RemovalClaim {
+    path: string;
+    abandoned: string[];
+}
+
+/** Each claim is published populated. A subsequent claim uses the next slot
+ * only when the recorded process has died or explicitly released its slot. */
+function claimRemoval(lockPath: string, directory: fs.BigIntStats): RemovalClaim | undefined {
+    if (!sameDirectory(lockPath, directory)) return undefined;
+    const parent = path.dirname(lockPath);
+    const generation = createHash('sha256').update(`${directory.dev}:${directory.ino}:${directory.birthtimeNs}`)
+        .digest('hex').slice(0, 24);
+    const abandoned: string[] = [];
+    for (let slot = 0; ; slot++) {
+        const claim = path.join(parent, `.xratu-lock-removal-${generation}-${slot}`);
+        let entries: string[];
+        try { entries = fs.readdirSync(claim); }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            entries = [];
+        }
+        if (entries.length) {
+            const pid = Number(entries.find(entry => /^\d+$/.test(entry)));
+            if (!entries.includes('released') && !processIsGone(pid)) return undefined;
+            abandoned.push(claim);
+            continue;
+        }
+
+        // Only our protocol creates claim paths, and always makes them
+        // nonempty before publishing them. Rename cannot replace a live claim.
+        const prepared = fs.mkdtempSync(path.join(parent, '.xratu-lock-claim-'));
+        let published = false;
+        try {
+            fs.writeFileSync(path.join(prepared, String(process.pid)), '');
+            fs.renameSync(prepared, claim);
+            published = true;
+            return { path: claim, abandoned };
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST' || isRemovalBusy(error)) return undefined;
+            throw error;
+        } finally {
+            if (!published) fs.rmSync(prepared, { recursive: true, force: true });
+        }
+    }
+}
+
+function finishRemoval(claim: RemovalClaim, removed: boolean): void {
+    // Earlier slots must remain visible while this generation can still be
+    // touched. Removing one early could admit a second live remover there.
+    for (const entry of removed ? [claim.path, ...claim.abandoned] : [claim.path]) {
+        const retired = path.join(path.dirname(entry), `.xratu-lock-retired-${randomUUID()}`);
+        try {
+            fs.renameSync(entry, retired);
+        } catch {
+            // If a rename is temporarily blocked, let the next remover skip
+            // this slot. This holder has finished all work on the lock path.
+            try { fs.mkdirSync(path.join(entry, 'released')); } catch { /* Best effort. */ }
+            continue;
+        }
+        try { fs.rmSync(retired, { recursive: true, force: true }); } catch { /* The claim is already retired. */ }
+    }
+}
+
+interface StaleRemoval {
+    directory: fs.BigIntStats;
+    claim: RemovalClaim;
+}
+
+function claimStaleLock(lockPath: string, opts: LockOptions, now: number, staleMs: number): StaleRemoval | undefined {
+    let claim: RemovalClaim | undefined;
+    let prepared = false;
     try {
-        const directory = fs.lstatSync(lockPath, { throwIfNoEntry: false });
+        const directory = fs.lstatSync(lockPath, { bigint: true, throwIfNoEntry: false });
         if (!directory?.isDirectory()) return undefined;
         const seen = readOwner(lockPath);
         if (seen?.record) {
-            const stale = opts.recoverDeadOwner ? ownerIsGone(seen.record) : now - seen.record.acquiredAt > staleMs;
+            const stale = opts.recoverDeadOwner ? processIsGone(seen.record.pid) : now - seen.record.acquiredAt > staleMs;
             if (!stale) return undefined;
-        } else if (now - directory.mtimeMs <= staleMs) return undefined;
-        // Previous versions used a fixed file name. Recheck that legacy
-        // record before unlinking it. New holders publish a unique filename.
-        if (seen?.name === LEGACY_OWNER_FILE) {
-            const current = readOwner(lockPath);
-            if (current?.name !== seen.name || current.record?.token !== seen.record?.token) return undefined;
-        }
-        if (seen) {
-            if (!sameDirectory(lockPath, directory)) return undefined;
-            // ENOENT means a different contender already removed this
-            // marker. Leave directory removal to that contender.
-            fs.unlinkSync(path.join(lockPath, seen.name));
-        } else if (readOwner(lockPath)) {
-            // A holder may have published its owner since the first read.
-            return undefined;
-        }
-        return directory;
+        } else if (now - Number(directory.mtimeMs) <= staleMs) return undefined;
+
+        claim = claimRemoval(lockPath, directory);
+        if (!claim || !sameDirectory(lockPath, directory)) return undefined;
+        const current = readOwner(lockPath);
+        if (current?.name !== seen?.name || current?.record?.token !== seen?.record?.token) return undefined;
+        if (seen) fs.unlinkSync(path.join(lockPath, seen.name));
+        prepared = true;
+        return { directory, claim };
     } catch {
         // The acquisition loop rechecks the owner after transient errors.
         return undefined;
+    } finally {
+        if (claim && !prepared) finishRemoval(claim, false);
     }
 }
 
@@ -137,36 +201,45 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
     const token = randomUUID();
     const ownerFile = path.join(lockPath, `owner-${token}.json`);
     const deadline = now() + timeoutMs;
-    let recovering: fs.Stats | undefined;
-    for (;;) {
-        opts.signal?.throwIfAborted();
-        try {
-            fs.mkdirSync(lockPath);
-            break;
-        } catch (error) {
-            const code = (error as NodeJS.ErrnoException).code;
-            if (code !== 'EEXIST'
-                && !(process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'))) throw error;
-        }
-        recovering ??= claimStaleLock(lockPath, opts, now(), staleMs);
-        let recovered = false;
-        if (recovering) {
+    let recovering: StaleRemoval | undefined;
+    try {
+        for (;;) {
+            opts.signal?.throwIfAborted();
             try {
-                recovered = removeEmptyLock(lockPath, recovering);
-                recovering = undefined;
+                fs.mkdirSync(lockPath);
+                break;
             } catch (error) {
-                // Keep the claimed identity across a busy rmdir. The marker
-                // is already gone and should not have to age out again.
-                if (!isRemovalBusy(error)) recovering = undefined;
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code !== 'EEXIST' && !(process.platform === 'win32' && isRemovalBusy(error))) throw error;
             }
+            recovering ??= claimStaleLock(lockPath, opts, now(), staleMs);
+            let recovered = false;
+            const removal = recovering;
+            if (removal) {
+                try {
+                    recovered = removeEmptyLock(lockPath, removal.directory);
+                    finishRemoval(removal.claim, true);
+                    recovering = undefined;
+                } catch (error) {
+                    // Hold the claim while retrying a busy empty directory.
+                    if (!isRemovalBusy(error)) {
+                        finishRemoval(removal.claim, false);
+                        recovering = undefined;
+                    }
+                }
+            }
+            if (now() >= deadline) throw new LockTimeoutError(lockPath);
+            if (!recovered) await abortable(sleep(sleepMs), opts.signal);
         }
-        if (now() >= deadline) throw new LockTimeoutError(lockPath);
-        if (!recovered) await abortable(sleep(sleepMs), opts.signal);
+    } finally {
+        if (recovering) finishRemoval(recovering.claim, false);
     }
 
-    const directory = fs.lstatSync(lockPath);
+    const directory = fs.lstatSync(lockPath, { bigint: true });
     let ownerWritten = false;
     let ownerRemoved = false;
+    let removed = false;
+    let claim: RemovalClaim | undefined;
     try {
         fs.writeFileSync(ownerFile, JSON.stringify({
             pid: process.pid, token, acquiredAt: now(),
@@ -178,21 +251,26 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
     } finally {
         for (let attempt = 0; attempt < 6; attempt++) {
             try {
-                if (!sameDirectory(lockPath, directory)) break;
-                if (!ownerRemoved) {
-                    try { fs.unlinkSync(ownerFile); }
-                    catch (error) {
-                        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || ownerWritten) throw error;
+                if (!sameDirectory(lockPath, directory)) { removed = true; break; }
+                claim ??= claimRemoval(lockPath, directory);
+                if (claim) {
+                    if (!ownerRemoved) {
+                        try { fs.unlinkSync(ownerFile); }
+                        catch (error) {
+                            if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || ownerWritten) throw error;
+                        }
+                        ownerRemoved = true;
                     }
-                    ownerRemoved = true;
+                    removeEmptyLock(lockPath, directory);
+                    removed = true;
+                    break;
                 }
-                removeEmptyLock(lockPath, directory);
-                break;
             } catch (error) {
-                if (attempt === 5 || !isRemovalBusy(error)) break;
-                await new Promise(resolve => setTimeout(resolve, 50));
+                if (!isRemovalBusy(error)) break;
             }
+            if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 50));
         }
+        if (claim) finishRemoval(claim, removed);
     }
 }
 

@@ -627,16 +627,13 @@ for (const legacy of [false, true]) {
     let second;
     let replacementOwner;
     let intercepted = false;
-    let release;
-    const held = new Promise(resolve => { release = resolve; });
     nativeFs.unlinkSync = target => {
         if (target === staleFile && !intercepted) {
             intercepted = true;
-            // The first contender has observed the stale owner. Let the
-            // second remove it and publish a lock before the first unlinks.
+            // The first contender is paused before unlink. The second must
+            // yield while the first still owns removal of the stale lock.
             second = withDirectoryLock(lock, { recoverDeadOwner: true }, async () => {
                 [replacementOwner] = fs.readdirSync(lock);
-                await held;
             });
         }
         return oldUnlink(target);
@@ -645,16 +642,82 @@ for (const legacy of [false, true]) {
         let clock = Date.now();
         const first = await withDirectoryLock(lock, {
             recoverDeadOwner: true, timeoutMs: 15, sleepMs: 5, nowMs: () => clock, sleep: async ms => { clock += ms; },
-        }, async () => 'entered').catch(error => error.name);
-        check(`second contender publishes a replacement (legacy=${legacy})`, typeof replacementOwner, 'string');
-        check(`late stale recovery waits for the replacement (legacy=${legacy})`, first, 'LockTimeoutError');
-        check(`late stale recovery preserves the replacement (legacy=${legacy})`, replacementOwner && fs.existsSync(path.join(lock, replacementOwner)), true);
+        }, async () => {
+            check(`second contender waits for claimed recovery (legacy=${legacy})`, replacementOwner, undefined);
+            return 'entered';
+        }).catch(error => error.name);
+        check(`first contender completes claimed recovery (legacy=${legacy})`, first, 'entered');
+        await second;
+        check(`second contender acquires after recovery (legacy=${legacy})`, typeof replacementOwner, 'string');
     } finally {
         nativeFs.unlinkSync = oldUnlink;
-        release();
         await second;
         fs.rmSync(lock, { recursive: true, force: true });
     }
+}
+{
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'competing-ownerless-recovery');
+    fs.mkdirSync(lock);
+    const stale = new Date(Date.now() - 150_000);
+    fs.utimesSync(lock, stale, stale);
+    const nativeFs = require('node:fs');
+    const oldRmdir = nativeFs.rmdirSync;
+    const oldWrite = nativeFs.writeFileSync;
+    let interleaved = false;
+    let startingSecond = false;
+    let removedReplacement = false;
+    let second;
+    nativeFs.rmdirSync = target => {
+        if (target === lock && !interleaved) {
+            interleaved = true;
+            startingSecond = true;
+            // Pause the first contender after the identity check. Without a
+            // shared removal claim, the second removes the stale directory
+            // and stops between its successful mkdir and first owner write.
+            second = withDirectoryLock(lock, {}, async () => 'second').catch(error => error.code);
+            startingSecond = false;
+            if (removedReplacement) return;
+        }
+        return oldRmdir(target);
+    };
+    nativeFs.writeFileSync = (target, ...args) => {
+        if (startingSecond && path.dirname(target) === lock) {
+            oldRmdir(lock);
+            removedReplacement = true;
+        }
+        return oldWrite(target, ...args);
+    };
+    try {
+        check('first contender recovers the stale ownerless directory', await withDirectoryLock(lock, {}, async () => 'first'), 'first');
+        check('ownerless recovery protects the replacement during owner publication', removedReplacement, false);
+        check('second contender acquires after the first finishes', await second, 'second');
+    } finally {
+        nativeFs.rmdirSync = oldRmdir;
+        nativeFs.writeFileSync = oldWrite;
+        await second;
+        fs.rmSync(lock, { recursive: true, force: true });
+    }
+}
+{
+    const lockModule = require.resolve('../out/oauth/refreshLock.js');
+    const { withDirectoryLock, oauthLockPath } = require(lockModule);
+    const parent = fs.mkdtempSync(path.join(tmp, 'abandoned-recovery-'));
+    const lock = oauthLockPath(parent, 'crashed-remover');
+    fs.mkdirSync(lock);
+    const stale = new Date(Date.now() - 150_000);
+    fs.utimesSync(lock, stale, stale);
+    const child = require('cross-spawn').sync(process.execPath, ['-e', `
+        const [lock, lockModule] = process.argv.slice(1);
+        const fs = require('node:fs');
+        const rmdir = fs.rmdirSync;
+        fs.rmdirSync = target => { if (target === lock) process.exit(0); return rmdir(target); };
+        require(lockModule).withDirectoryLock(lock, {}, async () => process.exit(2)).catch(() => process.exit(3));
+    `, lock, lockModule], { timeout: 5_000 });
+    check('crashed contender leaves a recovery claim', child.status, 0);
+    check('abandoned recovery claim is present', fs.readdirSync(parent).some(name => name.startsWith('.xratu-lock-removal-')), true);
+    check('another contender recovers a crashed remover', await withDirectoryLock(lock, { timeoutMs: 3_000 }, async () => 'entered'), 'entered');
+    check('recovery removes abandoned claim files', fs.readdirSync(parent).length, 0);
 }
 {
     const nearly = { ...VALID, expiresAt: Date.now() + 240000 };
