@@ -150,12 +150,11 @@ under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
   focused side panel; Iranian providers remain visible. Drafts survive page
   changes, and user bubbles stay on the right with automatic text direction.
 - **Agentic coding** - reads files, edits code, runs terminal commands,
-  searches the web. YOLO is on by default. Switch to Ask first to review edits
-  and commands before they run.
-  **YOLO mode drops the approval gate entirely** - file edits, terminal
-  commands, and MCP tools all run unasked. Checkpoints still snapshot before
-  edits and plan mode still blocks mutations, but nothing is holding the loop
-  back. Point it at a scratch workspace, not a repo you care about.
+  searches the web. **Ask first** is the default. Review approval requests in
+  the conversation. You can enable **YOLO** in the composer to run file edits,
+  terminal commands, and MCP tools without asking. The composer saves your
+  choice. Checkpoints still snapshot before edits, and Plan mode blocks
+  mutations.
 - **Plan mode** - read-only planning with a task list. Mutating tools are
   blocked in code, not by prompt.
 - **Checkpoints** - shadow-git snapshots before sends and edits. Use a turn's
@@ -269,7 +268,7 @@ via **Code → Extensions → ⋯ → Install from VSIX…**
 
 1. Open the Xratu panel from the activity bar.
 2. Pick a preset or a local runtime, paste your API key, choose a model.
-3. Start a chat. Select **Ask first** in the composer to approve edits and commands before they run.
+3. Start a chat. Review edit and command approvals in the conversation.
 
 ## MCP servers
 

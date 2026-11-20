@@ -35,9 +35,8 @@ bugs we want to hear about:
 ## What is not a vulnerability
 
 - **The agent doing what you approved.** Terminal commands run behind the
-  approval gate in Ask first mode. YOLO is enabled by default, and per-tool
-  auto-approval can also allow a tool to run without prompting.
-  Widen either one only as far as you trust.
+  approval gate in Ask first mode, the default. Turning on YOLO or per-tool
+  auto-approval can let tools run without prompting.
 - **Requests to configured providers and search services.** The [privacy guide](docs/guide.md#privacy)
   describes model and web search traffic.
 - **Prompt injection.** A model acting on instructions it read in a file, a

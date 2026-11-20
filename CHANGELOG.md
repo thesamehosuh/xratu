@@ -2,6 +2,7 @@
 
 ## 3.1.0
 
+- Made Ask first the default for approvals and kept saved preferences.
 - Added saved child conversations with independent controls, attributed approvals, and reports to the parent.
 - Improved Windows session ownership, checkpoint recovery, and extension shutdown.
 - Fixed streaming tool calls and compaction across supported model APIs.

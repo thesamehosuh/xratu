@@ -960,7 +960,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     private _chatRetryCount: number = 0;
     private _researchConversationId: string = crypto.randomUUID();
     private _childFamilyIds = new Set<string>();
-    _yoloMode: boolean = true;
+    _yoloMode: boolean;
     _planMode: boolean = false;
     _selectedModel: string | null = null;
     /** Provider-reported context windows, scoped by provider HOST then model
@@ -1336,7 +1336,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         readonly _globalState: vscode.Memento,
         localStorageUri: vscode.Uri
     ) {
-        this._yoloMode = this._globalState.get<boolean>('xratu.yoloMode', true);
+        this._yoloMode = this._globalState.get<boolean>('xratu.yoloMode', false);
         setOfflineMode(this._globalState.get<boolean>('xratu.offlineMode') === true);
         this._checkpoints = checkpoints;
         this._storagePath = localStorageUri.fsPath;

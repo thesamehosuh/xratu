@@ -14,9 +14,10 @@
 ## Release disposition
 
 The release candidate is **3.1.0**. The tag workflow verifies the packaged
-manifest version, runs host and webview checks, and publishes the checked
+manifest version and commit, runs host and webview checks, and publishes the checked
 VSIX to GitHub Releases. Visual Studio Marketplace publication uses that
-same VSIX through the publisher account.
+same VSIX through the publisher account. Ask first is now the default when
+there is no saved approval preference.
 
 The fixes are grouped into host and Windows lifecycle, model runtime and
 tools, webview flows, and release packaging. The webview Shiki bundle already

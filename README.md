@@ -73,8 +73,8 @@ Agent profiles are reusable starting configurations. [Details](docs/guide.md#sub
 
 ## Approvals and privacy
 
-YOLO is enabled by default and applies to the whole agent tree. Turn it off
-in the composer to require approval for mutations; your choice is saved.
+Ask first is the default. You can enable YOLO for the whole agent tree in
+the composer. Xratu saves your choice.
 Checkpoints use separate shadow git storage and leave your repository's git
 index and history alone.
 
