@@ -106,6 +106,15 @@ check(
     'the semver regex is the only guard on a v* tag reaching a shell',
 );
 check(
+    'release tag matches the packaged manifest version',
+    packageJob.includes('require("./package.json").version')
+        && packageJob.includes('[ "$manifest_version" != "${RELEASE_TAG#v}" ]'),
+);
+check(
+    'package uses the validated tag',
+    /RELEASE_TAG: \$\{\{ steps\.tag\.outputs\.tag \}\}/.test(packageJob),
+);
+check(
     'validation step publishes the tag as a job output',
     /echo "tag=\$RELEASE_TAG" >> "\$GITHUB_OUTPUT"/.test(yaml),
     'publish must consume the validated tag, not re-read github.ref_name',

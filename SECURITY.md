@@ -35,14 +35,14 @@ bugs we want to hear about:
 ## What is not a vulnerability
 
 - **The agent doing what you approved.** Terminal commands run behind the
-  approval gate; YOLO mode and per-tool auto-approve remove it deliberately.
+  approval gate in Ask first mode. YOLO is enabled by default, and per-tool
+  auto-approval can also allow a tool to run without prompting.
   Widen either one only as far as you trust.
-- **Requests to endpoints you configured** - your model provider, your SearXNG
-  instance, Brave or Parallel for web search. The Privacy section of the README
-  documents each one.
+- **Requests to configured providers and search services.** The [privacy guide](docs/guide.md#privacy)
+  describes model and web search traffic.
 - **Prompt injection.** A model acting on instructions it read in a file, a
   skill, or a web page is inherent to the design. The mitigations are the
-  approval gate and the fact that nothing executes without it.
+  approval gate in Ask first mode and deterministic tool restrictions in Plan mode.
 - **A third-party MCP server doing what its author wrote it to do.** Review
   catalogs before adding them; auto-approve is never taken from a catalog.
 - **Needing elevated privileges to install an MCP server's dependencies.**

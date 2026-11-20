@@ -2,7 +2,7 @@
   "name": "xratu",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "3.0.5",
+  "version": "3.1.0",
   "publisher": "xratu",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "assets/icon.png",
@@ -212,6 +212,11 @@
       ]
     }
   },
+  "homepage": "https://github.com/thesamehosuh/xratu#readme",
+  "bugs": {
+    "url": "https://github.com/thesamehosuh/xratu/issues"
+  },
+  "qna": "https://github.com/thesamehosuh/xratu/discussions",
   "repository": {
     "type": "git",
     "url": "https://github.com/thesamehosuh/xratu"

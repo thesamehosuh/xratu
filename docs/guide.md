@@ -150,8 +150,8 @@ under MIT; attribution ships in `THIRD_PARTY_NOTICES.txt`.
   focused side panel; Iranian providers remain visible. Drafts survive page
   changes, and user bubbles stay on the right with automatic text direction.
 - **Agentic coding** - reads files, edits code, runs terminal commands,
-  searches the web. Every edit and command needs your approval; per-tool
-  auto-approve if you trust a workflow, YOLO mode if you don't want the gate.
+  searches the web. YOLO is on by default. Switch to Ask first to review edits
+  and commands before they run.
   **YOLO mode drops the approval gate entirely** - file edits, terminal
   commands, and MCP tools all run unasked. Checkpoints still snapshot before
   edits and plan mode still blocks mutations, but nothing is holding the loop
@@ -269,8 +269,7 @@ via **Code → Extensions → ⋯ → Install from VSIX…**
 
 1. Open the Xratu panel from the activity bar.
 2. Pick a preset or a local runtime, paste your API key, choose a model.
-3. Chat. Approve edits and commands as the agent works - or turn on
-   auto-approval once you trust the loop.
+3. Start a chat. Select **Ask first** in the composer to approve edits and commands before they run.
 
 ## MCP servers
 
@@ -352,14 +351,13 @@ description: Deploy the app to staging; use when the user asks to deploy or ship
 ```
 
 Extra files (scripts, references, templates) go next to the `SKILL.md`.
-Enable/disable skills in Settings → Servers & skills → Skills.
+Enable/disable skills in Skills in the Xratu sidebar.
 
 ### First-party skills
 
 Xratu ships eight skills, seeded to `~/.agents/skills` when first introduced (so
 Claude Code, OpenCode, and the other agent tools see them too), editable
-like any skill, and switchable per skill in Settings → Servers & skills →
-Skills:
+like any skill, and switchable per skill from **Skills** in the Xratu sidebar.
 
 New bundled skills are added on upgrade. User-edited copies are preserved,
 and deleted skills stay deleted.
