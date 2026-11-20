@@ -1,7 +1,7 @@
 import { SidePanel } from './SidePanel';
 import { NativeInventory } from './EngineScope';
 import type { NativeSetupState } from '../types';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
@@ -400,6 +400,7 @@ export function CapabilitiesPage({
     } | null>(null);
     const sentMarketQuery = useRef('');
     const [draft, setDraft] = useState<Draft | null>(null);
+    const [discardDraft, setDiscardDraft] = useState<'close' | 'back' | null>(null);
     const [draftInitial, setDraftInitial] = useState<Draft | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
     /** Amber, non-blocking note in the editor (e.g. a guessed install). */
@@ -466,10 +467,8 @@ export function CapabilitiesPage({
 
     const draftDirty = !!draft && !!draftInitial && JSON.stringify(draft) !== JSON.stringify(draftInitial);
 
-    const confirmDiscard = (): boolean => !draftDirty || window.confirm(t('mcpDiscardConfirm'));
-
     const openEditor = (v?: McpServerView) => {
-        if (draft && !confirmDiscard()) return;
+        if (draft) return;
         setMenuFor(null);
         setArmedDelete(null);
         const d = v ? draftFromView(v) : emptyDraft();
@@ -479,12 +478,35 @@ export function CapabilitiesPage({
         setDraftNotice(null);
     };
 
-    const closeEditor = () => {
-        if (draftDirty && !window.confirm(t('mcpDiscardConfirm'))) return;
+    const clearEditor = () => {
+        setDiscardDraft(null);
         setDraft(null);
         setDraftInitial(null);
         setDraftError(null);
         setDraftNotice(null);
+    };
+
+    const draftName = useRef<HTMLInputElement>(null);
+    const focusDiscardCancel = useCallback((button: HTMLButtonElement | null) => { button?.focus(); }, []);
+    const resumeEditing = () => {
+        setDiscardDraft(null);
+        requestAnimationFrame(() => draftName.current?.focus());
+    };
+    const closeEditor = () => {
+        if (discardDraft) resumeEditing();
+        else if (draftDirty) setDiscardDraft('close');
+        else clearEditor();
+    };
+
+    const goBack = () => {
+        if (draftDirty) setDiscardDraft('back');
+        else onBack();
+    };
+
+    const discardEditor = () => {
+        const leavePage = discardDraft === 'back';
+        clearEditor();
+        if (leavePage) onBack();
     };
 
     const stripView = (s: McpServerView | McpServerPayload): McpServerPayload => {
@@ -784,6 +806,15 @@ export function CapabilitiesPage({
 
     const renderDraftForm = () => {
         if (!draft) return null;
+        if (discardDraft) return (
+            <div className="mcp-form">
+                <h3>{t('mcpDiscardConfirm')}</h3>
+                <div className="mcp-form-actions">
+                    <button type="button" className="settings-ghost-action" ref={focusDiscardCancel} onClick={resumeEditing}>{t('mcpKeepEditing')}</button>
+                    <button type="button" className="mcp-save" onClick={discardEditor}>{t('mcpDiscard')}</button>
+                </div>
+            </div>
+        );
         return (
             <div className="mcp-form">
                 <div className="mcp-form-head">
@@ -803,7 +834,7 @@ export function CapabilitiesPage({
                     </div>
                 </div>
                 {field(t('mcpServerName'),
-                    <input dir="ltr" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />)}
+                    <input ref={draftName} dir="ltr" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />)}
                 {field(t('mcpTransportType'),
                     <select dir="ltr" value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value as McpTransportType })}>
                         {TRANSPORTS.map((tr) => <option key={tr} value={tr}>{transportLabel(tr)}</option>)}
@@ -1327,10 +1358,7 @@ export function CapabilitiesPage({
                 <button
                     type="button"
                     className="ghost-btn small"
-                    onClick={() => {
-                        if (draft && !confirmDiscard()) return;
-                        onBack();
-                    }}
+                    onClick={goBack}
                     aria-label={t('credBack')}
                     title={t('credBack')}
                 >

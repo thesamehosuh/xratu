@@ -190,11 +190,16 @@ async function processPdfAttachment(a: ComposerAttachment): Promise<ComposerAtta
     const result = await processPdf(a.dataBase64);
     if (result.kind === 'text') {
         const block = `[Attached PDF: ${a.name} - text layer extracted]\n\n${result.text}`;
+        const bytes = new TextEncoder().encode(block);
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 8192) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+        }
         return [{
             ...a,
             mimeType: 'text/plain',
-            size: new Blob([block]).size,
-            dataBase64: btoa(String.fromCharCode(...new TextEncoder().encode(block))),
+            size: bytes.length,
+            dataBase64: btoa(binary),
         }];
     }
     const suffix = result.pageCount > PDF_SCAN_MAX_PAGES ? ` (first ${PDF_SCAN_MAX_PAGES} of ${result.pageCount} pages)` : '';
@@ -304,7 +309,7 @@ interface InputBarProps {
      *  conversation already occupies. */
     defaultContextWindow?: number | null;
     planMode?: boolean;
-    yolo?: boolean;
+    yolo?: boolean | null;
     onTogglePlan?: () => void;
     onToggleYolo?: () => void;
     statusSlot?: ReactNode;
@@ -318,7 +323,7 @@ interface InputBarProps {
     onRestoreApplied?: (ids: string[]) => void;
     /** Files the host read for attachment (picker/commands via attachUris). */
     injectedAttachments?: ComposerAttachment[] | null;
-    onInjectedAttachmentsApplied?: () => void;
+    onInjectedAttachmentsApplied?: (attachments: ComposerAttachment[]) => void;
     /** Host-side attachment rejection - shown inline, auto-dismissed.
      *  Keyed: every host post is a fresh error object. */
     hostError?: { id: number; value: string; valueKey?: string; params?: Record<string, string> } | null;
@@ -977,17 +982,8 @@ export function InputBar({
         };
     }, [ctxOpen]);
 
-    // Host-side attachment rejections render inline in the composer (with the
-    // same auto-dismiss as local errors) - never as chat bubbles.  Keyed by
-    // id so each host post displays exactly once, never a stale repeat.
-    useEffect(() => {
-        if (!hostError) return;
-        // Host posts i18n KEYS in valueKey (value is always ''); tf/tOrRaw
-        // resolves a known key and passes unknown text through unchanged.
-        setAttachError(tf(hostError.valueKey || hostError.value, hostError.params));
-        onHostErrorApplied?.();
-    }, [hostError, onHostErrorApplied]);
-
+    const hostAttachmentsApplied = useRef(onInjectedAttachmentsApplied);
+    useLayoutEffect(() => { hostAttachmentsApplied.current = onInjectedAttachmentsApplied; });
     // Host-read attachments arriving from an explorer drag (attachUris flow).
     useEffect(() => {
         if (!injectedAttachments || injectedAttachments.length === 0) return;
@@ -1007,16 +1003,16 @@ export function InputBar({
                         const converted = await convertWebpToPng(a.dataBase64);
                         normalized.push({ ...a, mimeType: 'image/png', size: converted.size, dataBase64: converted.dataBase64 });
                     } else if (isImageMime(a.mimeType) && sniffImageMime(a.dataBase64) !== a.mimeType) {
-                        setAttachError(t('attachUnsupported').replace('{name}', a.name));
+                        if (!cancelled) setAttachError(t('attachUnsupported').replace('{name}', a.name));
                     } else {
                         normalized.push(a);
                     }
                 } catch {
-                    setAttachError(t('attachReadError').replace('{name}', a.name));
+                    if (!cancelled) setAttachError(t('attachReadError').replace('{name}', a.name));
                 }
             }
-            if (cancelled || normalized.length === 0) return;
-            setAttachments((prev) => {
+            if (cancelled) return;
+            if (normalized.length) setAttachments((prev) => {
                 const next = [...prev];
                 let bytes = prev.reduce((sum, a) => sum + a.size, 0);
                 let dropped = 0;
@@ -1031,10 +1027,21 @@ export function InputBar({
                 if (dropped > 0) setAttachError(t('attachTooMany'));
                 return next;
             });
-            onInjectedAttachmentsApplied?.();
+            hostAttachmentsApplied.current?.(injectedAttachments);
         })();
         return () => { cancelled = true; };
-    }, [injectedAttachments, onInjectedAttachmentsApplied]);
+    }, [injectedAttachments]);
+
+    // Host-side attachment rejections render inline in the composer (with the
+    // same auto-dismiss as local errors) - never as chat bubbles.  Keyed by
+    // id so each host post displays exactly once, never a stale repeat.
+    useEffect(() => {
+        if (!hostError) return;
+        // Host posts i18n KEYS in valueKey (value is always ''); tf/tOrRaw
+        // resolves a known key and passes unknown text through unchanged.
+        setAttachError(tf(hostError.valueKey || hostError.value, hostError.params));
+        onHostErrorApplied?.();
+    }, [hostError, onHostErrorApplied]);
 
     // Paste image data from clipboard.
     const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1076,13 +1083,13 @@ export function InputBar({
                     <button type="button" className="composer-policy" data-policy="mode" aria-haspopup="menu" aria-expanded={policyOpen === 'mode'} onClick={() => setPolicyOpen(policyOpen === 'mode' ? null : 'mode')} title={t(planMode ? 'planControlHint' : 'buildControlHint')}>
                         {planMode ? <ListChecks size={12} /> : <Wrench size={12} />}<span>{t(planMode ? 'surfacePlan' : 'surfaceBuild')}</span><ChevronDown size={10} />
                     </button>
-                    <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t(yolo ? 'autoControlHint' : 'askControlHint')}>
-                        <ShieldCheck size={12} /><span>{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</span><ChevronDown size={10} />
+                    <button type="button" className={`composer-policy${yolo ? ' automatic' : ''}`} data-policy="approval" disabled={yolo === null} aria-haspopup="menu" aria-expanded={policyOpen === 'approval'} onClick={() => setPolicyOpen(policyOpen === 'approval' ? null : 'approval')} title={t(yolo === null ? 'surfacePermissionControl' : yolo ? 'autoControlHint' : 'askControlHint')}>
+                        <ShieldCheck size={12} /><span>{t(yolo === null ? 'surfacePermissionControl' : yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</span><ChevronDown size={10} />
                     </button>
                     {policyOpen && <div className="composer-policy-menu" role="menu" aria-label={t(policyOpen === 'mode' ? 'surfaceModeControl' : 'surfacePermissionControl')}>
                         {[false, true].map((enabled) => <button type="button" key={String(enabled)} role="menuitemradio" aria-checked={(policyOpen === 'mode' ? planMode : yolo) === enabled} onClick={() => {
                             const current = policyOpen === 'mode' ? planMode : yolo;
-                            if (current !== enabled) (policyOpen === 'mode' ? onTogglePlan : onToggleYolo)?.();
+                            if (current !== null && current !== enabled) (policyOpen === 'mode' ? onTogglePlan : onToggleYolo)?.();
                             setPolicyOpen(null); policyRef.current?.querySelector<HTMLButtonElement>(`[data-policy="${policyOpen}"]`)?.focus();
                         }}><span>{t(policyOpen === 'mode' ? enabled ? 'surfacePlan' : 'surfaceBuild' : enabled ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</span>{(policyOpen === 'mode' ? planMode : yolo) === enabled && <Check size={12} />}</button>)}
                     </div>}
@@ -1546,7 +1553,7 @@ export function InputBar({
                 <div className="composer-summary-item">
                     <dt className="sr-only">{t('surfacePermissionControl')}</dt>
                     <ShieldCheck size={12} aria-hidden="true" />
-                    <dd>{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</dd>
+                    <dd>{t(yolo === null ? 'surfacePermissionControl' : yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</dd>
                 </div>
             </dl>
         </div>

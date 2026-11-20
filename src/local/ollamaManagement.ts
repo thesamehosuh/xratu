@@ -12,6 +12,12 @@ export function ollamaManagementUrl(baseUrl: string, action: 'pull' | 'delete'):
     return new URL(`/api/${action}`, url.origin).href;
 }
 
+/** Only documented Ollama endpoints share an inventory and model actions. */
+export function sameOllamaEndpoint(left: string, right: string): boolean {
+    try { return ollamaManagementUrl(left, 'delete') === ollamaManagementUrl(right, 'delete'); }
+    catch { return false; }
+}
+
 export async function manageOllamaModel(
     baseUrl: string, action: 'pull' | 'delete', model: string,
     signal: AbortSignal, onProgress: (progress: ModelProgress) => void,

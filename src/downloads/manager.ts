@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import { constants, lstatSync } from 'fs';
 import * as path from 'path';
-import { sanitizePath } from '../paths';
+import { isPortablePathComponent, sanitizePath } from '../paths';
 import { abortable } from '../oauth/refreshLock';
 import type { ProxyRouteMode } from '../proxy';
 import { downloadActions } from './types';
@@ -52,10 +52,11 @@ function contentLength(value: string | null): number | null {
     return Number(value);
 }
 function validator(record: DownloadRecord): string | undefined { return record.etag ?? record.lastModified; }
-function validateRecordPath(value: string): void {
+function validateRecordPath(value: string, requirePortable = true): void {
     const parts = value.split(/[\\/]/);
     if (!value.trim() || path.isAbsolute(value) || path.win32.isAbsolute(value) || /^[a-z]:/i.test(value) || /[\r\n\0]/.test(value)
-        || parts.every(part => !part || part === '.') || parts.some(part => part === '..' || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
+        || parts.every(part => !part || part === '.') || parts.some(part => part === '..' || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))
+        || (requirePortable && parts.some(part => !isPortablePathComponent(part)))) throw new DownloadFailure('downloadFileError');
 }
 
 /** Workspace-owned transfers. Model turns own commands, never transfer lifetimes. */
@@ -106,13 +107,21 @@ export class DownloadManager {
     }
     private emit(): void { this.lastEmit = Date.now(); this.deps.changed(this.views(this.sessionId), this.startupError); }
     private key(id: string): string { return `xratu.download.${this.scope}.${id}`; }
-    private target(record: DownloadRecord): string {
-        validateRecordPath(record.path);
-        try { return sanitizePath(record.path, this.workspace); }
-        catch { throw new DownloadFailure('downloadFileError'); }
+    private target(record: DownloadRecord, requirePortable = true): string {
+        validateRecordPath(record.path, requirePortable);
+        try {
+            const root = sanitizePath('.', this.workspace);
+            const target = path.join(root, record.path);
+            const parentPath = path.dirname(target);
+            const relativeParent = path.relative(root, parentPath);
+            if (relativeParent) validateRecordPath(relativeParent);
+            const parent = sanitizePath(parentPath, root);
+            if (path.relative(path.dirname(target), parent)) throw new Error('Download parent changed.');
+            return target;
+        } catch { throw new DownloadFailure('downloadFileError'); }
     }
-    private partial(record: DownloadRecord): string {
-        const target = this.target(record);
+    private partial(record: DownloadRecord, requirePortable = true): string {
+        const target = this.target(record, requirePortable);
         // Resolve the parent, never the generated leaf: resolving a replaced
         // partial symlink would turn its target into our write/unlink operand.
         const parent = sanitizePath(path.dirname(target), this.workspace);
@@ -143,7 +152,9 @@ export class DownloadManager {
                 || (r.publication !== undefined && (!r.publication || ![r.publication.dev, r.publication.ino, r.publication.size, r.publication.mtimeMs].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0)
                     || r.publication.size !== r.received || r.total !== r.received))
                 || [r.etag, r.lastModified].some(v => v !== undefined && (typeof v !== 'string' || v.length > 1024 || /[\r\n]/.test(v)))) throw new Error('Invalid download record.');
-            validateRecordPath(r.path);
+            // Reject structurally unsafe metadata. A legacy nonportable
+            // destination is handled below as a failure of that transfer.
+            validateRecordPath(r.path, false);
             const source = new URL(r.source);
             if (!['http:', 'https:'].includes(source.protocol) || source.origin !== r.source) throw new Error('Invalid download source.');
             // Never silently restart network/disk work after a host restart.
@@ -252,8 +263,10 @@ export class DownloadManager {
         const route = routeArg(args.route);
         const url = await this.checkUrl(args.url, route, signal);
         signal?.throwIfAborted();
-        const target = sanitizePath(textArg(args.path, 'path', 4096), this.workspace);
-        if (/[\r\n\0]/.test(target)) throw new Error('Download path contains unsupported control characters.');
+        const requested = textArg(args.path, 'path', 4096);
+        // Validate before normalization, which can hide reserved path components.
+        validateRecordPath(requested);
+        const target = sanitizePath(requested, this.workspace);
         // Use the sanitizer's spelling for both operands: native realpath can
         // expand Windows short names that realpathSync preserves.
         const relative = path.relative(sanitizePath('.', this.workspace), target);
@@ -270,6 +283,8 @@ export class DownloadManager {
         if (!integer(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES) throw new Error('max_bytes must be between 1 and 1099511627776.');
         const sha256 = args.sha256 === undefined ? undefined : textArg(args.sha256, 'sha256', 64).toLowerCase();
         if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('sha256 must contain 64 hexadecimal characters.');
+        // Check the caller's leaf too: an existing symlink is an occupied destination.
+        this.assertAbsent(path.join(sanitizePath('.', this.workspace), requested));
         await fs.mkdir(path.dirname(target), { recursive: true });
         this.assertAbsent(target);
         const now = Date.now();
@@ -323,7 +338,7 @@ export class DownloadManager {
         if (this.records.get(id)?.status === 'completed') return r;
         if (action === 'cancel') {
             let partial: string | undefined;
-            try { partial = this.partial(r); } catch (error) { this.deps.diagnostic(error); }
+            try { partial = this.partial(r, false); } catch (error) { this.deps.diagnostic(error); }
             if (partial) await fs.unlink(partial).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
             await this.deps.secrets.delete(this.key(id));
         } else if (url) {

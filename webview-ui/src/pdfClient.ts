@@ -18,7 +18,7 @@ const PDF_SCAN_TARGET_WIDTH = 1200;
 const PDF_SCAN_MAX_HEIGHT = 4000;
 
 type MinimalPdfjs = {
-    getDocument(src: Record<string, unknown>): { promise: Promise<any> };
+    getDocument(src: Record<string, unknown>): { promise: Promise<any>; destroy(): Promise<void> };
 };
 
 let pdfjsPromise: Promise<MinimalPdfjs> | null = null;
@@ -60,57 +60,62 @@ export type PdfProcessing =
 
 export async function processPdf(dataBase64: string): Promise<PdfProcessing> {
     const pdfjs = await loadPdfjs();
-    const doc = await pdfjs.getDocument({
+    const loadingTask = pdfjs.getDocument({
         data: base64ToBytes(dataBase64),
         isEvalSupported: false,
         disableFontFace: true,
-    }).promise;
+    });
+    try {
+        const doc = await loadingTask.promise;
 
-    // 1) Text layer first - the cheapest and most token-efficient path.
-    let text = '';
-    const textLimit = Math.min(doc.numPages, PDF_TEXT_MAX_PAGES);
-    for (let i = 1; i <= textLimit; i++) {
-        const page = await doc.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-            .map((item: unknown) => {
-                const str = (item as { str?: unknown })?.str;
-                return typeof str === 'string' ? str : '';
-            })
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-        page.cleanup();
-        if (pageText) {
-            text += (text ? '\n\n' : '') + `--- Page ${i} ---\n` + pageText;
+        // 1) Text layer first - the cheapest and most token-efficient path.
+        let text = '';
+        const textLimit = Math.min(doc.numPages, PDF_TEXT_MAX_PAGES);
+        for (let i = 1; i <= textLimit; i++) {
+            const page = await doc.getPage(i);
+            const content = await page.getTextContent();
+            const pageText = content.items
+                .map((item: unknown) => {
+                    const str = (item as { str?: unknown })?.str;
+                    return typeof str === 'string' ? str : '';
+                })
+                .join(' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            page.cleanup();
+            if (pageText) {
+                text += (text ? '\n\n' : '') + `--- Page ${i} ---\n` + pageText;
+            }
+            if (text.length > PDF_TEXT_MAX_CHARS) break;
         }
-        if (text.length > PDF_TEXT_MAX_CHARS) break;
-    }
-    if (text.trim()) {
-        const truncated = text.length > PDF_TEXT_MAX_CHARS;
-        return { kind: 'text', text: text.slice(0, PDF_TEXT_MAX_CHARS) + (truncated ? '\n… [PDF truncated, character cap reached]' : '') };
-    }
+        if (text.trim()) {
+            const truncated = text.length > PDF_TEXT_MAX_CHARS;
+            return { kind: 'text', text: text.slice(0, PDF_TEXT_MAX_CHARS) + (truncated ? '\n… [PDF truncated, character cap reached]' : '') };
+        }
 
-    // 2) Image-only PDF: render pages for the vision model.
-    const pages: { page: number; dataBase64: string }[] = [];
-    const scanLimit = Math.min(doc.numPages, PDF_SCAN_MAX_PAGES);
-    for (let i = 1; i <= scanLimit; i++) {
-        const page = await doc.getPage(i);
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(
-            2,
-            Math.max(1, PDF_SCAN_TARGET_WIDTH / base.width),
-            Math.max(1, PDF_SCAN_MAX_HEIGHT / base.height)
-        );
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('canvas unavailable');
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        pages.push({ page: i, dataBase64: await canvasToBase64(canvas) });
-        page.cleanup();
+        // 2) Image-only PDF: render pages for the vision model.
+        const pages: { page: number; dataBase64: string }[] = [];
+        const scanLimit = Math.min(doc.numPages, PDF_SCAN_MAX_PAGES);
+        for (let i = 1; i <= scanLimit; i++) {
+            const page = await doc.getPage(i);
+            const base = page.getViewport({ scale: 1 });
+            const scale = Math.min(
+                2,
+                Math.max(1, PDF_SCAN_TARGET_WIDTH / base.width),
+                Math.max(1, PDF_SCAN_MAX_HEIGHT / base.height)
+            );
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('canvas unavailable');
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            pages.push({ page: i, dataBase64: await canvasToBase64(canvas) });
+            page.cleanup();
+        }
+        return { kind: 'scan', pages, pageCount: doc.numPages };
+    } finally {
+        await loadingTask.destroy();
     }
-    return { kind: 'scan', pages, pageCount: doc.numPages };
 }

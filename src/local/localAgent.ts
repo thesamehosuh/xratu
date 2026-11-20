@@ -9,6 +9,7 @@
  * integration supplies tool definitions + an executor + approval callback.
  */
 
+import { countUserRows, isUserTurn } from './historyBounds';
 import { reminderTaskList, taskListReminderLine } from '../taskList';
 import { providerHttpStatus } from '../providerErrors';
 import { resolveAgentRounds } from '../tooling/agentRounds';
@@ -344,14 +345,15 @@ export async function* runLocalAgent(
     let messages: LocalAgentMessage[] = buildMessages();
     // Both serial and parallel rounds deliver corrections after the complete
     // tool batch and before another model request (including wrap-up).
-    async function* applySteers(): AsyncGenerator<LocalAgentEvent> {
+    async function* applySteers(final = false): AsyncGenerator<LocalAgentEvent> {
         request.signal?.throwIfAborted();
-        for (const steer of await steerFeed?.drain() ?? []) {
+        for (const steer of await steerFeed?.drain(final) ?? []) {
             const text = steer.text.trim();
             if (!text && !steer.attachments?.length) continue;
-            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
+            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat), ...(steer.system ? { backgroundNotice: true } : {}) });
             yield {
                 type: 'steer', text,
+                ...(steer.system ? { system: true } : {}),
                 ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
                 ...(steer.steerId ? { steerId: steer.steerId } : {}),
             };
@@ -364,7 +366,7 @@ export async function* runLocalAgent(
         return index > 0 ? index : undefined;
     };
     // How many user turns the run has folded into the rolling summary so far.
-    const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+    const historyUserTurns = countUserRows(history);
     // How many user turns the run has folded into the rolling summary, as a
     // count the host can map to its suffix replay boundary. Only a summarized
     // PREFIX can be expressed that way: after any UNSUMMARIZED drop (forced
@@ -380,7 +382,7 @@ export async function* runLocalAgent(
         let remaining = 0;
         for (let i = 1; i < ts; i++) {
             const m = messages[i];
-            if (m.role === 'user' && !isHistoryTruncationMarker(m)) remaining++;
+            if (isUserTurn(m) && !isHistoryTruncationMarker(m)) remaining++;
         }
         reportedTurns = Math.max(0, historyUserTurns - remaining);
         return reportedTurns;
@@ -832,7 +834,7 @@ export async function* runLocalAgent(
                 ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
             });
             let corrected = false;
-            for await (const event of applySteers()) { corrected = true; yield event; }
+            for await (const event of applySteers(true)) { corrected = true; yield event; }
             if (corrected) continue;
             yield { type: 'status', value: 'done' };
             return;
@@ -952,7 +954,7 @@ export async function* runLocalAgent(
                         messages.push({
                             role: 'tool',
                             tool_call_id: call.id,
-                            content: result.output,
+                            content: toolResultContent(result.output, result.images, imageFormat),
                             isError: result.isError === true,
                         });
                         eventQueue.push({
@@ -961,8 +963,9 @@ export async function* runLocalAgent(
                             tool: call.name,
                             output: result.output,
                             isError: result.isError,
-                    ...(result.research ? { research: result.research } : {}),
-                    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+                            ...(result.images?.length ? { images: result.images } : {}),
+                            ...(result.research ? { research: result.research } : {}),
+                            ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
                         });
                     } catch (e) {
                         execError = execError ?? e;

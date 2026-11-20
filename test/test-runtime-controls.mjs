@@ -8,7 +8,11 @@ Module._load = function (name, ...args) {
 };
 const policy = require('../out/networkPolicy.js');
 const { proxyFetch } = require('../out/proxyFetch.js');
-const { manageOllamaModel, ollamaManagementUrl } = require('../out/local/ollamaManagement.js');
+const { manageOllamaModel, ollamaManagementUrl, sameOllamaEndpoint } = require('../out/local/ollamaManagement.js');
+
+assert.equal(sameOllamaEndpoint('http://localhost:11434/v1/', 'http://localhost:11434'), true);
+assert.equal(sameOllamaEndpoint('http://localhost:11434/another/v1', 'http://localhost:11434'), false);
+assert.equal(sameOllamaEndpoint('invalid endpoint', 'http://localhost:11434'), false);
 const { getLocalToolDefinitions, executeLocalTool } = require('../out/mcp.js');
 const { ExternalMcpManager } = require('../out/externalMcp.js');
 const originalFetch = globalThis.fetch;

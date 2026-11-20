@@ -87,7 +87,7 @@ export function Dropdown({
             const height = Math.min(190, options.length * 36 + 10);
             const up = side === 'top' || window.innerHeight - rect.bottom - 12 < height && rect.top > window.innerHeight - rect.bottom;
             const cap = Math.min(height, Math.max(64, up ? rect.top - 12 : window.innerHeight - rect.bottom - 12));
-            const rtl = getComputedStyle(trigger).direction === 'rtl';
+            const rtl = getComputedStyle(listRef.current?.parentElement ?? document.body).direction === 'rtl';
             setPlacement({ top: up ? rect.top - cap - 4 : rect.bottom + 4, inline: rtl ? window.innerWidth - rect.right : rect.left, width: rect.width, cap });
         };
         position();

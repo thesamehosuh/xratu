@@ -194,7 +194,7 @@ export type LocalAgentEvent =
         reasoningContent?: string;
         contextNote?: string;
     }
-    | { type: 'steer'; text: string; attachments?: LocalImageAttachment[]; steerId?: string }
+    | { type: 'steer'; text: string; attachments?: LocalImageAttachment[]; steerId?: string; system?: boolean }
     | {
         type: 'needsApproval';
         approvalId: string;
@@ -247,6 +247,8 @@ export interface LocalAgentMessage {
         };
     }>;
     tool_call_id?: string;
+    /** Host-origin job context carried on the user wire role between rounds. */
+    backgroundNotice?: boolean;
     /** True when a tool message carries a failure (denied/executor error).
      *  The Messages transport maps it to Anthropic's `is_error`. */
     isError?: boolean;
@@ -403,6 +405,7 @@ export interface LocalApprovalGate {
  *  receive the original bytes for every file instead, for native staging. */
 export interface LocalSteerMessage {
     text: string;
+    system?: boolean;
     attachments?: LocalImageAttachment[];
     /** Opaque webview id echoed back on the `steer` event so the host can
      *  confirm the pending bubble the moment it is actually injected. */
@@ -413,7 +416,7 @@ export interface LocalSteerMessage {
  *  messages at round boundaries (after tool results, before the next model
  *  request). `drain` must atomically empty the queue. */
 export interface LocalSteerFeed {
-    drain(): LocalSteerMessage[] | Promise<LocalSteerMessage[]>;
+    drain(final?: boolean): LocalSteerMessage[] | Promise<LocalSteerMessage[]>;
     /** Register an interrupt for ONLY the current model request. Tools,
      * approvals and delegated children must never share this controller. */
     setInterrupt?(interrupt: (() => void) | undefined): void;

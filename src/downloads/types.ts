@@ -6,7 +6,7 @@ export type DownloadAction = 'resume' | 'restart' | 'cancel';
 
 export function downloadActions(status: DownloadStatus): DownloadAction[] {
     if (status === 'completed' || status === 'cancelled') return [];
-    if (status === 'failed') return ['restart'];
+    if (status === 'failed') return ['restart', 'cancel'];
     if (status === 'paused' || status === 'interrupted' || status === 'retrying') return ['resume', 'cancel'];
     return ['cancel'];
 }

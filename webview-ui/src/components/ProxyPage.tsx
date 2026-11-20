@@ -51,7 +51,7 @@ interface ServerDraft {
  *  cannot express (auth, path) still round-trips via the raw host+port. */
 function splitProxyUrl(url: string): ServerDraft {
     const trimmed = (url ?? '').trim();
-    const match = /^([a-z][a-z0-9+.-]*):\/\/([^/:]+)(?::(\d+))?/i.exec(trimmed);
+    const match = /^(https?|socks5):\/\/((?:[^/@]*@)?(?:\[[^\]]+\]|[^/:@]+))(?::(\d+))?(?:[/?#]|$)/i.exec(trimmed);
     if (!match) {
         return { scheme: 'http', host: trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/.*$/, ''), port: '' };
     }

@@ -348,6 +348,7 @@ test.describe('work surface', () => {
             await page.setViewportSize({ width, height: 640 });
             await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
             await post(page, { type: 'locale', locale });
+            await post(page, { type: 'yoloMode', enabled: false });
             await post(page, { type: 'modelInfo', defaultModel: 'coder', selectedModel: 'coder', models: ['coder', 'another-coder'], contextWindows: { coder: 32768 } });
             await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
             await post(page, { type: 'gitBranchesState', branches: ['main', `feat/${'long-branch-name'.repeat(20)}`] });
@@ -1059,7 +1060,13 @@ test.describe('work surface', () => {
         await expect(page.locator('[data-policy="mode"]')).toContainText('Build');
         await post(page, { type: 'planMode', enabled: true });
         await expect(page.locator('[data-policy="mode"]')).toContainText('Plan');
-        await page.locator('[data-policy="approval"]').click();
+        const approval = page.locator('[data-policy="approval"]');
+        await expect(approval).toBeDisabled();
+        await expect(approval).toHaveText('Tool permissions');
+        await post(page, { type: 'yoloMode', enabled: false });
+        await expect(approval).toBeEnabled();
+        await expect(approval).toContainText('Ask first');
+        await approval.click();
         await page.keyboard.press('Escape');
         await expect(page.getByRole('menu')).toHaveCount(0);
         await post(page, { type: 'openSettings' });

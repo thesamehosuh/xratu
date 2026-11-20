@@ -219,6 +219,7 @@ check('lmstudio: explicit vision false preserved', lmstudioNoReasoning[0].suppor
 check('lmstudio: trained_for_tool_use false leaves supportsTools unset', lmstudioNoReasoning[0].supportsTools, undefined);
 
 // --- Unrecognized payloads ------------------------------------------------
+check('Ollama empty inventory clears the catalog', parseModelList({ models: [] })?.length, 0);
 check('empty payload -> null', parseModelList({ object: 'list', data: [] }), null);
 check('garbage payload -> null', parseModelList({ error: 'nope' }), null);
 check('null payload -> null', parseModelList(null), null);

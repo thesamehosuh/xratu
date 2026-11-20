@@ -100,6 +100,11 @@ const CLIP_MARKER_RESERVE = 40;
 interface HistoryRow {
     role?: string;
     content?: unknown;
+    backgroundNotice?: boolean;
+}
+
+export function isUserTurn(row: HistoryRow | undefined | null): boolean {
+    return row?.role === 'user' && row.backgroundNotice !== true;
 }
 
 /**
@@ -232,7 +237,7 @@ export function skipLeadingUserTurns<T extends HistoryRow>(rows: readonly T[], k
     if (k <= 0) return rows as T[];
     let seen = 0;
     for (let i = 0; i < rows.length; i++) {
-        if (rows[i]?.role !== 'user') continue;
+        if (!isUserTurn(rows[i])) continue;
         if (seen === k) return rows.slice(i);
         seen++;
     }
@@ -242,7 +247,7 @@ export function skipLeadingUserTurns<T extends HistoryRow>(rows: readonly T[], k
 /** Number of user rows in a ledger (one per turn, steers included). */
 export function countUserRows(rows: ReadonlyArray<HistoryRow>): number {
     let n = 0;
-    for (const row of rows) if (row?.role === 'user') n++;
+    for (const row of rows) if (isUserTurn(row)) n++;
     return n;
 }
 
@@ -319,7 +324,7 @@ export function keepLastUserTurns<T extends HistoryRow>(rows: readonly T[], k: n
     if (k <= 0) return [];
     let seen = 0;
     for (let i = rows.length - 1; i >= 0; i--) {
-        if (rows[i]?.role !== 'user') continue;
+        if (!isUserTurn(rows[i])) continue;
         seen++;
         if (seen === k) return rows.slice(i);
     }

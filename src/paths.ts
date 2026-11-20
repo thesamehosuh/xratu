@@ -5,6 +5,27 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+export function resolvedPath(file: string): string {
+    try { return fs.realpathSync(file); }
+    catch { return path.resolve(file); }
+}
+
+export function pathIdentity(file: string): string {
+    if (process.platform !== 'win32') return resolvedPath(file);
+    let canonical: string;
+    // The native resolver reads the filesystem spelling while preserving
+    // distinct entries in Windows directories with case sensitivity enabled.
+    try { canonical = fs.realpathSync.native(file); }
+    catch { canonical = path.resolve(file); }
+    return canonical.replace(/^[a-z]:/i, drive => drive.toUpperCase());
+}
+
+export function isPortablePathComponent(part: string): boolean {
+    return !!part && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255
+        && !/[\x00-\x1f\x7f<>:"|?*]/.test(part) && !/[. ]$/.test(part)
+        && !/^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(part.split('.')[0].trimEnd());
+}
+
 export interface PatchBlock { search: string; replace: string; }
 
 /** Count marker lines anchored at the start of a line (the parser only ever

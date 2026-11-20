@@ -366,6 +366,30 @@ test('the actual agent never approves or executes a damaged partial batch', asyn
     assert.equal(executed, 0);
     assert.equal(approved, 0);
 });
+test('index-less Chat tool calls keep their identity around nullable compatibility deltas', async () => {
+    const chat = (delta, finish_reason) => event({ choices: [{ delta, finish_reason }] });
+    const run = await read('chat', [
+        chat({ content: 'Checking', tool_calls: null }, ''),
+        chat({ tool_calls: [{ id: 'a', function: { name: 'read_file', arguments: '{"path":' } }] }),
+        chat({ tool_calls: [{ id: '', function: { arguments: '"a"}' } }] }),
+        chat({ tool_calls: [{ id: 'b', function: { name: 'read_file', arguments: '{"path":"b"}' } }] }),
+        chat({ tool_calls: [{ id: null, function: { arguments: null } }] }),
+        chat({}, 'tool_calls'),
+        chat({ role: null, content: '', tool_calls: [] }),
+    ]);
+    assert.deepEqual((await run.result).toolCalls.map(item => [item.id, item.arguments.path]), [['a', 'a'], ['b', 'b']]);
+});
+
+test('Google anonymous tool IDs survive separate rounds and a partless final candidate', async () => {
+    const frames = [
+        event({ candidates: [{ content: { parts: [{ functionCall: { name: 'read_file', args: { path: 'a' } } }] } }] }),
+        event({ candidates: [{ content: { role: 'model' }, finishReason: 'STOP' }] }),
+    ];
+    const first = await (await read('google', frames)).result;
+    const next = await (await read('google', frames)).result;
+    assert.notEqual(first.toolCalls[0].id, next.toolCalls[0].id);
+});
+
 let failures = 0;
 try {
     for (const { name, fn } of tests) {

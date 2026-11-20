@@ -21,11 +21,11 @@ export class WorkspaceWriter {
         try {
             await cancelled(previous, signal);
             signal.throwIfAborted();
-            for (;;) {
+            for (let delay = 125; ; delay = Math.min(delay * 2, 1000)) {
                 try { await owner.load(signal); break; }
                 catch (error) {
                     if (!(error instanceof SessionOwnershipError)) throw error;
-                    await cancelled(new Promise<void>(resolve => setTimeout(resolve, 50)), signal);
+                    await cancelled(new Promise<void>(resolve => setTimeout(resolve, delay)), signal);
                 }
             }
             signal.throwIfAborted();

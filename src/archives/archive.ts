@@ -8,7 +8,7 @@ import { createGunzip } from 'zlib';
 import * as tar from 'tar';
 import * as yauzl from 'yauzl';
 import { buf as crc32 } from 'crc-32';
-import { sanitizePath } from '../paths';
+import { isPortablePathComponent, sanitizePath } from '../paths';
 
 const INPUT_LIMIT = 20 * 1024 ** 3;
 const LIST_LIMIT = 200;
@@ -41,9 +41,7 @@ function portablePath(value: string, directory = false): string {
     if (directory && (!name || name === '.')) return '';
     const parts = name.split('/');
     if (Buffer.byteLength(name) > 1024 || parts.length > 32 || parts.some(part =>
-        !part || part === '.' || part === '..' || Buffer.byteLength(part) > 255
-        || /[\x00-\x1f\x7f<>:"|?*]/.test(part) || /[. ]$/.test(part)
-        || /^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(part.split('.')[0].trimEnd())
+        !isPortablePathComponent(part)
         || part.toLowerCase() === '.git' || /^\.xratu-(?:download|extract)-/i.test(part))) {
         throw new Error('Unsafe or non-portable archive path.');
     }

@@ -31,6 +31,7 @@ export interface LocalSessionHistoryMessage {
     isError?: boolean;
     /** Host-origin child report handoff row (never set on user-typed prompts). */
     hostChildReport?: boolean;
+    backgroundNotice?: boolean;
 }
 
 /** An interrupted in-flight turn, persisted mid-run so a host crash can
@@ -403,6 +404,9 @@ function sanitizePendingTurn(pt: LocalPendingTurn, contentCap: number = MAX_STOR
         }
         if (event?.type === 'tool_result' && typeof event.output === 'string') {
             return { ...event, output: clipHistoryContent(event.output, contentCap) };
+        }
+        if (event?.type === 'steer_system' && typeof event.text === 'string') {
+            return { ...event, text: clipHistoryContent(event.text, contentCap) };
         }
         if (event?.type === 'assistant_message' && Array.isArray(event.tool_calls)) {
             // Provider-native carriers are model-ledger data and can be large;

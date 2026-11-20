@@ -1,6 +1,6 @@
 {
 	"ext.displayName": "Xratu",
-	"ext.description": "AI coding assistant for VS Code. Bring your own key or use a local runtime.",
+	"ext.description": "AI coding assistant for VS Code. Use free OpenCode models, bring your own key, or connect a local runtime.",
 	"config.title": "Xratu",
 	"config.mcpServers.desc": "Legacy fallback for **MCP servers** - configure them in the Xratu panel's dedicated **MCP page** instead (files: global `mcp.json` / workspace `.xratu/mcp.json`). This setting is only read when both files are empty.\n\nTheir tools are exposed to the agent as `mcp__<server>__<tool>` and require your approval unless auto-approved on the MCP page.",
 	"config.proxyUrl.desc": "HTTP/HTTPS proxy URL for model and web requests, e.g. http://127.0.0.1:7890. Overrides VS Code's http.proxy setting and the HTTPS_PROXY/HTTP_PROXY environment variables. SOCKS proxies are not supported yet.",

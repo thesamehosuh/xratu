@@ -69,7 +69,7 @@ separate MCP-only SecretStorage namespace; existing hand-edited files can still
 contain plaintext. Model and native credentials cannot be referenced through it.
 
 The requested small UI changes are included: Persian PR status uses «ادغام شده»;
-YOLO defaults on, applies through the existing whole-tree grant, and persists a
+Ask first is the default. YOLO applies through the existing whole-tree grant and persists a
 user's choice to require approvals. Plan still deterministically rejects mutation.
 
 ## Finding coverage

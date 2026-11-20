@@ -11,6 +11,27 @@
 
 ---
 
+## Release disposition
+
+The release candidate is **3.1.0**. The tag workflow verifies the packaged
+manifest version and commit, runs host and webview checks, and publishes the checked
+VSIX to GitHub Releases. Visual Studio Marketplace publication uses that
+same VSIX through the publisher account. Ask first is now the default when
+there is no saved approval preference.
+
+The release PR covers host and Windows lifecycle, model runtime and tools,
+webview flows, and release packaging. The webview Shiki bundle already
+uses curated grammars and themes on current main. Host Shiki and Playwright
+size reductions can follow the stable release. Packaging now checks that the
+PDF worker and Playwright runtime manifest are present. Checkpoint retention
+also remains follow-up work because saved conversations still refer to those
+commits.
+
+At the dependency freeze, #241 had already been closed by Dependabot. #247
+was failing on all three CI platforms. #229, #230, #231, and #244 had passing
+checks on their own branches. Keep the release candidate on the dependency
+versions validated with the fixes and review updates separately.
+
 ## Executive Summary
 
 The core architecture is **already release-grade** — plan-mode gating, `sanitizePath`, shadow-git user-repo isolation, OAuth token management, archive extraction security, download atomicity, OpenCode MCP bridge security, host/webview protocol alignment, and `fa`/`en` i18n parity are all solid. **No architectural rewrites or broad refactors are needed.**

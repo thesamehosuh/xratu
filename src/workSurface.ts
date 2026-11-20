@@ -45,7 +45,7 @@ export interface AgentProfileView {
 
 interface ReviewStore {
     diffCheckpoint(root: string, sha: string, toSha?: string): Promise<ChangedFile[]>;
-    readCheckpointFile(root: string, sha: string, file: string): Promise<string | null>;
+    readCheckpointFile(root: string, sha: string, file: string, limit?: number): Promise<string | null>;
 }
 
 /** Live metadata lets the UI follow edits without reading file contents. */
@@ -62,6 +62,8 @@ export async function listReviewChanges(store: ReviewStore, root: string, sha: s
     }));
 }
 
+export class CheckpointFileTooLargeError extends Error {}
+
 export const REVIEW_FILE_LIMIT = 200_000;
 
 export function validateReviewCheckpoint(sha: unknown): asserts sha is string {
@@ -71,7 +73,7 @@ export function validateReviewCheckpoint(sha: unknown): asserts sha is string {
 }
 
 /** Only files in this checkpoint's change list may be requested by the UI. */
-export async function readReviewFile(store: ReviewStore, root: string, sha: unknown, file: unknown, toSha?: string): Promise<ReviewFile> {
+export async function readReviewFile(store: ReviewStore, root: string, sha: unknown, file: unknown, toSha?: string, limit = REVIEW_FILE_LIMIT): Promise<ReviewFile> {
     validateReviewCheckpoint(sha);
     if (toSha !== undefined) validateReviewCheckpoint(toSha);
     if (typeof file !== 'string') throw new Error('Invalid file');
@@ -81,13 +83,17 @@ export async function readReviewFile(store: ReviewStore, root: string, sha: unkn
     if (!change) throw new Error('File is not part of this checkpoint');
     const empty = { path: file, before: '', after: '' };
     if (change.binary) return { ...empty, kind: 'binary' };
-    const before = change.untracked ? '' : (await store.readCheckpointFile(root, sha, file)) ?? '';
-    if (before.length > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
+    const historical = (revision: string) => store.readCheckpointFile(root, revision, file, limit).catch(error => {
+        if (error instanceof CheckpointFileTooLargeError) return undefined;
+        throw error;
+    });
+    const before = change.untracked ? '' : await historical(sha);
+    if (before === undefined || (before?.length ?? 0) > limit) return { ...empty, kind: 'tooLarge' };
     if (toSha) {
-        const after = (await store.readCheckpointFile(root, toSha, file)) ?? '';
-        if (after.length > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
-        if (before.includes('\0') || after.includes('\0')) return { ...empty, kind: 'binary' };
-        return { path: file, kind: 'text', before, after, hunks: computeDiffHunks(before, after) };
+        const after = await historical(toSha);
+        if (after === undefined || (after?.length ?? 0) > limit) return { ...empty, kind: 'tooLarge' };
+        if (before?.includes('\0') || after?.includes('\0')) return { ...empty, kind: 'binary' };
+        return { path: file, kind: 'text', before: before ?? '', after: after ?? '', hunks: computeDiffHunks(before ?? '', after ?? '') };
     }
     let buffer: Buffer = Buffer.alloc(0);
     try {
@@ -96,22 +102,22 @@ export async function readReviewFile(store: ReviewStore, root: string, sha: unkn
         try {
             const stat = await handle.stat();
             if (!stat.isFile()) throw new Error('Not a regular file');
-            if (stat.size > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
-            const capped = Buffer.alloc(REVIEW_FILE_LIMIT + 1);
+            if (stat.size > limit) return { ...empty, kind: 'tooLarge' };
+            const capped = Buffer.alloc(limit + 1);
             let length = 0;
             while (length < capped.length) {
                 const read = await handle.read(capped, length, capped.length - length, length);
                 if (read.bytesRead === 0) break;
                 length += read.bytesRead;
             }
-            if (length > REVIEW_FILE_LIMIT) return { ...empty, kind: 'tooLarge' };
+            if (length > limit) return { ...empty, kind: 'tooLarge' };
             buffer = capped.subarray(0, length);
         } finally { await handle.close(); }
     } catch (error) {
         // A deletion has a checkpoint side and an empty working-tree side.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    if (buffer.includes(0) || before.includes('\0')) return { ...empty, kind: 'binary' };
+    if (buffer.includes(0) || before?.includes('\0')) return { ...empty, kind: 'binary' };
     const after = buffer.toString('utf8');
-    return { path: file, kind: 'text', before, after, hunks: computeDiffHunks(before, after) };
+    return { path: file, kind: 'text', before: before ?? '', after, hunks: computeDiffHunks(before ?? '', after) };
 }

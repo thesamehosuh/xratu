@@ -1,3 +1,4 @@
+import { postMessage } from '../vscode';
 import { ToolDetails, toolArgs } from './ToolDetails';
 import { AgentNavigation } from './AgentNavigation';
 import { ToolImages } from './ToolImages';
@@ -2124,6 +2125,8 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
     const approvalPending = !!message.approval && !message.approval.resolution;
     const approvalResolved = !!message.approval?.resolution;
     const [copied, setCopied] = useState(false);
+    const pendingCopy = useRef<(() => void) | null>(null);
+    useEffect(() => () => pendingCopy.current?.(), []);
 
     const bubbleClass = ['msg', role, tone ?? '', status === 'error' ? 'error' : '', conn ? `conn-${conn}` : '', message.steered ? 'steered' : '']
         .filter(Boolean)
@@ -2187,14 +2190,31 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
     const showUserFooter = role === 'user' && status === 'done';
     const showEditBtn =
         showUserFooter && !busy && userIndex !== undefined && !!onEditMessage;
-    const copyAnswer = async () => {
-        try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-        } catch {
-            /* clipboard unavailable */
-        }
+    const copyAnswer = () => {
+        pendingCopy.current?.();
+        setCopied(false);
+        const requestId = crypto.randomUUID();
+        const receive = (event: MessageEvent) => {
+            if (event.data?.type !== 'clipboardResult' || event.data.requestId !== requestId) return;
+            cleanup();
+            if (event.data.ok === true) {
+                setCopied(true);
+                const reset = setTimeout(() => {
+                    pendingCopy.current = null;
+                    setCopied(false);
+                }, 1500);
+                pendingCopy.current = () => clearTimeout(reset);
+            }
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            window.removeEventListener('message', receive);
+            pendingCopy.current = null;
+        };
+        const timeout = setTimeout(cleanup, 5000);
+        pendingCopy.current = cleanup;
+        window.addEventListener('message', receive);
+        postMessage({ type: 'copyToClipboard', value: text, requestId });
     };
 
     if (readOnly && isSystem) return null;

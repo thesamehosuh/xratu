@@ -28,6 +28,7 @@
  * Run: node test/test-release-workflow.mjs
  */
 import { readFileSync } from 'fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -100,15 +101,38 @@ check('publish job depends on package', /^ {4}needs: package$/m.test(publishJob)
 
 // --- 2. tag validation -----------------------------------------------------
 
+const manifestVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+const commit = 'a'.repeat(40);
+const validateTag = (tag, sha = commit) => spawnSync(process.execPath, [
+    join(ROOT, '.github/scripts/validate-release-tag.cjs'), tag, sha,
+], { cwd: ROOT, encoding: 'utf8' });
+const matchingTag = validateTag(`v${manifestVersion}`);
+check('a matching release tag emits exactly the tag and build commit', matchingTag.status === 0
+    && matchingTag.stdout === `tag=v${manifestVersion}\ncommit=${commit}\n`);
+const mismatchedTag = validateTag(manifestVersion === '99.0.0' ? 'v100.0.0' : 'v99.0.0');
+check('a manifest-version mismatch aborts before emitting release outputs',
+    mismatchedTag.status === 1 && mismatchedTag.stdout === '' && mismatchedTag.stderr.includes('disagrees'));
+const malformedTag = validateTag('v1.2.3-..');
+check('a malformed release tag aborts before emitting release outputs',
+    malformedTag.status === 1 && malformedTag.stdout === '' && malformedTag.stderr.includes('Unexpected'));
+const invalidCommit = validateTag(`v${manifestVersion}`, 'HEAD');
+check('an unpinned build cannot emit release outputs', invalidCommit.status === 1 && invalidCommit.stdout === '');
 check(
-    'strict semver tag validation is present',
-    /\^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+/.test(yaml),
-    'the semver regex is the only guard on a v* tag reaching a shell',
+    'package uses the validated tag',
+    /RELEASE_TAG: \$\{\{ steps\.tag\.outputs\.tag \}\}/.test(packageJob),
 );
 check(
-    'validation step publishes the tag as a job output',
-    /echo "tag=\$RELEASE_TAG" >> "\$GITHUB_OUTPUT"/.test(yaml),
-    'publish must consume the validated tag, not re-read github.ref_name',
+    'the package job validates its checked-out commit and publishes both outputs',
+    packageJob.includes('ref: ${{ github.sha }}')
+        && packageJob.includes('commit=$(git rev-parse HEAD)')
+        && packageJob.includes('node .github/scripts/validate-release-tag.cjs "$RELEASE_TAG" "$commit" >> "$GITHUB_OUTPUT"')
+        && packageJob.includes('tag: ${{ steps.tag.outputs.tag }}')
+        && packageJob.includes('commit: ${{ steps.tag.outputs.commit }}'),
+);
+check(
+    'the publish job pins its checkout and tag comparison to the build commit',
+    publishJob.includes('ref: ${{ needs.package.outputs.commit }}')
+        && publishJob.includes('RELEASE_COMMIT: ${{ needs.package.outputs.commit }}'),
 );
 check(
     'the tag-consuming step is identified (id: tag)',
@@ -129,6 +153,31 @@ check(
     /set -euo pipefail/.test(publishJob),
     'a missing VSIX must abort the job rather than publish an empty release',
 );
+
+// The publish job uses Bash on Linux. Exercise its actual guard before the
+// artifact handling, with a simulated git remote and no release credentials.
+if (process.platform === 'linux') {
+    const guard = publishJob.match(/^ {10}set -euo pipefail\n([\s\S]*?)(?=^ {10}vsix=)/m)?.[0];
+    check('the remote tag check runs before touching the release', Boolean(guard));
+    if (guard) {
+        const verify = (refs, remoteStatus = 0) => spawnSync('bash', ['-c', `
+git() {
+    [ "$*" = "ls-remote --exit-code origin refs/tags/v3.1.0 refs/tags/v3.1.0^{}" ] || return 2
+    printf '%s' "$REMOTE_REFS"
+    return "$REMOTE_STATUS"
+}
+${guard}`], {
+            encoding: 'utf8',
+            env: { ...process.env, RELEASE_TAG: 'v3.1.0', RELEASE_COMMIT: commit, REMOTE_REFS: refs, REMOTE_STATUS: String(remoteStatus) },
+        });
+        const tagRef = 'refs/tags/v3.1.0';
+        const annotated = `${'b'.repeat(40)}\t${tagRef}\n`;
+        check('the publish check accepts a matching lightweight tag', verify(`${commit}\t${tagRef}\n`).status === 0);
+        check('the publish check accepts a matching annotated tag', verify(annotated + `${commit}\t${tagRef}^{}\n`).status === 0);
+        check('the publish check refuses a moved tag', verify(annotated + `${'c'.repeat(40)}\t${tagRef}^{}\n`).status === 1);
+        check('the publish check refuses a missing tag', verify('', 2).status === 2);
+    }
+}
 
 // --- 3. action pinning -----------------------------------------------------
 

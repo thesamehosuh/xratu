@@ -35,6 +35,7 @@ export function nativeToolDisplayArgs(name: string, input: Record<string, unknow
         ...input,
         ...(typeof input.path !== 'string' && typeof input.filePath === 'string' ? { path: input.filePath } : {}),
         ...(typeof input.oldString === 'string' ? { old_text: input.oldString } : {}),
+        ...(name === 'write_file' && typeof input.content === 'string' ? { new_content: input.content } : {}),
         ...(typeof input.newString === 'string' ? { new_text: input.newString } : {}),
     };
 }

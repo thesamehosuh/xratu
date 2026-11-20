@@ -96,6 +96,16 @@ async function restore(f) {
 }
 
 try {
+    await test('destination names remain portable and inside the workspace', async () => {
+        const f = await fixture();
+        for (const destination of ['models/aux.bin', 'models/meta:tag.bin', 'models/folder./model.bin']) {
+            const result = await f.manager.tool(f.root, 'start_download', { url: 'https://downloads.example/file', path: destination });
+            assert.equal(result.isError, true);
+        }
+        assert.deepEqual(await fs.readdir(f.root), []);
+        assert.equal(f.secretMap.size, 0);
+    });
+
     await test('a changed partial cannot persist inconsistent publication metadata', async () => {
         let saves = 0;
         const record = { received: 10 };
@@ -538,6 +548,20 @@ try {
         }
         const manifest = path.join(await metadataDirectory(f), 'manifest.json');
         const records = JSON.parse(await fs.readFile(manifest, 'utf8'));
+        const legacy = { ...records[0], id: 'fcb55263-f1a7-4480-b8cb-a7eb27f5e8c8', path: 'models/aux.bin', status: 'paused' };
+        const legacyDir = path.join(f.root, 'models');
+        await fs.mkdir(legacyDir);
+        const legacyPartial = path.join(legacyDir, `.xratu-download-${legacy.id}.part`);
+        await fs.writeFile(legacyPartial, 'legacy bytes');
+        await fs.writeFile(manifest, JSON.stringify([...records, legacy]));
+        const mixed = await restore(f);
+        assert.equal(mixed.views().find(record => record.id === r.id).status, 'completed');
+        assert.equal(mixed.views().find(record => record.id === legacy.id).status, 'failed');
+        const cancelled = await mixed.tool(f.root, 'control_download', { id: legacy.id, action: 'cancel' });
+        assert.equal(cancelled.isError, undefined);
+        assert.equal(mixed.views().find(record => record.id === legacy.id).status, 'cancelled');
+        await assert.rejects(fs.stat(legacyPartial), { code: 'ENOENT' });
+        await mixed.dispose();
         records[0].path = '../escape.bin'; await fs.writeFile(manifest, JSON.stringify(records));
         const blocked = new DownloadManager(f.root, f.storage, f.deps); managers.push(blocked);
         await assert.rejects(blocked.ready, /downloadFileError/);

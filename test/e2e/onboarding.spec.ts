@@ -181,7 +181,12 @@ test('provider settings scope lists native connections and does not switch the c
     await page.locator('[data-section=engines]').click();
     await page.locator('[data-configure-engine=xratu]').click();
     await expect(page.locator('.cred-page')).toBeVisible();
-    await expect(page.locator('.engine-scope')).toHaveCount(0);
+    const scope = page.locator('.engine-scope .dropdown-trigger');
+    await expect(scope).toHaveText('Xratu');
+    await scope.click();
+    await page.getByRole('option', { name: 'OpenCode 2', exact: true }).click();
+    await expect(scope).toHaveText('OpenCode 2');
+    await expect(page.locator('.native-providers')).toBeVisible();
     expect((await messages(page)).some((value) => value.type === 'engineSelect')).toBe(false);
     await page.locator('.toolbar-back-work').click();
     await expect(page.locator('.composer-input')).toHaveValue('keep draft');

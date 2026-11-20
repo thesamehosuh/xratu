@@ -54,6 +54,19 @@ const checkTrue = (name, actual) => check(name, !!actual, true);
 const checkFalse = (name, actual) => check(name, !!actual, false);
 
 {
+    const messages = [
+        { role: 'system', content: 'Instructions' },
+        { role: 'user', content: HISTORY_TRUNCATION_MARKER + '\nPrevious summary' },
+        { role: 'user', content: 'Old question' },
+        { role: 'assistant', content: 'Old response' },
+        { role: 'user', content: 'Current request' },
+    ];
+    const forced = compactMessages(messages, 4096, undefined, 0, true, undefined, 4);
+    check('forced repeat compaction removes an actual old turn with the marker', forced[1]?.content, 'Old question');
+    check('repeat compaction protects the current request', messages.at(-1)?.content, 'Current request');
+}
+
+{
     const messages = [{ role: 'system', content: 'Stable instructions' }];
     for (let i = 0; i < 16; i++) messages.push(
         { role: 'user', content: `request ${i}` },

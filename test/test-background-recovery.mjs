@@ -40,7 +40,7 @@ const {
     spawnTerminalJob,
 } = require('../out/tooling/backgroundJobs.js');
 const { BackgroundJobStore } = require('../out/tooling/backgroundJobStore.js');
-const { captureIdentity, captureIdentityAsync, isOurProcess, processStartToken } = require('../out/tooling/processIdentity.js');
+const { captureIdentity, captureIdentityAsync, isOurProcess, processIdentityStatusAsync, processStartToken } = require('../out/tooling/processIdentity.js');
 
 let failed = 0;
 const ok = (name, cond, detail = '') => {
@@ -289,6 +289,7 @@ ok('capturing pid 0 yields nothing to record', captureIdentity(0) === null);
         await new Promise((resolve) => child.once('exit', resolve));
         const dead = { ...record, id: 'old-dead-job', identity };
         const unknown = { ...record, id: 'unverified-live-job', identity: { ...record.identity, token: 'unverified' } };
+        ok('an asynchronous identity check keeps a live unverified record uncertain', await processIdentityStatusAsync(unknown.identity) === 'unknown');
         writeFileSync(join(dir, 'background-jobs.json'), JSON.stringify({ version: 1, jobs: [...afterFinish.jobs, dead, unknown] }));
         const restarted = new BackgroundJobStore(dir);
         const recovered = await restarted.load();

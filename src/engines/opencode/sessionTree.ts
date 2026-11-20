@@ -1,3 +1,4 @@
+import { pathIdentity } from '../../paths';
 // Whole-tree Stop and active-session reconciliation adapted from T3 Code's
 // OpenCode 2 adapter. Fail closed if native settlement cannot be established.
 import { isSessionNotFoundError, type OpenCodeClient } from '@opencode/client';
@@ -20,7 +21,7 @@ export class NativeSessionTree {
                     if (isSessionNotFoundError(error)) return false;
                     throw error;
                 }
-                if (session.location.directory !== this.workspace) return false;
+                if (pathIdentity(session.location.directory) !== pathIdentity(this.workspace)) return false;
                 this.parents.set(current, session.parentID);
             }
             current = this.parents.get(current);

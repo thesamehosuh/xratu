@@ -54,10 +54,10 @@ export interface LoopbackServer {
     /** Abort the flow: waitForCallback rejects with OAuthCancelledError and
      *  the port is released. A late-arriving callback gets 410 and cannot
      *  resolve anything. */
-    cancel(): void;
+    cancel(): Promise<void>;
     /** Release the port WITHOUT settling the promise - for flows that were
      *  completed by another channel (manual code paste). */
-    dispose(): void;
+    dispose(): Promise<void>;
 }
 
 export interface LoopbackServerOptions {
@@ -261,6 +261,8 @@ function listenOn(
             respondThen(res, 200, successHtml, () => settle(result, undefined));
         });
 
+        const closed = new Promise<void>(resolve => server.once('close', resolve));
+
         server.on('connection', (socket) => {
             sockets.add(socket);
             socket.on('close', () => sockets.delete(socket));
@@ -285,9 +287,12 @@ function listenOn(
                 callbackPath,
                 redirectUri: `http://127.0.0.1:${address.port}${callbackPath}`,
                 waitForCallback: () => flow,
-                cancel: () => settle(undefined, new OAuthCancelledError()),
+                cancel: () => {
+                    settle(undefined, new OAuthCancelledError());
+                    return closed;
+                },
                 dispose: () => {
-                    if (settled) return;
+                    if (settled) return closed;
                     settled = true;
                     clearTimeout(timeout);
                     for (const socket of sockets) socket.destroy();
@@ -295,6 +300,7 @@ function listenOn(
                     server.close();
                     // Never settles the flow promise - the caller has already
                     // completed the flow out of band.
+                    return closed;
                 },
             });
         });
