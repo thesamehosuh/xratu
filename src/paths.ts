@@ -15,6 +15,12 @@ export function pathIdentity(file: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+export function isPortablePathComponent(part: string): boolean {
+    return !!part && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255
+        && !/[\x00-\x1f\x7f<>:"|?*]/.test(part) && !/[. ]$/.test(part)
+        && !/^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(part.split('.')[0].trimEnd());
+}
+
 export interface PatchBlock { search: string; replace: string; }
 
 /** Count marker lines anchored at the start of a line (the parser only ever

@@ -344,14 +344,15 @@ export async function* runLocalAgent(
     let messages: LocalAgentMessage[] = buildMessages();
     // Both serial and parallel rounds deliver corrections after the complete
     // tool batch and before another model request (including wrap-up).
-    async function* applySteers(): AsyncGenerator<LocalAgentEvent> {
+    async function* applySteers(final = false): AsyncGenerator<LocalAgentEvent> {
         request.signal?.throwIfAborted();
-        for (const steer of await steerFeed?.drain() ?? []) {
+        for (const steer of await steerFeed?.drain(final) ?? []) {
             const text = steer.text.trim();
             if (!text && !steer.attachments?.length) continue;
             messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
             yield {
                 type: 'steer', text,
+                ...(steer.system ? { system: true } : {}),
                 ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
                 ...(steer.steerId ? { steerId: steer.steerId } : {}),
             };
@@ -832,7 +833,7 @@ export async function* runLocalAgent(
                 ...(finalResult.reasoningContent ? { reasoningContent: finalResult.reasoningContent } : {}),
             });
             let corrected = false;
-            for await (const event of applySteers()) { corrected = true; yield event; }
+            for await (const event of applySteers(true)) { corrected = true; yield event; }
             if (corrected) continue;
             yield { type: 'status', value: 'done' };
             return;
@@ -952,7 +953,7 @@ export async function* runLocalAgent(
                         messages.push({
                             role: 'tool',
                             tool_call_id: call.id,
-                            content: result.output,
+                            content: toolResultContent(result.output, result.images, imageFormat),
                             isError: result.isError === true,
                         });
                         eventQueue.push({
@@ -961,8 +962,9 @@ export async function* runLocalAgent(
                             tool: call.name,
                             output: result.output,
                             isError: result.isError,
-                    ...(result.research ? { research: result.research } : {}),
-                    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+                            ...(result.images?.length ? { images: result.images } : {}),
+                            ...(result.research ? { research: result.research } : {}),
+                            ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
                         });
                     } catch (e) {
                         execError = execError ?? e;

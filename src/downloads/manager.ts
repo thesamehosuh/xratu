@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import { constants, lstatSync } from 'fs';
 import * as path from 'path';
-import { sanitizePath } from '../paths';
+import { isPortablePathComponent, sanitizePath } from '../paths';
 import { abortable } from '../oauth/refreshLock';
 import type { ProxyRouteMode } from '../proxy';
 import { downloadActions } from './types';
@@ -55,7 +55,7 @@ function validator(record: DownloadRecord): string | undefined { return record.e
 function validateRecordPath(value: string): void {
     const parts = value.split(/[\\/]/);
     if (!value.trim() || path.isAbsolute(value) || path.win32.isAbsolute(value) || /^[a-z]:/i.test(value) || /[\r\n\0]/.test(value)
-        || parts.every(part => !part || part === '.') || parts.some(part => part === '..' || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
+        || parts.some(part => !isPortablePathComponent(part) || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
 }
 
 /** Workspace-owned transfers. Model turns own commands, never transfer lifetimes. */
@@ -108,8 +108,13 @@ export class DownloadManager {
     private key(id: string): string { return `xratu.download.${this.scope}.${id}`; }
     private target(record: DownloadRecord): string {
         validateRecordPath(record.path);
-        try { return sanitizePath(record.path, this.workspace); }
-        catch { throw new DownloadFailure('downloadFileError'); }
+        try {
+            const root = sanitizePath('.', this.workspace);
+            const target = path.join(root, record.path);
+            const parent = sanitizePath(path.dirname(target), root);
+            if (path.relative(path.dirname(target), parent)) throw new Error('Download parent changed.');
+            return target;
+        } catch { throw new DownloadFailure('downloadFileError'); }
     }
     private partial(record: DownloadRecord): string {
         const target = this.target(record);
@@ -252,8 +257,10 @@ export class DownloadManager {
         const route = routeArg(args.route);
         const url = await this.checkUrl(args.url, route, signal);
         signal?.throwIfAborted();
-        const target = sanitizePath(textArg(args.path, 'path', 4096), this.workspace);
-        if (/[\r\n\0]/.test(target)) throw new Error('Download path contains unsupported control characters.');
+        const requested = textArg(args.path, 'path', 4096);
+        // Validate before normalization, which can hide reserved path components.
+        validateRecordPath(requested);
+        const target = sanitizePath(requested, this.workspace);
         // Use the sanitizer's spelling for both operands: native realpath can
         // expand Windows short names that realpathSync preserves.
         const relative = path.relative(sanitizePath('.', this.workspace), target);
@@ -270,6 +277,8 @@ export class DownloadManager {
         if (!integer(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES) throw new Error('max_bytes must be between 1 and 1099511627776.');
         const sha256 = args.sha256 === undefined ? undefined : textArg(args.sha256, 'sha256', 64).toLowerCase();
         if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('sha256 must contain 64 hexadecimal characters.');
+        // Check the caller's leaf too: an existing symlink is an occupied destination.
+        this.assertAbsent(path.join(sanitizePath('.', this.workspace), requested));
         await fs.mkdir(path.dirname(target), { recursive: true });
         this.assertAbsent(target);
         const now = Date.now();

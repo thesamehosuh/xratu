@@ -58,6 +58,16 @@ export function editDiffFromArgs(
     const path = typeof args.path === 'string' ? args.path : '';
     const toolName = tool ?? '';
 
+    if (toolName === 'edit_file' && Array.isArray(args.edits) && args.edits.length) {
+        const blocks = args.edits as Array<{ old_text?: unknown; new_text?: unknown } | null>;
+        if (blocks.every(edit => typeof edit?.old_text === 'string' && typeof edit.new_text === 'string')) {
+            return {
+                path,
+                before: blocks.map(edit => stripClips(edit!.old_text as string)).join(BLOCK_SEP),
+                after: blocks.map(edit => stripClips(edit!.new_text as string)).join(BLOCK_SEP),
+            };
+        }
+    }
     if (typeof args.patch === 'string') return patchDiff(path, args.patch);
     if (typeof args.old_str === 'string') {
         // replace_in_file (legacy name, still in history): exact fragment pair.

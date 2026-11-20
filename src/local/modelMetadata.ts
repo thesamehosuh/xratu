@@ -329,7 +329,7 @@ export function parseModelList(payload: any): LocalModelInfo[] | null {
             : Array.isArray(payload?.models)
                 ? payload.models
                 : [];
-    if (!items.length) return null;
+    if (!items.length) return Array.isArray(payload?.models) && payload.models.length === 0 ? [] : null;
 
     const out: LocalModelInfo[] = [];
     for (const m of items) {

@@ -205,7 +205,7 @@ import { resolveParallelSubagents } from './tooling/parallelSubagents';
 import { resolveCompactRatio } from './tooling/compactionPolicy';
 import { emptyGitStatus, isSafeBranchName, parseBranchList, parseGitStatus, type GitStatusSummary } from './tooling/gitStatus';
 import { McpMarketplaceStore, type MarketplaceState } from './mcpMarketplaceClient';
-import { mergeNoProxyWithLoopback } from './proxy';
+import { mergeNoProxyWithLoopback, redactProxyUrl } from './proxy';
 import { getProxyDispatcher, getProxyResolution } from './proxyDispatcher';
 import { proxyFetch } from './proxyFetch';
 import { detectLocalProxies, probeProxyReachable } from './proxyDetect';
@@ -4214,7 +4214,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             emit({ busy: false, status: 'success' });
             if (action === 'delete' && this._selectedModel === model) {
                 const active = (await this._getLlmCredentials()).llm_base_url;
-                if (active?.replace(/\/+$/, '') === baseUrl.replace(/\/+$/, '')) {
+                if (active && new URL(active).origin === new URL(baseUrl).origin) {
                     this._selectedModel = null;
                     const credentialId = await this._resolveActiveCredentialId();
                     if (credentialId) await this._forgetCredentialModel(credentialId);
@@ -4573,17 +4573,10 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             return;
         }
         const text = formatJobCompletion(notice);
-        if (this._localRunActive) {
+        if (this._localRunActive && this._activeEngine === 'xratu') {
             this._localSteerQueue.push({ text, system: true });
         } else {
-            this._pendingJobNotices.push(text);
-            // Bounded: each notice carries a job's output tail, and a watcher
-            // that restarts while the user is away could otherwise hand dozens
-            // of them to the next turn - token spend nobody asked for, pushing
-            // the context toward overflow. The most recent are the useful ones.
-            if (this._pendingJobNotices.length > MAX_PENDING_JOB_NOTICES) {
-                this._pendingJobNotices.splice(0, this._pendingJobNotices.length - MAX_PENDING_JOB_NOTICES);
-            }
+            this._holdJobNotice(text);
         }
         this._postBackgroundJobs();
     }
@@ -4591,9 +4584,15 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Drop queued steers from `fromIndex` on (a session switch, a no-run
      *  guard, or an empty completion) and release their held webview bubbles
      *  so they cannot render later in the wrong session. */
+    private _holdJobNotice(text: string): void {
+        this._pendingJobNotices.push(text);
+        if (this._pendingJobNotices.length > MAX_PENDING_JOB_NOTICES) this._pendingJobNotices.shift();
+    }
+
     private _discardQueuedSteers(fromIndex = 0): void {
         for (const entry of this._localSteerQueue.slice(fromIndex)) {
-            this._confirmSteer(entry.steerId, 'drop');
+            if (entry.system) this._holdJobNotice(entry.text);
+            else this._confirmSteer(entry.steerId, 'drop');
         }
         if (fromIndex <= 0) this._localSteerQueue.length = 0;
         else this._localSteerQueue.splice(fromIndex);
@@ -4603,6 +4602,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      * turn to consume. Return held drafts instead of silently dropping them. */
     private _rejectQueuedSteers(): void {
         for (const entry of this._localSteerQueue.splice(0)) {
+            if (entry.system) this._holdJobNotice(entry.text);
             if (entry.steerId) this._view?.webview.postMessage({ type: 'composerError', valueKey: 'engineSteerCancelled', steerId: entry.steerId });
         }
     }
@@ -5141,7 +5141,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // boundary (after tool results, before the next model
                     // request), so steered messages join the conversation
                     // without restarting the turn.
-                    drain: () => this._localSteerQueue.splice(0).map((e) => ({
+                    drain: (final) => this._localSteerQueue.splice(0).filter(entry => {
+                        if (!final || !entry.system) return true;
+                        this._holdJobNotice(entry.text);
+                        return false;
+                    }).map((e) => ({
+                        system: e.system,
                         text: e.text,
                         ...(e.images?.length ? { attachments: e.images } : {}),
                         ...(e.steerId ? { steerId: e.steerId } : {}),
@@ -5392,6 +5397,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 });
                 break;
             case 'steer':
+                if (event.system) break;
                 this._flushLiveSegment();
                 // The webview held this steer bubble while the tool call ran;
                 // confirm it now so the timeline splits at the exact point the
@@ -6159,15 +6165,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (!this._view) return;
         const cfg = vscode.workspace.getConfiguration('xratu');
         const resolved = getProxyResolution();
+        const displayUrl = (value: string | null | undefined) => value?.includes('@') ? redactProxyUrl(value).replace(/\/$/, '') : value;
         this._view.webview.postMessage({
             type: 'proxyState',
             requestId,
             mode: resolved.mode,
-            proxyUrl: cfg.get<string>('proxyUrl') ?? '',
+            proxyUrl: displayUrl(cfg.get<string>('proxyUrl')) ?? '',
             noProxy: cfg.get<string>('noProxy') ?? '',
-            resolvedUrl: resolved.url,
+            resolvedUrl: displayUrl(resolved.url),
             resolvedSource: resolved.source,
-            systemProxy: resolved.systemProxy,
+            systemProxy: displayUrl(resolved.systemProxy),
             noProxyList: resolved.noProxy,
             webSearchUseProxy: cfg.get<boolean>('webSearchUseProxy', true),
         });
@@ -6199,7 +6206,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             const cfg = vscode.workspace.getConfiguration('xratu');
             try {
                 await cfg.update('proxyMode', mode, vscode.ConfigurationTarget.Global);
-                await cfg.update('proxyUrl', proxyUrl.trim(), vscode.ConfigurationTarget.Global);
+                const configuredUrl = cfg.get<string>('proxyUrl') ?? '';
+                const nextUrl = proxyUrl.trim();
+                // Editing other proxy settings must retain credentials redacted from the UI.
+                const keepAuth = configuredUrl.includes('@') && nextUrl === redactProxyUrl(configuredUrl).replace(/\/$/, '');
+                await cfg.update('proxyUrl', keepAuth ? configuredUrl : nextUrl, vscode.ConfigurationTarget.Global);
                 await cfg.update('noProxy', noProxy.trim(), vscode.ConfigurationTarget.Global);
                 if (typeof webSearchUseProxy === 'boolean') await cfg.update('webSearchUseProxy', webSearchUseProxy, vscode.ConfigurationTarget.Global);
             } finally {
@@ -7876,7 +7887,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // a background job exiting is not the user asking for anything, and
         // starting a turn unprompted spends the user's tokens. They ride the
         // steer queue, so the loop delivers them at its first round boundary.
-        if (this._pendingJobNotices.length) {
+        if (this._activeEngine === 'xratu' && this._pendingJobNotices.length) {
             for (const notice of this._pendingJobNotices.splice(0)) {
                 this._localSteerQueue.push({ text: notice, system: true });
             }
@@ -8093,6 +8104,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     // bubble when it steered.
                     while (this._localSteerQueue.length > 0 && epoch === this._sessionEpoch) {
                         const carry = this._localSteerQueue.shift()!;
+                        if (carry.system) { this._holdJobNotice(carry.text); continue; }
                         // Confirm the held bubble before the follow-up turn
                         // streams, so the user row lands above its response.
                         this._confirmSteer(carry.steerId);
@@ -8273,6 +8285,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         this._history.push({ role: 'assistant', events: displayEvents, content: '' });
         while (this._localSteerQueue.length > 0) {
             const carry = this._localSteerQueue.shift()!;
+            if (carry.system) { this._holdJobNotice(carry.text); continue; }
             // Never reached a round boundary before the cancel/error: release
             // its held bubble so the rendered user rows match this ledger.
             this._confirmSteer(carry.steerId);

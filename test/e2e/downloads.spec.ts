@@ -42,7 +42,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await expect(panel.locator('.download-completed button')).toHaveCount(0);
         await expect(panel.locator('.download-cancelled button')).toHaveCount(0);
         await expect(panel.locator('.download-interrupted button')).toHaveCount(2);
-        await expect(panel.locator('.download-failed button')).toHaveCount(1);
+        await expect(panel.locator('.download-failed button')).toHaveCount(2);
         await expect(panel.locator('.download-delete')).toHaveCount(0);
         const completed = panel.locator('.download-completed');
         expect(await completed.evaluate(el => el.querySelector('.download-metrics')!.getBoundingClientRect().width === el.querySelector('.download-footer')!.getBoundingClientRect().width)).toBe(true);
@@ -58,6 +58,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
 
         for (const [selector, action, id] of [
             ['.download-interrupted button', 'resume', 'download-4'],
+            ['.download-failed button:nth-child(2)', 'cancel', 'download-5'],
             ['.download-retrying button:nth-child(2)', 'cancel', 'download-3'],
         ]) {
             const button = panel.locator(selector).first();
@@ -89,7 +90,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await expect(page.locator('.composer-input')).toHaveValue('Keep my draft');
         const sent = await page.evaluate(() => (window as Record<string, unknown>).__sent) as { type: string }[];
         expect(sent.some(msg => msg.type === 'downloadsGetState')).toBe(true);
-        expect(sent.filter(msg => msg.type === 'downloadAction')).toHaveLength(3);
+        expect(sent.filter(msg => msg.type === 'downloadAction')).toHaveLength(4);
         await page.evaluate(base => {
             window.postMessage({ type: 'sessionState', id: 'chat-b', browserSessionId: 'chat-b', title: null }, '*');
             window.postMessage({ type: 'downloadsState', sessionId: 'chat-a', downloads: [{ ...base, status: 'downloading' }] }, '*');

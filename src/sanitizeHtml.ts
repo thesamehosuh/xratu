@@ -6,6 +6,8 @@
  * test/test-sanitizer.mjs exercises this compiled module directly.
  */
 
+import { unescapeAll } from 'markdown-it/lib/common/utils.mjs';
+
 export function escapeHtml(str: string): string {
     return str
         .replace(/&/g, '&amp;')
@@ -63,7 +65,7 @@ const FORBIDDEN_TAGS = new Set([
 
 const EVENT_HANDLER_RE = /^on[a-z]/i;
 const DATA_ATTR_RE = /^data-/i;
-const JAVASCRIPT_URI_RE = /^\s*javascript\s*:/i;
+const UNSAFE_URI_RE = /^(?:javascript|vbscript|data)\s*:/i;
 
 /**
  * Inline styles are only safe for syntax highlighting: permit exactly the
@@ -128,7 +130,7 @@ export function _sanitizeHtml(html: string): string {
         while ((attrMatch = ATTR_RE.exec(attrsRaw)) !== null) {
             const [, attrName, dqVal, sqVal, uqVal] = attrMatch;
             const attrLower = attrName.toLowerCase();
-            const attrVal = dqVal ?? sqVal ?? uqVal ?? '';
+            const attrVal = (dqVal ?? sqVal ?? uqVal ?? '').replace(/&[a-z#][a-z0-9]{1,31};/gi, entity => unescapeAll(entity));
 
             // Block event handlers (onmouseover, onclick, etc.)
             if (EVENT_HANDLER_RE.test(attrLower)) continue;
@@ -141,13 +143,12 @@ export function _sanitizeHtml(html: string): string {
 
             // Validate href/src URIs - block javascript: and data: URIs
             if (attrLower === 'href' || attrLower === 'src') {
-                if (JAVASCRIPT_URI_RE.test(attrVal)) continue;
-                // Block data: URIs that could contain HTML/JS
-                if (/^\s*data\s*:/i.test(attrVal)) continue;
+                const uri = attrVal.replace(/[\t\n\r]/g, '').replace(/^[\x00-\x20]+/, '');
+                if (UNSAFE_URI_RE.test(uri)) continue;
                 // Remote images are a tracking beacon vector in offline
                 // coding chats - only relative/anchor links survive here,
                 // and CSP blocks network loads at the frame level too.
-                if (attrLower === 'src' && /^[a-z][a-z0-9+.-]*:\/\//i.test(attrVal)) continue;
+                if (attrLower === 'src' && /^(?:[a-z][a-z0-9+.-]*:)?[/\\]{2}/i.test(uri)) continue;
             }
 
             // Style attributes get property-level filtering (shiki colors only)

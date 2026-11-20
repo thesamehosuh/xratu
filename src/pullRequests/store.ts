@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { LockTimeoutError, withDirectoryLock } from '../oauth/refreshLock';
 import { renameWithRetry } from '../local/localSessionStore';
 import { PullRequestError, type PullRequestSession } from './types';
 import { validatePullRequestSession } from './validation';
@@ -33,43 +34,25 @@ export class PullRequestStore {
         const next = this.queue.then(async () => {
             await fs.mkdir(this.directory, { recursive: true });
             const filename = this.file(id), lock = `${filename}.lock`;
-            // A second window must not race a cursor/event update or bill a
-            // duplicate wake. A crashed owner's lock is recovered on restart.
-            let handle: fs.FileHandle;
-            try { handle = await fs.open(lock, 'wx'); }
-            catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-                const owner = Number(await fs.readFile(lock, 'utf8').catch(() => ''));
-                let alive = true;
-                if (Number.isSafeInteger(owner) && owner > 0) {
-                    try { process.kill(owner, 0); } catch (probe) { alive = (probe as NodeJS.ErrnoException).code !== 'ESRCH'; }
-                }
-                if (alive) throw new PullRequestError('prStoreBusy');
-                // Recovery has its own exclusive lock so two new hosts cannot
-                // both remove a lock acquired by the first recovering host.
-                const recovery = await fs.open(`${lock}.recovery`, 'wx').catch(() => null);
-                if (!recovery) throw new PullRequestError('prStoreBusy');
+            await repairLegacyLock(lock);
+            return withDirectoryLock(lock, { timeoutMs: 5_000, sleepMs: 100 }, async () => {
+                const temp = `${filename}.${randomUUID()}.tmp`;
                 try {
-                    if (await fs.readFile(lock, 'utf8').catch(() => '') === String(owner)) await fs.unlink(lock);
-                    handle = await fs.open(lock, 'wx');
-                } finally { await recovery.close(); await fs.unlink(`${lock}.recovery`); }
-            }
-            const temp = `${filename}.${randomUUID()}.tmp`;
-            try {
-                await handle.writeFile(String(process.pid));
-                const state = await this.read(id, workspace);
-                change(state);
-                validatePullRequestSession(state, id, workspace);
-                const json = JSON.stringify(state);
-                if (Buffer.byteLength(json, 'utf8') > 8 * 1024 * 1024) throw new PullRequestError('prReadTooLarge');
-                await fs.writeFile(temp, json, 'utf8');
-                await renameWithRetry(temp, filename);
-                return structuredClone(state);
-            } finally {
-                await fs.unlink(temp).catch(() => undefined);
-                await handle.close();
-                await fs.unlink(lock);
-            }
+                    const state = await this.read(id, workspace);
+                    change(state);
+                    validatePullRequestSession(state, id, workspace);
+                    const json = JSON.stringify(state);
+                    if (Buffer.byteLength(json, 'utf8') > 8 * 1024 * 1024) throw new PullRequestError('prReadTooLarge');
+                    await fs.writeFile(temp, json, 'utf8');
+                    await renameWithRetry(temp, filename);
+                    return structuredClone(state);
+                } finally {
+                    await fs.unlink(temp).catch(() => undefined);
+                }
+            }).catch(error => {
+                if (error instanceof LockTimeoutError) throw new PullRequestError('prStoreBusy');
+                throw error;
+            });
         });
         this.queue = next.catch(() => undefined);
         return next;
@@ -94,5 +77,31 @@ export class PullRequestStore {
     }
     async remove(id: string, workspace: string): Promise<void> {
         await this.update(id, workspace, state => { state.links = []; state.events = []; delete state.delivery; state.deleted = true; });
+    }
+}
+
+async function repairLegacyLock(lock: string): Promise<void> {
+    const missing = (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+    };
+    const original = await fs.lstat(lock).catch(missing);
+    if (!original || original.isDirectory()) return;
+    if (!original.isFile()) throw new PullRequestError('prStoreBusy');
+    const contents = await fs.readFile(lock, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'EISDIR') return undefined;
+        return missing(error);
+    });
+    if (contents === undefined) return;
+    const pid = Number(contents);
+    if (Number.isInteger(pid) && pid > 0 && pid <= 0x7fffffff) {
+        try { process.kill(pid, 0); throw new PullRequestError('prStoreBusy'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    } else if (Date.now() - original.mtimeMs < 3_000) {
+        throw new PullRequestError('prStoreBusy');
+    }
+    const current = await fs.lstat(lock).catch(missing);
+    if (current?.isFile() && current.ino === original.ino && current.birthtimeMs === original.birthtimeMs && current.mtimeMs === original.mtimeMs) {
+        await fs.unlink(lock).catch(missing);
     }
 }

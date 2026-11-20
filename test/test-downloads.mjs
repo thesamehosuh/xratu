@@ -96,6 +96,16 @@ async function restore(f) {
 }
 
 try {
+    await test('destination names remain portable and inside the workspace', async () => {
+        const f = await fixture();
+        for (const destination of ['models/aux.bin', 'models/meta:tag.bin', 'models/folder./model.bin']) {
+            const result = await f.manager.tool(f.root, 'start_download', { url: 'https://downloads.example/file', path: destination });
+            assert.equal(result.isError, true);
+        }
+        assert.deepEqual(await fs.readdir(f.root), []);
+        assert.equal(f.secretMap.size, 0);
+    });
+
     await test('a changed partial cannot persist inconsistent publication metadata', async () => {
         let saves = 0;
         const record = { received: 10 };

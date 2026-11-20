@@ -76,14 +76,14 @@ export function validateStreamEvent(style: 'chat' | 'messages' | 'responses' | '
             }
             const delta = object(choice.delta, 'choice delta');
             for (const key of ['content', 'reasoning_content', 'reasoning']) optionalText(delta[key], key);
-            if (delta.tool_calls !== undefined) for (const rawCall of array(delta.tool_calls, 'tool_calls')) {
+            if (delta.tool_calls != null) for (const rawCall of array(delta.tool_calls, 'tool_calls')) {
                 const call = object(rawCall, 'tool call');
-                if (call.index !== undefined) streamIndex(call.index);
-                if (call.id !== undefined) text(call.id, 'tool call identity', true);
-                if (call.function !== undefined) {
+                if (call.index != null) streamIndex(call.index);
+                optionalText(call.id, 'tool call identity');
+                if (call.function != null) {
                     const fn = object(call.function, 'tool function');
                     optionalText(fn.name, 'tool name');
-                    if (fn.arguments !== undefined && typeof fn.arguments !== 'string') object(fn.arguments, 'tool arguments');
+                    if (fn.arguments != null && typeof fn.arguments !== 'string') object(fn.arguments, 'tool arguments');
                 }
             }
         }
@@ -148,7 +148,7 @@ export function validateStreamEvent(style: 'chat' | 'messages' | 'responses' | '
         optionalText(candidate.finishReason, 'finish reason');
         if (candidate.content != null) {
             const content = object(candidate.content, 'candidate content');
-            for (const rawPart of array(content.parts, 'candidate parts')) {
+            for (const rawPart of array(content.parts ?? [], 'candidate parts')) {
                 const part = object(rawPart, 'candidate part');
                 if (part.text !== undefined) text(part.text, 'part text');
                 if (part.thought !== undefined && typeof part.thought !== 'boolean') invalid('thought flag');

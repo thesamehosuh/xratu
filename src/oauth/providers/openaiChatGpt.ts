@@ -89,7 +89,7 @@ export async function validateChatGptIdToken(ctx: OAuthLoginContext, token: stri
     if (claims.iss !== ISSUER || !audience.includes(clientId)
         || (audience.length > 1 && claims.azp !== clientId)
         || typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now
-        || (typeof claims.nbf === 'number' && claims.nbf > now)
+        || (typeof claims.nbf === 'number' && claims.nbf > now + 60)
         || typeof claims.sub !== 'string' || !claims.sub
         || (nonce !== undefined && claims.nonce !== nonce)) {
         throw new OAuthFlowError('invalid_id_token', 'Invalid ID token claims');

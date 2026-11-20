@@ -276,7 +276,7 @@ export async function sniffProxyProtocol(host: string, port: number): Promise<Pr
 export async function probeController(host: string, port: number): Promise<ControllerFingerprint | null> {
     for (const path of ['/', '/version']) {
         try {
-            const response = await fetch(`http://${host}:${port}${path}`, {
+            const response = await fetch(`http://${formatHost(host)}:${port}${path}`, {
                 signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
                 headers: { Accept: 'application/json' },
             });
@@ -329,7 +329,7 @@ export async function detectLocalProxies(): Promise<DetectedProxyGroup[]> {
 }
 
 function formatHost(host: string): string {
-    return host.includes(':') ? `[${host}]` : host;
+    return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 export function probeProxyReachable(proxyUrl: string): Promise<{ endpoint: string; reason: string } | null> {
@@ -338,13 +338,13 @@ export function probeProxyReachable(proxyUrl: string): Promise<{ endpoint: strin
         let port = 80;
         try {
             const parsed = new URL(proxyUrl);
-            host = parsed.hostname;
+            host = parsed.hostname.replace(/^\[|\]$/g, '');
             port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
         } catch {
-            resolve({ endpoint: proxyUrl, reason: 'invalid URL' });
+            resolve({ endpoint: 'invalid URL', reason: 'invalid URL' });
             return;
         }
-        const endpoint = `${host}:${port}`;
+        const endpoint = `${formatHost(host)}:${port}`;
         const socket = net.connect({ host, port });
         let settled = false;
         const finish = (value: { endpoint: string; reason: string } | null) => {

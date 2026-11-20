@@ -8,6 +8,7 @@ import { ModelStreamError, streamIndex, validateStreamEvent } from './streamVali
  * VS Code-free: plain fetch + SSE.
  */
 
+import { randomUUID } from 'node:crypto';
 import { proxyFetch } from '../proxyFetch';
 import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { isOpenRouterHost, supportsPromptCacheKey } from './apiStyle';
@@ -525,6 +526,9 @@ async function requestChatCompletion(
     let reasoning = '';
     let usage: LocalUsage | null = null;
     const toolDeltas = new Map<number, { id: string; name: string; arguments: string }>();
+    const toolSlots = new Map<string, number>();
+    let activeToolSlot = 0;
+    let nextToolSlot = 0;
     let streamEnded = false;
     let finishReason: string | null = null;
 
@@ -541,10 +545,15 @@ async function requestChatCompletion(
         if (json?.error) throw new Error(`Model stream error: ${json.error?.message ?? 'unknown error'}`);
         if (json?.usage) usage = chatUsage(json.usage);
         const delta = json?.choices?.[0]?.delta;
-        if (streamEnded && delta && Object.keys(delta).length) throw new ModelStreamError('Model returned content after completion.');
+        if (streamEnded && delta && Object.values(delta).some(value => value != null && value !== '' && (!Array.isArray(value) || value.length))) {
+            throw new ModelStreamError('Model returned content after completion.');
+        }
         const reason = json?.choices?.[0]?.finish_reason;
-        if (streamEnded && typeof reason === 'string' && reason !== finishReason) throw new ModelStreamError('Model changed its terminal completion reason.');
-        if (typeof reason === 'string') { finishReason = reason; streamEnded = true; }
+        if (typeof reason === 'string' && reason.length > 0) {
+            if (streamEnded && reason !== finishReason) throw new ModelStreamError('Model changed its terminal completion reason.');
+            finishReason = reason;
+            streamEnded = true;
+        }
         if (!delta) return;
 
         const textDelta = typeof delta.content === 'string' ? delta.content : '';
@@ -570,7 +579,10 @@ async function requestChatCompletion(
         const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
         if (calls.length) onToolCall?.();
         for (const call of calls) {
-            const index = Number(call.index ?? 0);
+            const existingSlot = call.id ? toolSlots.get(call.id) : undefined;
+            const active = toolDeltas.get(activeToolSlot);
+            const startsNewCall = call.id && active?.id && active.id !== call.id;
+            const index = call.index ?? existingSlot ?? (startsNewCall ? nextToolSlot : activeToolSlot);
             if (!Number.isSafeInteger(index) || index < 0) throw new ModelStreamError('Model returned an invalid tool call identity.');
             const current = toolDeltas.get(index) ?? {
                 id: '',
@@ -580,7 +592,9 @@ async function requestChatCompletion(
 
             if (call.id) {
                 if (current.id && current.id !== call.id) throw new ModelStreamError('Model changed a tool call identity during streaming.');
+                if (existingSlot !== undefined && existingSlot !== index) throw new ModelStreamError('Model returned duplicate tool call IDs.');
                 current.id = String(call.id);
+                toolSlots.set(current.id, index);
             }
             if (call.function?.name) current.name += String(call.function.name);
             if (call.function?.arguments) {
@@ -593,6 +607,8 @@ async function requestChatCompletion(
             }
 
             toolDeltas.set(index, current);
+            activeToolSlot = index;
+            nextToolSlot = Math.max(nextToolSlot, index + 1);
         }
     };
 
@@ -679,6 +695,10 @@ function toMessagesBody(
             continue;
         }
         if (msg.role === 'assistant') {
+            if (msg.compactedToolCalls?.length && typeof msg.content === 'string') {
+                appendMessagesNote(out, msg.content);
+                continue;
+            }
             appendMessagesNote(out, msg.contextNote ?? '');
             // Prefer the provider-native blocks captured while streaming
             // (thinking + signature + tool_use). Reconstructing from text and
@@ -1607,6 +1627,10 @@ function toGoogleBody(
             continue;
         }
         if (msg.role === 'assistant') {
+            if (msg.compactedToolCalls?.length && typeof msg.content === 'string') {
+                appendGoogleNote(contents, msg.content);
+                continue;
+            }
             appendGoogleNote(contents, msg.contextNote ?? '');
             if (hasReplayBlocks(msg.providerBlocks, 'google')) {
                 // Replay Google's own model parts (functionCall + thoughtSignature).
@@ -1635,7 +1659,11 @@ function toGoogleBody(
                 toolNameById.set(call.id, call.function.name);
                 parts.push({ functionCall: { name: call.function.name, args: parseArguments(call.function.arguments) } });
             }
-            if (parts.length) contents.push({ role: 'model', parts });
+            if (parts.length) {
+                const last = contents[contents.length - 1];
+                if (last?.role === 'model') last.parts.push(...parts);
+                else contents.push({ role: 'model', parts });
+            }
             continue;
         }
         if (msg.role === 'tool') {
@@ -1864,10 +1892,11 @@ async function requestGoogleCompletion(
     // Reserve every provider ID before assigning IDs to older ID-less calls.
     // Declaration-order map keys retain duplicates for batch validation.
     const reservedIds = new Set([...toolDeltas.values()].map(call => call.id).filter(Boolean));
+    const anonymousBatch = randomUUID();
     let syntheticId = 0;
     for (const call of toolDeltas.values()) {
         if (call.id) continue;
-        do { call.id = `google-call-${syntheticId++}`; } while (reservedIds.has(call.id));
+        do { call.id = `google-call-${anonymousBatch}-${syntheticId++}`; } while (reservedIds.has(call.id));
         reservedIds.add(call.id);
     }
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks: modelParts };

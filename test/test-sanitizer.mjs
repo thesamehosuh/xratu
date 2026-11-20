@@ -92,6 +92,10 @@ const uriStripCases = [
     ['mixed-case JaVaScRiPt:', '<a href="JaVaScRiPt:alert(1)">click</a>', 'href='],
     ['leading-space javascript:', '<a href="  javascript:alert(1)">click</a>', 'href='],
     ['unquoted javascript:', '<a href=javascript:alert(1)>click</a>', 'href='],
+    ['URI scheme with control characters', '<a href="java\tscript:example">link</a>', 'href='],
+    ['URI scheme with an encoded control', '<a href="java&Tab;script:example">link</a>', 'href='],
+    ['vbscript scheme', '<a href="vbscript:example">link</a>', 'href='],
+    ['protocol-relative remote image', '<img src="//tracker.example/pixel.png">', 'src='],
     ['data:text/html href', '<a href="data:text/html,hello">click</a>', 'href='],
     ['data: with embedded > (TOKEN_RE regression)', '<a href="data:text/html,<script>alert(1)</script>">click</a>', 'href='],
     ['single-quoted data: with embedded >', "<a href='data:text/html,<script>alert(1)</script>'>click</a>", 'href='],
@@ -112,6 +116,9 @@ for (const [label, input, forbidden] of uriStripCases) {
 {
     const link = _sanitizeHtml('<a href="https://example.com/docs" title="Docs" rel="noopener">Docs</a>');
     assert.equal(link, '<a href="https://example.com/docs" title="Docs" rel="noopener">Docs</a>');
+
+    const queryLink = '<a href="https://example.com/?a=1&amp;b=2" title="A &amp; B">link</a>';
+    assert.equal(_sanitizeHtml(queryLink), queryLink, 'attributes are escaped once');
 
     const anchor = _sanitizeHtml('<a href="#section-1">Jump</a>');
     assert.equal(anchor, '<a href="#section-1">Jump</a>');

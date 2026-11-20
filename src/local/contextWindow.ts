@@ -262,19 +262,21 @@ export function compactMessages(
         total = Math.max(0, total - reclaimed);
         if (!force && total <= target) return [];
     }
-    let start = 1;
-    while (start < turnStart && (total > target || (force && start === 1))) {
+    const previous = messages[1]?.content;
+    const firstTurn = messages[1]?.role === 'user' && typeof previous === 'string' && previous.startsWith(HISTORY_TRUNCATION_MARKER) ? 2 : 1;
+    let start = firstTurn;
+    while (start < turnStart && (total > target || (force && start === firstTurn))) {
         let end = start + 1;
         while (end < turnStart && messages[end].role !== 'user') end++;
         const groupCost = estimateRunTokens(messages.slice(start, end));
         // Make progress even when the first old turn crosses the soft target.
         // After that, retain a recent complete turn if there is already safe
         // headroom; an overflowing request must still be allowed to cross it.
-        if (!force && start > 1 && total - groupCost < target && total < windowTokens * AUTO_COMPACT_RATIO) break;
+        if (!force && start > firstTurn && total - groupCost < target && total < windowTokens * AUTO_COMPACT_RATIO) break;
         total -= groupCost;
         start = end;
     }
-    if (start <= 1) return [];
+    if (start === firstTurn) return [];
     // splice(1, start-1) removes indices 1..start-1; the slice must cover
     // exactly the same range so the summarizer sees every dropped message.
     const dropped = messages.slice(1, start);

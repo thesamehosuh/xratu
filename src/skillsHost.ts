@@ -33,11 +33,13 @@ export async function isKnownSkillsPath(p: string): Promise<boolean> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const candidates: string[] = [
         path.join(os.homedir(), '.agents', 'skills'),
+        path.join(os.homedir(), '.claude', 'skills'),
     ];
     if (root) {
         candidates.push(
             path.join(root, '.xratu', 'skills'),
             path.join(root, '.agents', 'skills'),
+            path.join(root, '.claude', 'skills'),
         );
     }
     for (const base of candidates) {
@@ -47,7 +49,8 @@ export async function isKnownSkillsPath(p: string): Promise<boolean> {
         } catch {
             continue;
         }
-        if (real === baseReal || real.startsWith(baseReal + path.sep)) return true;
+        const relative = path.relative(baseReal, real);
+        if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return true;
     }
     return false;
 }
