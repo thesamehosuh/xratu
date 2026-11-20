@@ -35,7 +35,7 @@ interface ToolbarProps {
     onToggleSide?: () => void;
     onAddTab?: () => void;
     workspaceLabel?: string | null;
-    yolo: boolean;
+    yolo: boolean | null;
     plan: boolean;
     sessionTitle: string | null;
     sessionsOpen: boolean;

@@ -44,6 +44,8 @@ export interface LockOptions {
     timeoutMs?: number;
     /** A lock older than this is presumed abandoned. Default 2 minutes. */
     staleMs?: number;
+    /** Reap recorded owners only after the OS confirms their PID is gone. */
+    recoverDeadOwner?: boolean;
     /** Async sleep between acquire attempts. Default 25ms - short enough to
      *  be responsive, long enough that the event loop is never blocked. */
     sleepMs?: number;
@@ -79,6 +81,12 @@ function readOwner(lockPath: string): OwnerRecord | null {
     }
 }
 
+function ownerIsGone(owner: OwnerRecord): boolean {
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || owner.pid > 0x7fffffff) return false;
+    try { process.kill(owner.pid, 0); return false; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+}
+
 /** Age of the lock directory itself, used when its owner record is missing or
  *  unreadable. 0 when it cannot be stat'ed (never treated as stale). */
 function dirAgeMs(lockPath: string, nowMs: number): number {
@@ -96,7 +104,7 @@ function rmIfOwnerUnchanged(lockPath: string, seen: OwnerRecord): void {
     const current = readOwner(lockPath);
     if (!current || current.token !== seen.token) return;
     try {
-        fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(lockPath, { recursive: true, force: true });
     } catch {
         // Best effort: if the rm fails the next acquire loop re-evaluates.
     }
@@ -112,7 +120,7 @@ function removeIfUnchanged(lockPath: string, measuredAgeMs: number, nowMs: numbe
     const age = dirAgeMs(lockPath, nowMs);
     if (age === 0 || Math.abs(age - measuredAgeMs) > 1) return;
     try {
-        fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        fs.rmSync(lockPath, { recursive: true, force: true });
     } catch {
         // Best effort: the acquire loop re-evaluates.
     }
@@ -160,7 +168,9 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
         // record yet is never taken from.
         const measuredAt = now();
         const acquiredAge = dirAgeMs(lockPath, measuredAt);
-        const isStale = seen ? measuredAt - seen.acquiredAt > staleMs : acquiredAge > staleMs;
+        const isStale = seen
+            ? (opts.recoverDeadOwner ? ownerIsGone(seen) : measuredAt - seen.acquiredAt > staleMs)
+            : acquiredAge > staleMs;
         if (isStale) {
             if (seen) rmIfOwnerUnchanged(lockPath, seen);
             else removeIfUnchanged(lockPath, acquiredAge, measuredAt);
@@ -193,16 +203,24 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
         opts.signal?.throwIfAborted();
         return await fn();
     } finally {
-        try {
-            const owner = readOwner(lockPath);
-            const currentStat = fs.statSync(lockPath);
-            if (owner?.token === token || (!ownerWritten && !owner
-                && currentStat.ino === acquiredStat.ino && currentStat.birthtimeMs === acquiredStat.birthtimeMs)) {
-                fs.rmSync(lockPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        let removalStarted = false;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            try {
+                const owner = readOwner(lockPath);
+                const current = fs.statSync(lockPath);
+                const sameDirectory = current.dev === acquiredStat.dev && current.ino === acquiredStat.ino
+                    && current.birthtimeMs === acquiredStat.birthtimeMs;
+                if (!sameDirectory || (owner?.token !== token && (owner || (ownerWritten && !removalStarted)))) break;
+                // Each retry rechecks ownership after sleeping. Never ask rm
+                // to retry a pathname that could now belong to another holder.
+                removalStarted = true;
+                fs.rmSync(lockPath, { recursive: true, force: true });
+                break;
+            } catch (error) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (attempt === 5 || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) break;
+                await new Promise(resolve => setTimeout(resolve, 50));
             }
-        } catch {
-            // Process is exiting or the FS is misbehaving; the stale path
-            // recovers this for the next caller.
         }
     }
 }

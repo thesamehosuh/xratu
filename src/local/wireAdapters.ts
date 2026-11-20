@@ -275,7 +275,8 @@ export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessa
             const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, compactedToolCalls: _compactedToolCalls, compactedKeptToolCalls: _compactedKeptToolCalls, compactedSteerCount: _compactedSteerCount, ...wire } = m;
             cleaned = stripLocalImageFields(wire);
         } else {
-            cleaned = stripLocalImageFields(m);
+            const { backgroundNotice: _backgroundNotice, ...wire } = m;
+            cleaned = stripLocalImageFields(wire);
         }
         const prev = out[out.length - 1];
         // Strict local Jinja templates (Llama 3, Mistral, Gemma, LFM) reject

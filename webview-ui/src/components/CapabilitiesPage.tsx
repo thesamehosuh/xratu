@@ -1,7 +1,7 @@
 import { SidePanel } from './SidePanel';
 import { NativeInventory } from './EngineScope';
 import type { NativeSetupState } from '../types';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
@@ -487,6 +487,7 @@ export function CapabilitiesPage({
     };
 
     const draftName = useRef<HTMLInputElement>(null);
+    const focusDiscardCancel = useCallback((button: HTMLButtonElement | null) => { button?.focus(); }, []);
     const resumeEditing = () => {
         setDiscardDraft(null);
         requestAnimationFrame(() => draftName.current?.focus());
@@ -809,7 +810,7 @@ export function CapabilitiesPage({
             <div className="mcp-form">
                 <h3>{t('mcpDiscardConfirm')}</h3>
                 <div className="mcp-form-actions">
-                    <button type="button" className="settings-ghost-action" ref={button => { button?.focus(); }} onClick={resumeEditing}>{t('mcpKeepEditing')}</button>
+                    <button type="button" className="settings-ghost-action" ref={focusDiscardCancel} onClick={resumeEditing}>{t('mcpKeepEditing')}</button>
                     <button type="button" className="mcp-save" onClick={discardEditor}>{t('mcpDiscard')}</button>
                 </div>
             </div>

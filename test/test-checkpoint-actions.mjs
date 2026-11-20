@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const { EmptySeedError, ShadowCheckpointStore } = require('../out/shadowGit.js');
+const { isUserTurn } = require('../out/local/historyBounds.js');
 const root = mkdtempSync(path.join(tmpdir(), 'xratu-restore-actions-'));
 const source = readFileSync(new URL('../src/extension.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('extension.ts', source, ts.ScriptTarget.Latest, true);
@@ -14,7 +15,7 @@ const cls = file.statements.find(node => ts.isClassDeclaration(node) && node.nam
 const names = ['_gitCheckout', '_forgetSubagentRuns', '_rewindAndResend', '_bindRunConnection', '_truncateLocalHistoryAt', '_findLocalUserEntry', 'restoreCheckpointFlow', '_restoreCheckpointAt', '_captureCheckpointAction', '_checkpointActionCurrent', '_applyCheckpointRestore', '_checkpointRestoreActive', '_findUserEntry', '_serializeSessionTransition', '_sessionTransitionQueue', '_sessionTransitionsPending', '_handleChatRequest'];
 const members = cls.members.filter(node => node.name && names.includes(node.name.getText(file)));
 let jobs = [];
-const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, backgroundJobViews: () => jobs,
+const sandbox = { ui: key => key, path, fs: require('node:fs'), EmptySeedError, isUserTurn, backgroundJobViews: () => jobs,
     AbortController, console, crypto: require('node:crypto'), closeSubagentRunner: async () => {},
     // Turn preflight in _handleChatRequest resolves these module helpers before
     // the rules step; the suite stubs their results through them.
@@ -48,10 +49,11 @@ try {
     for (const evicted of [0, 3]) {
         const t = harness();
         Object.assign(t.host, { _sessionSummary: 'Future work already done; do not repeat it', _localEvictedUserTurns: evicted,
-            _localReplayUserTurns: 1, _localHistory: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'earlier answer' }, { role: 'user', content: 'future work' }] });
+            _localReplayUserTurns: 1, _localHistory: [{ role: 'user', content: 'earlier' }, { role: 'user', content: 'background notice', backgroundNotice: true }, { role: 'assistant', content: 'earlier answer' }, { role: 'user', content: 'future work' }] });
         sandbox.Host.prototype._truncateLocalHistoryAt.call(t.host, 1);
         assert.equal(t.host._sessionSummary, null, 'rewinding cannot carry instructions from the discarded future');
         assert.equal(t.host._localHistory.some(row => row.content === 'future work'), false);
+        if (!evicted) assert.equal(t.host._localHistory.some(row => row.content === 'background notice'), true);
     }
     const h = harness();
     const pending = h.host._restoreCheckpointAt(0, sha.slice(0, 12));

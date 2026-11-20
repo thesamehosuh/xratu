@@ -107,18 +107,21 @@ export class DownloadManager {
     }
     private emit(): void { this.lastEmit = Date.now(); this.deps.changed(this.views(this.sessionId), this.startupError); }
     private key(id: string): string { return `xratu.download.${this.scope}.${id}`; }
-    private target(record: DownloadRecord): string {
-        validateRecordPath(record.path);
+    private target(record: DownloadRecord, requirePortable = true): string {
+        validateRecordPath(record.path, requirePortable);
         try {
             const root = sanitizePath('.', this.workspace);
             const target = path.join(root, record.path);
-            const parent = sanitizePath(path.dirname(target), root);
+            const parentPath = path.dirname(target);
+            const relativeParent = path.relative(root, parentPath);
+            if (relativeParent) validateRecordPath(relativeParent);
+            const parent = sanitizePath(parentPath, root);
             if (path.relative(path.dirname(target), parent)) throw new Error('Download parent changed.');
             return target;
         } catch { throw new DownloadFailure('downloadFileError'); }
     }
-    private partial(record: DownloadRecord): string {
-        const target = this.target(record);
+    private partial(record: DownloadRecord, requirePortable = true): string {
+        const target = this.target(record, requirePortable);
         // Resolve the parent, never the generated leaf: resolving a replaced
         // partial symlink would turn its target into our write/unlink operand.
         const parent = sanitizePath(path.dirname(target), this.workspace);
@@ -335,7 +338,7 @@ export class DownloadManager {
         if (this.records.get(id)?.status === 'completed') return r;
         if (action === 'cancel') {
             let partial: string | undefined;
-            try { partial = this.partial(r); } catch (error) { this.deps.diagnostic(error); }
+            try { partial = this.partial(r, false); } catch (error) { this.deps.diagnostic(error); }
             if (partial) await fs.unlink(partial).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
             await this.deps.secrets.delete(this.key(id));
         } else if (url) {

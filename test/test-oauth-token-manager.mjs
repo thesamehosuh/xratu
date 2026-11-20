@@ -511,6 +511,38 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     check('failed stale removal waits until the virtual deadline', waits, 3);
 }
 {
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'release-removal-race');
+    const ownerFile = path.join(lock, 'owner.json');
+    const fsModule = require('node:fs');
+    const oldRemove = fsModule.rmSync;
+    let attempts = 0;
+    let automaticRetries;
+    fsModule.rmSync = (target, options) => {
+        if (target !== lock) return oldRemove(target, options);
+        attempts++;
+        if (attempts !== 1) return oldRemove(target, options);
+        automaticRetries = options.maxRetries ?? 0;
+        setImmediate(() => {
+            oldRemove(lock, { recursive: true });
+            fs.mkdirSync(lock);
+            fs.writeFileSync(ownerFile, JSON.stringify({ token: 'replacement', acquiredAt: Date.now(), pid: process.pid }));
+        });
+        const error = new Error('busy');
+        error.code = 'EBUSY';
+        throw error;
+    };
+    try {
+        await withDirectoryLock(lock, {}, async () => {});
+        check('directory removal delegates no delayed retries', automaticRetries, 0);
+        check('release rechecks ownership after a busy removal', attempts, 1);
+        check('release preserves the replacement owner', fs.existsSync(ownerFile), true);
+    } finally {
+        fsModule.rmSync = oldRemove;
+        oldRemove(lock, { recursive: true, force: true });
+    }
+}
+{
     const nearly = { ...VALID, expiresAt: Date.now() + 240000 };
     const m = managerFor(memoryStore({ k: nearly }));
     const h = handler((tokens) => refreshWithTokenEndpoint(endpointOpts(async () => { throw new Error('temporary outage'); }, tokens)));

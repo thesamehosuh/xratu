@@ -44,6 +44,18 @@ const ok = (name, cond, detail = '') => {
     console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond || !detail ? '' : ` - ${detail}`}`);
 };
 
+{
+    const { countUserRows, skipLeadingUserTurns } = require('../out/local/historyBounds.js');
+    const notice = historyRowFromEvent({ type: 'steer_system', text: 'Background job completed' });
+    const rows = [{ role: 'user', content: 'Run the build' }, notice, { role: 'user', content: 'Continue' }];
+    const replay = buildReplayHistory(rows);
+    const wire = chatWireMessages(replay);
+    ok('background notices survive replay without claiming a user turn', countUserRows(replay) === 2 && replay[1]?.backgroundNotice === true);
+    ok('rewind skips the background notice as part of its enclosing turn', skipLeadingUserTurns(rows, 1)[0]?.content === 'Continue');
+    ok('wire projection preserves the notice text without exposing internal metadata',
+        JSON.stringify(wire).includes('Background job completed') && !JSON.stringify(wire).includes('backgroundNotice'));
+}
+
 // A large-window run must not lose tool findings or rewrite cached arguments
 // at the event -> history boundary before the window-aware ledger sees them.
 {

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import Module from 'node:module';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -480,6 +480,9 @@ test('crashed continuations are marked interrupted across reloads and never repl
     const exited = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { windowsHide: true });
     assert.equal(exited.status, 0);
     await f.store.update(context.sessionId, context.workspace, state => { state.delivery = { ids: state.events.map(event => event.id), status: 'running', owner: exited.pid }; });
+    const lock = path.join(f.store.directory, `${context.sessionId}.json.lock`);
+    await mkdir(lock);
+    await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: exited.pid, token: 'abandoned', acquiredAt: Date.now() }));
     const restarted = new PullRequestService(new PullRequestStore(f.storage), f.provider);
     try {
         await restarted.start();

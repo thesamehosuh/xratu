@@ -247,6 +247,8 @@ export interface LocalAgentMessage {
         };
     }>;
     tool_call_id?: string;
+    /** Host-origin job context carried on the user wire role between rounds. */
+    backgroundNotice?: boolean;
     /** True when a tool message carries a failure (denied/executor error).
      *  The Messages transport maps it to Anthropic's `is_error`. */
     isError?: boolean;

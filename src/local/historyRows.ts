@@ -167,6 +167,7 @@ export function historyRowFromEvent(event: any): LocalSessionHistoryMessage | nu
             ...(event.isError != null ? { isError: event.isError } : {}),
         };
     }
+    if (event.type === 'steer_system' && typeof event.text === 'string') return { role: 'user', content: event.text, backgroundNotice: true };
     if (event.type === 'steer_user') {
         return { role: 'user', content: event.text };
     }
@@ -295,6 +296,7 @@ export function buildReplayHistory(rows: readonly LocalSessionHistoryMessage[]):
         out.push({
             role: row.role as LocalAgentMessage['role'],
             content: row.content ?? '',
+            ...(row.backgroundNotice === true ? { backgroundNotice: true } : {}),
             ...(toolCalls ? { tool_calls: toolCalls } : {}),
             ...(row.isError != null ? { isError: row.isError } : {}),
             ...(row.providerBlocks ? { providerBlocks: row.providerBlocks } : {}),

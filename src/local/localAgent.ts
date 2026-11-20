@@ -9,6 +9,7 @@
  * integration supplies tool definitions + an executor + approval callback.
  */
 
+import { countUserRows, isUserTurn } from './historyBounds';
 import { reminderTaskList, taskListReminderLine } from '../taskList';
 import { providerHttpStatus } from '../providerErrors';
 import { resolveAgentRounds } from '../tooling/agentRounds';
@@ -349,7 +350,7 @@ export async function* runLocalAgent(
         for (const steer of await steerFeed?.drain(final) ?? []) {
             const text = steer.text.trim();
             if (!text && !steer.attachments?.length) continue;
-            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat) });
+            messages.push({ role: 'user', content: steerContent(text, steer.attachments, imageFormat), ...(steer.system ? { backgroundNotice: true } : {}) });
             yield {
                 type: 'steer', text,
                 ...(steer.system ? { system: true } : {}),
@@ -365,7 +366,7 @@ export async function* runLocalAgent(
         return index > 0 ? index : undefined;
     };
     // How many user turns the run has folded into the rolling summary so far.
-    const historyUserTurns = history.reduce((n, m) => n + (m.role === 'user' ? 1 : 0), 0);
+    const historyUserTurns = countUserRows(history);
     // How many user turns the run has folded into the rolling summary, as a
     // count the host can map to its suffix replay boundary. Only a summarized
     // PREFIX can be expressed that way: after any UNSUMMARIZED drop (forced
@@ -381,7 +382,7 @@ export async function* runLocalAgent(
         let remaining = 0;
         for (let i = 1; i < ts; i++) {
             const m = messages[i];
-            if (m.role === 'user' && !isHistoryTruncationMarker(m)) remaining++;
+            if (isUserTurn(m) && !isHistoryTruncationMarker(m)) remaining++;
         }
         reportedTurns = Math.max(0, historyUserTurns - remaining);
         return reportedTurns;

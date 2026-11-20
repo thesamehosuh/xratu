@@ -444,7 +444,14 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1080]) {
         await keep.click();
         await expect(input).toHaveValue('local-docs');
         await drawer.getByRole('button', { name: fa ? 'انصراف' : 'Cancel', exact: true }).last().click();
-        await drawer.getByRole('button', { name: fa ? 'دور ریختن تغییرات' : 'Discard changes' }).click();
+        await expect(keep).toBeFocused();
+        await page.keyboard.press('Tab');
+        const discard = drawer.locator('.mcp-save');
+        await expect(discard).toBeFocused();
+        await hostMessage(page, { type: 'locale', locale: fa ? 'en' : 'fa' });
+        await expect(discard).toHaveText(fa ? 'Discard changes' : 'دور ریختن تغییرات');
+        await expect(discard).toBeFocused();
+        await page.keyboard.press('Enter');
         await expect(drawer).toHaveCount(0);
         expect((await sentMessages(page)).some(message => message.type === 'mcpSave')).toBe(false);
     });

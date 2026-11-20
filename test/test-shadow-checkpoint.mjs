@@ -13,6 +13,7 @@
 import { createRequire } from 'module';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
+import crossSpawn from 'cross-spawn';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync,
     renameSync, utimesSync, chmodSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -37,7 +38,8 @@ const work = mkdtempSync(join(tmpdir(), 'xratu-cp-work-'));
 try {
     const partialRepo = join(storageRoot, 'checkpoints', createHash('sha1').update(work).digest('hex').slice(0, 16));
     mkdirSync(partialRepo, { recursive: true });
-    execFileSync('git', ['init', '--bare', '--quiet', partialRepo], { windowsHide: true });
+    const init = crossSpawn.sync('git', ['init', '--bare', '--quiet', '--object-format=sha1', partialRepo], { windowsHide: true, encoding: 'utf8' });
+    if (init.error || init.status !== 0) throw init.error ?? new Error(init.stderr || `git init exited ${init.status}`);
     const staleIndex = join(partialRepo, 'index.lock');
     writeFileSync(staleIndex, '');
     const old = new Date(Date.now() - 120_000);

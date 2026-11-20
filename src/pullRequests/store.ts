@@ -35,7 +35,7 @@ export class PullRequestStore {
             await fs.mkdir(this.directory, { recursive: true });
             const filename = this.file(id), lock = `${filename}.lock`;
             await repairLegacyLock(lock);
-            return withDirectoryLock(lock, { timeoutMs: 5_000, sleepMs: 100 }, async () => {
+            return withDirectoryLock(lock, { timeoutMs: 5_000, sleepMs: 100, recoverDeadOwner: true }, async () => {
                 const temp = `${filename}.${randomUUID()}.tmp`;
                 try {
                     const state = await this.read(id, workspace);

@@ -192,7 +192,7 @@ import {
 import { knownContextWindow, knownMaxOutputTokens } from './modelKnowledge';
 import { ui, setUiLocale } from './uiStrings';
 import { buildLocalSystemPrompt, buildSubagentSystemPrompt, buildNativeSystemContext } from './systemPrompt';
-import { IN_MEMORY_CONTENT_CAP, MAX_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
+import { IN_MEMORY_CONTENT_CAP, MAX_CONTENT_CAP, MAX_IN_MEMORY_TURNS, boundCarriers, clipHistoryContent, clipToolCallArguments, contentCapForWindow, countUserRows, evictOldestTurns, isUserTurn, serializedWithinCap, skipLeadingUserTurns } from './local/historyBounds';
 import { boundOutcomeEvents, trimDisplayEvent } from './local/eventBounds';
 import { buildReplayHistory, historyRowFromEvent, persistedEventFromAgentEvent } from './local/historyRows';
 import { RulesSnapshot } from './local/rulesSnapshot';
@@ -2228,7 +2228,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (localUserIndex < 0) return -2;
         let seen = -1;
         for (let i = 0; i < this._localHistory.length; i++) {
-            if (this._localHistory[i].role === 'user') {
+            if (isUserTurn(this._localHistory[i])) {
                 seen++;
                 if (seen === localUserIndex) return i;
             }
@@ -5425,7 +5425,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 });
                 break;
             case 'steer':
-                if (event.system) break;
+                if (event.system) {
+                    outcome.events.push({ type: 'steer_system', text: event.text });
+                    this._scheduleLocalPartialPersist();
+                    break;
+                }
                 this._flushLiveSegment();
                 // The webview held this steer bubble while the tool call ran;
                 // confirm it now so the timeline splits at the exact point the
@@ -7259,7 +7263,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             if (pt.thinking && !hasThinkingEvent) {
                 restoredEvents.push({ type: 'thinking', content: clipHistoryContent(pt.thinking, MAX_CONTENT_CAP) });
             }
-            restoredEvents.push(...(pt.events ?? []).map(trimDisplayEvent));
+            restoredEvents.push(...(pt.events ?? []).filter(event => event.type !== 'steer_system').map(trimDisplayEvent));
             if (pt.text) restoredEvents.push({ type: 'result', persian_explanation: pt.text });
             this._history.push({
                 role: 'user',
@@ -8087,7 +8091,8 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 boundOutcomeEvents(outcome.events);
                 // An empty completion (context overflow, degenerate round) must
                 // read as an error, not finalize a silent empty bubble.
-                if (outcome.resultEvent && !String(outcome.resultEvent.persian_explanation ?? '').trim() && outcome.events.length === 0) {
+                if (outcome.resultEvent && !String(outcome.resultEvent.persian_explanation ?? '').trim()
+                    && !outcome.events.some(event => event.type !== 'steer_system')) {
                     outcome.resultEvent = null;
                 }
                 if (outcome.resultEvent) {
@@ -8122,7 +8127,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                             });
                         }
                     }
-                    this._history.push({ role: "assistant", events: outcome.events.map(trimDisplayEvent), content: JSON.stringify(outcome.resultEvent) });
+                    this._history.push({ role: "assistant", events: outcome.events.filter(event => event.type !== 'steer_system').map(trimDisplayEvent), content: JSON.stringify(outcome.resultEvent) });
                     await this._persistLocalSession().catch((e) => {
                         console.error('xratu: local session persist failed:', e);
                     });
@@ -8286,7 +8291,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // terminal `result` marker (otherwise the cancel/error bubble
         // vanishes on reload). These are DISPLAY events only - the model
         // context is built from _localHistory.
-        const displayEvents: any[] = outcome.events.map(trimDisplayEvent);
+        const displayEvents: any[] = outcome.events.filter(event => event.type !== 'steer_system').map(trimDisplayEvent);
         const answered = new Set(
             outcome.events.filter((e) => e.type === 'tool_result').map((e) => e.id)
         );

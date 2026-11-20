@@ -125,7 +125,7 @@ export function App() {
      *  step's args; edits go back to the host for persistence + reminder. */
     const [taskList, setTaskList] = useState<TaskListItem[] | null>(null);
     const [conn, setConn] = useState<ConnStatus>('disconnected');
-    const [yolo, setYolo] = useState(true);
+    const [yolo, setYolo] = useState<boolean | null>(null);
     const [plan, setPlan] = useState(false);
     const [byokHint, setByokHint] = useState(false);
     const [byokError, setByokError] = useState<string | null>(null);
@@ -1757,7 +1757,7 @@ export function App() {
                     // The host refreshes the list itself (open-deletion resets
                     // the webview); the remaining rows just go stale briefly.
                 }}
-                onToggleYolo={() => send({ type: 'toggleYolo' })}
+                onToggleYolo={() => { if (yolo !== null) send({ type: 'toggleYolo' }); }}
                 onTogglePlan={() => send({ type: 'togglePlanMode' })}
                 onEditCredentials={() => {
                     // byokHint stays: the setup empty state must persist until
@@ -1900,7 +1900,7 @@ export function App() {
                 onAcceptedSendApplied={() => { if (acceptedSend?.edit) setEditDraft(null); setAcceptedSend(null); }}
                 yolo={yolo}
                 onTogglePlan={() => send({ type: 'togglePlanMode' })}
-                onToggleYolo={() => send({ type: 'toggleYolo' })}
+                onToggleYolo={() => { if (yolo !== null) send({ type: 'toggleYolo' }); }}
                 statusSlot={<div className="dock-status-row"><span className={`dock-status${chat.busy ? ' working' : ''}${conn === 'error' || conn === 'disconnected' ? ' disconnected' : ''}`} title={t(conn === 'error' || conn === 'disconnected' ? 'surfaceDisconnected' : chat.busy ? 'working' : 'surfaceReady')}>
                     {chat.busy ? <span className="step-status spinner" /> : <span className="dock-status-dot" />}<span>{t(chat.busy ? chat.messages.some((message) => message.approval && !message.approval.resolution || message.decisions?.some((decision) => !decision.answered)) ? 'surfaceNeedsInput' : 'working' : conn === 'error' || conn === 'disconnected' ? 'surfaceDisconnected' : 'surfaceReady')}</span>
                 </span>{taskControl}</div>}

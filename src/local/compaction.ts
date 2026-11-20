@@ -7,6 +7,7 @@
  * VS Code-free.
  */
 
+import { isUserTurn } from './historyBounds';
 import { proxyFetch } from '../proxyFetch';
 import { isLikelyLocalUrl } from '../endpointGuard';
 import {
@@ -588,7 +589,7 @@ export function boundHistory(
 
     const kept = [...history];
     while (kept.length > 2 && total > budget) {
-        const nextUser = kept.findIndex((m, i) => i > 0 && m.role === 'user');
+        const nextUser = kept.findIndex((m, i) => i > 0 && isUserTurn(m));
         if (nextUser <= 0) break;
         const removed = kept.splice(0, nextUser);
         total -= removed.reduce((n, m) => n + estimateMessageTokens(m), 0);
