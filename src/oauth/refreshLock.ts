@@ -1,33 +1,15 @@
 /**
- * Cross-process refresh lock - a directory mutex (mkdir is atomic on both
- * POSIX and Windows, which O_EXCL file-create is not quite).
+ * Cross-process directory mutex for rotating OAuth tokens and persisted state.
+ * A contender writes its unique owner file in a private directory, then
+ * publishes the populated directory with a same-filesystem rename. A published
+ * lock is nonempty, so another contender cannot replace it.
  *
- * Why this exists: refresh tokens ROTATE. Two VS Code windows sharing one
- * credential store will burn each other's tokens when both refresh at once -
- * one window's stored refresh token dies the moment the other's succeeds
- * (Roo's cross-window brick; opencode documents it as a "known cross-process
- * limitation"). The lock serializes refreshes so the second caller re-reads
- * the rotated token instead of replaying the old one.
- *
- * Why mkdir + owner-token compare instead of alternatives:
- *  - Cline uses SQLite BEGIN EXCLUSIVE - strongest option, but requires a
- *    native dependency this extension does not otherwise need.
- *  - Codex's flock is not portable to Windows from pure Node.
- *  - mkdir gives an atomic acquire on every supported platform.
- *
- * Stale takeover: a holder that crashes leaves the directory behind, so an
- * owner.json {pid, token, acquiredAt} is written inside; a waiter whose
- * deadline passes the staleness threshold removes the directory ONLY IF the
- * owner token it re-read still matches what it first saw (a changed token
- * means a live holder rewrote it - do not touch). The residual TOCTOU window
- * is milliseconds wide and the cost of a lost race is one extra refresh,
- * which the re-read-compare in the token manager then absorbs. Documented
- * honestly rather than pretending to be a perfect mutex.
- *
- * The lock directory contains NO credentials - only the hashed storage key
- * in its name.
+ * To release or recover a lock, unlink only the observed owner's filename,
+ * then remove the directory if it is empty. A delayed contender may reach a
+ * replacement directory, but its different owner filename keeps it nonempty.
+ * The lock directory contains no credentials.
  */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -68,16 +50,21 @@ interface OwnerRecord {
     acquiredAt: number;
 }
 
-const OWNER_FILE = 'owner.json';
+const LEGACY_OWNER_FILE = 'owner.json';
+const OWNER_FILE_PATTERN = /^owner-[a-f0-9-]{36}\.json$/;
 
-function readOwner(lockPath: string): OwnerRecord | null {
+function readOwner(lockPath: string): { name: string; record: OwnerRecord | null } | undefined {
     try {
-        const raw = fs.readFileSync(path.join(lockPath, OWNER_FILE), 'utf8');
-        const parsed = JSON.parse(raw) as OwnerRecord;
-        if (typeof parsed?.token !== 'string' || typeof parsed?.acquiredAt !== 'number') return null;
-        return parsed;
+        const name = fs.readdirSync(lockPath).find(entry => entry === LEGACY_OWNER_FILE || OWNER_FILE_PATTERN.test(entry));
+        if (!name) return undefined;
+        const raw = fs.readFileSync(path.join(lockPath, name), 'utf8');
+        try {
+            const parsed = JSON.parse(raw) as OwnerRecord;
+            if (typeof parsed?.token === 'string' && Number.isFinite(parsed.acquiredAt)) return { name, record: parsed };
+        } catch { /* An interrupted legacy write can leave malformed JSON. */ }
+        return { name, record: null };
     } catch {
-        return null;
+        return undefined;
     }
 }
 
@@ -87,49 +74,43 @@ function ownerIsGone(owner: OwnerRecord): boolean {
     catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
 }
 
-/** Age of the lock directory itself, used when its owner record is missing or
- *  unreadable. 0 when it cannot be stat'ed (never treated as stale). */
-function dirAgeMs(lockPath: string, nowMs: number): number {
-    try {
-        return nowMs - fs.statSync(lockPath).mtimeMs;
-    } catch {
-        return 0;
+function removeLock(lockPath: string, ownerFile?: string): void {
+    if (!fs.lstatSync(lockPath, { throwIfNoEntry: false })?.isDirectory()) return;
+    if (ownerFile) {
+        try { fs.unlinkSync(path.join(lockPath, ownerFile)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
+    try { fs.rmdirSync(lockPath); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
-/** Remove the lock directory ONLY if the owner record still matches what we
- *  saw. A live holder that rewrote its record between our read and our rm is
- *  not stale - this compare is what keeps takeover from becoming theft. */
-function rmIfOwnerUnchanged(lockPath: string, seen: OwnerRecord): void {
-    const current = readOwner(lockPath);
-    if (!current || current.token !== seen.token) return;
+function tryRecoverLock(lockPath: string, opts: LockOptions, now: number, staleMs: number): boolean {
     try {
-        fs.rmSync(lockPath, { recursive: true, force: true });
+        const directory = fs.lstatSync(lockPath, { throwIfNoEntry: false });
+        if (!directory?.isDirectory()) return false;
+        const seen = readOwner(lockPath);
+        if (seen?.record) {
+            const stale = opts.recoverDeadOwner ? ownerIsGone(seen.record) : now - seen.record.acquiredAt > staleMs;
+            if (!stale) return false;
+        } else if (now - directory.mtimeMs <= staleMs) return false;
+        // Previous versions used a fixed file name. Recheck that legacy
+        // record before unlinking it. New holders publish a unique filename.
+        if (seen?.name === LEGACY_OWNER_FILE) {
+            const current = readOwner(lockPath);
+            if (current?.name !== seen.name || current.record?.token !== seen.record?.token) return false;
+        }
+        removeLock(lockPath, seen?.name);
+        return true;
     } catch {
-        // Best effort: if the rm fails the next acquire loop re-evaluates.
-    }
-}
-
-/** Reap an ownerless lock directory. There is no token to compare, so the
- *  guard is the directory's mtime: if it changed since we measured its age,
- *  something recreated or touched it and this is not the abandoned directory
- *  we measured. mkdir arbitration then settles any residual race - the loser
- *  gets EEXIST and retries. */
-function removeIfUnchanged(lockPath: string, measuredAgeMs: number, nowMs: number): void {
-    if (readOwner(lockPath)) return;
-    const age = dirAgeMs(lockPath, nowMs);
-    if (age === 0 || Math.abs(age - measuredAgeMs) > 1) return;
-    try {
-        fs.rmSync(lockPath, { recursive: true, force: true });
-    } catch {
-        // Best effort: the acquire loop re-evaluates.
+        // A replacement is nonempty, and transient filesystem failures can
+        // be retried by the same bounded acquisition loop.
+        return false;
     }
 }
 
 /**
- * Run `fn` while holding the directory lock at `lockPath`. The lock is
- * released in a finally, so a throw inside `fn` cannot leak it (the stale
- * path exists for process death, not for ordinary errors).
+ * Run `fn` while the populated directory at `lockPath` holds our owner file.
+ * The release path retries transient filesystem errors using the unique name.
  */
 export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, fn: () => Promise<T>): Promise<T> {
     const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -138,87 +119,51 @@ export async function withDirectoryLock<T>(lockPath: string, opts: LockOptions, 
     const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const now = opts.nowMs ?? (() => Date.now());
     opts.signal?.throwIfAborted();
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const parent = path.dirname(lockPath);
+    fs.mkdirSync(parent, { recursive: true });
 
-    const token = `${process.pid}:${now()}:${Math.random().toString(36).slice(2)}`;
+    const token = randomUUID();
+    const ownerFile = `owner-${token}.json`;
     const deadline = now() + timeoutMs;
-    let firstSeenOwner: OwnerRecord | null = null;
-
-    for (;;) {
-        opts.signal?.throwIfAborted();
-        try {
-            fs.mkdirSync(lockPath);
-            break; // acquired
-        } catch (err) {
-            const code = (err as NodeJS.ErrnoException)?.code;
-            // Windows can report EPERM while another process deletes the
-            // directory. Retry through the same deadline/abort path; only a
-            // successful mkdir grants ownership, never the error itself.
-            if (code !== 'EEXIST' && !(process.platform === 'win32' && code === 'EPERM')) throw err;
+    let prepared: string | undefined;
+    let acquired = false;
+    try {
+        for (;;) {
+            opts.signal?.throwIfAborted();
+            try {
+                // Respect the grace period for legacy empty directories.
+                // If another contender publishes after this lookup, rename
+                // cannot replace its nonempty directory.
+                if (!fs.lstatSync(lockPath, { throwIfNoEntry: false })) {
+                    prepared ??= fs.mkdtempSync(path.join(parent, '.lock-'));
+                    fs.writeFileSync(path.join(prepared, ownerFile), JSON.stringify({
+                        pid: process.pid, token, acquiredAt: now(),
+                    } satisfies OwnerRecord));
+                    fs.renameSync(prepared, lockPath);
+                    acquired = true;
+                    break;
+                }
+            } catch (error) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code !== 'EEXIST' && code !== 'ENOTEMPTY'
+                    && !(process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'))) throw error;
+            }
+            const recovered = tryRecoverLock(lockPath, opts, now(), staleMs);
+            if (now() >= deadline) throw new LockTimeoutError(lockPath);
+            if (!recovered) await abortable(sleep(sleepMs), opts.signal);
         }
 
-        const owner = readOwner(lockPath);
-        if (!firstSeenOwner && owner) firstSeenOwner = owner;
-        const seen = owner ?? firstSeenOwner;
-        // A holder that died between mkdir and the owner write leaves a
-        // directory with NO record - keying staleness off the record alone
-        // would wedge the lock forever (every waiter just times out). Age such
-        // a directory by its mtime instead, and only reap it once it is well
-        // past the grace period, so a live holder that has not written its
-        // record yet is never taken from.
-        const measuredAt = now();
-        const acquiredAge = dirAgeMs(lockPath, measuredAt);
-        const isStale = seen
-            ? (opts.recoverDeadOwner ? ownerIsGone(seen) : measuredAt - seen.acquiredAt > staleMs)
-            : acquiredAge > staleMs;
-        if (isStale) {
-            if (seen) rmIfOwnerUnchanged(lockPath, seen);
-            else removeIfUnchanged(lockPath, acquiredAge, measuredAt);
-            firstSeenOwner = null;
-            // Use the same deadline and abortable wait even if removal failed,
-            // so stale takeover cannot spin without yielding the event loop.
-        }
-
-        if (now() >= deadline) throw new LockTimeoutError(lockPath);
-        await abortable(sleep(sleepMs), opts.signal);
-    }
-
-    const acquiredStat = fs.statSync(lockPath);
-    let ownerWritten = false;
-    try {
-        fs.writeFileSync(path.join(lockPath, OWNER_FILE), JSON.stringify({
-            pid: process.pid,
-            token,
-            acquiredAt: now(),
-        } satisfies OwnerRecord));
-        ownerWritten = true;
-    } catch {
-        // A missing owner record makes us look stale to others. Acceptable:
-        // the record exists to detect DEAD holders, and a live holder without
-        // one is still protected by the directory's mere existence until
-        // staleMs passes. Writing must never fail the lock itself.
-    }
-
-    try {
         opts.signal?.throwIfAborted();
         return await fn();
     } finally {
-        let removalStarted = false;
-        for (let attempt = 0; attempt < 6; attempt++) {
+        const directory = acquired ? lockPath : prepared;
+        for (let attempt = 0; directory && attempt < 6; attempt++) {
             try {
-                const owner = readOwner(lockPath);
-                const current = fs.statSync(lockPath);
-                const sameDirectory = current.dev === acquiredStat.dev && current.ino === acquiredStat.ino
-                    && current.birthtimeMs === acquiredStat.birthtimeMs;
-                if (!sameDirectory || (owner?.token !== token && (owner || (ownerWritten && !removalStarted)))) break;
-                // Each retry rechecks ownership after sleeping. Never ask rm
-                // to retry a pathname that could now belong to another holder.
-                removalStarted = true;
-                fs.rmSync(lockPath, { recursive: true, force: true });
+                removeLock(directory, ownerFile);
                 break;
             } catch (error) {
                 const code = (error as NodeJS.ErrnoException).code;
-                if (attempt === 5 || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code ?? '')) break;
+                if (attempt === 5 || !['EBUSY', 'EPERM', 'EACCES'].includes(code ?? '')) break;
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }
