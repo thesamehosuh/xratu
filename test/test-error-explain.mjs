@@ -30,6 +30,7 @@ const cases = [
     ['self-signed certificate in certificate chain', undefined, 'errTls'],
     ['fetch failed', undefined, 'errNetwork'],
     ['{"error":{"message":"This model\'s maximum context length is 8192 tokens"}}', undefined, 'errContextLength'],
+    ['Model stream error: Error rendering prompt with jinja template: "Unknown test: sequence".', undefined, 'errPromptTemplate'],
     ['context_length_exceeded', undefined, 'errContextLength'],
     ['The model `gpt-9` does not exist', undefined, 'errModelNotFound'],
     ['No such model: llama3.2', undefined, 'errModelNotFound'],

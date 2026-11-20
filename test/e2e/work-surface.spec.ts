@@ -576,6 +576,13 @@ for (const locale of ['en', 'fa']) for (const width of [420, 900]) {
         expect(branchBox!.y + branchBox!.height).toBeLessThanOrEqual(641);
         await page.keyboard.press('Escape');
         await expect(branches).toHaveCount(0);
+        await page.locator('.composer-input').focus();
+        await page.locator('.git-status').focus();
+        await expect(page.locator('.git-status')).toBeVisible();
+        await page.locator('.git-status').press('Enter');
+        await expect(branches).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(branches).toHaveCount(0);
         expect((await sent(page)).some(m => m.type === 'cancelRequest')).toBe(false);
     });
 }
@@ -1199,7 +1206,7 @@ test('live changes follow the latest edited file and preserve a manual selection
     await expect(page.locator('.review-file.selected')).toContainText('src/second.ts');
     const secondRequest = (await sent(page)).filter(message => message.type === 'changeFileGet' && message.path === 'src/second.ts').at(-1)!;
     await post(page, { ...secondRequest, type: 'changeFileState', file: { path: 'src/second.ts', kind: 'text', before: 'old', after: 'second changed again', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: ['second changed again'] }] } });
-    await expect(page.locator('.review-open-file').filter({ has: page.locator('.review-diff-head', { hasText: 'src/second.ts' }) })).toContainText('second changed again');
+    await expect(page.locator('.review-file-group').filter({ has: page.locator('.review-file', { hasText: 'src/second.ts' }) }).locator('.review-open-file')).toContainText('second changed again');
 });
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
@@ -1524,30 +1531,30 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'chunk', value: 'Still running' });
-        for (const section of ['appearance', 'history', 'workspace']) {
-            if (section === 'appearance') {
-                await post(page, { type: 'openSettings' });
-                await openPageNavigation(page);
-                await page.locator('[data-section=appearance]').click();
-            } else {
-                if (!await page.locator('.workspace-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
-                await page.locator('.workspace-sidebar .workspace-views').first().locator('button').nth(section === 'workspace' ? 0 : 1).click();
-            }
-            await expect(page.locator('.page-content')).toBeVisible();
-            await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
-            await page.keyboard.press('Escape');
-            await expect(page.locator('.page-content')).toHaveCount(0);
-            expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
-        }
+        await post(page, { type: 'openSettings' });
+        await openPageNavigation(page);
+        await page.locator('[data-section=appearance]').click();
+        await expect(page.locator('.page-content')).toBeVisible();
+        await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.page-content')).toHaveCount(0);
+        expect(await sent(page)).not.toContainEqual({ type: 'cancelRequest' });
     });
 }
 
 for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
-    test(`resting composer retains context and git status (${locale}, ${width})`, async ({ page }, info) => {
+    test(`resting composer replaces git with runtime summary (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'transcriptPrefs', prefs: { expand: {}, options: { showContextMeter: true } } });
         await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+        setTestLocale(locale as 'en' | 'fa');
+        const modelInfo = { type: 'modelInfo', defaultModel: 'reasoner', selectedModel: 'reasoner', models: ['reasoner'], displayNames: { reasoner: 'A very long reasoning model display name for narrow sidebar coverage' }, thinkingLevels: { reasoner: 'high' }, capabilities: { reasoner: { reasoningLevels: ['low', 'high'] } } };
+        await post(page, modelInfo);
+        await post(page, { type: 'yoloMode', enabled: false });
+        // Welcome/empty composers remain expanded, with the git footer intact.
+        await expect(page.locator('.composer-summary')).toBeHidden();
+        await expect(page.locator('.git-status')).toBeVisible();
         await post(page, { type: 'restoreUser', value: 'Keep the context visible' });
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'fullResponse', persian: 'Done' });
@@ -1555,11 +1562,90 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1440]) {
         await expect(page.locator('.tok-meter')).toBeVisible();
         await expect(page.locator('.tok-pct')).toBeHidden();
         await expect(page.locator('.tok-text')).toBeHidden();
-        await expect(page.locator('.git-status')).toBeVisible();
+        const summary = page.locator('.composer-summary');
+        await expect(summary).toBeVisible();
+        await expect(page.locator('.git-status')).toBeHidden();
+        await expect(summary.locator('dd')).toHaveText([modelInfo.displayNames.reasoner, t('thinkingHigh'), t('surfaceBuild'), t('surfaceAskFirst')]);
+        await expect(summary.locator('dd[dir=ltr]')).toHaveCount(1);
+        const bounds = (await summary.boundingBox())!;
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        expect(await summary.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+        const rows = await summary.locator('.composer-summary-item').evaluateAll(items => items.map(item => item.getBoundingClientRect().y));
+        expect(Math.max(...rows) - Math.min(...rows)).toBeLessThan(1);
+        await post(page, { type: 'planMode', enabled: true });
+        await post(page, { type: 'yoloMode', enabled: true });
+        await expect(summary.locator('dd').nth(2)).toHaveText(t('surfacePlan'));
+        await expect(summary.locator('dd').nth(3)).toHaveText(t('surfaceAutoApprove'));
+        // A stale persisted level must agree with the picker's Default state.
+        await post(page, { ...modelInfo, capabilities: { reasoner: { reasoningLevels: ['low'] } } });
+        await expect(summary.locator('dd').nth(1)).toHaveText(t('thinkingDefault'));
+        await post(page, { ...modelInfo, capabilities: { reasoner: { noReasoning: true } } });
+        await expect(summary.locator('dd').nth(1)).toHaveText(t('thinkingNone'));
+        // The resting summary also works outside git repositories.
+        await post(page, { type: 'gitStatusState', root: null, status: { isRepo: false, branch: null, detached: false, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicted: 0 } });
+        await expect(summary).toBeVisible();
         const ring = (await page.locator('.tok-meter').boundingBox())!;
         const composer = (await page.locator('.composer').boundingBox())!;
         expect(ring.y).toBeGreaterThanOrEqual(composer.y);
         expect(ring.y + ring.height).toBeLessThanOrEqual(composer.y + composer.height);
         await page.screenshot({ path: info.outputPath('resting-composer.png') });
+        await page.locator('.composer-input').focus();
+        await expect(summary).toBeHidden();
+        await post(page, { type: 'gitStatusState', root: 'project', status: { isRepo: true, branch: 'main', detached: false, ahead: 0, behind: 0, staged: 0, modified: 1, untracked: 0, conflicted: 0 } });
+        await expect(page.locator('.git-status')).toBeVisible();
+        // An open picker keeps the expanded footer rather than duplicating it.
+        await page.locator('.picker-chip').click();
+        await expect(page.locator('.model-pop')).toBeVisible();
+        await expect(summary).toBeHidden();
+        await expect(page.locator('.git-status')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) test(`appearance uses shared host preferences (${locale}, ${width})`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await post(page, { type: 'locale', locale });
+    // A different workspace starts with empty webview state, then receives
+    // the shared user preference. Hydration must not write defaults back.
+    await post(page, { type: 'appearancePrefs', prefs: { scheme: 'dark', accent: 'violet', interfaceSize: 18 } });
+    await expect(page.locator('.app')).toHaveAttribute('data-accent', 'violet');
+    expect((await sent(page)).filter(m => m.type === 'appearanceSet')).toHaveLength(0);
+    await post(page, { type: 'openSettings' });
+    await openPageNavigation(page);
+    await page.locator('[data-section=appearance]').click();
+    await expect(page.locator('#appearance-interface-size')).toHaveText('18 px');
+    await page.locator('#appearance-interface-size').click();
+    await page.getByRole('option', { name: '12 px', exact: true }).click();
+    await expect.poll(async () => (await sent(page)).filter(m => m.type === 'appearanceSet').at(-1)).toMatchObject({ type: 'appearanceSet', prefs: { accent: 'violet', interfaceSize: 12 } });
+});
+
+for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+    test(`file diffs stay beneath their names and newest files lead (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
+        await openReview(page);
+        const previous = await latest(page, 'changesGetState');
+        await page.locator('.review-head .icon-btn').click();
+        const request = await latest(page, 'changesGetState', previous.requestId);
+        await post(page, { ...request, type: 'changesState', files: changes.map((file, i) => ({ ...file, modifiedAt: i + 1 })) });
+        const replyPath = async (path: string, content: string, previousId?: unknown) => {
+            await expect.poll(async () => (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === path && m.requestId !== previousId).length).toBeGreaterThan(0);
+            const fileRequest = (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === path && m.requestId !== previousId).at(-1)!;
+            await post(page, { ...fileRequest, type: 'changeFileState', file: { path, kind: 'text', before: 'old', after: content, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, removedLines: ['old'], addedLines: [content] }] } });
+        };
+        await replyPath('src/second.ts', 'newest content');
+        const groups = page.locator('.review-current .review-file-group');
+        await expect(groups.first().locator('.review-file code')).toHaveText('src/second.ts');
+        await expect(groups.first().locator('.review-diff')).toContainText('newest content');
+        await expect(groups.nth(1).locator('.review-file code')).toHaveText('src/first.ts');
+        // Opening another file leaves each diff inside its own file group.
+        const firstFile = groups.nth(1).locator('.review-file');
+        if (await firstFile.getAttribute('aria-expanded') === 'true') await firstFile.click();
+        const previousFile = (await sent(page)).filter(m => m.type === 'changeFileGet' && m.path === 'src/first.ts').at(-1);
+        await firstFile.click();
+        await replyPath('src/first.ts', 'older content', previousFile?.requestId);
+        await expect(groups.nth(1).locator('.review-diff')).toContainText('older content');
+        await expect(groups.first().locator('.review-diff')).toContainText('newest content');
+        await page.screenshot({ path: info.outputPath('inline-newest-changes.png') });
     });
 }

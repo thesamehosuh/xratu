@@ -502,14 +502,18 @@ export async function updateBundledSkillIfUntouched(
     dirName: string,
     skillMd: string,
     seededHash: string,
+    fileName: string = SKILL_FILE,
 ): Promise<'updated' | 'skipped'> {
     if (!NAME_RE.test(dirName)) {
         throw new Error(`bundled skill dirName "${dirName}" is invalid`);
     }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(fileName)) {
+        throw new Error('Bundled skill file must be a direct child');
+    }
     // 'foreign' (or any missing/odd hash) = the copy was never ours to
     // overwrite - a pre-existing user file or a legacy seed with no record.
     if (!seededHash || seededHash === 'foreign') return 'skipped';
-    const target = path.join(skillsRoot, dirName, SKILL_FILE);
+    const target = path.join(skillsRoot, dirName, fileName);
     let current: string;
     try {
         current = await fs.promises.readFile(target, 'utf-8');
@@ -524,6 +528,8 @@ export async function updateBundledSkillIfUntouched(
     // swapped to be) a symlink. The hash pre-check above additionally
     // guarantees we only ever overwrite OUR bytes.
     try {
+        if (!fs.lstatSync(path.join(skillsRoot, dirName)).isDirectory()) return 'skipped';
+        if (!fs.lstatSync(target).isFile()) return 'skipped';
         const realDir = fs.realpathSync(path.join(skillsRoot, dirName));
         const realTarget = fs.realpathSync(target);
         const rel = path.relative(realDir, realTarget);
@@ -534,6 +540,8 @@ export async function updateBundledSkillIfUntouched(
     let descriptor: number;
     try { descriptor = fs.openSync(target, 'r+'); } catch { return 'skipped'; }
     try {
+        if (!fs.lstatSync(path.join(skillsRoot, dirName)).isDirectory()) return 'skipped';
+        if (!fs.lstatSync(target).isFile()) return 'skipped';
         const confined = path.relative(fs.realpathSync(path.join(skillsRoot, dirName)), fs.realpathSync(target));
         if (!confined || confined.startsWith('..') || path.isAbsolute(confined)) return 'skipped';
         const opened = fs.fstatSync(descriptor);
@@ -555,6 +563,56 @@ export async function updateBundledSkillIfUntouched(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'skipped';
         throw error;
     } finally { fs.closeSync(descriptor); }
+}
+
+/** Seed a new bundled resource once; update only our recorded bytes. Missing
+ *  resources with a recorded hash were deleted by the user and stay deleted.
+ *  Only direct-child files are supported; no directories or symlinks are made. */
+export async function syncBundledSkillResource(
+    skillsRoot: string,
+    dirName: string,
+    fileName: string,
+    content: string,
+    seededHash?: string,
+): Promise<'created' | 'updated' | 'skipped'> {
+    if (!NAME_RE.test(dirName) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(fileName)
+        || fileName.toLowerCase() === SKILL_FILE.toLowerCase()) throw new Error('Invalid bundled skill resource');
+    const skillDir = path.join(skillsRoot, dirName);
+    try {
+        if (!fs.lstatSync(skillDir).isDirectory()) return 'skipped';
+        if (!fs.lstatSync(path.join(skillDir, SKILL_FILE)).isFile()) return 'skipped';
+    } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'skipped';
+        throw err;
+    }
+    if (seededHash !== undefined) {
+        return updateBundledSkillIfUntouched(skillsRoot, dirName, content, seededHash, fileName);
+    }
+    const target = path.join(skillDir, fileName);
+    let descriptor: number;
+    try { descriptor = fs.openSync(target, 'wx'); } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') return 'skipped';
+        throw err;
+    }
+    let shouldUnlink = false;
+    try {
+        // Recheck the directory after opening, before writing executable bytes.
+        if (!fs.lstatSync(skillDir).isDirectory()) return 'skipped';
+        const relative = path.relative(fs.realpathSync(skillDir), fs.realpathSync(target));
+        if (relative !== fileName) return 'skipped';
+        try {
+            fs.writeFileSync(descriptor, content, 'utf-8');
+        } catch (err: unknown) {
+            shouldUnlink = true;
+            throw err;
+        }
+        return 'created';
+    } finally {
+        fs.closeSync(descriptor);
+        if (shouldUnlink) {
+            try { fs.unlinkSync(target); } catch { /* best-effort cleanup of incomplete file */ }
+        }
+    }
 }
 
 /** Read one bundled resource of a skill, scoped to the skill's directory:

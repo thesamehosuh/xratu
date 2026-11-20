@@ -33,6 +33,10 @@ export interface UsageEntry {
     /** Plan usage is tracked in tokens, never priced as API spend. */
     billing?: 'chatgpt-plan';
     engine?: 'xratu' | 'opencode';
+    /** Nonsecret saved connection id; distinguishes account/provider switches. */
+    connectionId?: string;
+    scope?: 'parent' | 'child';
+    source?: 'compaction';
     costSource?: 'reported' | 'unknown';
     input: number;
     output: number;
@@ -99,6 +103,9 @@ export function normalizeEntry(raw: unknown): UsageEntry | null {
         ...(e.engine === 'opencode' || e.engine === 'xratu' ? { engine: e.engine } : {}),
         ...(e.costSource === 'reported' || e.costSource === 'unknown' ? { costSource: e.costSource } : {}),
         ...(billing ? { billing } : {}),
+        ...(typeof e.connectionId === 'string' && e.connectionId.length <= 300 ? { connectionId: e.connectionId } : {}),
+        ...(e.scope === 'parent' || e.scope === 'child' ? { scope: e.scope } : {}),
+        ...(e.source === 'compaction' ? { source: e.source } : {}),
         input: finiteCount(e.input),
         output: finiteCount(e.output),
         cached: finiteCount(e.cached),

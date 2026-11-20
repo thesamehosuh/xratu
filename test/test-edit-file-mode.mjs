@@ -79,7 +79,7 @@ for (const raw of [1, 0, true, false, {}, [], ['overwrite'], { mode: 'overwrite'
 const err = resolveEditMode('replace').error;
 ok('mentions every valid mode', ['"overwrite"', '"create"', '"append"'].every((m) => err.includes(m)), err);
 ok('echoes the offending value', err.includes('"replace"'), err);
-ok('points at apply_patch for partial edits', err.includes('apply_patch'), err);
+ok('points at edit_file for partial edits', err.includes('use edit_file'), err);
 ok('states the omitted-mode default', err.includes('default'), err);
 ok('single-line (no raw newline)', !err.includes('\n'), err);
 ok('reads as an error the model can act on', /^Error: unknown mode/.test(err), err);
@@ -154,7 +154,7 @@ for (const raw of [1, 0, true, false, {}, [], ['a'], { content: 'a' }, () => {}]
 const contentErr = resolveEditContent(undefined).error;
 ok('names the parameter', contentErr.includes('new_content'), contentErr);
 ok('states what to send instead', contentErr.includes('complete file content'), contentErr);
-ok('points at apply_patch for partial edits', contentErr.includes('apply_patch'), contentErr);
+ok('points at edit_file for partial edits', contentErr.includes('use edit_file'), contentErr);
 ok('single-line (no raw newline)', !contentErr.includes('\n'), contentErr);
 ok('reads as an error the model can act on', /^Error: /.test(contentErr), contentErr);
 ok('non-string error echoes the value', resolveEditContent({ content: 'a' }).error.includes('{"content":"a"}'), resolveEditContent({ content: 'a' }).error);

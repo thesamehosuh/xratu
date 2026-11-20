@@ -1,4 +1,6 @@
 import { SubagentTraceCollector, type SubagentTrace, type SubagentApprovalSource } from '../subagentObservation';
+import type { CoordinatorStore, ChildSession } from '../sessions/types';
+import { CoordinatedSubagents } from '../sessions/subagents';
 /**
  * Nested-run orchestration for the `task` tool: drive a child runLocalAgent
  * loop on behalf of a tool call and collapse it to a single final report.
@@ -38,6 +40,14 @@ import {
 } from '../subagents';
 
 export interface SubagentHostContext {
+    store?: CoordinatorStore;
+    maxParallel?: number;
+    executionGeneration?: number;
+    withWorkspaceWriter?<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T>;
+    parentSessionId?: string;
+    onSessions?(sessions: ChildSession[]): void;
+    onCheckpoint?(taskId: string, record: SubagentRunRecord): Promise<void>;
+    steerFeed?: import('./localTypes').LocalSteerFeed;
     /** Model/transport identity shared with the parent run - called once per
      * invocation with a conversationId that stays stable across resumes.
      * Different children receive different cacheKey/OpenCode session IDs.
@@ -59,6 +69,8 @@ export interface SubagentHostContext {
     >;
     /** Nonsecret provider identity, used to invalidate opaque replay state. */
     connectionId?: string;
+    /** Models eligible for a parent-selected override on the active connection. */
+    childModelIds?: ReadonlySet<string>;
     /** Build the child toolset (host applies plan/yolo/external/skills, this
      *  layer only enforces the per-agent allow-list and the recursion deny). */
     tools(def: SubagentDefinition): LocalToolDefinition[];
@@ -68,7 +80,7 @@ export interface SubagentHostContext {
     executor(signal: AbortSignal, source?: SubagentApprovalSource): LocalToolExecutor;
     approvalGate: LocalApprovalGate;
     /** Child model usage, forwarded so cost ledgers count delegated work. */
-    onUsage?(usage: LocalUsage, model: string): void;
+    onUsage?(usage: LocalUsage, model: string, source?: 'compaction'): void;
     onObservation?(parentCallId: string, trace: SubagentTrace): void;
     /** Registers (or clears, with `undefined`) the stop control for ONE live
      *  task call. The host keeps it keyed by the parent call id so the Agents
@@ -104,6 +116,10 @@ export function wrapRestrictedExecutor(
 // ---------------------------------------------------------------------------
 
 export interface SubagentRunRecord {
+    definition?: SubagentDefinition;
+    parentCallId?: string;
+    trace?: SubagentTrace;
+    deliveredMessageIds?: string[];
     /** The profile the run launched with. */
     defName: string;
     /** Committed model-ledger rows of everything the run has done so far. */
@@ -226,6 +242,7 @@ export async function runSubagentTask(
     let taskId = '';
     let resumed = false;
     if (req.taskId) {
+        if (req.model) return { output: 'Omit model when continuing an existing child.', isError: true };
         const existing = registry.get(req.taskId);
         if (!existing) {
             const known = Array.from(registry.keys()).join(', ') || 'none';
@@ -258,17 +275,22 @@ export async function runSubagentTask(
                 isError: true,
             };
         }
+        if (req.model && !ctx.childModelIds?.has(req.model)) {
+            return { output: 'The requested model is unavailable for child tools on the active connection.', isError: true };
+        }
         taskId = newTaskId();
-        record = { defName: def0.name, rows: [], startedAt: Date.now() };
+        record = { defName: def0.name, rows: [], startedAt: Date.now(), ...(req.model ? { definition: { ...def0, model: req.model } } : {}) };
     }
 
-    const def = resolveSubagent(defs, record.defName);
+    const def = record.definition ?? resolveSubagent(defs, record.defName);
     if (!def) {
         return {
             output: `Subagent profile "${record.defName}" is no longer available; its run cannot continue.`,
             isError: true,
         };
     }
+    record.definition ??= structuredClone(def);
+    record.parentCallId = req.parentCallId;
 
     const tools = ctx.tools(def);
     const allowed = new Set(tools.map((t) => t.name));
@@ -291,6 +313,7 @@ export async function runSubagentTask(
     const signal = base.signal ? AbortSignal.any([base.signal, stop.signal]) : stop.signal;
     const observation = new SubagentTraceCollector({
         taskId, profile: def.name, description: req.description, prompt: req.prompt, model: base.model,
+        generation: ctx.executionGeneration,
         effort: base.reasoningEffort, tools: tools.map(tool => tool.name), resumed,
         status: 'running', startedAt: Date.now(), updatedAt: Date.now(), entries: [], toolCalls: 0, inputTokens: 0, outputTokens: 0,
     }, trace => { if (req.parentCallId) ctx.onObservation?.(req.parentCallId, trace); });
@@ -320,6 +343,14 @@ export async function runSubagentTask(
     let finalText = '';
     let lastError = '';
     let toolCallCount = 0;
+    let steersDelivered = 0;
+    const checkpointRecord = (rows: LocalSessionHistoryMessage[]): SubagentRunRecord => {
+        const bounded = boundSubagentHistory(rows);
+        const replayUserTurns = record.replayUserTurns == null
+            ? undefined
+            : Math.min(record.replayUserTurns + 1, countUserRows(bounded));
+        return { ...record, rows: bounded, ...(replayUserTurns !== undefined ? { replayUserTurns } : {}) };
+    };
     const commitTurn = (): void => {
         if (!finalText.trim()) turnRows.push({ role: 'assistant', content: '[The child run ended without a final report. Tool effects may already have occurred; verify current state before repeating actions.]' });
         record.rows.push({ role: 'user', content: req.prompt }, ...turnRows);
@@ -338,13 +369,30 @@ export async function runSubagentTask(
     // concurrent `task` calls carrying this task_id cannot both start.
     record.running = true;
     try {
+        if (ctx.onCheckpoint) await ctx.onCheckpoint(taskId, checkpointRecord([...record.rows, {role: 'user', content: req.prompt}]));
+        const restricted = wrapRestrictedExecutor(ctx.executor(signal, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined), allowed);
+        const executor: LocalToolExecutor = {execute: (call, output) => {
+            if (call.name === 'ask_session_question' && allowed.has(call.name)) {
+                observation.trace.status = 'waiting';
+                observation.trace.pendingTools = ['ask_session_question'];
+                observation.flush();
+            }
+            return restricted.execute(call, output);
+        }};
         for await (const event of runLocalAgent(
             request,
-            wrapRestrictedExecutor(ctx.executor(signal, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined), allowed),
+            executor,
             { requestApproval: (id, calls) => ctx.approvalGate.requestApproval(id, calls, req.parentCallId ? { parentCallId: req.parentCallId, profile: def.name, description: req.description } : undefined, signal) },
+            ctx.steerFeed,
         )) {
             observation.receive(event);
             switch (event.type) {
+                case 'steer':
+                    turnRows.push({role: 'user', content: event.text});
+                    steersDelivered++;
+                    if (event.steerId) record.deliveredMessageIds = [...(record.deliveredMessageIds ?? []), event.steerId];
+                    if (record.replayUserTurns != null) record.replayUserTurns++;
+                    break;
                 case 'assistantMessage':
                     if (!event.toolCalls.length) finalText = event.text;
                     break;
@@ -365,11 +413,11 @@ export async function runSubagentTask(
                 case 'usage':
                     // Estimates stay display-only; the authoritative
                     // round-end copy is what cost ledgers count.
-                    if (!event.estimated) ctx.onUsage?.(event.usage, event.model ?? request.model);
+                    if (!event.estimated) ctx.onUsage?.(event.usage, event.model ?? request.model, event.source === 'compaction' ? 'compaction' : undefined);
                     break;
                 case 'compactionSummary':
                     record.summary = event.value;
-                    record.replayUserTurns = Math.max(0, replayAtEntry - Math.max(0, event.droppedUserTurns ?? 0));
+                    record.replayUserTurns = Math.max(0, replayAtEntry - Math.max(0, event.droppedUserTurns ?? 0)) + steersDelivered;
                     break;
                 default:
                     break;
@@ -378,6 +426,7 @@ export async function runSubagentTask(
             const persisted = persistedEventFromAgentEvent(event, contentCapForWindow(request.contextWindow));
             const row = persisted ? historyRowFromEvent(persisted) : null;
             if (row) { turnRows.push(row); turnRows = boundCarriers(turnRows); }
+            if ((row || event.type === 'steer') && ctx.onCheckpoint) await ctx.onCheckpoint(taskId, checkpointRecord([...record.rows, { role: 'user', content: req.prompt }, ...turnRows]));
         }
     } catch (err) {
         commitTurn();
@@ -418,7 +467,22 @@ export function createSubagentRunner(
     defs: readonly SubagentDefinition[],
     registry: SubagentRunRegistry,
 ): SubagentRunner {
+    if (ctx.store) {
+        const existing = coordinatedRunners.get(registry);
+        if (existing) { existing.configure(ctx, defs); return existing; }
+        const runner = new CoordinatedSubagents(ctx, defs, registry);
+        coordinatedRunners.set(registry, runner);
+        return runner;
+    }
     return {
         run: (req) => runSubagentTask(ctx, defs, req, registry),
     };
+}
+
+const coordinatedRunners = new WeakMap<SubagentRunRegistry, CoordinatedSubagents>();
+
+export async function closeSubagentRunner(registry: SubagentRunRegistry): Promise<void> {
+    const runner = coordinatedRunners.get(registry);
+    coordinatedRunners.delete(registry);
+    await runner?.close();
 }

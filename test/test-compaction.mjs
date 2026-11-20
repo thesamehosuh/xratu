@@ -360,6 +360,16 @@ checkTrue('short text untouched', clipForSummary('short', 100) === 'short');
     // totalBudget = 6144 - 1000*3 = 3144 chars.
     checkTrue('schema tokens reduce the budget', total <= 3144);
 }
+// --- Schema-heavy window at the floor preserves clipped newest output ---
+{
+    const msgs = [
+        { role: 'user', content: 'go' },
+        { role: 'tool', tool_call_id: 'c0', content: 'r'.repeat(2000) },
+    ];
+    boundToolResults(msgs, 4096, 2048);
+    checkTrue('schema-heavy single result clipped, not omitted', msgs[1].content.includes('[...clipped...]'));
+    checkTrue('schema-heavy single result keeps floor chars', msgs[1].content.length >= 800);
+}
 
 // --- Steering: a tool result pushed behind a later user message is still
 // --- bounded (it is not "before the last user message").

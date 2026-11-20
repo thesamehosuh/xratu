@@ -7,7 +7,7 @@ export interface SubagentApprovalSource { parentCallId: string; profile: string;
 /** Display-only child history. Never enters the parent's model ledger. */
 export interface SubagentTraceEntry {
     id: string;
-    kind: 'text' | 'thinking' | 'tool';
+    kind: 'text' | 'thinking' | 'tool' | 'user';
     text: string;
     startedAt: number;
     endedAt?: number;
@@ -40,6 +40,10 @@ export interface SubagentTrace {
     report?: string;
     error?: string;
     pendingTools?: string[];
+    canSend?: boolean;
+    pendingInstructions?: number;
+    generation?: number;
+    sequence?: number;
     truncated?: boolean;
 }
 export const TRACE_ENTRIES = 120;
@@ -103,6 +107,10 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
         description: text(v.description, 1_000), prompt: text(v.prompt), model: text(v.model, 160), effort: text(v.effort, 40) || undefined,
         tools: Array.isArray(v.tools) ? v.tools.filter((s): s is string => typeof s === 'string').slice(0, 100).map(s => s.slice(0, 160)) : [],
         resumed: !!v.resumed, status: restored && ['running', 'waiting'].includes(v.status) ? 'interrupted' : v.status,
+        canSend: !restored && !!v.canSend && ['running','waiting'].includes(v.status),
+        pendingInstructions: restored ? 0 : Math.min(100,number(v.pendingInstructions)),
+        generation: v.generation === undefined ? undefined : number(v.generation),
+        sequence: v.sequence === undefined ? undefined : number(v.sequence),
         startedAt: number(v.startedAt), updatedAt: number(v.updatedAt), endedAt: v.endedAt === undefined ? undefined : number(v.endedAt),
         toolCalls: number(v.toolCalls), inputTokens: number(v.inputTokens), outputTokens: number(v.outputTokens),
         report: text(v.report, 12_000) || undefined, error: text(v.error, 2_000) || undefined,
@@ -111,7 +119,7 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
     };
     // Preserve the newest work when the trace reaches its bounded history.
     for (const e of v.entries.slice(-TRACE_ENTRIES).reverse()) {
-        if (!e || !['text', 'thinking', 'tool'].includes(e.kind) || typeof e.id !== 'string') continue;
+        if (!e || !['text', 'thinking', 'tool', 'user'].includes(e.kind) || typeof e.id !== 'string') continue;
         result.entries.unshift({ id: e.id.slice(0, 160), kind: e.kind, text: text(e.text), startedAt: number(e.startedAt),
             endedAt: e.endedAt === undefined ? undefined : number(e.endedAt), tool: text(e.tool, 160) || undefined,
             output: e.output === undefined ? undefined : text(e.output), live: e.live === undefined ? undefined : text(e.live), isError: !!e.isError,
@@ -124,6 +132,7 @@ export function readSubagentTrace(value: unknown, restored = false): SubagentTra
 /** Assemble actual nested-loop events rather than infer activity from prose. */
 export class SubagentTraceCollector {
     private sequence = 0;
+    private revision = 0;
     private lastEmit = 0;
     constructor(public trace: SubagentTrace, private publish: (trace: SubagentTrace) => void, private now = Date.now) { this.emit(true); }
     flush(): void { this.emit(true); }
@@ -132,6 +141,7 @@ export class SubagentTraceCollector {
         this.trace.updatedAt = now;
         if (!force && now - this.lastEmit < 80) return;
         this.lastEmit = now;
+        this.trace.sequence = ++this.revision;
         const snapshot = readSubagentTrace(this.trace)!;
         this.trace = { ...snapshot, entries: snapshot.entries.map(entry => ({ ...entry })) };
         this.publish(snapshot);
@@ -141,6 +151,8 @@ export class SubagentTraceCollector {
         const now = this.now();
         const last = trace.entries.at(-1);
         const sameSource = !sourceId || last?.id.startsWith(`${sourceId}:`);
+        const firstDelta = event.type === 'chunk' && (last?.kind !== 'text' || !!last.endedAt || !sameSource)
+            || event.type === 'thinking' && (last?.kind !== 'thinking' || !!last.endedAt || !sameSource);
         switch (event.type) {
             case 'chunk':
                 if (last?.kind === 'thinking' && !last.endedAt) last.endedAt = now;
@@ -183,7 +195,7 @@ export class SubagentTraceCollector {
         }
         if (['chunk', 'thinking', 'assistantMessage'].includes(event.type) && trace.entries.some(entry => entry.text.length >= 12_000)) trace.truncated = true;
         if (trace.entries.length > TRACE_ENTRIES) { trace.entries = trace.entries.slice(-TRACE_ENTRIES); trace.truncated = true; }
-        this.emit(['toolCall', 'toolResult', 'needsApproval', 'assistantMessage', 'error', 'usage'].includes(event.type));
+        this.emit(firstDelta || ['toolCall', 'toolResult', 'needsApproval', 'assistantMessage', 'error', 'usage'].includes(event.type));
     }
     finish(status: SubagentTrace['status'], report?: string) {
         this.trace.status = status; this.trace.report = report; this.trace.endedAt = this.now(); this.trace.pendingTools = undefined;

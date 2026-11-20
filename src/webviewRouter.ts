@@ -1,3 +1,4 @@
+import { readAppearance } from './appearancePrefs';
 /**
  * The webview -> host message router: every `onDidReceiveMessage` case for
  * the chat view, extracted from extension.ts's `resolveWebviewView`. The
@@ -15,7 +16,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { killForegroundJobs } from './tooling/backgroundJobs';
 import type { ComposerAttachment, HistoryMessage } from './chatViewTypes';
 import { setUiLocale } from './uiStrings';
 import type { ExternalMcpManager } from './externalMcp';
@@ -68,11 +68,14 @@ export interface WebviewMessageHost {
     _sendChangesState(sha: string, requestId: string, toSha?: string): Promise<void>;
     _sendChangeFile(sha: string, path: string, requestId: string, open?: boolean, toSha?: string): Promise<void>;
     _sendAgentsState(): Promise<void>;
+    _sendChildSessions(): Promise<void>;
+    _nativeChildInstruction(rootId: string, sessionId: string, callId: string, text: string, receipt: string): Promise<void>;
     _openAgentFile(name: string, source: string): Promise<void>;
     manageAgentFiles(): Promise<void>;
     _backgroundTerminalCall(callId: string | undefined): void;
-    _cancelActiveRequests(): void;
+    _cancelActiveRequests(stopChildren?: boolean): void;
     _stopSubagent(callId: string): void;
+    _childSessionAction(rootId: string, sessionId: string, action: 'send' | 'stop' | 'create' | 'configure' | 'report', text?: string, receipt?: string): Promise<void>;
     _clearAllSessions(): Promise<void>;
     _confirmSteer(steerId: string | undefined, mode?: 'steer' | 'turn' | 'drop'): void;
     _createSkillScaffold(): Promise<string | null>;
@@ -92,6 +95,7 @@ export interface WebviewMessageHost {
     _handleComposerSend(prompt: string, attachments?: ComposerAttachment[], requestId?: string, sessionKey?: string, editIndex?: number): Promise<void>;
     _handleChatRequest(prompt: string, attachments?: ComposerAttachment[], opts?: { baseSha?: string; steerCarry?: boolean }): Promise<void>;
     _handleSteer(value: string, attachments?: ComposerAttachment[], steerId?: string): Promise<void>;
+    _handleSteerNow(steerId: string): void;
     _handleToolApproval(approvalId: string, toolDecisions: Record<string, boolean>, sessionApprove?: boolean, _retryCount?: number): Promise<void>;
     _handleToolDecision(decisionId: string, answer: string | null | undefined, dismissed: boolean): void;
     _history: HistoryMessage[];
@@ -251,6 +255,7 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                     // pills at the wrong default.
                     host._sendRuntimePreferences();
                     host._sendDownloads();
+                    host._view?.webview.postMessage({ type: 'appearancePrefs', prefs: host._globalState.get('xratu.appearance') });
                     host._sendTranscriptPrefs();
                     host._startConnectionPolling();
                     // Re-echo the policy toggles: a webview reload
@@ -316,6 +321,12 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'setReplyLanguage':
                     void host._globalState.update('xratu.replyLanguage', data.replyLanguage);
                     break;
+                case 'appearanceSet': {
+                    const prefs = readAppearance(data.prefs);
+                    await host._globalState.update('xratu.appearance', prefs);
+                    host._view?.webview.postMessage({ type: 'appearancePrefs', prefs });
+                    break;
+                }
                 case 'transcriptSet': {
                     // The persisted blob is opaque to the host (the
                     // webview owns the row schema); only the SHAPE is
@@ -340,6 +351,9 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                         // bubble, or its chip sticks forever.
                         .catch(() => host._confirmSteer(data.steerId, 'drop'));
                     break;
+                case 'steerNow':
+                    if (typeof data.steerId === 'string') host._handleSteerNow(data.steerId);
+                    break;
                 case 'requestFileList':
                     void host._pushFileList();
                     break;
@@ -361,17 +375,25 @@ export function routeWebviewMessage(host: WebviewMessageHost, data: WebviewMessa
                 case 'killBackgroundJob':
                     void host._killBackgroundJob(data.jobId);
                     break;
+                case 'nativeChildInstruction':
+                    if([data.rootId,data.sessionId,data.callId,data.text,data.receipt].every(value=>typeof value==='string')) await host._nativeChildInstruction(data.rootId,data.sessionId,data.callId,data.text,data.receipt);
+                    break;
+                case 'childSessionsGet':
+                    await host._sendChildSessions();
+                    break;
+                case 'childSessionAction':
+                    if (typeof data.rootId === 'string' && typeof data.sessionId === 'string' && (data.action === 'send' || data.action === 'stop' || data.action === 'create' || data.action === 'configure' || data.action === 'report')) {
+                        await host._childSessionAction(data.rootId, data.sessionId, data.action, data.text, data.receipt);
+                    }
+                    break;
                 case 'stopAgent':
                     if (typeof data.callId === 'string' && data.callId) host._stopSubagent(data.callId);
                     break;
                 case 'cancelRequest':
                     void host._stopPullRequestWatches?.();
-                    // Stop a running terminal command NOW. The loop's
-                    // abort only takes effect at a round boundary, so
-                    // without this a long command keeps running (and
-                    // keeps holding its ports/files) until the idle cap.
-                    killForegroundJobs();
-                    host._cancelActiveRequests();
+                    // Per-call cancellation stops the parent's foreground
+                    // command without killing a child's process tree.
+                    host._cancelActiveRequests(false);
                     break;
                 case 'restoreCheckpoint':
                     if (typeof data.sha === 'string' && data.sha) {

@@ -46,7 +46,7 @@ export function usesResponsesCacheBreakpoints(request: LocalAgentRequest): boole
  * the same rendered reasoning history on continuation, as Codex itself sends.
  * Keep this off arbitrary compatible providers and unsupported older models. */
 export function supportsAllTurnsReasoning(request: LocalAgentRequest): boolean {
-    return /^gpt-(?:5\.6(?:-|$)|6\.1-sol(?:-|$))/i.test(request.model)
+    return /^gpt-(?:5\.6(?:-|$)|6\.1-(?:sol|terra)(?:-|$))/i.test(request.model)
         && (request.subscription === true || isChatGptSubscriptionHost(request.baseUrl)
             || (supportsPromptCacheKey(request.baseUrl) && !isOpenCodeHost(request.baseUrl)));
 }

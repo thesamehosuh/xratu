@@ -8,6 +8,7 @@
  */
 
 import { proxyFetch } from '../proxyFetch';
+import { isLikelyLocalUrl } from '../endpointGuard';
 import {
     AUTO_COMPACT_RATIO,
     clipForSummary,
@@ -40,6 +41,9 @@ import {
 
 const SUMMARY_MAX_TOTAL_CHARS = 60_000;
 const SUMMARY_TIMEOUT_MS = 60_000;
+/** Local models (especially reasoning models on CPU/modest GPU) often need
+ *  longer than 60s for a non-streaming summary prefill + completion. */
+const LOCAL_SUMMARY_TIMEOUT_MS = 180_000;
 /** Tool results are hard-capped per line regardless of the per-message
  *  allowance: the summarizer call runs on the SAME local model/window, so a
  *  single 60k-char tool output can overflow the summarizer itself and
@@ -366,7 +370,8 @@ async function summarizeDroppedTurns(
         catch { /* Display-only callbacks must not change the summary result. */ }
     };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
+    const timeoutMs = isLikelyLocalUrl(request.baseUrl) ? LOCAL_SUMMARY_TIMEOUT_MS : SUMMARY_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     // Cancel the summarizer the moment the run is cancelled - without this the
     // caller's await blocks for up to SUMMARY_TIMEOUT_MS after a user cancel.
     const outerSignal = request.signal;
@@ -508,6 +513,60 @@ export async function compactWithSummary(
     messages.splice(0, messages.length, ...working);
     carryCompactionSummary(messages, summary);
     return summary;
+}
+
+/** Summarize older settled rounds within a long live turn while keeping the
+ * most recent settled tool round intact (so the model never loses unread tool
+ * outputs and the wire array never ends on `role: 'assistant'`). Keep every
+ * user row, including steers, and never split a tool batch or repeat its
+ * effects. The checkpoint names exactly the calls replaced so replay can fold
+ * them too. */
+export async function compactActiveTurn(
+    messages: LocalAgentMessage[], request: LocalAgentRequest,
+    opener: LocalAgentMessage, windowTokens?: number | null,
+    minCalls = 8,
+): Promise<LocalAgentMessage | null> {
+    const start = messages.indexOf(opener);
+    if (start < 1) return null;
+    const tail = messages.slice(start + 1);
+    const allCalls = tail.flatMap(row => row.tool_calls ?? []);
+    if (allCalls.length < minCalls) return null;
+    const results = new Set(tail.filter(row => row.role === 'tool').map(row => row.tool_call_id));
+    if (allCalls.some(call => !results.has(call.id))) return null;
+    // Keep the most recent tool-call round intact so unread tool results reach
+    // the model and `messages` never terminates on `role: 'assistant'`.
+    let latestRoundStart = -1;
+    for (let i = tail.length - 1; i >= 0; i--) {
+        if (tail[i].role === 'assistant' && (tail[i].tool_calls?.length ?? 0) > 0) {
+            latestRoundStart = i;
+            break;
+        }
+    }
+    if (latestRoundStart <= 0) return null;
+    const older = tail.slice(0, latestRoundStart);
+    const recent = tail.slice(latestRoundStart);
+    const calls = older.flatMap(row => row.tool_calls ?? []);
+    if (!calls.length) return null;
+    const oldCheckpoint = older.find(row => row.compactedToolCalls?.length);
+    const dropped = older.filter(row => row.role !== 'user' && row !== oldCheckpoint);
+    const previous = typeof oldCheckpoint?.content === 'string' ? oldCheckpoint.content : null;
+    const summary = await summarizeDroppedTurns(request, dropped, previous, windowTokens);
+    if (!summary || request.signal?.aborted) return null;
+    const retained = older.filter(row => row.role === 'user');
+    const keptToolCalls = (recent[0]?.tool_calls ?? []).map(call => call.id);
+    const checkpoint: LocalAgentMessage = {
+        role: 'assistant',
+        content: summary,
+        compactedToolCalls: [...new Set([...(oldCheckpoint?.compactedToolCalls ?? []), ...calls.map(call => call.id)])],
+        compactedKeptToolCalls: keptToolCalls,
+        compactedSteerCount: retained.length,
+    };
+    // Avoid repeated cache-invalidating summaries when fixed instructions or
+    // a very large summary leave too little reclaimable space.
+    if (estimateMessageTokens(checkpoint) + retained.reduce((n, row) => n + estimateMessageTokens(row), 0)
+        >= older.reduce((n, row) => n + estimateMessageTokens(row), 0) * 0.8) return null;
+    messages.splice(start + 1, tail.length, ...retained, checkpoint, ...recent);
+    return checkpoint;
 }
 
 export function boundHistory(

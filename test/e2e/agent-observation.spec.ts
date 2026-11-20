@@ -54,6 +54,14 @@ for (const locale of ['en','fa']) for (const width of [420,1080]) {
         await expect(panel).toBeVisible(); await expect(panel.locator('.agent-run-card')).toHaveCount(2);
         await expect(panel.locator('.agent-run-view:not(.panel-hidden) .agent-run-heading')).toContainText('Trace session expiry');
         await expect(panel.locator('.agent-token-metric').first()).toContainText('1,234');
+        await expect(panel.locator('.agent-run-select').first().locator('strong')).toContainText('Trace session expiry');
+        await expect(panel.locator('.agent-profile-label').first()).toHaveText('explore');
+        if (process.env.XRATU_SCREENSHOTS) await page.screenshot({path:`/tmp/xratu-agents-main-${locale}-${width}.png`});
+        const details = panel.locator('.agent-run-view:not(.panel-hidden) .agent-brief');
+        await expect(details).not.toHaveAttribute('open');
+        await details.locator('summary').click();
+        await expect(details.locator('.agent-token-metric')).toBeVisible();
+        await details.locator('summary').click();
         await expect(panel).toContainText('Checking expiry before editing.');
         const read=panel.locator('.step').first(); await read.locator(':scope > summary').click();
         await expect(read.locator('.detail-line-number').first()).toHaveText('38');
@@ -222,3 +230,18 @@ for(const locale of ['en','fa']) {
         expect(await sent(page)).toContainEqual({type:'killBackgroundJob',jobId:'recovered'});
     });
 }
+
+test('selected agent stop uses its parent call identity and finished runs stay separate', async ({ page }) => {
+    await post(page, { type: 'startResponse' });
+    for (const callId of ['older', 'live']) {
+        await post(page, { type: 'toolCall', tool: 'task', args: JSON.stringify({ subagent_type: 'explore', description: callId }), callId });
+        await post(page, { type: 'subagentState', callId, trace: trace(callId === 'older' ? 'done' : 'running', { description: callId }) });
+    }
+    await page.locator('.transcript-pane .step').last().locator(':scope > summary').click();
+    await page.locator('.transcript-pane .subagent-open').last().click();
+    const panel = page.locator('.agents-pane');
+    await expect(panel.locator('.agent-group-heading')).toHaveText(['Active1', 'Finished1']);
+    await expect(panel.locator('.agent-run-select').first().locator('strong')).toHaveText('live');
+    await panel.locator('.agent-run-view:not(.panel-hidden) .agent-run-head .agent-run-stop').click();
+    expect(await sent(page)).toContainEqual({ type: 'stopAgent', callId: 'live' });
+});

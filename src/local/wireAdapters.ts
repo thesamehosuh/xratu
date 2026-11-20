@@ -11,6 +11,7 @@ import { ModelStreamError, streamIndex, validateStreamEvent } from './streamVali
 import { proxyFetch } from '../proxyFetch';
 import { UNPARSED_ARGS_KEY } from '../tooling/editFileArgs';
 import { isOpenRouterHost, supportsPromptCacheKey } from './apiStyle';
+import { HISTORY_TRUNCATION_MARKER } from './contextWindow';
 import { isChatGptSubscriptionHost } from '../providerIdentity';
 import { dataUrlMime, dataUrlPayload } from './imageFormat';
 import { markMessagesCache, markResponsesCache, supportsAllTurnsReasoning, usesAllTurnsReasoning, usesResponsesCacheBreakpoints } from './promptCache';
@@ -115,7 +116,7 @@ export interface CompletionResult {
     /** Captured reasoning text for transports that replay it as a top-level
      *  field instead of content blocks (Chat Completions `reasoning_content`). */
     reasoningContent?: string;
-    cacheDiagnostic?: { type?: string; reason?: string; reasoningContext?: string };
+    cacheDiagnostic?: { type?: string; reason?: string; reasoningContext?: string; outputTypes?: string[] };
 }
 
 /** Dispatch to the transport the resolved API style calls for. */
@@ -247,18 +248,62 @@ export function withReasoningContent(
  * `withReasoningContent` turns it into the wire `reasoning_content` field
  * thinking-mode APIs require.
  */
+function mergeUserContent(
+    first: LocalAgentMessage['content'],
+    second: LocalAgentMessage['content'],
+): LocalAgentMessage['content'] {
+    if (typeof first === 'string' && typeof second === 'string') {
+        return first && second ? `${first}\n\n${second}` : (first || second);
+    }
+    const toParts = (c: LocalAgentMessage['content']) => {
+        if (Array.isArray(c)) return c;
+        if (typeof c === 'string' && c) return [{ type: 'text' as const, text: c }];
+        return [];
+    };
+    return [...toParts(first), ...toParts(second)];
+}
+
 export function chatWireMessages(messages: LocalAgentMessage[]): LocalAgentMessage[] {
-    return messages.map((m) => {
+    const out: LocalAgentMessage[] = [];
+    for (const m of messages) {
+        let cleaned: LocalAgentMessage;
         if (m.role === 'tool') {
             const { isError: _isError, ...wire } = m;
-            return stripLocalImageFields(wire);
+            cleaned = stripLocalImageFields(wire);
+        } else if (m.role === 'assistant') {
+            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, compactedToolCalls: _compactedToolCalls, compactedKeptToolCalls: _compactedKeptToolCalls, compactedSteerCount: _compactedSteerCount, ...wire } = m;
+            cleaned = stripLocalImageFields(wire);
+        } else {
+            cleaned = stripLocalImageFields(m);
         }
-        if (m.role === 'assistant') {
-            const { providerBlocks: _providerBlocks, isError: _isError, contextNote: _contextNote, ...wire } = m;
-            return stripLocalImageFields(wire);
+        const prev = out[out.length - 1];
+        // Strict local Jinja templates (Llama 3, Mistral, Gemma, LFM) reject
+        // consecutive user messages created by compaction (truncation marker +
+        // user turn, or adjacent text steers) and consecutive assistant
+        // messages (an active compaction checkpoint followed by the retained
+        // latest tool round). Preserve distinct multimodal user turns intact.
+        const prevIsMarker = prev?.role === 'user' && typeof prev.content === 'string' && prev.content.startsWith(HISTORY_TRUNCATION_MARKER);
+        if (prev && prev.role === 'user' && cleaned.role === 'user'
+            && (prevIsMarker || (typeof prev.content === 'string' && typeof cleaned.content === 'string'))) {
+            out[out.length - 1] = { ...prev, content: mergeUserContent(prev.content, cleaned.content) };
+            continue;
         }
-        return stripLocalImageFields(m);
-    });
+        if (prev && prev.role === 'assistant' && cleaned.role === 'assistant'
+            && !prev.tool_calls?.length
+            && !prev.reasoningContent
+            && (prev.content == null || typeof prev.content === 'string')
+            && (cleaned.content == null || typeof cleaned.content === 'string')) {
+            const prevText = typeof prev.content === 'string' ? prev.content : '';
+            const nextText = typeof cleaned.content === 'string' ? cleaned.content : '';
+            out[out.length - 1] = {
+                ...cleaned,
+                content: prevText && nextText ? `${prevText}\n\n${nextText}` : (prevText || nextText),
+            };
+            continue;
+        }
+        out.push(cleaned);
+    }
+    return out;
 }
 
 /**
@@ -640,10 +685,13 @@ function toMessagesBody(
             // tool_calls would drop the thinking state the API requires when a
             // thinking turn is continued.
             if (hasReplayBlocks(msg.providerBlocks, 'messages')) {
-                out.push({ role: 'assistant', content: msg.providerBlocks.map(block => {
+                const replay = msg.providerBlocks.map(block => {
                     const { cache_control: _cacheControl, ...content } = block as Record<string, unknown>;
                     return content;
-                }) });
+                });
+                const last = out[out.length - 1];
+                if (last && last.role === 'assistant') last.content.push(...replay);
+                else out.push({ role: 'assistant', content: replay });
                 continue;
             }
             const blocks: any[] = [];
@@ -662,7 +710,11 @@ function toMessagesBody(
                     input: parseArguments(call.function.arguments),
                 });
             }
-            if (blocks.length) out.push({ role: 'assistant', content: blocks });
+            if (blocks.length) {
+                const last = out[out.length - 1];
+                if (last && last.role === 'assistant') last.content.push(...blocks);
+                else out.push({ role: 'assistant', content: blocks });
+            }
             continue;
         }
         if (msg.role === 'tool') {
@@ -1295,6 +1347,7 @@ async function requestResponsesCompletion(
     const itemsByIndex = new Map<number, any>();
     const itemIndexById = new Map<string, number>();
     const closedItems = new Set<number>();
+    const closedFunctionCalls = new Set<number>();
     let completedItems: any[] | null = null;
     let completed = false;
     let cacheDiagnostic: CompletionResult['cacheDiagnostic'];
@@ -1388,6 +1441,7 @@ async function requestResponsesCompletion(
                 const index = itemIndexById.get(json.item_id);
                 if (!current || index === undefined || closedItems.has(index)) throw new ModelStreamError('Model returned an unmatched or finalized argument item identity.');
                 current.arguments = json.arguments;
+                closedFunctionCalls.add(index);
                 break;
             }
             case 'response.completed':
@@ -1428,8 +1482,18 @@ async function requestResponsesCompletion(
             if (call?.arguments) item.arguments = call.arguments;
         }
     }
-    const providerBlocks = completedItems
-        ?? [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+    // Some OpenAI subscription streams send complete output_item.done events
+    // but leave completed.output empty. Do not erase those finalized calls
+    // (or reasoning replay carriers) with the empty terminal snapshot. Never
+    // promote an unfinished streamed item into an executable call, though.
+    const terminalItems = completedItems as Record<string, unknown>[] | null;
+    const hasOpenItem = [...itemsByIndex.keys()].some(index => !closedItems.has(index));
+    const hasOpenFunctionCall = [...itemsByIndex.entries()].some(([index, item]) => !closedItems.has(index) && !closedFunctionCalls.has(index) && item?.type === 'function_call');
+    if ((terminalItems?.length === 0 && hasOpenItem) || (!terminalItems && hasOpenFunctionCall)) {
+        throw new ModelStreamError('Model completion omitted unfinished output items; no tools were executed.', 'modelStreamIncomplete');
+    }
+    const providerBlocks = terminalItems?.length ? terminalItems
+        : [...itemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
     // Finalized items are authoritative for execution as well as replay.
     // Relays may coalesce deltas, and an interrupted argument delta must not
     // replace the complete JSON that the final item actually approved.
@@ -1454,6 +1518,8 @@ async function requestResponsesCompletion(
         if (finalText.startsWith(text) && finalText.length > text.length) onDelta(finalText.slice(text.length));
         text = finalText;
     }
+    cacheDiagnostic = { ...cacheDiagnostic, outputTypes: providerBlocks.slice(0, 16)
+        .map(item => String(item?.type ?? 'unknown').slice(0, 80)) };
     return { ...finalizeCompletion(text, toolDeltas, usage), providerBlocks, cacheDiagnostic };
     } finally {
         // Always detach: a throw during fetch/read/consume must not leave the

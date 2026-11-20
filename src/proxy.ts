@@ -5,6 +5,8 @@
  * VS Code / undici glue lives in `proxyDispatcher.ts`.
  */
 
+import { isLikelyLocalUrl } from './endpointGuard';
+
 export interface ProxySources {
     /** `xratu.proxyUrl` setting - highest priority. */
     explicit?: string | null;
@@ -152,6 +154,40 @@ export function hostMatchesNoProxy(host: string, patterns: string[]): boolean {
         if (hname === bare || hname.endsWith(`.${bare}`)) return true;
     }
     return false;
+}
+
+const LOOPBACK_NO_PROXY = ['localhost', '127.0.0.1', '::1'];
+
+/**
+ * True when `targetUrl` should talk direct instead of going through the proxy.
+ * Local/loopback/LAN endpoints (`isLikelyLocalUrl`) always bypass the proxy
+ * unless an explicit per-target `'proxy'` override forces it.
+ */
+export function shouldBypassProxy(
+    targetUrl: string | undefined,
+    noProxy: string,
+    override?: ProxyRouteMode,
+): boolean {
+    if (override === 'direct') return true;
+    if (override === 'proxy' || !targetUrl) return false;
+    if (isLikelyLocalUrl(targetUrl)) return true;
+    const host = hostFromUrl(targetUrl);
+    return !!host && hostMatchesNoProxy(host, parseNoProxy(noProxy));
+}
+
+/** Merge user `no_proxy` entries with loopback hosts so child processes never
+ *  route localhost traffic through a configured HTTP proxy. */
+export function mergeNoProxyWithLoopback(noProxy: string): string {
+    const entries: string[] = [];
+    const seen = new Set<string>();
+    for (const item of [...LOOPBACK_NO_PROXY, ...noProxy.split(',').map((s) => s.trim())]) {
+        if (!item) continue;
+        const key = item.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries.push(item);
+    }
+    return entries.join(',');
 }
 
 function splitHostPort(value: string): [string, string | null] {

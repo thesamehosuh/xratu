@@ -116,9 +116,13 @@ export interface TerminalJob {
      *  tool call. The user's "run in background" button has no other way to
      *  name the running command it is attached to. */
     readonly callId?: string;
+    /** Session that spawned this job; process_input enforces session ownership. */
+    readonly sessionId?: string;
     /** Pid + kernel start token captured at spawn. Needed to write a
      *  checkpoint that is safe to act on after a restart. */
     readonly identity?: ProcessIdentity;
+    /** Input is available only for a live job launched with interactive=true. */
+    writeInput?(text: string, end: boolean): Promise<void>;
     /** Request a tree kill. False means identity is temporarily unverifiable:
      * nothing was signalled and the live recovery record must be retained. */
     kill(why: string): void | false;
@@ -165,6 +169,8 @@ export interface BackgroundJobRecord {
 }
 
 export interface SpawnTerminalJobOptions {
+    stdin?: string;
+    interactive?: boolean;
     workspaceRoot: string;
     command: string;
     /** Called per raw chunk so the webview can render live output. */
@@ -179,6 +185,8 @@ export interface SpawnTerminalJobOptions {
     /** The tool_call_id this command belongs to. Lets the user's "run in
      *  background" button find the running job from the row it is attached to. */
     callId?: string;
+    /** Owning session ID for process_input authorization. */
+    sessionId?: string;
 }
 
 /** Bound `text` to `limit` chars, keeping the TAIL. Live terminal output is
@@ -422,7 +430,7 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
     let status: TerminalJobStatus = 'running';
     let exitCode: number | null = null;
     let error: Error | null = null;
-    let startedAt = Date.now();
+    const startedAt = Date.now();
     let finishedAt: number | undefined;
     let settled = false;
     // Mutable: a foreground job flips to background when the user releases the
@@ -443,7 +451,9 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
         windowsHide: true,
         windowsVerbatimArguments,
     });
-    child.stdin.end();
+    child.stdin.on('error', () => { /* A process can close stdin before consuming input. */ });
+    if (options.interactive) { if (options.stdin) child.stdin.write(options.stdin); }
+    else child.stdin.end(options.stdin);
     // Deliberately empty for a FOREGROUND command, and on Windows even for a
     // background one: `processStartToken` needs a subprocess there, and
     // capturing it synchronously froze the extension host for the whole probe
@@ -471,10 +481,35 @@ export function spawnTerminalJob(options: SpawnTerminalJobOptions): TerminalJob 
     const job: TerminalJob = {
         id,
         command,
+        writeInput(text: string, end: boolean): Promise<void> {
+            if (!options.interactive || status !== 'running' || child.stdin.destroyed || !child.stdin.writable || child.stdin.writableEnded) {
+                throw new Error('This job has no writable input.');
+            }
+            if (text.length > 64000) throw new Error('Input is limited to 64000 characters.');
+            return new Promise<void>((resolve, reject) => {
+                let settled = false;
+                const done = (err?: Error | null) => {
+                    if (settled) return;
+                    settled = true;
+                    child.stdin.off('error', onError);
+                    if (err) reject(err);
+                    else resolve();
+                };
+                const onError = (err: Error) => done(err);
+                child.stdin.once('error', onError);
+                try {
+                    if (end) child.stdin.end(text, 'utf8', () => done());
+                    else child.stdin.write(text, 'utf8', (err) => done(err));
+                } catch (err) {
+                    done(err instanceof Error ? err : new Error(String(err)));
+                }
+            });
+        },
         cwd: workspaceRoot,
         pid: child.pid,
         startedAt,
         callId,
+        sessionId: options.sessionId,
         // A GETTER, not a copy: the Windows probe fills the token in
         // asynchronously, and `moveToBackground` fills it later still. A
         // snapshot taken here kept the initial `undefined`/`unverified`
@@ -924,7 +959,7 @@ export function formatJobCompletion(notice: JobCompletionNotice): string {
             : notice.status === 'exited' && notice.exitCode === 0
                 ? 'completed successfully'
                 : `exited with code ${notice.exitCode}`;
-    const tail = notice.output.trim();
+    const tail = notice.output.trim().slice(-2000);
     return [
         `[background job ${notice.jobId} ${outcome}]`,
         `Command: ${notice.command}`,

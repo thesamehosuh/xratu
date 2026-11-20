@@ -1,3 +1,4 @@
+import { installVscodeTheme } from './vscodeTheme';
 import { openPageNavigation, openSettingsFromWork } from './navigation';
 /**
  * Browser smoke tests for the built webview bundle (dist/webview-ui).
@@ -14,6 +15,7 @@ import { openPageNavigation, openSettingsFromWork } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+    await installVscodeTheme(page);
     await page.addInitScript(() => {
         const sent: unknown[] = [];
         (window as Record<string, unknown>).__xratuHostMessages = sent;
@@ -718,6 +720,12 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
     const steerId = sent.find((m) => m.type === 'steerRun')?.steerId;
     expect(steerId).toBeTruthy();
+    await page.getByRole('button', { name: 'Steer now', exact: true }).click();
+    const controls = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string; steerId?: string }>);
+    expect(controls.filter(message => message.type === 'steerNow')).toEqual([{ type: 'steerNow', steerId }]);
+    expect(controls.some(message => message.type === 'cancelRequest')).toBe(false);
+    // Asking for immediate delivery does not acknowledge it prematurely.
+    await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
     await hostMessage(page, { type: 'toolResult', tool: 'read_file', output: 'r', callId: 'c1' });
     await hostMessage(page, { type: 'steerApplied', steerId });
 
@@ -727,6 +735,39 @@ test('a steer waits for the tool call: queued chip, then the bubble on steerAppl
     await expect(page.locator('.queued-steer-chip')).toHaveCount(0);
 });
 
+
+for (const locale of ['en', 'fa'] as const) {
+    for (const width of [420, 1100]) {
+        test(`steering remains usable during delegated work (${locale}, ${width})`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await page.goto('/');
+            await hostMessage(page, { type: 'showChat' });
+            await hostMessage(page, { type: 'locale', locale });
+            await hostMessage(page, { type: 'restoreUser', value: 'Inspect this repo' });
+            await hostMessage(page, { type: 'startResponse' });
+            await hostMessage(page, { type: 'toolCall', tool: 'task', args: '{"prompt":"Inspect files"}', callId: 'child-running' });
+            const input = page.locator('.composer-input');
+            await input.fill(locale === 'fa' ? 'اول تست ها رو بررسی کن' : 'Check tests first');
+            await input.press('Enter');
+            await expect(input).toHaveValue('');
+            await expect(page.locator('.queued-steer-chip')).toHaveCount(1);
+            const now = page.locator('.queued-steer-now');
+            await expect(now).toBeVisible();
+            const box = await now.boundingBox();
+            expect(box!.x).toBeGreaterThanOrEqual(0);
+            expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+            await now.click();
+            await input.fill('A second correction');
+            await input.press('Enter');
+            await expect(page.locator('.queued-steer-chip')).toHaveCount(2);
+            await page.screenshot({ path: `test-results/steering-${locale}-${width}.png` });
+            const sent = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string }>);
+            expect(sent.filter(message => message.type === 'steerRun')).toHaveLength(2);
+            expect(sent.filter(message => message.type === 'steerNow')).toHaveLength(1);
+            expect(sent.some(message => message.type === 'cancelRequest' || message.type === 'subagentStop')).toBe(false);
+        });
+    }
+}
 
 test('conversation display choices follow the host echo', async ({ page }) => {
     await page.goto('/');

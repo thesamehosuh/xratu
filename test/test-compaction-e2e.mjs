@@ -498,6 +498,62 @@ for (const style of ['chat', 'messages', 'responses', 'google', 'subscription'])
     } finally { globalThis.fetch = original; }
 }
 
+// Large-capacity models still need a bounded working context during one
+// long turn. Persist the checkpoint and prove old calls cannot reappear.
+{
+    const {persistedEventFromAgentEvent,historyRowFromEvent,buildReplayHistory}=require('../out/local/historyRows.js');
+    const {chatWireMessages}=require('../out/local/wireAdapters.js');
+    const {LocalSessionStore}=require('../out/local/localSessionStore.js');
+    const {mkdtemp,rm}=await import('node:fs/promises');
+    const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+    const folder=await mkdtemp(join(tmpdir(),'xratu-live-compaction-'));
+    const original=globalThis.fetch;const requests=[],events=[],queued=[];let rounds=0,summaries=0;
+    globalThis.fetch=async(_url,init)=>{
+        const body=JSON.parse(init.body);
+        if(!body.stream){summaries++;return jsonResponse({choices:[{message:{content:SUMMARY_TEXT}}]});}
+        requests.push(body); rounds++;
+        const delta=rounds<=18?{tool_calls:[{index:0,id:'budget-'+rounds,function:{name:'read_file',arguments:'{}'}}]}:{content:'Done'};
+        return sse([frame({choices:[{delta}],usage:{prompt_tokens:20000,completion_tokens:10}}),'data: [DONE]\n\n']);
+    };
+    try {
+        for await(const event of runLocalAgent({baseUrl:'http://localhost:11434/v1',model:'test',systemPrompt:'System',userText:'KEEP ORIGINAL INSTRUCTION',contextWindow:500000,compactionTokenBudget:12000,maxRounds:20,
+            tools:[{name:'read_file',description:'',inputSchema:{}}]},
+            {execute:async()=>{if(rounds===2)queued.push({text:'KEEP STEERING CONSTRAINT'});return {output:'large finding '.repeat(600)};}},
+            {requestApproval:async()=>({})},{drain:()=>queued.splice(0)}))events.push(event);
+        const checkpoints=events.filter(e=>e.type==='compactionCheckpoint');
+        ok('a live turn compacts before filling the model capacity',summaries>=2&&checkpoints.length>=2);
+        ok('live compaction preserves every user instruction',requests.every(body=>body.messages.some(row=>String(row.content).includes('KEEP ORIGINAL INSTRUCTION')))
+            &&requests.slice(3).every(body=>body.messages.some(row=>String(row.content).includes('KEEP STEERING CONSTRAINT'))));
+        const rows=[{role:'user',content:'KEEP ORIGINAL INSTRUCTION'},...events.flatMap(e=>{
+            if(e.type==='steer')return [{role:'user',content:e.text}];
+            const stored=persistedEventFromAgentEvent(e);const row=stored&&historyRowFromEvent(stored);return row?[row]:[];
+        })];
+        const store=new LocalSessionStore(folder);const meta=await store.create(folder);
+        await store.save(meta.id,{model:'test',summary:null,localHistory:rows,uiHistory:[{role:'user',content:'KEEP ORIGINAL INSTRUCTION'},{role:'user',content:'KEEP STEERING CONSTRAINT'}]});
+        const saved=await store.load(meta.id);const replay=buildReplayHistory(saved.localHistory);
+        ok('saved checkpoints keep compacted calls out of replay',!replay.some(row=>row.tool_calls?.some(call=>call.id==='budget-1')));
+        ok('replay retains instructions and the current summary',replay.some(row=>row.content==='KEEP ORIGINAL INSTRUCTION')&&replay.some(row=>row.content==='KEEP STEERING CONSTRAINT')&&replay.some(row=>row.content===SUMMARY_TEXT));
+        ok('compaction metadata never reaches the chat wire',!JSON.stringify(chatWireMessages(replay)).includes('compactedToolCalls'));
+        const pending=new Set();let paired=true;
+        for(const row of replay){if(row.role==='assistant')for(const call of row.tool_calls??[])pending.add(call.id);if(row.role==='tool'){if(!pending.delete(row.tool_call_id))paired=false;}}
+        ok('live compaction preserves tool-result pairing on restore',paired&&pending.size===0);
+        // No context-window % harness noise is injected into model requests,
+        // and no request terminates on role=assistant or duplicates adjacent user/assistant roles.
+        const noContextNoise = requests.every(body => !JSON.stringify(body.messages).includes('Context status:') && !JSON.stringify(body.messages).includes('CONTEXT FULL'));
+        const validWire = requests.every(body => {
+            const msgs = body.messages;
+            if (!msgs.length || msgs.at(-1).role === 'assistant') return false;
+            for (let i = 1; i < msgs.length; i++) {
+                if (msgs[i].role === 'user' && msgs[i - 1].role === 'user') return false;
+                if (msgs[i].role === 'assistant' && msgs[i - 1].role === 'assistant') return false;
+            }
+            return true;
+        });
+        ok('model requests omit context-window status/hint noise', noContextNoise);
+        ok('live compaction keeps chat wire alternating and never ends on assistant', validWire);
+    } finally {globalThis.fetch=original;await rm(folder,{recursive:true,force:true});}
+}
+
 if (failed) {
     console.error(`\n${failed} check(s) failed`);
     process.exit(1);

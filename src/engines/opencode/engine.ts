@@ -45,7 +45,7 @@ export class OpenCodeEngine implements AgentEngine {
     readonly id = 'opencode' as const;
     readonly capabilities = ENGINE_CAPABILITIES.opencode;
     private readonly server: Pick<OpenCodeServer, 'connect' | 'dispose'>;
-    private active?: { client: OpenCodeClient; sessionID: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage>; cancelChild: (id: string) => void };
+    private active?: { client: OpenCodeClient; sessionID: string; workspace: string; signal: AbortSignal; calls: Set<string>; steers: Map<string, LocalSteerMessage & {childSessionID?: string}>; cancelChild: (id: string) => void; childReceipt?: EngineHost['onChildInstructionReceipt'] };
     private shellMonitor?: NativeShellMonitor;
     private probing = false;
     private coordinator?: NativeSessionCoordinator;
@@ -66,6 +66,41 @@ export class OpenCodeEngine implements AgentEngine {
         const coordinator = this.coordinator;
         if (!active || !coordinator) return false;
         return coordinator.requestStop(callId, sessionID => { active.cancelChild(sessionID); void this.interruptSubagent(active.client, active.signal, sessionID); });
+    }
+    async sendSubagent(callId: string, message: LocalSteerMessage, expectedSessionId?: string): Promise<boolean> {
+        const active=this.active, coordinator=this.coordinator;
+        if(!active || active.signal.aborted || !coordinator || !message.text.trim() || message.text.length>100000) return false;
+        if(expectedSessionId && coordinator.instructionTarget(callId)!==expectedSessionId) return false;
+        const id=`msg_xratu_${randomUUID()}`;
+        const childID=coordinator.claimInstruction(callId,id,message.text);
+        if(!childID) return false;
+        active.steers.set(id,{...message,childSessionID:childID});
+        let verified=false;
+        try {
+            const child=await active.client.session.get({sessionID:childID},{signal:active.signal});
+            if(this.active!==active || active.signal.aborted) throw new DOMException('Native execution ended','AbortError');
+            if(coordinator.instructionTarget(callId)!==childID) {
+                active.steers.delete(id);
+                coordinator.cancelInstructions(childID);
+                return false;
+            }
+            if(child.parentID!==active.sessionID || child.location.directory!==active.workspace) throw new Error('Native child ownership mismatch');
+            verified=true;
+            if(this.active!==active || active.signal.aborted) throw new DOMException('Native execution ended','AbortError');
+            if(coordinator.instructionTarget(callId)!==childID) {
+                active.steers.delete(id);
+                coordinator.cancelInstructions(childID);
+                return false;
+            }
+            await active.client.session.prompt({sessionID:childID,id,delivery:'steer',text:message.text},{signal:active.signal});
+            return true;
+        } catch(error) {
+            active.steers.delete(id);
+            coordinator.cancelInstructions(childID);
+            if(verified) coordinator.requestStop(callId,sessionID=>{active.cancelChild(sessionID);void this.interruptSubagent(active.client,active.signal,sessionID);});
+            else for(const sessionID of coordinator.rejectInstruction(callId)) active.cancelChild(sessionID);
+            throw error;
+        }
     }
     private async interruptSubagent(client: OpenCodeClient, turnSignal: AbortSignal, sessionID: string): Promise<void> {
         const signal = AbortSignal.any([turnSignal, AbortSignal.timeout(15_000)]);
@@ -284,8 +319,11 @@ export class OpenCodeEngine implements AgentEngine {
         if (turn.signal.aborted) abort();
         const calls = new Map<string, { name: string; input: Record<string, unknown>; nativeEdit?: boolean }>();
         const childControllers = new Map<string, AbortController>();
-        const active = { client, sessionID, signal: turn.signal, calls: new Set<string>(), steers: new Map<string, LocalSteerMessage>(), cancelChild: (id: string) => {
+        const steers=new Map<string,LocalSteerMessage & {childSessionID?:string}>();
+        const active = { client, sessionID, workspace:turn.workspace, signal: turn.signal, calls: new Set<string>(), steers, childReceipt:host.onChildInstructionReceipt, cancelChild: (id: string) => {
             childControllers.get(id)?.abort();
+            this.coordinator?.cancelInstructions(id);
+            for(const [inboxID,message] of steers) if(message.childSessionID===id){steers.delete(inboxID);host.onChildInstructionReceipt?.(id,message.steerId,false);}
             decisions.settleSession(id);
             this.mcpBridge?.deactivate(id);
         } };
@@ -319,7 +357,7 @@ export class OpenCodeEngine implements AgentEngine {
             const prompt = await this.attachments.prepare(sessionID, turn.prompt, turn.attachments, turn.signal);
             await client.session.prompt({ sessionID, ...prompt }, options);
             this.active = active;
-            for (const message of host.steer?.drain() ?? []) await this.steer(message);
+            for (const message of await host.steer?.drain() ?? []) await this.steer(message);
             yield { type: 'status', value: 'running' };
             for await (const streamedEvent of stream) {
                 const queue = [streamedEvent];
@@ -344,6 +382,10 @@ export class OpenCodeEngine implements AgentEngine {
                     if (event.type.startsWith('session.execution.') && !event.type.endsWith('started')) decisions.settleSession(eventSessionID);
                     if (event.type === 'permission.replied') decisions.settle(`${eventSessionID}:permission:${String(data.requestID)}`, data.reply === 'reject' ? 'rejected' : 'approved');
                     if (event.type === 'form.replied' || event.type === 'form.cancelled') decisions.settle(`${eventSessionID}:form:${String(data.id)}`);
+                    if(childEvent && ['session.inbox.delivered','session.inbox.cancelled'].includes(event.type)) {
+                        const inboxID=String(data.inboxID), message=active.steers.get(inboxID);
+                        if(message?.childSessionID===eventSessionID){active.steers.delete(inboxID);host.onChildInstructionReceipt?.(eventSessionID,message.steerId,event.type==='session.inbox.delivered');}
+                    }
                     if (childEvent && !['permission.asked', 'form.created', 'session.step.ended'].includes(event.type)) {
                         const shellID = (data.metadata as { shellID?: unknown } | undefined)?.shellID;
                         if (typeof shellID === 'string') await this.shellMonitor?.track(shellID, eventSessionID, coordinator.displayID(eventSessionID, String(data.id)), true).catch(() => undefined);
@@ -510,7 +552,10 @@ export class OpenCodeEngine implements AgentEngine {
             for (const controller of childControllers.values()) controller.abort();
             for (const id of coordinator.sessions.keys()) this.mcpBridge?.deactivate(id);
             if (this.coordinator === coordinator) this.coordinator = undefined;
-            for (const message of active.steers.values()) host.onSteerRejected?.(message.steerId);
+            for (const message of active.steers.values()) {
+                if(message.childSessionID) host.onChildInstructionReceipt?.(message.childSessionID,message.steerId,false);
+                else host.onSteerRejected?.(message.steerId);
+            }
             turn.signal.removeEventListener('abort', abort);
             streamController.abort();
             await decisions.close();

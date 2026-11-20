@@ -1,3 +1,4 @@
+import {removeChildFamily} from '../sessions/ownership';
 import { readResearchEvidence } from '../web/types';
 import { boundSubagentEvents, readSubagentTrace } from '../subagentObservation';
 import type { EngineSessionRef } from '../engines/types';
@@ -22,9 +23,14 @@ export interface LocalSessionHistoryMessage {
     /** Chat Completions `reasoning_content` replay carrier (same rationale). */
     reasoningContent?: string;
     contextNote?: string;
+    compactedToolCalls?: string[];
+    compactedKeptToolCalls?: string[];
+    compactedSteerCount?: number;
     /** Tool-row failure flag. The Messages transport maps it to `is_error`;
      *  persisting it keeps the replayed tool row byte-stable. */
     isError?: boolean;
+    /** Host-origin child report handoff row (never set on user-typed prompts). */
+    hostChildReport?: boolean;
 }
 
 /** An interrupted in-flight turn, persisted mid-run so a host crash can
@@ -44,6 +50,7 @@ export interface LocalSessionSnapshot {
     connectionId?: string;
     /** Random per-chat research ID, unrelated to paths or native session IDs. */
     researchConversationId?: string;
+    childFamilyIds?: string[];
     engineSession?: EngineSessionRef;
     /** Workspace folder path the session belongs to (list filtering). */
     workspace?: string;
@@ -484,7 +491,7 @@ export class LocalSessionStore {
         return run;
     }
 
-    constructor(storageRoot: string) {
+    constructor(private readonly storageRoot: string) {
         this.rootDir = path.join(storageRoot, 'sessions');
         this.legacyPath = path.join(storageRoot, 'local-sessions.json');
     }
@@ -663,6 +670,7 @@ export class LocalSessionStore {
                 model: parsed?.model ?? null,
                 engineSession: readEngineSession(parsed?.engineSession),
                 researchConversationId: typeof parsed.researchConversationId === 'string' && /^[a-f0-9-]{36}$/i.test(parsed.researchConversationId) ? parsed.researchConversationId : undefined,
+                childFamilyIds: Array.isArray(parsed.childFamilyIds) ? parsed.childFamilyIds.filter((id: unknown): id is string=>typeof id==='string' && /^[a-f0-9-]{36}$/i.test(id)) : undefined,
                 summary: parsed?.summary ?? null,
                 localHistory: parsed?.localHistory ?? [],
                 replayUserTurns: typeof parsed?.replayUserTurns === 'number' && Number.isFinite(parsed.replayUserTurns)
@@ -775,8 +783,53 @@ export class LocalSessionStore {
         return this.enqueue(() => this._delete(id));
     }
 
+    async clearChildFamilies(): Promise<number> {
+        const directory=path.join(this.storageRoot,'children');
+        let files: string[];
+        try{files=await fs.readdir(directory);}
+        catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return 0;throw error;}
+        const families = new Set<string>();
+        for (const name of files) {
+            const match = /^([a-f0-9-]{36}\.json)(?:\.[a-f0-9-]{36}\.tmp)?$/i.exec(name);
+            if (match) families.add(match[1]);
+        }
+        let failed=0;
+        for(const file of families){
+            try{await removeChildFamily(path.join(directory,file));}catch{failed++;}
+        }
+        return failed;
+    }
+
+    private async readDeletionFamilies(id: string): Promise<Set<string>> {
+        const file = path.join(this.sessionDir(id), 'snapshot.json');
+        let raw: string;
+        try {
+            raw = await fs.readFile(file, 'utf8');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+            throw error;
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Invalid session snapshot');
+        }
+        const families = new Set<string>();
+        const uuid = /^[a-f0-9-]{36}$/i;
+        if (typeof parsed.researchConversationId === 'string' && uuid.test(parsed.researchConversationId)) {
+            families.add(parsed.researchConversationId);
+        }
+        if (Array.isArray(parsed.childFamilyIds)) {
+            for (const entry of parsed.childFamilyIds) {
+                if (typeof entry === 'string' && uuid.test(entry)) families.add(entry);
+            }
+        }
+        return families;
+    }
+
     private async _delete(id: string): Promise<boolean> {
         try {
+            const families = await this.readDeletionFamilies(id);
+            for(const family of families) await removeChildFamily(path.join(this.storageRoot,'children',`${family}.json`));
             await fs.rm(this.sessionDir(id), { recursive: true, force: true });
         } catch {
             // A real removal failure (e.g. EBUSY on Windows with an open

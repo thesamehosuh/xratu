@@ -32,6 +32,10 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await expect(page.locator('.dropdown-list')).toBeVisible();
         await assertBorder(true);
         await page.keyboard.press('Escape');
+        // Closing the menu leaves the pointer where the trigger was, which is
+        // now over the composer. Hover styling is intentional, so park the
+        // pointer on neutral chrome before expecting the idle border.
+        await page.mouse.move(2, 2);
         await input.fill('');
         await input.evaluate(el => (el as HTMLTextAreaElement).blur());
         await assertBorder(false);

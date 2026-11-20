@@ -14,12 +14,58 @@ interface Options {
     /** Tests can supply a real, already-launched browser without changing production sandboxing. */
     launch?: () => Promise<Browser>;
     protocolTimeoutMs?: number;
+    /** Debounce delay before auto-reloading a loopback page after a workspace file edit. */
+    liveReloadDebounceMs?: number;
 }
 const MAX_DIAGNOSTICS = 100;
+const MAX_EVALUATE_BYTES = 64_000;
 const TIMEOUT = 15_000;
 const boundedString = (value: unknown, max = 8192): string => {
     if (typeof value !== 'string' || value.length > max) throw new Error('Invalid browser argument.');
     return value;
+};
+const isLoopbackWebSocketUrl = (raw: string): boolean => {
+    try {
+        const url = new URL(raw);
+        url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+        return isLoopbackUrl(url);
+    } catch {
+        return false;
+    }
+};
+const urlWithoutHash = (raw: string): string => {
+    try {
+        const url = new URL(raw);
+        url.hash = '';
+        return url.href;
+    } catch {
+        return raw.split('#', 1)[0];
+    }
+};
+const boundEvaluateOutput = (output: string, maxBytes = MAX_EVALUATE_BYTES): string => {
+    if (Buffer.byteLength(output, 'utf8') <= maxBytes) return output;
+    const serialize = (end: number): string => {
+        const safeEnd = end > 0 && end < output.length
+            && output.charCodeAt(end - 1) >= 0xd800 && output.charCodeAt(end - 1) <= 0xdbff
+            && output.charCodeAt(end) >= 0xdc00 && output.charCodeAt(end) <= 0xdfff
+            ? end - 1
+            : end;
+        return JSON.stringify({ truncated: true, preview: output.slice(0, safeEnd) });
+    };
+    let low = 0;
+    let high = Math.min(output.length, maxBytes);
+    let best = serialize(0);
+    while (low <= high) {
+        const mid = (low + high) >> 1;
+        const candidate = serialize(mid);
+        if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) {
+            best = candidate;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return best;
 };
 
 /** One isolated page per active chat. No debug server, exposed port, or personal profile. */
@@ -37,6 +83,9 @@ export class BrowserController {
     private lastFrame = 0;
     private latestFrame: string | null = null;
     private frameTimer: ReturnType<typeof setTimeout> | undefined;
+    private liveReloadTimer: ReturnType<typeof setTimeout> | undefined;
+    private loopbackSockets = new Set<unknown>();
+    private navigationGeneration = 0;
     private diagnostics: Array<{ kind: string; text: string }> = [];
     private disposed = false;
 
@@ -63,6 +112,7 @@ export class BrowserController {
         this.browser = null; this.context = null; this.page = null; this.cdp = null;
         this.streaming = false; this.pendingFrame = null; this.diagnostics = [];
         this.latestFrame = null; clearTimeout(this.frameTimer); this.frameTimer = undefined;
+        clearTimeout(this.liveReloadTimer); this.liveReloadTimer = undefined; this.loopbackSockets.clear(); this.navigationGeneration++;
         this.state = this.emptyState(this.state.sessionId);
         this.publish();
         void browser?.close().catch(() => undefined);
@@ -117,9 +167,7 @@ export class BrowserController {
                 else await route.continue();
             });
             await context.routeWebSocket('**/*', socket => {
-                const url = new URL(socket.url());
-                url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-                if (isOfflineMode() && !isLoopbackUrl(url)) socket.close();
+                if (isOfflineMode() && !isLoopbackWebSocketUrl(socket.url())) socket.close();
                 else socket.connectToServer();
             });
             const page = await context.newPage();
@@ -130,6 +178,13 @@ export class BrowserController {
             this.current(sessionId, browserId);
             this.browser = launched; this.context = context; this.page = page; this.cdp = cdp;
             const active = () => this.page === page && this.state.browserId === browserId;
+            page.on('websocket', ws => {
+                if (!active() || ws.isClosed() || !isLoopbackWebSocketUrl(ws.url())) return;
+                this.loopbackSockets.add(ws);
+                ws.on('close', () => {
+                    if (active()) this.loopbackSockets.delete(ws);
+                });
+            });
             const diagnostic = (kind: string, text: string) => {
                 if (!active()) return;
                 this.diagnostics.push({ kind, text: text.slice(0, 2000) });
@@ -149,7 +204,14 @@ export class BrowserController {
             });
             page.on('framenavigated', frame => {
                 if (!active() || frame !== page.mainFrame()) return;
-                this.state = { ...this.state, url: page.url(), loading: true };
+                const nextUrl = page.url();
+                const fragmentNavigation = Boolean(this.state.url) && nextUrl !== this.state.url && urlWithoutHash(nextUrl) === urlWithoutHash(this.state.url);
+                if (fragmentNavigation) {
+                    this.state = { ...this.state, url: nextUrl };
+                } else {
+                    this.navigationGeneration++;
+                    this.state = { ...this.state, url: nextUrl, loading: true };
+                }
                 this.publish();
             });
             const loaded = () => { if (active()) void this.refresh(page); };
@@ -172,6 +234,7 @@ export class BrowserController {
             await launched?.close().catch(() => undefined);
             if (this.state.browserId === browserId) {
                 this.browser = null; this.context = null; this.page = null; this.cdp = null;
+                this.loopbackSockets.clear();
                 this.state = { ...this.state, status: 'error', loading: false, errorKey: 'browserStartFailed', errorDetail: String(error) };
                 this.publish();
             }
@@ -210,6 +273,43 @@ export class BrowserController {
 
     setVisible(sessionId: string, browserId: string, visible: boolean): Promise<void> {
         return this.enqueue(sessionId, browserId, async () => { this.visible = visible; await this.stream(); });
+    }
+
+    /**
+     * Auto-reload a loopback page (e.g. `python3 -m http.server`) when a served
+     * workspace file changes on disk. Skips remote pages and dev servers that
+     * already hold an active loopback HMR WebSocket.
+     */
+    notifyWorkspaceFileChanged(): void {
+        if (this.disposed || this.state.status !== 'ready' || !this.page || this.page.isClosed()) return;
+        if (!isLoopbackUrl(this.state.url) || this.loopbackSockets.size > 0) return;
+        const sessionId = this.state.sessionId;
+        const browserId = this.state.browserId;
+        const navigationGeneration = this.navigationGeneration;
+        clearTimeout(this.liveReloadTimer);
+        this.liveReloadTimer = setTimeout(() => {
+            this.liveReloadTimer = undefined;
+            if (this.navigationGeneration !== navigationGeneration) return;
+            void this.enqueue(sessionId, browserId, async () => {
+                if (this.navigationGeneration !== navigationGeneration) return;
+                if (!this.page || this.page.isClosed() || this.state.status !== 'ready' || this.state.loading) return;
+                if (!isLoopbackUrl(this.state.url) || this.loopbackSockets.size > 0) return;
+                const page = this.page;
+                try {
+                    await page.reload({ waitUntil: 'domcontentloaded' });
+                } catch {
+                    return;
+                }
+                if (this.page !== page || this.state.browserId !== browserId) return;
+                await this.refresh(page);
+                if (this.visible && this.page === page && this.state.browserId === browserId) {
+                    const still = await page.screenshot({ type: 'jpeg', quality: 70, timeout: TIMEOUT }).catch(() => null);
+                    if (still && this.page === page && this.visible && this.state.browserId === browserId) {
+                        this.sendFrame(still.toString('base64'));
+                    }
+                }
+            }).catch(() => undefined);
+        }, this.options.liveReloadDebounceMs ?? 250);
     }
 
     private async protocolCommand(operation: Promise<unknown>): Promise<void> {
@@ -320,9 +420,9 @@ export class BrowserController {
         try {
             checkAbort(); signal?.addEventListener('abort', cancel, { once: true });
             if (name === 'browser_status') { this.current(sessionId); return { output: JSON.stringify(this.getState()) }; }
-            if (['browser_open', 'browser_navigate', 'browser_close', 'browser_resize', 'browser_press', 'browser_scroll'].includes(name)) {
+            if (['browser_open', 'browser_close', 'browser_resize', 'browser_press', 'browser_scroll'].includes(name)) {
                 let command: BrowserCommand;
-                if (name === 'browser_open' || name === 'browser_navigate') command = { action: 'navigate', url: boundedString(args.url) };
+                if (name === 'browser_open') command = { action: 'navigate', url: boundedString(args.url) };
                 else if (name === 'browser_resize') command = { action: 'resize', ...browserViewport(args.width, args.height) };
                 else if (name === 'browser_press') command = { action: 'press', key: boundedString(args.key, 128) };
                 else if (name === 'browser_scroll') command = { action: 'scroll', ...browserPoint(args.x ?? this.state.viewport.width / 2, args.y ?? this.state.viewport.height / 2, this.state.viewport), deltaX: this.delta(args.deltaX ?? 0), deltaY: this.delta(args.deltaY) };
@@ -336,6 +436,16 @@ export class BrowserController {
             }
             return await this.enqueue(sessionId, browserId, async () => {
                 checkAbort(); const page = this.requirePage();
+                if (name === 'browser_wait_for') {
+                    const timeout = Math.max(1, Math.min(60000, Number(args.timeout_ms) || 10000));
+                    if (![args.locator, args.text, args.url].some(value => typeof value === 'string' && value.length)) throw new Error('Provide locator, text, or URL.');
+                    await Promise.all([
+                        ...(args.locator ? [page.locator(boundedString(args.locator)).waitFor({ state: 'visible', timeout })] : []),
+                        ...(args.text ? [page.getByText(boundedString(args.text), { exact: false }).filter({ visible: true }).first().waitFor({ state: 'visible', timeout })] : []),
+                        ...(args.url ? [page.waitForURL(boundedString(args.url), { timeout })] : []),
+                    ]);
+                    return { output: JSON.stringify(this.getState()) };
+                }
                 if (name === 'browser_snapshot') {
                     const tree = await page.locator('body').ariaSnapshot({ timeout: TIMEOUT });
                     const text = await page.locator('body').innerText({ timeout: TIMEOUT });
@@ -349,7 +459,7 @@ export class BrowserController {
                 if (name === 'browser_click') {
                     if (args.locator !== undefined) await page.locator(boundedString(args.locator)).click();
                     else { const point = browserPoint(args.x, args.y, this.state.viewport); await page.mouse.click(point.x, point.y); }
-                } else if (name === 'browser_type') {
+                } else if (name === 'browser_fill') {
                     await page.locator(boundedString(args.locator)).fill(boundedString(args.text, 16000));
                 } else if (name === 'browser_evaluate') {
                     const expression = boundedString(args.expression, 32000);
@@ -365,7 +475,7 @@ export class BrowserController {
                         ]);
                     } finally { clearTimeout(timer); }
                     const output = JSON.stringify(result) ?? 'null';
-                    return { output: output.length > 64000 ? output.slice(0, 64000) + '\n[truncated]' : output };
+                    return { output: boundEvaluateOutput(output) };
                 } else throw new Error('Unknown browser tool.');
                 checkAbort(); await this.refresh(page);
                 return { output: JSON.stringify(this.getState()) };

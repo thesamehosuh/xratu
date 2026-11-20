@@ -384,15 +384,20 @@ export function CapabilitiesPage({
     useEffect(() => { updateTab(initialTab); }, [initialTab]);
     const [newServerTarget, setNewServerTarget] = useState<McpSaveTarget>('global');
     // Marketplace tab: query input, the query the last request carried, the
-    // source/tag filters, and the row awaiting its confirm step.
+    // source/tag filters.
     const [marketQuery, setMarketQuery] = useState('');
     const [marketSource, setMarketSource] = useState<'all' | MarketplaceSource>('all');
     const [marketTag, setMarketTag] = useState<string | null>(null);
     /** How many filtered rows are currently mounted. */
     const [marketLimit, setMarketLimit] = useState(MARKET_PAGE);
-    const [armedAdd, setArmedAdd] = useState<string | null>(null);
     const [detecting, setDetecting] = useState<string | null>(null);
     const [detectMiss, setDetectMiss] = useState<string | null>(null);
+    /** A catalog row awaiting explicit confirmation. The payload is computed
+     *  ONCE at click time so the JSON shown is byte-for-byte what gets saved. */
+    const [pendingMarketAdd, setPendingMarketAdd] = useState<{
+        target: McpSaveTarget;
+        payload: McpServerPayload;
+    } | null>(null);
     const sentMarketQuery = useRef('');
     const [draft, setDraft] = useState<Draft | null>(null);
     const [draftInitial, setDraftInitial] = useState<Draft | null>(null);
@@ -537,12 +542,32 @@ export function CapabilitiesPage({
         return name;
     };
 
-    /** Write a marketplace entry straight to config - only ever after the
-     *  user confirmed the exact command in that row's confirm panel. */
+    /** Add is the explicit install action. Entries needing configuration or
+     *  a review of detected commands open the editor instead of being saved.
+     *  Everything else gets a confirmation popup first: the catalog is remote
+     *  input, so the EXACT payload is shown before anything is written. */
     const addFromMarketplace = (entry: MarketplaceEntry) => {
         if (!entry.install) return;
-        commitNew(newServerTarget, payloadFromInstall(uniqueName(entry.serverName), entry.install));
-        setArmedAdd(null);
+        const requiredEnv = entry.install.envVars?.filter(variable => variable.required) ?? [];
+        if (entry.requiresApiKey || requiredEnv.length || entry.installConfidence === 'detected') {
+            const notice = entry.installConfidence === 'detected' ? t('mcpMarketDetectedWarn')
+                : requiredEnv.length ? tf('mcpMarketNeedsKeyHint', { name: requiredEnv.map(variable => variable.name).join(', ') })
+                    : t('mcpMarketNeedsKey');
+            openEditorFromEntry(entry, entry.install, notice);
+            return;
+        }
+        setDetecting(null);
+        onMarketplaceClearDetection();
+        setPendingMarketAdd({
+            target: newServerTarget,
+            payload: payloadFromInstall(uniqueName(entry.serverName), entry.install),
+        });
+    };
+
+    const confirmMarketplaceAdd = () => {
+        if (!pendingMarketAdd) return;
+        commitNew(pendingMarketAdd.target, pendingMarketAdd.payload);
+        setPendingMarketAdd(null);
     };
 
     /** Open the editor prefilled from a catalog entry. Used whenever a direct
@@ -565,7 +590,6 @@ export function CapabilitiesPage({
             d.type = install.type === 'sse' ? 'sse' : 'streamableHttp';
             d.url = install.url;
         }
-        setArmedAdd(null);
         setDetecting(null);
         setDraft(d);
         setDraftInitial(d);
@@ -859,65 +883,6 @@ export function CapabilitiesPage({
         );
     };
 
-    /** Confirm step for one row: shows the EXACT payload before it is written.
-     *  A remote catalog is untrusted input, so nothing is saved silently and
-     *  entries needing a secret are routed to the editor instead. */
-    const renderConfirm = (entry: MarketplaceEntry) => {
-        const install = entry.install as MarketplaceInstall;
-        const payload = payloadFromInstall(uniqueName(entry.serverName), install);
-        // A remote entry can need a credential too (it goes in a header we
-        // must not guess), so both kinds are checked before a direct write.
-        const envVars = install.envVars ?? [];
-        const requiredEnv = envVars.filter((v) => v.required);
-        return (
-            <div className="mp-confirm" dir="ltr">
-                <div className="mp-confirm-head">{t('mcpMarketConfirmTitle')}</div>
-                <pre className="mp-confirm-json">{JSON.stringify(payload, null, 2)}</pre>
-                {requiredEnv.length > 0 && (
-                    <div className="mcp-hint warn" role="status">
-                        <KeyRound size={11} aria-hidden="true" />
-                        <span>
-                            {tf('mcpMarketNeedsKeyHint', { name: requiredEnv.map((v) => v.name).join(', ') })}
-                            {requiredEnv[0].url && (
-                                <>
-                                    {' '}
-                                    <a href={requiredEnv[0].url} target="_blank" rel="noreferrer">
-                                        {t('mcpMarketGetKey')}
-                                    </a>
-                                </>
-                            )}
-                        </span>
-                    </div>
-                )}
-                {entry.installConfidence === 'detected' && (
-                    <div className="mcp-hint-text warn-text">{t('mcpMarketDetectedWarn')}</div>
-                )}
-                <div className="mcp-form-actions">
-                    {requiredEnv.length > 0 ? (
-                        <button type="button" className="mcp-save" onClick={() => openEditorFromEntry(entry, install)}>
-                            <Pencil size={13} />
-                            <span>{t('mcpMarketAddAndEdit')}</span>
-                        </button>
-                    ) : (
-                        <button type="button" className="mcp-save" onClick={() => addFromMarketplace(entry)}>
-                            <Check size={13} />
-                            <span>{t('mcpMarketConfirm')}</span>
-                        </button>
-                    )}
-                    <button type="button" className="settings-ghost-action" onClick={() => setArmedAdd(null)}>
-                        {t('mcpCancel')}
-                    </button>
-                    {entry.repoUrl && (
-                        <a className="mp-link" href={entry.repoUrl} target="_blank" rel="noreferrer">
-                            <ExternalLink size={11} />
-                            <span>{t('mcpMarketOpenRepo')}</span>
-                        </a>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
     /** The live marketplace: rows come from remote catalogs (fetched host-side)
      *  plus the vendored curated list, which keeps it usable offline. */
     const renderMarketplace = () => {
@@ -941,14 +906,13 @@ export function CapabilitiesPage({
 
         const renderRow = (entry: MarketplaceEntry) => {
             const added = matesForTarget(newServerTarget).some((s) => s.name === entry.serverName);
-            const armed = armedAdd === entry.id;
             const busy = detecting === entry.id;
             const preview = installPreview(entry.install);
             const needsKey = !!entry.requiresApiKey || !!entry.install?.envVars?.some((v) => v.required);
             const summary = entrySummary(entry);
             return (
                 <div key={entry.id}>
-                    <div className={`mcp-row mp-row ${armed ? 'armed' : ''}`} dir="ltr">
+                    <div className="mcp-row mp-row" dir="ltr">
                         <div className="mcp-row-main">
                             <span className="mcp-row-title">
                                 <span className="catalog-icon" aria-hidden="true">{entry.tags?.includes('files') ? <FolderOpen size={14}/> : entry.tags?.includes('web') ? <Globe size={14}/> : entry.tags?.includes('knowledge') ? <BookOpen size={14}/> : <FileJson size={14}/>}</span><strong dir="auto">{entryName(entry)}</strong>
@@ -1009,8 +973,7 @@ export function CapabilitiesPage({
                                 <button
                                     type="button"
                                     className="settings-ghost-action"
-                                    aria-expanded={armed}
-                                    onClick={() => setArmedAdd(armed ? null : entry.id)}
+                                    onClick={() => addFromMarketplace(entry)}
                                 >
                                     <Plus size={12} />
                                     <span>{t('mcpRegAdd')}</span>
@@ -1040,7 +1003,6 @@ export function CapabilitiesPage({
                             )}
                         </div>
                     </div>
-                    {armed && entry.install && renderConfirm(entry)}
                 </div>
             );
         };
@@ -1222,7 +1184,7 @@ export function CapabilitiesPage({
                     <div className="inventory-status"><span><i className="health-dot"/>{servers.filter(s => s.state === 'connected' && !s.disabled).length} {t('mcpStatusConnected')}</span>{servers.some(s => s.state === 'error' && !s.disabled) && <span className="health-warning"><i className="health-dot"/>{servers.filter(s => s.state === 'error' && !s.disabled).length} {t('mcpStatusError')}</span>}</div>{visibleServers.map(renderServerRow)}{servers.length > 0 && visibleServers.length === 0 && <div className="inventory-no-results" role="status">{t('surfaceNoMatches')}</div>}
                 </div>
 
-                <button type="button" className="settings-nav-row" onClick={onOpenRawSettings}>
+                <button type="button" className="settings-nav-row mcp-raw-settings" onClick={onOpenRawSettings}>
                     <div className="settings-nav-main">
                         <strong>{t('mcpEditRawJson')}</strong>
                     </div>
@@ -1439,6 +1401,20 @@ export function CapabilitiesPage({
                     <span>{tab === 'skills' ? t('skillsHint') : t('mcpApplyHint')}</span>
                 </div></details>
             </div>
+
+            {pendingMarketAdd && <SidePanel label={t('mcpMarketConfirmTitle')} className="market-confirm compact-dialog" onClose={() => setPendingMarketAdd(null)}>
+                <header className="drawer-head">
+                    <h3>{t('mcpMarketConfirmTitle')}</h3>
+                    <button type="button" className="ghost-btn" aria-label={t('mcpCancel')} title={t('mcpCancel')} onClick={() => setPendingMarketAdd(null)}><X size={14} /></button>
+                </header>
+                <div className="market-confirm-body">
+                    <pre className="market-confirm-json" dir="ltr">{JSON.stringify(pendingMarketAdd.payload, null, 2)}</pre>
+                    <div className="settings-confirm-actions">
+                        <button type="button" className="settings-ghost-action" onClick={() => setPendingMarketAdd(null)}>{t('mcpCancel')}</button>
+                        <button type="button" className="mcp-save" onClick={confirmMarketplaceAdd}><Check size={14} /><span>{t('mcpMarketConfirm')}</span></button>
+                    </div>
+                </div>
+            </SidePanel>}
         </div>
     );
 }

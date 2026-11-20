@@ -249,15 +249,6 @@ for (const theme of ['dark', 'light', 'app-dark'] as const) for (const locale of
         }
         await page.locator('.toolbar-back-work').click();
         await expect(input).toHaveValue('A retained draft');
-        for (const destination of ['history', 'workspace']) {
-            await navigation(page);
-            await page.locator('.workspace-views').first().locator('button').nth(destination === 'history' ? 1 : 0).click();
-            await post(page, { type: 'sessionList', currentId: 'current', items: [{ id: 'current', title: 'Current project work', workspace: 'C:\\project\\xratu', engineId: 'xratu', model: 'test-model', updatedAt: Date.now() }, { id: 'native', title: 'Earlier native work', workspace: 'C:\\project\\xratu', engineId: 'opencode', model: 'native-model', updatedAt: Date.now() - 172800000 }] });
-            await expect(page.locator('.session-destination-row')).toHaveCount(2);
-            if (destination === 'history') await expect(page.locator('.history-group > h3')).toHaveCount(2);
-            await shot(`page-${destination}`);
-            await page.locator('.toolbar-back-work').click();
-        }
         await post(page, { type: 'showWelcome' });
         await expect(page.locator('.onboarding')).toBeVisible();
         await expect(page.locator('.setup-shell')).toHaveCSS('display', 'flex');

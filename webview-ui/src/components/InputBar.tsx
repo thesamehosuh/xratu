@@ -1092,6 +1092,10 @@ export function InputBar({
             <div
                 className={`composer${typing ? ' is-typing' : ''}${editDraft ? ' is-editing' : ''}${attachments.length > 0 ? ' has-attachments' : ''}${value.trim() ? ' has-draft' : ''}`}
                 ref={composerRef}
+                onClick={(event) => {
+                    if (event.target instanceof Element && event.target.closest('button, a, input, textarea, [role="menu"], [role="listbox"]')) return;
+                    ref.current?.focus();
+                }}
             >
                 {recoveryDrafts.map(draft => <div className="composer-edit-banner" key={draft.id}>
                     <span dir="auto">{draft.missingNames.length ? tf('composerRecoveryMissing', { names: draft.missingNames.join(', ') }) : (draft.value || draft.attachments.map(file => file.name).join(', ')).slice(0, 80)}</span>
@@ -1522,6 +1526,29 @@ export function InputBar({
                 )}
                 {branchPicker}
             </div>
+            <dl className="composer-summary">
+                <div className="composer-summary-item composer-summary-model">
+                    <dt className="sr-only">{t('pickModel')}</dt>
+                    <dd dir="ltr" title={(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}>
+                        {(selectedModel && (modelDisplayNames?.[selectedModel] ?? selectedModel)) || t('modelPlaceholder')}
+                    </dd>
+                </div>
+                <div className="composer-summary-item">
+                    <dt className="sr-only">{t('thinkingLevel')}</dt>
+                    <Brain size={12} aria-hidden="true" />
+                    <dd>{modelCapabilities?.[selectedModel ?? '']?.noReasoning === true ? t('thinkingNone') : activeThinking ? thinkingLabel(activeThinking) : t('thinkingDefault')}</dd>
+                </div>
+                <div className="composer-summary-item">
+                    <dt className="sr-only">{t('surfaceModeControl')}</dt>
+                    {planMode ? <ListChecks size={12} aria-hidden="true" /> : <Wrench size={12} aria-hidden="true" />}
+                    <dd>{t(planMode ? 'surfacePlan' : 'surfaceBuild')}</dd>
+                </div>
+                <div className="composer-summary-item">
+                    <dt className="sr-only">{t('surfacePermissionControl')}</dt>
+                    <ShieldCheck size={12} aria-hidden="true" />
+                    <dd>{t(yolo ? 'surfaceAutoApprove' : 'surfaceAskFirst')}</dd>
+                </div>
+            </dl>
         </div>
     );
 }

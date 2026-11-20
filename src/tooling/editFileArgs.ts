@@ -1,5 +1,5 @@
 /**
- * Argument resolution for the `edit_file` whole-file writer.
+ * Argument resolution for the `write_file` whole-file writer.
  *
  * Kept free of the `vscode` import so it can be unit-tested in plain node
  * (see test/test-edit-file-mode.mjs) - `dispatchTool` lives in mcp.ts, which
@@ -75,7 +75,7 @@ export function resolveEditContent(raw: unknown): EditContentResolution {
         return {
             error: 'Error: new_content is required and was missing - send the complete file '
                 + 'content for mode "overwrite"/"create", or the text to add for "append". '
-                + 'To change PART of an existing file, use apply_patch instead of edit_file.',
+                + 'To change PART of an existing file, use edit_file instead of write_file.',
         };
     }
     return {
@@ -119,6 +119,6 @@ export function resolveEditMode(raw: unknown): EditModeResolution {
         error: `Error: unknown mode ${shown} - valid modes are `
             + EDIT_FILE_MODES.map((m) => `"${m}"`).join(', ')
             + ` (omit mode for the default "${EDIT_FILE_DEFAULT_MODE}"; mode "create" fails if the file exists).`
-            + ' To change PART of an existing file, use apply_patch instead of edit_file.',
+            + ' To change PART of an existing file, use edit_file instead of write_file.',
     };
 }

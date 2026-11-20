@@ -165,7 +165,9 @@ function responsesTool(name, args, id, callId, n, reasoning) {
         frame({ type: 'response.output_item.added', output_index: index, item: { ...call, arguments: '' } }),
         frame({ type: 'response.function_call_arguments.delta', item_id: id, delta: args }),
         frame({ type: 'response.output_item.done', output_index: index, item: call }),
-        frame({ type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 5 }, output: items } }),
+        // Subscription streams can omit the terminal snapshot after done
+        // events. Exercise that shape across the real persistence boundary.
+        frame({ type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 5 }, output: [] } }),
     );
     return out;
 }
@@ -262,7 +264,7 @@ function legacyRow(row) {
  * asserts the live path is stable AND that the legacy path measurably is not,
  * so the test cannot silently stop testing.
  */
-async function runScenario(style, { reasoning = false, legacyReplay = false, dropContextNotes = false, modernResponses = false } = {}) {
+async function runScenario(style, { reasoning = false, legacyReplay = false, dropContextNotes = false, modernResponses = false, withTaskList = false } = {}) {
     const requests = [];
     const originalFetch = globalThis.fetch;
     let turn = 0;
@@ -300,6 +302,7 @@ async function runScenario(style, { reasoning = false, legacyReplay = false, dro
                 contextWindow: 200000,
                 apiStyle: style,
                 cacheKey: 'session-fixed',
+                ...(withTaskList ? { taskList: [{ id: `t-${turn}`, label: `Step ${turn}`, status: 'in_progress' }] } : {}),
                 ...(reasoning ? { reasoningEffort: 'medium' } : {}),
             };
             const events = [];
@@ -378,8 +381,8 @@ for (const style of ['chat', 'messages', 'responses', 'google']) {
 // PROOF: the lossy replay this suite guards against measurably fails.
 // ---------------------------------------------------------------------------
 for (const style of ['chat', 'messages', 'responses', 'google']) {
-    const omitted = await runScenario(style, { reasoning: true, dropContextNotes: true });
-    const retained = await runScenario(style, { reasoning: true });
+    const omitted = await runScenario(style, { reasoning: true, dropContextNotes: true, withTaskList: true });
+    const retained = await runScenario(style, { reasoning: true, withTaskList: true });
     ok(`${style}: forgetting only the sent status notes breaks the previous prompt prefix`,
         omitted.minCover < retained.minCover && retained.minCover >= 0.999,
         `omitted=${(omitted.minCover * 100).toFixed(1)}% retained=${(retained.minCover * 100).toFixed(1)}%`);

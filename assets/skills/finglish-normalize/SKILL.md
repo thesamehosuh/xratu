@@ -44,6 +44,8 @@ briefly rather than guessing wrong in a way that derails the response.
 
 1. Parse the message as Persian first when the tells above are present.
 2. **Reply-language policy (concrete default):**
+   - An explicit language or script preference wins immediately; do not wait
+     for repeated Latin-script replies before respecting a Finglish choice.
    - Full Finglish message → reply in informal Persian SCRIPT (the user's
      Latin typing is usually just a missing keyboard, not a script
      preference). If the user keeps replying in Latin across turns, stay in
@@ -52,10 +54,10 @@ briefly rather than guessing wrong in a way that derails the response.
      Finglish fragments as Persian content (spell them correctly in Persian
      script when quoting or normalizing them).
    - Persian-script message → Persian script back.
-3. **Every Persian-script reply follows `natural-farsi`** — colloquial
-   register (رو not را, همون not همان, میخوای not میخواهی), its orthography
-   rules, and its technical-vocabulary list. This skill decides *which
-   language/script*; `natural-farsi` decides *how it is written*.
+3. **Every Persian-script reply follows `natural-farsi`** — respect the
+   user's formal/informal choice, its orthography rules, and its technical
+   vocabulary. Default to informal for chat; do not override a formal choice.
+   This skill decides *which language/script*; `natural-farsi` decides *how it is written*.
 4. If the user mixes English technical nouns into Persian sentences, keep
    those nouns in English in your reply too (see the technical vocabulary
    section of the `natural-farsi` skill for which terms to leave

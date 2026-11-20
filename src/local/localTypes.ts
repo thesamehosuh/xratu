@@ -138,6 +138,7 @@ export interface LocalCacheDiagnostic {
     type?: string;
     reason?: string;
     reasoningContext?: string;
+    outputTypes?: string[];
 }
 
 export interface LocalToolCall {
@@ -220,6 +221,7 @@ export type LocalAgentEvent =
      *  The host advances its replay boundary by this so the next turn does not
      *  re-send turns the summary already covers. */
     | { type: 'compactionSummary'; value: string; droppedUserTurns?: number }
+    | { type: 'compactionCheckpoint'; value: string; compactedToolCalls: string[]; keptToolCalls?: string[]; steerCount?: number }
     | { type: 'error'; value: string };
 
 export interface LocalAgentMessage {
@@ -259,6 +261,9 @@ export interface LocalAgentMessage {
     /** Exact status/task note sent BEFORE this assistant response. Replayed
      *  in the same wire position; never a display row or a user turn. */
     contextNote?: string;
+    compactedToolCalls?: string[];
+    compactedKeptToolCalls?: string[];
+    compactedSteerCount?: number;
 }
 
 export interface LocalAgentRequest {
@@ -306,6 +311,8 @@ export interface LocalAgentRequest {
      *  than a constant - Cline's rule, and the right one: compacting early
      *  costs cache hits and a summarizer call, compacting late risks overflow. */
     autoCompactRatio?: number;
+    /** Working-context budget, independent of the model capacity. */
+    compactionTokenBudget?: number;
     /** Current session task list (client-echoed, user edits merged) -
      *  appended to the system message each round so the model stays on-plan
      *  even after compaction dropped the original tool call. */
@@ -377,6 +384,7 @@ export interface LocalToolExecutor {
         /** Called with incremental output for long-running tools (terminal
          *  commands). Optional: executors may ignore it. */
         onOutput?: (chunk: string) => void,
+        signal?: AbortSignal,
     ): Promise<LocalToolResult>;
 }
 
@@ -405,5 +413,8 @@ export interface LocalSteerMessage {
  *  messages at round boundaries (after tool results, before the next model
  *  request). `drain` must atomically empty the queue. */
 export interface LocalSteerFeed {
-    drain(): LocalSteerMessage[];
+    drain(): LocalSteerMessage[] | Promise<LocalSteerMessage[]>;
+    /** Register an interrupt for ONLY the current model request. Tools,
+     * approvals and delegated children must never share this controller. */
+    setInterrupt?(interrupt: (() => void) | undefined): void;
 }

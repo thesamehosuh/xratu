@@ -4056,6 +4056,22 @@ pre.tool-cmd {
     opacity: 0.85;
 }
 
+.queued-steer-now {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    font: inherit;
+    cursor: pointer;
+}
+
+.queued-steer-now:hover { background: var(--vscode-toolbar-hoverBackground); }
+.queued-steer-now:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+
 .queued-steer-text {
     min-width: 0;
     max-width: 42ch;
@@ -8066,10 +8082,6 @@ button.settings-nav-row:hover {
     align-items: flex-start;
 }
 
-.mp-row.armed {
-    background: var(--vscode-list-hoverBackground);
-}
-
 .mp-row .mcp-row-main {
     cursor: default;
 }
@@ -8122,35 +8134,6 @@ button.settings-nav-row:hover {
     color: #ffb020;
     border-color: rgba(255, 176, 32, 0.4);
     background: rgba(255, 176, 32, 0.12);
-}
-
-.mp-confirm {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 2px 0 8px;
-    padding: 10px;
-    border: 1px solid var(--vscode-widget-border);
-    border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.06));
-}
-
-.mp-confirm-head {
-    font-size: var(--xratu-fs-sm);
-    font-weight: 600;
-}
-
-.mp-confirm-json {
-    margin: 0;
-    padding: 8px;
-    max-height: 160px;
-    overflow: auto;
-    border-radius: var(--xratu-radius-sm);
-    background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--xratu-fs-xs);
-    line-height: var(--xratu-line-ui);
-    white-space: pre;
 }
 
 /* Only a window of catalog rows is mounted (see MARKET_PAGE) - this grows it. */

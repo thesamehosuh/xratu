@@ -5,6 +5,7 @@
  *  (extension.ts `UserQuestionGate` implementation). */
 
 export const USER_QUESTION_TOOL_NAME = 'ask_user_question';
+export const SESSION_QUESTION_TOOL_NAME = 'ask_session_question';
 
 export interface UserQuestionOption {
     label: string;
@@ -65,7 +66,7 @@ export type UserQuestionParse =
 
 /** Normalize raw tool arguments into a renderable question. Tolerant on
  *  cosmetics (missing header/description, extra options) and strict only on
- *  what the card cannot exist without: a question and 2+ labeled options. */
+ *  a question, with either free text or 2+ labeled options. */
 export function parseUserQuestionArgs(args: Record<string, unknown>): UserQuestionParse {
     const question = text(args.question, QUESTION_MAX);
     if (!question) {
@@ -87,10 +88,10 @@ export function parseUserQuestionArgs(args: Record<string, unknown>): UserQuesti
         });
         if (options.length >= 6) break;
     }
-    if (options.length < 2) {
+    if (options.length === 1 || rawOptions.length > 0 && options.length === 0) {
         return {
             ok: false,
-            error: `${USER_QUESTION_TOOL_NAME} requires at least 2 options with a non-empty label`,
+            error: `${USER_QUESTION_TOOL_NAME} requires either no options for free text, or at least 2 labeled options`,
         };
     }
     // Several recommended flags is a model slip: the FIRST one wins so the

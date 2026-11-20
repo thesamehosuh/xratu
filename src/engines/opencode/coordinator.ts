@@ -22,6 +22,7 @@ export interface NativeSession {
     id: string; parentID?: string; model: string; agent: string; running: boolean; execution: number;
     calls: Map<string, NativeCall>; delegations: Map<string, Delegation>;
     reports: Set<string>; delegation?: Delegation; pending: NativeEvent[]; pendingChars: number; reasoning: string;
+    instructions: Set<string>;
 }
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' ? value as Record<string, unknown> : {};
 const text = (value: unknown) => typeof value === 'string' ? value : '';
@@ -42,7 +43,7 @@ export class NativeSessionCoordinator {
     }
     private add(id: string, parentID: string | undefined, model: string, agent: string): NativeSession {
         if (this.sessions.size >= 128) throw new Error('OpenCode child session limit exceeded');
-        const state: NativeSession = { id, parentID, model, agent, running: false, execution: 0, calls: new Map(), delegations: new Map(), reports: new Set(), pending: [], pendingChars: 0, reasoning: '' };
+        const state: NativeSession = { id, parentID, model, agent, running: false, execution: 0, calls: new Map(), delegations: new Map(), reports: new Set(), pending: [], pendingChars: 0, reasoning: '', instructions: new Set() };
         this.sessions.set(id, state);
         if (parentID) this.childAdded(id);
         return state;
@@ -71,7 +72,46 @@ export class NativeSessionCoordinator {
     }
     reusable(id: string): boolean {
         const below = (state: NativeSession): boolean => state.id === id || !!state.parentID && below(this.sessions.get(state.parentID)!);
-        return ![...this.sessions.values()].some(state => below(state) && (state.running || state.reports.size || [...state.delegations.values()].some(call => !call.finished)));
+        return ![...this.sessions.values()].some(state => below(state) && (state.running || state.reports.size || state.instructions.size || [...state.delegations.values()].some(call => !call.finished)));
+    }
+    instructionTarget(callId: string): string | undefined {
+        const call=this.root.delegations.get(callId);
+        return call?.child?.running && !call.stopped ? call.child.id : undefined;
+    }
+    claimInstruction(callId: string, id: string, instruction: string): string | undefined {
+        const target=this.instructionTarget(callId);
+        if(!target) return undefined;
+        const call=this.root.delegations.get(callId)!;
+        const child=call.child!;
+        if(child.instructions.size>=32) throw new Error('Too many queued child instructions');
+        child.instructions.add(id);
+        call.finished=false;
+        if(call.collector){
+            call.collector.trace.endedAt=undefined;
+            call.collector.trace.status='running';
+            call.collector.trace.canSend=true;
+            call.collector.trace.pendingInstructions=child.instructions.size;
+            call.collector.trace.entries.push({id:`instruction:${id}`,kind:'user',text:instruction,startedAt:Date.now(),endedAt:Date.now()});
+            call.collector.flush();
+        }
+        return target;
+    }
+    cancelInstructions(sessionID: string): void {
+        const state=this.sessions.get(sessionID);
+        if(!state) return;
+        state.instructions.clear();
+        const group=this.group(state);
+        if(group?.collector){group.collector.trace.pendingInstructions=0;group.collector.flush();}
+    }
+    rejectInstruction(callId: string): string[] {
+        const call=this.root.delegations.get(callId);
+        if(!call) return [];
+        const revoked=[...this.sessions.values()].filter(state=>state!==this.root&&this.group(state)===call).map(state=>state.id);
+        for(const id of revoked) this.sessions.delete(id);
+        if(call.child) call.child.running=false;
+        call.child=undefined;call.finished=true;call.error=true;
+        if(call.collector){call.collector.trace.error='Native child identity could not be verified.';call.collector.finish('error');}
+        return revoked;
     }
     /** Stop ONE delegated child (and its descendants). A child that has only
      *  been announced is interrupted as soon as `attach()` binds it, because a
@@ -101,7 +141,11 @@ export class NativeSessionCoordinator {
         while (call?.owner.delegation) call = call.owner.delegation;
         return call;
     }
-    private emit(state: NativeSession, event: LocalAgentEvent): void { this.group(state)?.collector?.receive(event, `${state.id}:${state.execution}`); }
+    private emit(state: NativeSession, event: LocalAgentEvent): void {
+        const group=this.group(state);
+        if(group?.collector) group.collector.trace.canSend=!!group.child?.running&&!group.stopped;
+        group?.collector?.receive(event, `${state.id}:${state.execution}`);
+    }
     waiting(sessionID: string, approvalId: string, tool: string, callID?: string): void {
         const state = this.sessions.get(sessionID);
         const event: LocalAgentEvent = { type: 'needsApproval', approvalId, approvals: [{ tool_call_id: approvalId, tool_name: tool, args: {} }] };
@@ -145,7 +189,7 @@ export class NativeSessionCoordinator {
         return !!parent && [...parent.delegations.values()].some(call => !call.finished);
     }
     pendingWork(): boolean {
-        return [...this.sessions.values()].some(state => state.running || state.reports.size
+        return [...this.sessions.values()].some(state => state.running || state.reports.size || state.instructions.size
             || (state.pending.length > 0 && (!!state.delegation || this.bindable(state)))
             || [...state.delegations.values()].some(call => !call.finished));
     }
@@ -153,7 +197,7 @@ export class NativeSessionCoordinator {
         for (const call of this.root.delegations.values()) {
             if (!call.collector || !call.finished || call.collector.trace.endedAt) continue;
             const under = (state: NativeSession) => this.group(state) === call;
-            if ([...this.sessions.values()].some(state => under(state) && (state.running || state.reports.size || [...state.delegations.values()].some(nested => !nested.finished)))) continue;
+            if ([...this.sessions.values()].some(state => under(state) && (state.running || state.reports.size || state.instructions.size || [...state.delegations.values()].some(nested => !nested.finished)))) continue;
             call.collector.finish(call.stopped ? 'cancelled' : call.error ? 'error' : 'done', call.report);
         }
     }
@@ -169,6 +213,7 @@ export class NativeSessionCoordinator {
         }
     }
     finish(status: 'cancelled' | 'interrupted' | 'error'): void {
+        for(const session of this.sessions.values()) session.instructions.clear();
         for (const call of this.root.delegations.values()) if (call.collector && !call.collector.trace.endedAt) call.collector.finish(status, call.report);
     }
     /** Returns true for child events: their prose/tools stay out of the parent
@@ -197,11 +242,15 @@ export class NativeSessionCoordinator {
         const id = text(data.id);
         const displayID = this.displayID(sessionID, id);
         switch (event.type) {
-            case 'session.execution.started': state.running = true; state.reasoning = ''; state.execution++; state.calls.clear(); break;
+            case 'session.execution.started':
+                state.running = true; state.reasoning = ''; state.execution++; state.calls.clear();
+                if(child){const group=this.group(state);if(group?.child===state&&group.collector){group.collector.trace.canSend=!group.stopped;group.collector.flush();}}
+                break;
             case 'session.execution.succeeded':
             case 'session.execution.failed':
             case 'session.execution.interrupted':
                 state.running = false;
+                if(child){const group=this.group(state);if(group?.child===state&&group.collector){group.collector.trace.canSend=false;group.collector.flush();}}
                 // A user-stopped child ends interrupted by design; only a real
                 // runtime failure should paint an error on its observation.
                 if (child && event.type !== 'session.execution.succeeded' && !this.group(state)?.stopped) this.emit(state, { type: 'error', value: text(record(data.error).message) || event.type });
@@ -273,11 +322,22 @@ export class NativeSessionCoordinator {
                 break;
             }
             case 'session.inbox.delivered':
+                if(state.instructions.delete(text(data.inboxID))){
+                    state.running=true;
+                    const group=this.group(state);
+                    if(group?.collector){group.collector.trace.pendingInstructions=state.instructions.size;group.collector.flush();}
+                }
                 // Delivery can precede execution.started. Keep ownership until
                 // the execution answering this report emits its terminal.
                 if (state.reports.delete(text(data.inboxID))) state.running = true;
                 break;
-            case 'session.inbox.cancelled': state.reports.delete(text(data.inboxID)); break;
+            case 'session.inbox.cancelled':
+                state.reports.delete(text(data.inboxID));
+                if(state.instructions.delete(text(data.inboxID))){
+                    const group=this.group(state);
+                    if(group?.collector){group.collector.trace.pendingInstructions=state.instructions.size;group.collector.flush();}
+                }
+                break;
         }
         this.settleStopped();
         this.finishGroups();

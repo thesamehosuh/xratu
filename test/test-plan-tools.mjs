@@ -59,11 +59,11 @@ for (const name of ['edit_file', 'replace_in_file', 'apply_patch', 'run_terminal
 // must actually require approval. `run_tests` was classified read-only, so it
 // took no approval while still executing project build/test code.
 const runTools = getLocalToolDefinitions({ plan: false, subagents });
-for (const name of ['run_tests', 'install_dependency', 'run_terminal_command', 'git_push']) {
+for (const name of ['write_file', 'edit_file', 'process_input', 'run_terminal_command']) {
     const tool = runTools.find((t) => t.name === name);
     check(`run: ${name} requires approval`, tool ? tool.requiresApproval : false, true);
 }
-for (const name of ['browser_open', 'browser_navigate', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_resize', 'browser_evaluate', 'browser_close']) {
+for (const name of ['browser_open', 'browser_click', 'browser_fill', 'browser_press', 'browser_scroll', 'browser_resize', 'browser_evaluate', 'browser_close']) {
     check(`plan: no ${name}`, planNames.has(name), false);
     check(`run: ${name} requires approval`, runTools.find(tool => tool.name === name)?.requiresApproval, true);
     check(`YOLO snapshot: ${name} still reaches the live approval gate`, getLocalToolDefinitions({ yolo: true }).find(tool => tool.name === name)?.requiresApproval, true);
@@ -76,7 +76,7 @@ for (const name of ['start_download', 'control_download', 'extract_archive']) {
 }
 
 // Read tools stay (planning needs them).
-for (const name of ['read_file', 'grep_search', 'list_files', 'update_task_list', 'exit_plan_mode', 'ask_user_question']) {
+for (const name of ['read_file', 'grep_search', 'symbols', 'view_image', 'list_files', 'update_task_list', 'exit_plan_mode', 'ask_user_question']) {
     check(`plan: keeps ${name}`, planNames.has(name), true);
 }
 

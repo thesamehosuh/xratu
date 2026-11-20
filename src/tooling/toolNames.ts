@@ -1,32 +1,18 @@
 /**
- * Tool-name resolution for live model drift. Dependency-free (no `vscode`)
+ * Exact tool-name admission and suggestions for invalid calls. Dependency-free (no `vscode`)
  * so plain node can unit-test it.
  *
- * Models call writers by the name their OTHER harness uses (`write_file`)
- * and get a bare "Unknown tool" - a dead end that wastes a turn. Known
- * aliases resolve to the canonical tool; unknown names get the closest
- * canonical name as a suggestion instead of a shrug.
+ * Unknown names get a close canonical suggestion. Names are never silently
+ * translated: each major-release tool contract is explicit.
  */
 
-/** Alias -> canonical tool name. Deliberately small: only names that models
- *  actually emit for an existing tool, never fuzzy guesses. */
-export const TOOL_NAME_ALIASES: Record<string, string> = {
-    write_file: 'edit_file',
-    create_file: 'edit_file',
-    new_file: 'edit_file',
-    save_file: 'edit_file',
-    str_replace: 'replace_in_file',
-};
-
 /** Resolve a model-supplied tool name against the canonical set.
- *  Returns the canonical name when known/aliased, else the best suggestion
+ *  Returns the canonical name when known, else the best suggestion
  *  (edit distance <= 3, or a containment hit) for the error message. */
 export function resolveToolName(
     name: string,
     known: readonly string[],
-): { name: string; aliasedFrom?: string; suggestion?: string } {
-    const direct = TOOL_NAME_ALIASES[name];
-    if (direct && known.includes(direct)) return { name: direct, aliasedFrom: name };
+): { name: string; suggestion?: string } {
     if (known.includes(name)) return { name };
     let best: string | null = null;
     let bestScore = Infinity;

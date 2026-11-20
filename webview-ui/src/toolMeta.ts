@@ -33,6 +33,8 @@ import { t } from './i18n';
 
 export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^(start_download|control_download|list_downloads)$/, icon: Download },
+    { re: /^view_image$/, icon: FileText },
+    { re: /^symbols$/, icon: CodeXml },
     { re: /^verify_file$/, icon: ShieldCheck },
     { re: /^(inspect_archive|extract_archive)$/, icon: Package },
     { re: /^(link|unlink|watch|unwatch|get)_pull_request$|^list_thread_pull_requests$/, icon: GitPullRequest },
@@ -40,13 +42,15 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
     { re: /^opencode_/, icon: Bot },
     { re: /^browser_/, icon: Globe },
     { re: /^update_task_list$/, icon: ListChecks },
-    { re: /^ask_user_question$/, icon: HelpCircle },
+    { re: /^(ask_user_question|ask_session_question)$/, icon: HelpCircle },
+    { re: /^(spawn_agent|send_agent|inspect_agents|wait_agents|stop_agent)$/, icon: Bot },
     { re: /^task$/, icon: Bot },
     { re: /^exit_plan_mode$/, icon: ShieldCheck },
     { re: /^skill$/, icon: BookOpen },
     { re: /terminal|command/, icon: SquareTerminal },
     // Before the generic fallbacks: `process` shares no substring with any
     // other family, so without its own row it rendered as a bare wrench.
+    { re: /^process_input$/, icon: SquareTerminal },
     { re: /^process$/, icon: Cpu },
     { re: /grep/, icon: Search },
     { re: /glob/, icon: Search },
@@ -78,7 +82,14 @@ export const TOOL_ICONS: Array<{ re: RegExp; icon: typeof Wrench }> = [
 /** Persian labels for the builtin tool pills - shown RTL like the thinking
  *  pill; unknown/external tools fall back to their raw LTR name. */
 const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
+    { re: /^spawn_agent$/, key: 'childLaunch' },
+    { re: /^send_agent$/, key: 'childSendInstruction' },
+    { re: /^inspect_agents$/, key: 'childInspect' },
+    { re: /^wait_agents$/, key: 'childWait' },
+    { re: /^stop_agent$/, key: 'agentStop' },
     { re: /^start_download$/, key: 'toolStartDownload' },
+    { re: /^view_image$/, key: 'toolViewImage' },
+    { re: /^symbols$/, key: 'toolDefinitions' },
     { re: /^verify_file$/, key: 'toolVerifyFile' },
     { re: /^inspect_archive$/, key: 'toolInspectArchive' },
     { re: /^extract_archive$/, key: 'toolExtractArchive' },
@@ -94,8 +105,9 @@ const TOOL_LABELS: Array<{ re: RegExp; key: Parameters<typeof t>[0] }> = [
     { re: /^opencode_/, key: 'toolOpenCode' },
     { re: /^browser_/, key: 'toolBrowser' },
     { re: /^run_terminal_command$/, key: 'toolTerminal' },
+    { re: /^process_input$/, key: 'toolTerminal' },
     { re: /^process$/, key: 'toolProcess' },
-    { re: /^ask_user_question$/, key: 'toolAskUserQuestion' },
+    { re: /^(ask_user_question|ask_session_question)$/, key: 'toolAskUserQuestion' },
     { re: /^task$/, key: 'toolTask' },
     { re: /^read_file$/, key: 'toolReadFile' },
     { re: /^read_files$/, key: 'toolReadFiles' },

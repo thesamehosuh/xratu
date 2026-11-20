@@ -62,6 +62,15 @@ nested and background children. The turn stays active until their reports
 settle. Delegation is unavailable in Plan mode; conversation rewind and offline
 mode remain unavailable with OpenCode.
 
+## Child sessions
+
+Open **Agents** to enter a child's conversation, send follow-up instructions,
+answer its questions, or stop it independently. The parent can launch children
+in the background, send follow-ups, inspect their state, and wait for reports.
+Built-in child history survives reloads; stopped or interrupted work continues
+only after a new instruction. Choose **Report to parent** for a manual investigation.
+Agent profiles are reusable starting configurations. [Details](docs/guide.md#subagents).
+
 ## Approvals and privacy
 
 YOLO is enabled by default and applies to the whole agent tree. Turn it off

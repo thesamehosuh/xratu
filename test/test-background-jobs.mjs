@@ -775,5 +775,31 @@ ok('monitor retains a long-running job that finished most recently', recentlyFin
 ok('monitor output is a bounded tail', monitor[0].output.length === 20_000);
 ok('monitor preserves spawn errors', backgroundJobViews([monitorJob(1,{status:'failed',output:'',error:new Error('spawn failed')})])[0].output === 'spawn failed');
 
+// Interactive pipe input remains owned by the original job and preserves EOF.
+{
+    const dir = mkdtempSync(join(tmpdir(), 'xratu-stdin-'));
+    const script = join(dir, 'echo-input.cjs');
+    writeFileSync(script, "let text = ''; process.stdin.on('data', part => text += part); process.stdin.on('end', () => process.stdout.write(text));");
+    const job = spawnTerminalJob({
+        workspaceRoot: dir,
+        command: sh(`${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`, `node ${JSON.stringify(script)}`),
+        interactive: true,
+        background: true,
+        stdin: 'initial:',
+    });
+    try {
+        await job.writeInput('continued', true);
+        ok('interactive input completes after explicit EOF', await waitForTerminalJob(job, 10000));
+        ok('interactive input preserves initial and subsequent bytes', job.stdout === 'initial:continued', job.stdout);
+        ok('interactive input reports the actual exit code', job.exitCode === 0);
+        let rejected = false;
+        try { await job.writeInput('late', false); } catch { rejected = true; }
+        ok('finished jobs refuse further input', rejected);
+    } finally {
+        if (job.status === 'running') { job.kill('test cleanup'); await job.finished; }
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+}
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

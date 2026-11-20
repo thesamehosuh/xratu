@@ -72,19 +72,6 @@ for (const theme of ['dark', 'light'] as const) for (const locale of ['en', 'fa'
         await expect(page.locator('.session-search-toggle')).toBeFocused();
         await expect(page.locator('.workspace-sidebar')).toBeVisible();
         await expect(page.locator('.session-row')).toHaveCount(2);
-        await page.locator('.workspace-views').first().getByRole('button', { name: locale === 'en' ? 'History' : 'تاریخچه', exact: true }).click();
-        await page.locator('.sessions-page .inventory-search input').fill('retained history filter');
-        await page.locator('.toolbar-back-work').click();
-        if (!await page.locator('.workspace-sidebar').isVisible()) await page.locator('.toolbar > .sidebar-toggle').click();
-        await post(page, sessionList);
-        if (width >= 860) {
-            await expect(search).toBeVisible();
-            await expect(search).toHaveValue('retained history filter');
-            await search.focus();
-            await page.keyboard.press('Escape');
-        }
-        await expect(search).toHaveCount(0);
-        await expect(page.locator('.session-row')).toHaveCount(2);
         await page.locator('.toolbar > .sidebar-toggle').click();
 
         await post(page, { type: 'openSettings' });

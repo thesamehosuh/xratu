@@ -45,6 +45,7 @@ export function GitStatusBar({ status, root, onOpenPicker, disabled = false }: G
             type="button"
             className="git-status"
             dir="ltr"
+            onMouseDown={event => event.preventDefault()}
             onClick={onOpenPicker}
             disabled={disabled}
             title={t(disabled ? 'gitCheckoutBusy' : 'gitStatusOpen')}

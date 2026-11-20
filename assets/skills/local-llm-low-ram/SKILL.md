@@ -15,12 +15,12 @@ is roughly 4.5-5.5GB on disk and in memory, plus context and overhead.
 
 | Machine | Comfortable target |
 |---|---|
-| 8GB RAM, no GPU | 3B-8B at Q4, keep the context window modest |
-| 16GB RAM | 7B-14B at Q4, or 7B-8B at Q8 |
-| Dedicated GPU (8GB+) | 7B-14B at Q4 fully offloaded - the sweet spot |
+| 8GB RAM, no GPU | Start around 3B at Q4; larger models need measured headroom |
+| 16GB RAM | Start around 7B-8B at Q4; estimate before increasing size |
+| Dedicated GPU | Fit weights, KV cache and overhead within actual free VRAM |
 
-Leave headroom: the OS and the inference runtime want ~2GB beyond the
-weights. When memory is tight, a smaller model that answers is worth more
+Leave headroom for the OS, VS Code, extension host, runtime, KV cache,
+and compute buffers; a fixed 2GB allowance is not a reliable total. When memory is tight, a smaller model that answers is worth more
 than a bigger one that swaps. **Check actual free memory first** (`free -h`
 on Linux, Task Manager on Windows) before picking a size - the table is a
 target, not a promise about the machine in front of you. Swap (or zram)
@@ -40,17 +40,25 @@ reply; if the machine is swapping, downsize instead of tolerating it.
 Xratu probes a local model's real context window at connect time and sizes
 its history accordingly - but a manually configured window that is too
 large eats RAM for the weights, and one that is too small triggers
-compaction churn. 8k is the safe baseline on 8GB machines; only raise it
-after checking the model card AND the machine's free memory.
+compaction churn. Do not call any context size universally safe on an 8GB
+machine. Start modestly and measure the loaded model with Xratu's actual
+prompt and tool catalog. Distinguish the model's advertised maximum from
+the runtime's currently allocated context; inspect `ollama ps`, or use
+`lms load <model> --context-length <tokens> --estimate-only` before loading.
+See [Ollama context](https://docs.ollama.com/context-length) and
+[LM Studio load](https://lmstudio.ai/docs/cli/local-models/load).
+
+Before recommending a model for agent work, verify a small tool-call/result
+round trip as well as ordinary generation. Check its model card and runtime
+support; a text response alone does not establish usable tool calling.
 
 ## Wiring it into Xratu
 
 - **Ollama**: install, `ollama pull <model>`, then keep it running -
   Xratu auto-discovers the local endpoint (no API key needed) and lists its
-  models. On Windows, the installer registers Ollama as a login-item
-  service, so "it's not running" usually means the tray app was closed -
-  reopening Ollama is enough; there is no `ollama serve` to run by hand
-  unless the service was removed.
+  models. On Windows, check the Ollama tray app and how it was installed
+  before starting another server. Reopen the app if needed; standalone
+  installations can use `ollama serve`.
 - **LM Studio / vLLM / llama.cpp**: serve any OpenAI-compatible endpoint;
   Xratu auto-discovers these too (Settings -> API keys shows what was
   found; the URL can always be pasted manually).
@@ -59,9 +67,21 @@ after checking the model card AND the machine's free memory.
   means the runtime isn't running yet. Discovery only probes localhost
   ports, so a runtime on another machine needs its URL pasted manually.
 
+## Obtaining models on an unreliable connection
+
+Check existing local models before proposing a multi-gigabyte download.
+Choose one runtime-compatible quantization and a specific revision; do not
+download every weight format in a repository. For split weights include every
+required shard and any required config/tokenizer files. Use publisher metadata
+and hashes when available, retain partial transfers, and check actual free disk
+space as well as RAM. A small completed download is more useful than several
+unfinished alternatives. Use `native-downloads` for supported public files and
+`iran-dev-access` for source/routing failures when those skills are available.
+
 ## Expectations to set
 
-CPU inference on an 8GB machine is slow (single-digit tokens per second).
+CPU speed depends on the model, CPU, context, and memory bandwidth. Measure
+a short request rather than promising a fixed token rate.
 That is fine for planning, explanations, small edits and review - say so
 up front instead of letting the user conclude something is broken. Keep
 tool-heavy workflows to small steps: every tool result costs context, and

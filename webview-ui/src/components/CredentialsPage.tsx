@@ -443,18 +443,22 @@ export function CredentialsPage({
                             </div>
 
                             {accounts.length > 0 && <div className="cred-oauth-accounts">
-                                {accounts.map((account) => (
-                                    <div className={`cred-oauth-account-card${account.active ? ' active' : ''}`} key={account.credentialId}>
+                                {accounts.map((account) => {
+                                    const isAccountActive = savedCredentials.length > 0
+                                        ? active?.id === account.credentialId
+                                        : !!account.active;
+                                    return (
+                                    <div className={`cred-oauth-account-card${isAccountActive ? ' active' : ''}`} key={account.credentialId}>
                                         <div className="cred-oauth-account-head">
                                             <span className="cred-oauth-avatar" aria-hidden="true"><UserRound size={15} /></span>
                                             <span className="cred-oauth-account" title={account.accountLabel}>
                                                 <bdi dir="auto">{account.accountLabel || t('credOAuthAccount')}</bdi>
                                             </span>
-                                            {account.active && <span className="cred-oauth-active"><Check size={11} /><span>{t('credActive')}</span></span>}
+                                            {isAccountActive && <span className="cred-oauth-active"><Check size={11} /><span>{t('credActive')}</span></span>}
                                             <button type="button" className="ghost-btn small cred-oauth-signout" disabled={!!inProgress}
                                                 aria-label={t('credOAuthSignOut')} title={t('credOAuthSignOut')}
                                                 onClick={() => onOAuthSignOut(account.credentialId)}><LogOut size={14} /></button>
-                                        {!account.active && <>
+                                        {!isAccountActive && <>
                                             <button type="button" className="settings-ghost-action cred-oauth-action cred-oauth-use"
                                                 disabled={!!inProgress || selectingId === account.credentialId}
                                                 onClick={() => { setSelectingId(account.credentialId); onSelectCredential(account.credentialId); }}>
@@ -466,7 +470,8 @@ export function CredentialsPage({
                                         {account.planEnabled === false && <div className="cred-oauth-hint">{t('oauthPlanPermissionMissing')}</div>}
 
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>}
 
                             {busy && inProgress?.method === 'browser' && (
@@ -925,6 +930,23 @@ export function CredentialsPage({
                                 )}
                                 {!editing && (
                                     <span className="saved-credential-actions">
+                                        {!embedded && !isActive && (
+                                            <button
+                                                type="button"
+                                                dir="auto"
+                                                className="saved-use-btn"
+                                                disabled={selectingId === credential.id}
+                                                onClick={() => {
+                                                    setDeletingId(null);
+                                                    setConnectionSelection(credential.id);
+                                                    setSelectingId(credential.id);
+                                                    onSelectCredential(credential.id);
+                                                }}
+                                            >
+                                                {selectingId === credential.id && <RefreshCw size={12} className="spinning" />}
+                                                <span>{t('credUseConnection')}</span>
+                                            </button>
+                                        )}
                                         {!credential.oauth && (
                                         <button
                                             type="button"

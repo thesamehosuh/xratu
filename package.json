@@ -99,6 +99,12 @@
           "maximum": 8,
           "description": "%config.maxParallelSubagents.desc%"
         },
+        "xratu.compactionTokenBudget": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 4096,
+          "description": "%config.compactionTokenBudget.desc%"
+        },
         "xratu.autoCompactThreshold": {
           "type": "number",
           "default": 90,
@@ -229,6 +235,8 @@
     "test:run-tests-guard": "node test/test-run-tests-guard.mjs",
     "test:release-workflow": "node test/test-release-workflow.mjs",
     "test:outside-workspace": "node test/test-outside-workspace.mjs",
+    "test:tool-catalog": "node test/test-tool-catalog.mjs",
+    "test:tool-reliability": "node test/test-tool-reliability.mjs",
     "test:tool-args": "node test/test-tool-args.mjs",
     "test:mcp-tool-images": "node test/test-mcp-tool-images.mjs",
     "test:tool-images-e2e": "node test/test-tool-images-e2e.mjs",
@@ -329,7 +337,8 @@
     "test:tool-admission": "node test/test-tool-admission.mjs",
     "test:attachment-session": "node test/test-attachment-session.mjs",
     "test:archives": "node test/test-archives.mjs",
-    "test:web-research": "node test/test-web-research.mjs"
+    "test:web-research": "node test/test-web-research.mjs",
+    "test:session-coordinator": "node test/test-session-coordinator.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [

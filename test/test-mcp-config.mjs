@@ -31,9 +31,12 @@ try {
     await Promise.all([store.seedDefaults(), store.seedDefaults()]);
     const raw = await readFile(store.globalPath, 'utf8');
     const { mcpServers } = JSON.parse(raw);
-    assert.deepEqual(Object.keys(mcpServers).sort(), []);
+    assert.deepEqual(Object.keys(mcpServers).sort(), ['zarinpal']);
+    assert.equal(mcpServers.zarinpal.url, 'https://www.zarinpal.com/docs/mcp');
+    assert.deepEqual(mcpServers.zarinpal.autoApprove, ['list_docs', 'search_docs', 'get_doc', 'get_error_code']);
+    assert.equal(mcpServers.zarinpal.disabled, undefined);
     const { MCP_REGISTRY } = require('../out/mcpRegistry.js');
-    for (const entry of MCP_REGISTRY.filter(entry => entry.tags?.includes('iranian'))) {
+    for (const entry of MCP_REGISTRY.filter(entry => ['divar', 'torob', 'digikala'].includes(entry.id))) {
         assert.equal(entry.defaultEnabled, false, 'Iranian marketplace presets stay visible and opt-in');
         assert.equal(entry.server.autoApprove, undefined);
     }
@@ -44,7 +47,7 @@ try {
     assert.equal(await readFile(store.globalPath, 'utf8'), raw);
 
     // An empty file, a disabled server, and a removed default are user choices.
-    for (const content of ['{"mcpServers":{}}', '{"mcpServers":{"divar":{"disabled":true,"url":"https://example.com/mcp"}}}']) {
+    for (const content of ['{"mcpServers":{}}', '{"mcpServers":{"zarinpal":{"disabled":true,"url":"https://www.zarinpal.com/docs/mcp"}}}', '{"mcpServers":{"divar":{"disabled":true,"url":"https://example.com/mcp"}}}']) {
         await writeFile(store.globalPath, content);
         await store.seedDefaults();
         assert.equal(await readFile(store.globalPath, 'utf8'), content);
@@ -60,7 +63,7 @@ try {
     await assert.rejects(readFile(store.globalPath), { code: 'ENOENT' });
     workspace.isTrusted = true;
     await store.seedDefaults();
-    assert.equal(Object.keys((await store.load()).servers).length, 0);
+    assert.deepEqual(Object.keys((await store.load()).servers), ['zarinpal']);
     // The first Servers-page read cannot race ahead of publishing defaults.
     await rm(store.globalPath);
     const originalLink = fs.promises.link;
@@ -78,7 +81,7 @@ try {
         assert.equal(loadedEarly, false);
         release();
         await seeding;
-        assert.deepEqual(Object.keys((await reading).servers).sort(), []);
+        assert.deepEqual(Object.keys((await reading).servers).sort(), ['zarinpal']);
     } finally { release(); fs.promises.link = originalLink; }
     // An interrupted publication must leave no truncated final config.
     await rm(store.globalPath);
@@ -87,7 +90,7 @@ try {
     finally { fs.promises.link = originalLink; }
     await assert.rejects(readFile(store.globalPath), { code: 'ENOENT' });
     assert.equal((await fs.promises.readdir(root)).some(name => name.endsWith('.tmp')), false);
-    console.log('mcp-config: optional defaults, concurrent seed, user choices, legacy and trust gates passed');
+    console.log('mcp-config: Zarinpal default, marketplace opt-in, concurrent seed, user choices, legacy and trust gates passed');
 } finally {
     await rm(root, { recursive: true, force: true });
 }

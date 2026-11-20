@@ -5,8 +5,8 @@ import { openPageNavigation, openSettingsFromWork } from './navigation';
  * Same harness as app.spec.ts: a mocked `acquireVsCodeApi` records what the
  * webview sends, and host→webview envelopes are posted at the window. This
  * covers the parts a unit test cannot: that the tab renders real rows, that
- * search round-trips through the host, and that NOTHING is written to
- * mcp.json before the confirm step (a remote catalog is untrusted input).
+ * search round-trips through the host, and that explicit Add writes complete
+ * installs while credential-dependent or detected installs open the editor.
  */
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -174,16 +174,17 @@ test('marketplace rows stay LTR inside the RTL page', async ({ page }) => {
     expect(probe.overflow).toBeLessThanOrEqual(1);
 });
 
-test('adding a row needs a confirm step and writes the parsed install', async ({ page }) => {
+test('Add shows the exact payload and writes only after confirmation', async ({ page }) => {
     await openMarketplace(page);
     await page.locator('.mp-row').first().getByText('افزودن').click();
-    // The confirm panel shows the exact JSON payload first.
-    const confirm = page.locator('.mp-confirm-json');
-    await expect(confirm).toBeVisible();
-    await expect(confirm).toContainText('"command": "uvx"');
-    expect((await sentMessages(page)).some((m) => m.type === 'mcpSave')).toBe(false);
-
-    await page.getByText('تایید و افزودن').click();
+    const dialog = page.locator('.market-confirm');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.market-confirm-json')).toContainText('"command": "uvx"');
+    await expect(dialog.locator('.market-confirm-json')).toContainText('duckduckgo-mcp-server==0.7.0');
+    // Nothing is written until the confirmation is accepted.
+    expect((await sentMessages(page)).some((message) => message.type === 'mcpSave')).toBe(false);
+    await dialog.getByRole('button', { name: 'تایید و افزودن' }).click();
+    await expect(dialog).toHaveCount(0);
     const save = (await sentMessages(page)).find((m) => m.type === 'mcpSave') as {
         target: string;
         servers: Array<Record<string, unknown>>;
@@ -195,17 +196,39 @@ test('adding a row needs a confirm step and writes the parsed install', async ({
     expect(save.servers[0].autoApprove).toBeUndefined();
 });
 
+test('cancelling the add confirmation writes nothing', async ({ page }) => {
+    await openMarketplace(page);
+    await page.locator('.mp-row').first().getByText('افزودن').click();
+    const dialog = page.locator('.market-confirm');
+    await expect(dialog).toBeVisible();
+    await dialog.locator('.settings-confirm-actions').getByRole('button', { name: 'انصراف' }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await sentMessages(page)).some((message) => message.type === 'mcpSave')).toBe(false);
+});
+
 test('a row needing a secret opens the editor instead of writing config', async ({ page }) => {
     await openMarketplace(page);
     const airtable = page.locator('.mp-row').filter({ hasText: 'Airtable' });
     await airtable.getByText('افزودن').click();
-    await expect(page.locator('.mp-confirm-json')).toContainText('https://mcp.airtable.com/mcp');
-    await page.getByText('افزودن و ویرایش').click();
     // Prefilled edit form, nothing saved yet.
     await expect(page.locator('.mcp-form')).toBeVisible();
     await expect(page.locator('.mcp-form input[dir="ltr"]').first()).toHaveValue('airtable');
+    await expect(page.locator('.mcp-form')).toContainText('AIRTABLE_TOKEN');
     expect((await sentMessages(page)).some((m) => m.type === 'mcpSave')).toBe(false);
 });
+
+for (const kind of ['credential', 'detected'] as const) {
+    test(`Add opens configuration for ${kind} installs without saving`, async ({ page }) => {
+        await openMarketplace(page, 'en');
+        const entry = {...ENTRIES[0], id: 'review-install', nameKey: undefined, descKey: undefined, name: 'Review install',
+            requiresApiKey: kind === 'credential', installConfidence: kind === 'detected' ? 'detected' : 'registry'};
+        await hostMessage(page, {...MARKET_STATE, entries: [entry]});
+        await page.locator('.mp-row').getByRole('button', {name: 'Add', exact: true}).click();
+        await expect(page.locator('.mcp-form')).toBeVisible();
+        expect((await sentMessages(page)).some(message => message.type === 'mcpSave')).toBe(false);
+        await expect(page.locator('.market-confirm')).toHaveCount(0);
+    });
+}
 
 test('search round-trips to the host and can be cleared', async ({ page }) => {
     await openMarketplace(page);
@@ -360,8 +383,12 @@ test.describe('marketplace visual contract', () => {
             };
             await verify('catalog');
             await page.locator('.mp-row').first().getByRole('button', { name: locale === 'fa' ? 'افزودن' : 'Add', exact: true }).click();
-            await expect(page.locator('.mp-confirm-json')).toBeVisible();
+            await expect(page.locator('.market-confirm-json')).toBeVisible();
             await verify('confirm');
+            await page.locator('.market-confirm').getByRole('button', { name: locale === 'fa' ? 'تایید و افزودن' : 'Confirm and add' }).click();
+            await expect(page.locator('.market-confirm')).toHaveCount(0);
+            expect((await sentMessages(page)).some(m => m.type === 'mcpSave')).toBe(true);
+            await verify('added');
             await hostMessage(page, { ...MARKET_STATE, status: 'offline', entries: [ENTRIES[0]], error: 'Catalog unavailable' });
             await expect(page.locator('.mp-status')).toContainText(locale === 'fa' ? 'آفلاین' : 'Offline');
             await verify('offline');
@@ -390,8 +417,9 @@ for (const locale of ['en', 'fa'] as const) {
             const tags = page.getByRole('group', { name: locale === 'fa' ? 'برچسب ها' : 'Tags' });
             await expect(tags.getByRole('button').first()).toHaveText(locale === 'fa' ? 'ایرانی' : 'Iranian');
             await tags.getByRole('button').first().click();
-            await expect(page.locator('.mp-row')).toHaveCount(3);
+            await expect(page.locator('.mp-row')).toHaveCount(4);
             await expect(page.locator('.mp-row')).toContainText([
+                locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
                 locale === 'fa' ? 'ایرانی' : 'Iranian',
@@ -399,4 +427,25 @@ for (const locale of ['en', 'fa'] as const) {
             expect((await sentMessages(page)).some((m) => m.type === 'mcpSaveServers')).toBe(false);
         });
     }
+}
+
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 900]) {
+    test(`Zarinpal official docs can be added in ${locale} at ${width}px`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 900 });
+        await openMarketplace(page, locale);
+        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-before.png`) });
+        await hostMessage(page, { ...MARKET_STATE, entries: curatedMarketplaceEntries() });
+        const row = page.locator('.mp-row').filter({ hasText: locale === 'fa' ? 'مستندات زرین پال' : 'Zarinpal Docs' });
+        await expect(row).toBeVisible();
+        await row.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-catalog.png`) });
+        await row.getByRole('button', { name: locale === 'fa' ? 'افزودن' : 'Add', exact: true }).click();
+        const dialog = page.locator('.market-confirm');
+        await expect(dialog).toBeVisible();
+        await dialog.getByRole('button', { name: locale === 'fa' ? 'تایید و افزودن' : 'Confirm and add' }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(await page.locator('.settings-page').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        const save = (await sentMessages(page)).find(m => m.type === 'mcpSave');
+        expect(save).toMatchObject({ target: 'global', servers: [{ name: 'zarinpal', url: 'https://www.zarinpal.com/docs/mcp' }] });
+    });
 }

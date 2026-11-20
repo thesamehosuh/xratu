@@ -22,8 +22,11 @@ export interface ExplainedError {
     params: Record<string, string>;
 }
 
+const PROMPT_TEMPLATE_RE = /error rendering prompt with jinja template|unknown test:\s*sequence|issue with the model'?s prompt template/i;
+
 /** Text patterns, most specific first. The first match wins. */
 const TEXT_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+    [PROMPT_TEMPLATE_RE, 'errPromptTemplate'],
     [/context[_ ]?(length|window)|maximum context|too many tokens|prompt is too long|context_length_exceeded/i, 'errContextLength'],
     [/model.{0,30}(not found|does not exist|not exist)|no such model|unknown model|invalid model/i, 'errModelNotFound'],
     [/invalid.{0,20}(api )?key|incorrect api key|invalid x-api-key|unauthorized|authentication failed|api key not/i, 'errAuth'],
@@ -50,6 +53,7 @@ export function explainError(text: string, status?: number): ExplainedError | nu
     // Status wins over wording for the unambiguous classes.
     if (status === 401) return { valueKey: 'errAuth', params: { detail } };
     if (status === 429) return { valueKey: 'errRateLimited', params: { detail } };
+    if (PROMPT_TEMPLATE_RE.test(text)) return { valueKey: 'errPromptTemplate', params: { detail } };
     if (typeof status === 'number' && status >= 500) return { valueKey: 'errServer', params: { detail } };
     for (const [re, valueKey] of TEXT_RULES) {
         if (re.test(text)) return { valueKey, params: { detail } };

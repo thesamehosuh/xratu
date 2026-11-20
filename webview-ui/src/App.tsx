@@ -1,3 +1,7 @@
+import { nativeChildSessions } from './nativeChildSessions';
+import { MessageItem } from './components/MessageItem';
+import { ChildSessionsPanel } from './components/ChildSessionsPanel';
+import type { ChildSessionView } from '../../src/sessions/view';
 import { NativeConfiguration } from './components/EngineScope';
 import { ENGINE_CAPABILITIES } from '../../src/engines/types';
 import type { NativeSetupState, SetupEngine } from './types';
@@ -11,7 +15,6 @@ import { AgentNavigation } from './components/AgentNavigation';
 import { PageSidebar, type SettingsSection } from './components/PageSidebar';
 import { AppearancePage } from './components/AppearancePage';
 import { appearanceStyle, readAppearance } from './appearance';
-import { SessionPages } from './components/SessionPages';
 import { AgentsPage } from './components/AgentsPage';
 import { PullRequestIndicator } from './components/PullRequestIndicator';
 import { ChangesPanel } from './components/ChangesPanel';
@@ -75,7 +78,7 @@ import { getLocale, setLocale, t, tf } from './i18n';
 import { coerceTranscriptPrefs, EMPTY_TRANSCRIPT_PREFS, transcriptOptions, type TranscriptPrefs } from './transcriptPrefs';
 import type { ChatGptUsageView, LedgerDay, ModelRateView, ProxyCandidateView, ProxyRouteMode, ProxyStateView, ProviderUsageView, UsageTotals } from './types';
 
-type Screen = 'appearance' | 'workspace' | 'history' | 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
+type Screen = 'appearance' | 'boot' | 'welcome' | 'chat' | 'credentials' | 'settings' | 'capabilities' | 'usage' | 'proxy' | 'agents' | 'engines';
 
 /** Composer attachments → persisted-history shape (base64 dropped, images
  *  keep an inline preview for the just-sent bubble). */
@@ -231,7 +234,14 @@ export function App() {
     const [sessionTitle, setSessionTitle] = useState<string | null>(null);
     const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>('servers');
     const [taskChipOpen, setTaskChipOpen] = useState(false);
+    const [childReceipt, setChildReceipt] = useState<{sessionId: string; receipt?: string; accepted: boolean} | null>(null);
+    const [childSessions, setChildSessions] = useState<{rootId: string; sessions: ChildSessionView[]} | null>(null);
     const agentRuns = useMemo(() => collectAgentRuns(chat.messages), [chat.messages]);
+    const nativeChildren = useMemo(() => nativeChildSessions(agentRuns), [agentRuns]);
+    const activeAgentCount = engineState?.active === 'opencode'
+        ? nativeChildren.filter(child => ['queued', 'running', 'waiting_for_workspace', 'stopping', 'waiting_for_approval', 'waiting_for_answer'].includes(child.state)).length
+        : childSessions ? childSessions.sessions.filter(child => ['queued', 'running', 'waiting_for_workspace', 'stopping', 'waiting_for_approval', 'waiting_for_answer'].includes(child.state)).length
+            : agentRuns.filter(run => ['queued', 'running', 'waiting'].includes(run.status)).length;
     const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
     const [changeCount, setChangeCount] = useState(0);
     const [activeReviewNumber, setActiveReviewNumber] = useState<number | null>(null);
@@ -255,15 +265,18 @@ export function App() {
     const pullRequests = usePullRequests(currentSessionId);
     const downloads = useDownloads();
     const [browserAvailable, setBrowserAvailable] = useState(false);
-    const dock = useDockLayout(agentRuns.length > 0, chat.backgroundJobs.length > 0, changeCount > 0, pullRequests.state.links.length > 0, hasActivity(chat.messages), downloads.downloads.length > 0, browserAvailable);
+    const dock = useDockLayout(agentRuns.length > 0 || !!childSessions?.sessions.length, chat.backgroundJobs.length > 0, changeCount > 0, pullRequests.state.links.length > 0, hasActivity(chat.messages), downloads.downloads.length > 0, browserAvailable);
     const agentsVisible = dock.mainActive === 'agents' || dock.sideActive === 'agents';
     const backgroundVisible = dock.mainActive === 'background' || dock.sideActive === 'background';
     const { activate: setSurfaceTab } = dock;
+    const [agentSelectNonce, setAgentSelectNonce] = useState(0);
     const agentRunsRef = useRef(agentRuns);
     agentRunsRef.current = agentRuns;
     const observeAgent = useCallback((id: string) => {
         const run = agentRunsRef.current.find(run => run.id === id || run.call.callId === id);
-        setSelectedAgentId(run?.id ?? id); setSurfaceTab('agents');
+        setSelectedAgentId(run?.id ?? id);
+        setAgentSelectNonce(n => n + 1);
+        setSurfaceTab('agents');
     }, [setSurfaceTab]);
     const showConversation = useCallback(() => setSurfaceTab('conversation'), [setSurfaceTab]);
     const surfaceTab = dock.mainActive;
@@ -365,7 +378,7 @@ export function App() {
     const sessionSearchLatest = useRef(0);
     // Debounced full-text session search while the picker is open.
     useEffect(() => {
-        if ((!sessionsOpen && screen !== 'history' && screen !== 'workspace') || !sessionQuery.trim()) {
+        if (!sessionsOpen || !sessionQuery.trim()) {
             // Invalidate any in-flight search and drop the results view.
             sessionSearchLatest.current = ++sessionSearchSeq.current;
             setSessionResults(null);
@@ -380,7 +393,7 @@ export function App() {
             send({ type: 'searchSessions', query: sessionQuery, all: sessionsScope === 'all', requestId });
         }, 200);
         return () => clearTimeout(handle);
-    }, [sessionQuery, sessionsOpen, sessionsScope, send, screen]);
+    }, [sessionQuery, sessionsOpen, sessionsScope, send]);
 
     /** Kick off local-runtime discovery (welcome screen + credentials page).
      *  Probing can finish near-instantly - the ≥1s spinner floor lives in
@@ -742,8 +755,6 @@ export function App() {
             case 'proxy': setScreen(proxyReturnTo); return true;
             case 'settings':
             case 'appearance':
-            case 'history':
-            case 'workspace':
             case 'engines':
             case 'agents': setScreen('chat'); return true;
             default: return false;
@@ -804,6 +815,7 @@ export function App() {
                     setScreen('welcome');
                     break;
                 case 'resetConversation':
+                    setChildSessions(null);
                     dispatch(msg);
                     pendingSteers.current.clear();
                     setQueuedSteers([]);
@@ -819,14 +831,40 @@ export function App() {
                     setSelectedModel(null);
                     break;
                 case 'showChat':
+                    send({type:'childSessionsGet'});
                     setScreen('chat');
                     if (msg.workspaceKind) setWorkspaceKind(msg.workspaceKind);
+                    break;
+                case 'subagentState': {
+                    dispatch(msg);
+                    const trace=msg.trace;
+                    setChildSessions(current=>current?{...current,sessions:current.sessions.map(child=>{
+                        if(child.id!==trace.taskId || child.generation!==trace.generation || (child.displayRevision??0)>(trace.sequence??trace.updatedAt) || !['running','waiting_for_approval','waiting_for_answer'].includes(child.state))return child;
+                        const active=trace.entries.slice().reverse().find(entry=>entry.kind==='tool'&&!entry.endedAt);
+                        return {...child,displayRevision:trace.sequence??trace.updatedAt,
+                            state:trace.status==='waiting'?(trace.pendingTools?.includes('ask_session_question')?'waiting_for_answer':'waiting_for_approval'):child.state==='waiting_for_approval'||child.state==='waiting_for_answer'?'running':child.state,
+                            activeTool:active?{name:active.tool??'',live:active.live}:undefined,
+                            liveText:trace.entries.slice().reverse().find(entry=>entry.kind==='text'&&!entry.endedAt)?.text};
+                    })}:current);
+                    break;
+                }
+                case 'childSessionReceipt':
+                    setChildReceipt({sessionId: msg.sessionId, receipt: msg.receipt, accepted: msg.accepted});
+                    break;
+                case 'childSessions':
+                    setChildSessions(current=>({rootId:msg.rootId,sessions:msg.sessions.map(child=>{
+                        const previous=current?.rootId===msg.rootId?current.sessions.find(item=>item.id===child.id):undefined;
+                        return previous && previous.generation===child.generation && (previous?.displayRevision??0)>(child.displayRevision??0) && ['running','waiting_for_approval','waiting_for_answer'].includes(child.state)
+                            ? {...child,displayRevision:previous.displayRevision,liveText:previous.liveText,activeTool:previous.activeTool,state:previous.state}
+                            : child;
+                    })}));
                     break;
                 case 'agentsState':
                     setAgentProfiles(msg.profiles);
                     setAgentsError(msg.errorKey);
                     break;
                 case 'sessionState': {
+                    send({type:'childSessionsGet'});
                     const previous = draftIdentity.current;
                     const key = composerDraftKey(msg.workspace ?? '', msg.id);
                     const live = msg.browserSessionId ?? msg.id;
@@ -1061,6 +1099,10 @@ export function App() {
                     break;
                 case 'replyLanguage':
                     setReplyLanguageState(msg.replyLanguage);
+                    break;
+                case 'appearancePrefs':
+                    if (msg.prefs) setAppearance(readAppearance(msg.prefs));
+                    else send({ type: 'appearanceSet', prefs: readAppearance(getWebviewState().surfaceAppearance) });
                     break;
                 case 'transcriptPrefs':
                     setTranscriptPrefs(coerceTranscriptPrefs(msg.prefs));
@@ -1352,15 +1394,11 @@ export function App() {
         } else setScreen(section);
     };
     let overlay: JSX.Element | null = null;
-    if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={setAppearance} onTheme={() => send({ type: 'selectColorTheme' })} />;
-    if (screen === 'history' || screen === 'workspace') overlay = <SessionPages history={screen === 'history'} sessions={sessionQuery.trim() ? sessionResults ?? [] : sessions} loading={sessionsLoading || !!sessionQuery.trim() && sessionResults === null} query={sessionQuery} onQuery={setSessionQuery}
-        onOpen={id => { setScreen('chat'); if (id !== currentSessionId) { setEditDraft(null); send({ type: 'openSession', id }); } }} onNew={() => { setEditDraft(null); showConversation(); send({ type: 'newSession' }); }}
-        onConversation={() => { setScreen('chat'); showConversation(); }} onAgents={() => { setScreen('chat'); setSurfaceTab('agents'); }} onBackground={() => { setScreen('chat'); setSurfaceTab('background'); }}
-        onPanel={panel => { setScreen('chat'); dock.activate(panel); }} pending={chat.messages.reduce((count, message) => count + (message.approval && !message.approval.resolution ? 1 : 0) + (message.decisions?.filter(decision => !decision.answered).length ?? 0), 0)} agents={agentRuns.length} background={liveJobs.length} />;
+    if (screen === 'appearance') overlay = <AppearancePage prefs={appearance} onChange={prefs => { setAppearance(prefs); send({ type: 'appearanceSet', prefs }); }} onTheme={() => send({ type: 'selectColorTheme' })} />;
     if (screen === 'engines') overlay = <EnginesPage state={engineState} send={send} provider={(savedCredentials.find(credential => credential.id === activeCredentialId) ?? savedCredentials.find(credential => credential.active))?.label ?? null} connection={conn} model={selectedModel ? modelInfo?.displayNames[selectedModel] ?? selectedModel : null} plan={plan} onConfigure={engine => { settingsScopeInitialized.current = true; setSettingsEngine(engine); setCredReturnTo('chat'); setScreen('credentials'); if (engine === 'xratu') send({ type: 'openCredentials' }); }} />;
 
     if (screen === 'agents') {
-        overlay = <AgentsPage profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
+        overlay = <AgentsPage canLaunch={engineState?.active !== 'opencode'} launchReady={Boolean(childSessions?.rootId)} onLaunch={(profile, prompt) => { if (!childSessions?.rootId) return; send({type:'childSessionAction',rootId:childSessions.rootId,sessionId:profile.name,action:'create',text:prompt,receipt:crypto.randomUUID()});setScreen('chat');dock.activate('agents'); }} profiles={agentProfiles} errorKey={agentsError} onRefresh={refreshAgents} onManage={() => send({ type: 'agentsManage' })} onOpen={(profile) => send({ type: 'agentFileOpen', name: profile.name, source: profile.source })} />;
     }
 
     const renderCredentials = (embedded?: 'provider' | 'local') => (
@@ -1628,7 +1666,7 @@ export function App() {
     />;
 
     const overlayOpen = overlay !== null;
-    const settingsOpen = overlayOpen && screen !== 'welcome' && screen !== 'workspace' && screen !== 'history';
+    const settingsOpen = overlayOpen && screen !== 'welcome';
     useLayoutEffect(() => {
         if (overlayOpen && screen !== 'welcome') setSessionsOpen(window.innerWidth >= 860);
     }, [overlayOpen, screen]);
@@ -1658,9 +1696,7 @@ export function App() {
                 onToggleSide={dock.toggleSide}
                 onAddTab={() => { setScreen('chat'); dock.add('main'); }}
                 onBackWork={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }}
-                destinationLabel={overlayOpen ? t(screen === 'history' ? 'surfaceHistory' : screen === 'workspace' ? 'surfaceWorkspace' : screen === 'welcome' ? 'settingsTitle' : activeSection === 'appearance' ? 'appearanceTitle' : activeSection === 'settings' ? 'settingsTitle' : activeSection === 'mcp' ? 'mcpServersTab' : activeSection === 'providers' ? 'providersTitle' : activeSection === 'engines' ? 'enginesTitle' : activeSection === 'skills' ? 'skillsTitle' : activeSection === 'marketplace' ? 'mcpMarketTab' : activeSection === 'agents' ? 'surfaceAgents' : activeSection === 'usage' ? 'settingsUsage' : 'proxyPageTitle') : undefined}
-                onOpenHistory={() => { setScreen('history'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
-                onOpenWorkspace={() => { setScreen('workspace'); setSessionsLoading(true); send({ type: 'listSessions', all: sessionsScope === 'all' }); }}
+                destinationLabel={overlayOpen ? t(screen === 'welcome' ? 'settingsTitle' : activeSection === 'appearance' ? 'appearanceTitle' : activeSection === 'settings' ? 'settingsTitle' : activeSection === 'mcp' ? 'mcpServersTab' : activeSection === 'providers' ? 'providersTitle' : activeSection === 'engines' ? 'enginesTitle' : activeSection === 'skills' ? 'skillsTitle' : activeSection === 'marketplace' ? 'mcpMarketTab' : activeSection === 'agents' ? 'surfaceAgents' : activeSection === 'usage' ? 'settingsUsage' : 'proxyPageTitle') : undefined}
                 settingsNavigation={settingsOpen ? <PageSidebar current={activeSection} onSelect={openSection} onBack={() => { setScreen('chat'); if (!dock.wide) setSessionsOpen(false); }} /> : undefined}
                 workNavigation={<nav className="workspace-views" aria-label={t('surfaceWorkspace')}>{dock.allPanels.filter(panel => !isNewTab(panel)).map(panel => {
                     if (isNewTab(panel)) return null;
@@ -1751,7 +1787,7 @@ export function App() {
                     if (panel !== dock.dragging) return;
                     event.preventDefault(); dock.move(dock.dragging, (event.target as Element).closest('.panel-side,.dock-sidebar') ? 'side' : 'main');
                 }}>
-            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
+            <SurfaceTabs location="main" panels={dock.wide ? dock.mainPanels : dock.allPanels} active={surfaceTab} wide={dock.wide} count={changeCount} agentCount={activeAgentCount} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
             {[...dock.layout.main, ...dock.layout.side].filter(isNewTab).map(tab => <NewTabPanel key={tab} tab={tab} panelClass={dock.position(tab)} openPanels={dock.allPanels} onChoose={panel => dock.open(panel, dock.layout.side.includes(tab) ? 'side' : 'main', tab)} />)}
             <div className={`conversation-panel${chat.messages.length === 0 ? ' empty-conversation' : ''} ${dock.position('conversation')}`} aria-hidden={!conversationVisible || undefined} id="surface-panel-conversation" role="tabpanel" aria-labelledby="surface-tab-conversation">
             <div className="chat-stage">
@@ -1792,6 +1828,7 @@ export function App() {
                     <button
                         type="button"
                         className="jump-btn"
+                        onMouseDown={event => event.preventDefault()}
                         onClick={jumpToBottom}
                         aria-label={t('jumpToBottom')}
                         title={t('jumpToBottom')}
@@ -1841,6 +1878,13 @@ export function App() {
                             <CornerDownRight size={11} aria-hidden="true" className="rtl-flip" />
                             <span className="queued-steer-label">{t('steerQueued')}</span>
                             <span className="queued-steer-text" dir="auto">{s.label}</span>
+                            {engineState?.active !== 'opencode' && (
+                                <button type="button" className="queued-steer-now" title={t('steerNowTitle')}
+                                    onMouseDown={event => event.preventDefault()}
+                                    onClick={() => send({ type: 'steerNow', steerId: s.id })}>
+                                    <span>{t('steerNow')}</span>
+                                </button>
+                            )}
                         </span>
                     ))}
                 </div>
@@ -1952,7 +1996,7 @@ export function App() {
             </div>
             </div>
             {(activityVisible || activityOpened) && <ActivityPanel sessionKey={currentSessionId} visible={activityVisible} panelClass={dock.position('activity')} messages={chat.messages} busy={chat.busy} onOpenDiff={handleOpenDiff} taskList={taskListView ? { ...taskListView, editable: false } : undefined} transcriptPrefs={transcriptPrefs} firstVisible={firstVisible} onShowEarlier={showEarlier} />}
-            <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={() => { setScreen('chat'); showConversation(); }} prefs={transcriptPrefs} sessionKey={currentSessionId} />
+            {(childSessions?.sessions.length || engineState?.active === 'opencode' && nativeChildren.length) ? <ChildSessionsPanel requestedId={selectedAgentId ? (agentRuns.find(run => run.id === selectedAgentId || run.call.callId === selectedAgentId)?.call.callId ?? selectedAgentId) : null} selectionNonce={agentSelectNonce} onNew={() => setScreen('agents')} decisions={callId => chat.messages.filter(message => message.approval?.source?.parentCallId === callId && !message.approval.resolution || message.decisions?.some(decision => decision.source?.parentCallId === callId && !decision.answered)).map(message => <MessageItem key={message.id} message={{...message, text:'', steps:[], decisions:message.decisions?.filter(decision => decision.source?.parentCallId === callId && !decision.answered), approval:message.approval?.source?.parentCallId === callId ? message.approval : undefined}} onApprovalDecision={handleApprovalDecision} onDecisionResponse={handleDecisionResponse} />)} receipt={childReceipt} sessions={engineState?.active === 'opencode' ? nativeChildren : childSessions!.sessions} rootId={childSessions?.rootId ?? currentSessionId ?? ''} visible={agentsVisible} panelClass={dock.position('agents')} onAction={(rootId, sessionId, action, text, receipt) => {if (engineState?.active === 'opencode') {const callId=nativeChildren.find(child=>child.id===sessionId)?.parentCallId;if(callId && action==='stop')send({type:'stopAgent',callId});else if(callId && action==='send' && text && receipt)send({type:'nativeChildInstruction',rootId,sessionId,callId,text,receipt});} else send({type:'childSessionAction', rootId, sessionId, action, text, receipt});}} onParent={() => { setScreen('chat'); showConversation(); }} /> : <SubagentsPanel runs={agentRuns} selectedId={selectedAgentId} onSelect={setSelectedAgentId} onStop={handleStopAgent} visible={agentsVisible} panelClass={dock.position('agents')} onConversation={() => { setScreen('chat'); showConversation(); }} prefs={transcriptPrefs} sessionKey={currentSessionId} />}
             <BackgroundTasksPanel jobs={chat.backgroundJobs} visible={backgroundVisible} panelClass={dock.position('background')} onStop={handleKillBackground} onConversation={() => { setScreen('chat'); showConversation(); }} />
             <DownloadsPanel {...downloads} visible={dock.mainActive === 'downloads' || dock.sideActive === 'downloads'} panelClass={dock.position('downloads')} />
             <BrowserPanel onAvailable={setBrowserAvailable} visible={!overlayOpen && (dock.mainActive === 'browser' || dock.sideActive === 'browser')} panelClass={dock.position('browser')} sessionKey={currentBrowserSessionId} />
@@ -1962,7 +2006,7 @@ export function App() {
                 return <button key={panel} type="button" className="icon-btn" title={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} aria-label={isNewTab(panel) ? t('surfaceAddTab') : t(PANEL_LABELS[panel])} onClick={() => setSurfaceTab(panel)}><Icon size={15} /></button>;
             })}</nav>}
             <DockSidebar active={dock.wide && dock.sideOpen} dragging={!!dock.dragging}>
-                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={agentRuns.length} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
+                <SurfaceTabs location="side" panels={dock.wide ? dock.sidePanels : []} active={dock.sideActive} wide={dock.wide} count={changeCount} agentCount={activeAgentCount} backgroundCount={liveJobs.length} dragging={dock.dragging} onDrag={dock.setDragging} onActivate={setSurfaceTab} onMove={dock.move} onReset={dock.reset} onAdd={dock.add} onClose={dock.close} onReopen={dock.reopen} canAdd={dock.canAdd} canReopen={dock.canReopen} />
                 {dock.sidePanels.length === 0 && <div className="dock-empty"><button type="button" className="settings-ghost-action" onClick={() => dock.add('side')}><span>{t('surfaceAddTab')}</span></button></div>}
             </DockSidebar>
             <div className={`changes-pane ${dock.position('changes')}`} id="surface-panel-changes" role="tabpanel" aria-labelledby="surface-tab-changes" aria-hidden={dock.mainActive !== 'changes' && dock.sideActive !== 'changes' || undefined}><ChangesPanel key={currentSessionId ?? ''} turns={reviewTurns} selectedNumber={activeReviewNumber} sha={checkpointSha} initialPath={reviewPath} busy={chat.busy} sessionKey={currentSessionId ?? ''} onCount={setChangeCount} onFiles={setReviewFiles} onTurnFiles={recordTurnFiles} /></div>

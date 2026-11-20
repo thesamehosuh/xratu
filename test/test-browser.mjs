@@ -16,6 +16,9 @@ test('browser navigation accepts local servers and rejects executable/credential
     assert.equal(browserUrl('example.com'), 'https://example.com/');
     assert.equal(browserUrl('http://[::1]:3000'), 'http://[::1]:3000/');
     for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,test', 'ftp://example.com', 'https://key:secret@example.com', '', null, 'http://']) assert.throws(() => browserUrl(url));
+    for (const localPath of ['./index.html', '../index.html', '/tmp/index.html', '~/index.html', 'C:\\site\\index.html', 'file:///workspace/index.html']) {
+        assert.throws(() => browserUrl(localPath, true), /Local file paths cannot be opened directly/i);
+    }
     assert.equal(browserUrl('localhost:3000', true), 'http://localhost:3000/');
     assert.throws(() => browserUrl('https://example.com', true));
 });
@@ -35,10 +38,21 @@ function fakeBrowser() {
         isClosed: () => closed, setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
         url: () => url, title: async () => 'Test page', mainFrame: () => page,
         goto: async target => { calls.push(['goto', target]); url = target; page.emit('framenavigated', page); },
+        reload: async () => { calls.push(['reload', url]); page.emit('framenavigated', page); page.emit('domcontentloaded'); },
         screenshot: async () => Buffer.from('frame'), setViewportSize: async size => calls.push(['viewport', size]),
         keyboard: { press: async key => calls.push(['press', key]), insertText: async text => calls.push(['type', text]) },
         mouse: { click: async (x, y) => calls.push(['click', x, y]), move: async (x, y) => calls.push(['move', x, y]), wheel: async (x, y) => calls.push(['wheel', x, y]) },
-        locator: () => ({ ariaSnapshot: async () => '- button "Save"', innerText: async () => 'Save', click: async () => {}, fill: async () => {} }),
+        locator: () => ({ ariaSnapshot: async () => '- button "Save"', innerText: async () => 'Save', click: async () => {}, fill: async () => {}, waitFor: async () => {} }),
+        getByText: (text, opts) => {
+            calls.push(['getByText', text, opts]);
+            const loc = {
+                filter: filterOpts => { calls.push(['filter', filterOpts]); return loc; },
+                first: () => { calls.push(['first']); return loc; },
+                waitFor: async waitOpts => { calls.push(['waitFor', waitOpts]); },
+            };
+            return loc;
+        },
+        setUrl: target => { url = target; },
         evaluate: async () => ({ ok: true }),
     });
     const context = new EventEmitter();
@@ -240,5 +254,96 @@ test('an agent browser-open reveals launch errors and stale opens cannot switch 
         assert.ok(shown >= 0 && failed > shown);
         await controller.tool('old-chat', 'browser_open', { url: 'http://localhost:3000' });
         assert.equal(events.filter(event => event.type === 'openBrowser').length, 1);
+    } finally { controller.dispose(); }
+});
+
+test('loopback pages auto-reload on workspace file changes unless HMR WebSocket is active', async () => {
+    const fake = fakeBrowser();
+    const events = [];
+    const controller = new BrowserController({
+        emit: event => events.push(event),
+        executablePath: () => '',
+        launch: async () => fake.browser,
+        liveReloadDebounceMs: 25,
+    });
+    try {
+        controller.setSession('chat');
+        const id = controller.getState().browserId;
+        await controller.setVisible('chat', id, true);
+        await controller.command('chat', id, { action: 'open', url: 'http://localhost:8000/index.html' });
+        const initialFrames = events.filter(e => e.type === 'browserFrame');
+        controller.ack('chat', id, initialFrames.at(-1).frame.frameId);
+        // Rapid saves coalesce into one reload.
+        controller.notifyWorkspaceFileChanged();
+        controller.notifyWorkspaceFileChanged();
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 160));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 1);
+        assert.ok(events.filter(e => e.type === 'browserFrame').length > initialFrames.length, 'live reload pushes a fresh frame');
+
+        // routeWebSocket must not override Playwright's default close forwarding.
+        let onCloseCalled = false;
+        let connected = false;
+        fake.sockets[0]({
+            url: () => 'ws://localhost:8000/@vite/client',
+            close: () => {},
+            connectToServer: () => { connected = true; },
+            onClose: () => { onCloseCalled = true; },
+        });
+        assert.equal(connected, true);
+        assert.equal(onCloseCalled, false, 'routeWebSocket must not install page-side onClose');
+
+        // An active loopback HMR WebSocket observed via page.on('websocket') skips hard reload until it closes.
+        const ws = new EventEmitter();
+        let wsClosed = false;
+        Object.assign(ws, { url: () => 'ws://localhost:8000/@vite/client', isClosed: () => wsClosed });
+        fake.page.emit('websocket', ws);
+
+        // Fragment navigation must keep live HMR socket count and not leave loading stuck true.
+        fake.page.setUrl('http://localhost:8000/index.html#section');
+        fake.page.emit('framenavigated', fake.page);
+        assert.equal(controller.getState().loading, false, 'fragment navigation must not leave loading stuck true');
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 1, 'HMR WebSocket survives fragment navigation and suppresses reload');
+
+        // Closing the socket (client or server initiated) re-enables live reload.
+        wsClosed = true;
+        ws.emit('close');
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 2, 'closing HMR WebSocket re-enables live reload');
+
+        // Navigating to a different loopback document cancels a pending debounced reload for the old page.
+        controller.notifyWorkspaceFileChanged();
+        await controller.command('chat', id, { action: 'navigate', url: 'http://localhost:8000/other.html' });
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 2, 'pending reload bound to previous document does not reload new page');
+
+        // Remote URLs never auto-reload on local file edits.
+        await controller.command('chat', id, { action: 'navigate', url: 'https://example.com' });
+        controller.notifyWorkspaceFileChanged();
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(fake.calls.filter(([name]) => name === 'reload').length, 2, 'remote pages do not auto-reload');
+
+        // browser_wait_for filters text matches by visibility before taking first().
+        const waitRes = await controller.tool('chat', 'browser_wait_for', { text: 'Ready' });
+        assert.equal(waitRes.isError, undefined);
+        const textIdx = fake.calls.findIndex(([name]) => name === 'getByText');
+        assert.deepEqual(fake.calls[textIdx + 1], ['filter', { visible: true }]);
+        assert.deepEqual(fake.calls[textIdx + 2], ['first']);
+
+        // browser_evaluate enforces the 64 KB byte cap after JSON serialization, even with heavy backslash escaping or UTF-8.
+        fake.page.evaluate = async () => '\\'.repeat(40_000);
+        const evalSlash = await controller.tool('chat', 'browser_evaluate', { expression: '1' });
+        assert.equal(evalSlash.isError, undefined);
+        assert.ok(Buffer.byteLength(evalSlash.output, 'utf8') <= 64_000, 'escaped backslash preview stays <= 64 KB');
+        assert.equal(JSON.parse(evalSlash.output).truncated, true);
+
+        fake.page.evaluate = async () => '😀'.repeat(20_000);
+        const evalEmoji = await controller.tool('chat', 'browser_evaluate', { expression: '1' });
+        assert.equal(evalEmoji.isError, undefined);
+        assert.ok(Buffer.byteLength(evalEmoji.output, 'utf8') <= 64_000, 'multi-byte UTF-8 preview stays <= 64 KB');
+        assert.equal(JSON.parse(evalEmoji.output).truncated, true);
     } finally { controller.dispose(); }
 });

@@ -160,31 +160,6 @@ export const HISTORY_TRUNCATION_MARKER =
     '[Earlier messages in this conversation were removed to fit the context window. '
     + 'Continue seamlessly; do not mention this.]';
 
-export function contextStatusLine(usedTokens: number, windowTokens?: number | null): string {
-    if (!windowTokens || windowTokens <= 0) return '';
-    const pct = Math.min(100, Math.round((usedTokens / windowTokens) * 100));
-    return `\n\n[Context status: ${pct}% of the ${windowTokens}-token context window is in use (${usedTokens}/${windowTokens} tokens).]`;
-}
-
-export function contextHint(
-    usedTokens: number,
-    windowTokens?: number | null,
-    compactRatio: number = AUTO_COMPACT_RATIO,
-): string {
-    if (!windowTokens || windowTokens <= 0) return '';
-    const ratio = usedTokens / windowTokens;
-    if (ratio > compactRatio) {
-        return '\n\n⚠ CONTEXT CRITICAL: the context window is nearly exhausted and older turns may have been removed. Keep responses minimal, avoid re-reading files, and prefer precise edits.';
-    }
-    if (ratio > 0.7) {
-        return "\n\n⚠ CONTEXT FULL: You are running out of context space. Keep responses concise. Avoid reading files you don't need.";
-    }
-    if (ratio > 0.5) {
-        return '\n\n⚠ Context is getting full. Keep tool output and responses lean to save tokens.';
-    }
-    return '';
-}
-
 /**
  * Proactive auto-compact for the local loop. When the assembled messages
  * fill >= AUTO_COMPACT_RATIO of the model's window, oldest COMPLETE turns
@@ -315,6 +290,8 @@ const TOOL_RESULT_MAX_RATIO = 0.4;
 const TOOL_RESULT_TOTAL_RATIO = 0.5;
 /** Never clip a result below this many chars - a clipped stub stays useful. */
 const TOOL_RESULT_MIN_CHARS = 800;
+/** Marker inserted by `clipForSummary` when trimming a result over 200 chars. */
+const TOOL_RESULT_CLIP_MARKER = '\n[...clipped...]\n';
 /** Last-resort replacement when even the floor cannot fit the budget. */
 const TOOL_RESULT_OMISSION = '[tool output omitted to fit the context window]';
 
@@ -415,10 +392,13 @@ export function boundToolResults(
 
     const windowChars = windowTokens * TOOL_RESULT_CHARS_PER_TOKEN;
     const perResultCap = Math.max(TOOL_RESULT_MIN_CHARS, Math.floor(windowChars * TOOL_RESULT_MAX_RATIO));
-    // Tool SCHEMAS also consume the window - subtract them from the budget
-    // (they may consume it entirely; the omission pass still enforces this).
+    // Tool SCHEMAS also consume the window - subtract them from the budget.
+    // On small local windows where full tool schemas exceed half the window,
+    // keep at least one clipped result's worth of headroom (including its clip
+    // marker and omission markers for any older results) so the newest tool
+    // output is never blindly omitted on round 1.
     const totalBudget = Math.max(
-        0,
+        TOOL_RESULT_MIN_CHARS + TOOL_RESULT_CLIP_MARKER.length,
         Math.floor(windowChars * TOOL_RESULT_TOTAL_RATIO) - toolTokens * TOOL_RESULT_CHARS_PER_TOKEN,
     );
 
@@ -440,7 +420,7 @@ export function boundToolResults(
         if (total <= totalBudget) break;
         const text = contentText(messages[i].content);
         if (text.length <= TOOL_RESULT_MIN_CHARS) continue;
-        const target = Math.max(TOOL_RESULT_MIN_CHARS, text.length - (total - totalBudget));
+        const target = Math.max(TOOL_RESULT_MIN_CHARS, text.length - (total - totalBudget) - TOOL_RESULT_CLIP_MARKER.length);
         if (target >= text.length) continue;
         const before = contentChars(messages[i].content);
         messages[i] = { ...messages[i], content: clipToolContent(messages[i].content, target) };
@@ -453,10 +433,20 @@ export function boundToolResults(
     // Keyed on the whole message's weight, not just its text: an image still
     // riding along (because its text alone was under the floor) has to be
     // reclaimable too, or a run of screenshot-only results is unshrinkable.
-    for (const i of idxs) {
+    for (let k = 0; k < idxs.length; k++) {
         if (total <= totalBudget) break;
+        const i = idxs[k];
         const before = contentChars(messages[i].content);
         if (before <= TOOL_RESULT_OMISSION.length) continue;
+        if (k === idxs.length - 1) {
+            const room = totalBudget - (total - before) - TOOL_RESULT_CLIP_MARKER.length;
+            if (room > TOOL_RESULT_OMISSION.length) {
+                messages[i] = { ...messages[i], content: clipToolContent(messages[i].content, room) };
+                total -= before - contentChars(messages[i].content);
+                changed = true;
+                if (total <= totalBudget) break;
+            }
+        }
         messages[i] = { ...messages[i], content: TOOL_RESULT_OMISSION };
         total -= before - TOOL_RESULT_OMISSION.length;
         changed = true;

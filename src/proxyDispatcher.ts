@@ -14,7 +14,7 @@
  */
 import * as vscode from 'vscode';
 import { ProxyAgent, type Dispatcher } from 'undici';
-import { resolveProxyUrl, pickNoProxy, parseNoProxy, hostMatchesNoProxy, hostFromUrl, isHttpProxy, isSocksProxy, redactProxyUrl, type ProxyMode, type ProxyRouteMode, type ResolvedProxy } from './proxy';
+import { resolveProxyUrl, pickNoProxy, shouldBypassProxy, isHttpProxy, isSocksProxy, redactProxyUrl, type ProxyMode, type ProxyRouteMode, type ResolvedProxy } from './proxy';
 import { getSystemProxyUrl } from './systemProxy';
 
 
@@ -89,13 +89,10 @@ export function getProxyDispatcher(targetUrl?: string, override?: ProxyRouteMode
         disposeCached();
         return undefined;
     }
-    // no_proxy bypass: this target talks direct, so the caller's SSRF check
-    // must run. A per-server 'proxy' override skips it deliberately. Do NOT
-    // dispose the cached agent - other targets still use it.
-    if (override !== 'proxy' && targetUrl) {
-        const host = hostFromUrl(targetUrl);
-        if (host && hostMatchesNoProxy(host, parseNoProxy(getNoProxy()))) return undefined;
-    }
+    // Local/LAN and no_proxy bypass: this target talks direct, so the caller's
+    // SSRF check still runs. A per-server 'proxy' override skips it
+    // deliberately. Do NOT dispose the cached agent - other targets still use it.
+    if (shouldBypassProxy(targetUrl, getNoProxy(), override)) return undefined;
     if (isSocksProxy(url)) {
         disposeCached();
         warnUnsupported('SOCKS proxies are not supported yet - set an HTTP proxy instead');
