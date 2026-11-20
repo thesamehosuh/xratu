@@ -1083,10 +1083,11 @@ test.describe('work surface', () => {
         expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
         await post(page, { type: 'compactionState', active: false, completed: true });
         await expect(page.locator('.compaction-status')).toHaveCount(0);
-        await expect(page.locator('.compaction-divider')).toBeVisible();
+        const divider = page.locator('.messages-inner .compaction-divider');
+        await expect(divider).toBeVisible();
         await post(page, { type: 'fullResponse', persian: 'Continuing after compaction.', renderedHtml: '<p>Continuing after compaction.</p>' });
-        await expect(page.locator('.compaction-divider')).toBeVisible();
-        const dividerBox = await page.locator('.compaction-divider').boundingBox();
+        await expect(divider).toBeVisible();
+        const dividerBox = await divider.boundingBox();
         const innerBox = await page.locator('.messages-inner').boundingBox();
         expect(dividerBox && innerBox && Math.abs(dividerBox.x - innerBox.x) <= 2 && Math.abs(dividerBox.width - innerBox.width) <= 2).toBe(true);
         await post(page, { type: 'byokReset' });
