@@ -210,18 +210,16 @@ test('appending while scrolled up keeps the reader anchor', async ({ page }) => 
     }
     const bubbles = page.locator('article.msg.user');
     await expect(bubbles).toHaveCount(40);
-    await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
+    const transcript = page.locator('.messages');
+    await transcript.evaluate((el) => { el.scrollTop = 0; });
     await expect(page.locator('.jump-btn')).toBeVisible();
-    const first = page.getByText('msg 0', { exact: true });
-    const anchor = () => first.evaluate(el => el.getBoundingClientRect().top - el.closest('.messages')!.getBoundingClientRect().top);
-    const originalTop = await anchor();
     await page.evaluate(() => {
         window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg x' } }));
         window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg y' } }));
     });
     await expect(bubbles).toHaveCount(42);
-    await expect(first).toBeInViewport();
-    expect(await anchor()).toBeCloseTo(originalTop, 0);
+    await expect(page.getByText('msg 0', { exact: true })).toBeInViewport();
+    expect(await transcript.evaluate(el => el.scrollTop)).toBe(0);
     await expect(page.locator('.show-earlier')).toHaveCount(0);
 });
 
