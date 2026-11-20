@@ -1051,9 +1051,13 @@ test.describe('work surface', () => {
         await page.keyboard.press('Escape');
 
         // Mode controls wait for host echo, Escape closes menus & overlays without cancelling.
+        await post(page, { type: 'restoreUser', value: 'Compact this long conversation' });
         await post(page, { type: 'startResponse' });
         await post(page, { type: 'compactionState', active: true });
         await expect(page.locator('.compaction-status')).toBeVisible();
+        const statusBox = await page.locator('.compaction-status').boundingBox();
+        const composerBox = await page.locator('.composer').boundingBox();
+        expect(statusBox && composerBox && Math.abs(statusBox.x - composerBox.x) <= 2 && Math.abs(statusBox.width - composerBox.width) <= 2).toBe(true);
         await page.locator('[data-policy="mode"]').click();
         await page.getByRole('menuitemradio', { name: 'Plan', exact: true }).click();
         expect(await sent(page)).toContainEqual({ type: 'togglePlanMode' });
@@ -1077,6 +1081,16 @@ test.describe('work surface', () => {
         await page.keyboard.press('Escape');
         await expect(page.locator('.page-content')).toHaveCount(0);
         expect((await sent(page)).some((m) => m.type === 'cancelRequest')).toBe(false);
+        await post(page, { type: 'compactionState', active: false, completed: true });
+        await expect(page.locator('.compaction-status')).toHaveCount(0);
+        const divider = page.locator('.messages-inner .compaction-divider');
+        await expect(divider).toBeVisible();
+        await post(page, { type: 'fullResponse', persian: 'Continuing after compaction.', renderedHtml: '<p>Continuing after compaction.</p>' });
+        await expect(page.locator('.messages-inner')).toContainText('Continuing after compaction.');
+        await expect(divider).toBeVisible();
+        const dividerBox = await divider.boundingBox();
+        const innerBox = await page.locator('.messages-inner').boundingBox();
+        expect(dividerBox && innerBox && Math.abs(dividerBox.x - innerBox.x) <= 2 && Math.abs(dividerBox.width - innerBox.width) <= 2).toBe(true);
         await post(page, { type: 'byokReset' });
         await expect(page.locator('.compaction-status')).toHaveCount(0);
     });

@@ -47,6 +47,19 @@ import { conversationPrefs, prefOn, toolFamily, transcriptOptions, type Transcri
 /** Open the native diff editor for completed edit call(s). */
 type OpenDiffHandler = (edits: OpenDiffEdit[]) => void;
 
+function CompactionDivider() {
+    return (
+        <div className="compaction-divider" role="status">
+            <span className="compaction-divider-line" aria-hidden="true" />
+            <span className="compaction-divider-label">
+                <Minimize2 size={12} aria-hidden="true" />
+                <span>{t('compactedContext')}</span>
+            </span>
+            <span className="compaction-divider-line" aria-hidden="true" />
+        </div>
+    );
+}
+
 function RetryCountdown({ retryStatus }: { retryStatus: NonNullable<ChatMessage['retryStatus']> }) {
     const [seconds, setSeconds] = useState(Math.ceil(retryStatus.nextRetryInMs / 1000));
     useEffect(() => {
@@ -81,7 +94,8 @@ type Row =
     // A settled `ask_user_question`: the compact "Answered" pills, INLINE in
     // one row (a turn may settle several). Present only on reload - while the
     // live cards exist they render their own pill row.
-    | { key: string; kind: 'decision'; steps: Step[] };
+    | { key: string; kind: 'decision'; steps: Step[] }
+    | { key: string; kind: 'compacted'; step: Step };
 
 type WorkGroup = { key: string; kind: 'workGroup'; category: 'explore' | 'edit' | 'terminal' | 'git' | 'work'; rows: Row[] };
 type ConversationRow = Row | WorkGroup;
@@ -91,7 +105,7 @@ function rowCalls(row: Row): ToolRow[] {
 }
 
 function rowStep(row: Row): Step | undefined {
-    if (row.kind === 'thinking' || row.kind === 'taskList') return row.step;
+    if (row.kind === 'thinking' || row.kind === 'taskList' || row.kind === 'compacted') return row.step;
     if (row.kind === 'tool') return row.call;
     if (row.kind === 'toolGroup') return row.calls[0]?.call;
     return row.steps[0];
@@ -430,6 +444,8 @@ function buildRows(steps: Step[], hasDecisionCard: boolean): Row[] {
                 continue;
             }
             pushToolRow(rows, { key: s.id, call: s });
+        } else if (s.kind === 'compacted') {
+            rows.push({ key: s.id, kind: 'compacted', step: s });
         } else if (s.kind === 'toolResult') {
             if (s.tool === TASK_LIST_TOOL || s.tool === USER_QUESTION_TOOL) continue;
             pushToolRow(rows, {
@@ -457,7 +473,9 @@ function activityRows(steps: Step[], hasDecisionCard: boolean, filter: ActivityF
         if (filter === 'commands' && (row.kind !== 'tool' || toolFamily(row.call.tool) !== 'terminal')) return false;
         if (filter === 'thinking' && row.kind !== 'thinking') return false;
         if (filter === 'failures' && (row.kind !== 'tool' || !toolRowFailed(row.call, row.result))) return false;
-        const body = row.kind === 'text' ? row.steps.map(item => item.text).join('\n') : step?.text;
+        const body = row.kind === 'text' ? row.steps.map(item => item.text).join('\n')
+            : row.kind === 'compacted' ? t('compactedContext')
+            : step?.text;
         const output = row.kind === 'tool' ? resultTextOf(row.call, row.result) : step?.result;
         return !query || [step?.tool, body, output].some(value => value?.toLocaleLowerCase().includes(query));
     };
@@ -1224,7 +1242,7 @@ function ToolGroupRow({ row, onOpenDiff, prefs, age, activityNow }: { age?: Acti
     );
 }
 
-function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, onKillBackground, prefs, age }: { age?: ActivityTime; row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; onBackgroundTerminal?: (callId: string) => void; onKillBackground?: (jobId: string) => void; prefs?: TranscriptPrefs }) {
+function ActivityRow({ row, running, isLast, onOpenDiff, onBackgroundTerminal, onKillBackground, prefs, age }: { age?: ActivityTime; row: Exclude<Row, { kind: 'toolGroup' | 'text' | 'taskList' | 'decision' | 'compacted' }>; running: boolean; isLast: boolean; onOpenDiff?: OpenDiffHandler; onBackgroundTerminal?: (callId: string) => void; onKillBackground?: (jobId: string) => void; prefs?: TranscriptPrefs }) {
     const active = running && isLast;
     // Hooks BEFORE the thinking early-return: this component renders both
     // thinking and tool rows, so hook order must stay unconditional.
@@ -2253,11 +2271,13 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
             <TaskListRow key={row.key} row={row} view={readOnly && taskList ? { ...taskList, editable: false } : taskList} streaming={streamingContent} prefs={displayPrefs} age={age} />
         ) : row.kind === 'decision' ? (
             <DecisionRecords key={row.key} steps={row.steps} />
+        ) : row.kind === 'compacted' ? (
+            <CompactionDivider key={row.key} />
         ) : (
             <ActivityRow key={row.key} row={row} running={status === 'streaming' && !approvalPending} isLast={row === lastRow} onOpenDiff={onOpenDiff} onBackgroundTerminal={readOnly ? undefined : onBackgroundTerminal} onKillBackground={readOnly ? undefined : onKillBackground} prefs={displayPrefs} age={age} />
         );
         if (!readOnly) return <div className="conversation-entry" key={row.key}>{content}</div>;
-        return <div className="activity-entry" key={row.key}>{content}{row.kind === 'decision' && age && <ActivityAge {...age} />}</div>;
+        return <div className="activity-entry" key={row.key}>{content}{(row.kind === 'decision' || row.kind === 'compacted') && age && <ActivityAge {...age} />}</div>;
     };
     const displayRows = readOnly ? rows : conversationRows(rows, options);
 
@@ -2267,6 +2287,7 @@ function MessageItemImpl({ activityOnly = false, activityFilter = 'all', activit
             dir="auto"
             aria-busy={status === 'streaming' && !approvalPending}
         >
+            {collapseSteps && rows.some((row) => row.kind === 'compacted') && <CompactionDivider />}
             {collapseSteps && rows.filter((row) => row.kind === 'decision').map((row) => row.kind === 'decision' && <DecisionRecords key={row.key} steps={row.steps} />)}
             {collapseSteps && hasPills && <CompactSteps steps={completedSteps} failed={toolCallFailed} createdAt={message.createdAt} completedAt={message.completedAt} />}
             {collapseSteps && backgroundRows.length > 0 && <div className="steps">{backgroundRows.map(renderRow)}</div>}

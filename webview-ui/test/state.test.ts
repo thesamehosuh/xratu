@@ -593,5 +593,30 @@ ok(!s.busy && !s.streamingId, 'failure still settles its own stream');
     ok(restored.messages.length === 1 && restored.messages[0].text === 'new session', 'new transcript replays once');
 }
 
+// Compaction lifecycle: active shows compacting; bare false clears without
+// claiming success; completed records one compacted marker that survives turn end.
+{
+    let c = reduceChat(createInitialChatState(), M('restoreUser', { value: 'long chat' }));
+    c = reduceChat(c, M('startResponse'));
+    c = reduceChat(c, M('compactionState', { active: true }));
+    ok(c.compacting === true, 'active compaction sets compacting flag');
+    c = reduceChat(c, M('compactionState', { active: false }));
+    ok(c.compacting === false && c.messages.at(-1)!.steps.length === 0, 'failed/cancelled compaction does not record compacted step');
+    c = reduceChat(c, M('compactionState', { active: true }));
+    c = reduceChat(c, M('compactionState', { active: false, completed: true, timestamp: 1234 }));
+    c = reduceChat(c, M('compactionState', { active: false, completed: true, timestamp: 1235 }));
+    const stepsAfter = c.messages.at(-1)!.steps;
+    ok(
+        c.compacting === false && stepsAfter.length === 1 && stepsAfter[0].kind === 'compacted' && stepsAfter[0].startedAt === 1234,
+        'completed compaction appends one compacted step and deduplicates consecutive repeats',
+    );
+    c = reduceChat(c, M('fullResponse', { persian: 'after compaction', renderedHtml: '<p>after compaction</p>' }));
+    const finalSteps = c.messages.at(-1)!.steps;
+    ok(
+        finalSteps.some((st) => st.kind === 'compacted') && finalSteps.some((st) => st.kind === 'text' && st.final),
+        'fullResponse keeps compacted marker alongside final answer text',
+    );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
