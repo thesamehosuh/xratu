@@ -325,6 +325,7 @@ interface InputBarProps extends ComposerModelPickerConnections {
     editDraft?: { value: string; attachments?: ComposerAttachment[] } | null;
     editingQueued?: boolean;
     queuedEditPending?: boolean;
+    releasedQueuedEdit?: string | null;
     /** Leave edit mode (Escape or the banner's cancel button). */
     onCancelEdit?: () => void;
     /** Workspace file list for the @-mention popup (host-provided; null
@@ -380,6 +381,7 @@ export function InputBar({
     editDraft,
     editingQueued,
     queuedEditPending,
+    releasedQueuedEdit,
     onCancelEdit,
     workspaceFiles,
     onRequestFiles,
@@ -434,6 +436,10 @@ export function InputBar({
     // Historical edits are temporary; cancelling returns to the normal draft.
     const ordinaryDraft = useRef(initialDraft);
     const wasEditing = useRef(false);
+    const queuedEditSnapshot = useRef<{ value: string; id?: string } | null>(null);
+    useEffect(() => {
+        if (editingQueued && editDraft) queuedEditSnapshot.current = { value: editDraft.value, id: (editDraft as { id?: string }).id };
+    }, [editingQueued, editDraft]);
     useEffect(() => {
         if (editDraft) {
             wasEditing.current = true;
@@ -441,13 +447,18 @@ export function InputBar({
         }
         if (wasEditing.current) {
             wasEditing.current = false;
+            const queued = queuedEditSnapshot.current;
+            if (queued && releasedQueuedEdit === queued.id && value !== queued.value) {
+                setRecoveryDrafts(previous => [...previous, { id: `queued-${releasedQueuedEdit}`, value, attachments, missingNames: [] }]);
+            }
+            queuedEditSnapshot.current = null;
             setValue(ordinaryDraft.current.text);
             setAttachments(ordinaryDraft.current.attachments);
             return;
         }
         ordinaryDraft.current = { text: value, attachments };
         saveComposerDraft(draftKey, value, attachments);
-    }, [draftKey, value, attachments, editDraft]);
+    }, [draftKey, value, attachments, editDraft, releasedQueuedEdit]);
     // @-mention popup state: a live `@token` under the caret opens the
     // workspace-file picker; the textarea itself is the search field.
     const [mention, setMention] = useState<MentionState | null>(null);
@@ -1092,7 +1103,7 @@ export function InputBar({
             >
                 {recoveryDrafts.map(draft => <div className="composer-edit-banner" key={draft.id}>
                     <span dir="auto">{draft.missingNames.length ? tf('composerRecoveryMissing', { names: draft.missingNames.join(', ') }) : (draft.value || draft.attachments.map(file => file.name).join(', ')).slice(0, 80)}</span>
-                    {(draft.value || draft.attachments.length > 0) && <button type="button" className="settings-ghost-action" onClick={() => recoverDraft(draft)}><span>{t('composerRecoverDraft')}</span></button>}
+                    {(draft.value || draft.attachments.length > 0) && <button type="button" className="settings-ghost-action" disabled={editingQueued} onClick={() => recoverDraft(draft)}><span>{t('composerRecoverDraft')}</span></button>}
                     <button type="button" className="composer-edit-cancel" aria-label={t('notifDismiss')} onClick={() => setRecoveryDrafts(previous => previous.filter(entry => entry.id !== draft.id))}><X size={12} /></button>
                 </div>)}
                 {editDraft && (

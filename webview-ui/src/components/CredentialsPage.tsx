@@ -185,7 +185,7 @@ export function CredentialsPage({
     currentUrl,
     activeCredentialId,
     initialOpenCard = null,
-    models, modelDisplayNames, savedCredentials, credentialsReady = true,
+    models, modelDisplayNames, savedCredentials,
     localRuntimes,
     localModelsScanning,
     localScanError = null,
@@ -218,13 +218,7 @@ export function CredentialsPage({
         : detected ?? PRESETS.find((p) => p.id === 'openai')!;
     const [presetId, setPresetId] = useState<string>(initialPreset.id);
     const [url, setUrl] = useState<string>(detected?.baseUrl ?? currentUrl ?? initialPreset.baseUrl);
-    const [addOpen, setAddOpen] = useState(() => !!reason || !!error || !!initialOpenCard || (credentialsReady && savedCredentials.length === 0));
-    const offeredSetup = useRef(credentialsReady);
-    useEffect(() => {
-        if (!credentialsReady || offeredSetup.current) return;
-        offeredSetup.current = true;
-        if (savedCredentials.length === 0) setAddOpen(true);
-    }, [credentialsReady, savedCredentials.length]);
+    const [addOpen, setAddOpen] = useState(() => !!reason || !!error || !!initialOpenCard);
     const [apiKey, setApiKey] = useState('');
     const [showApiKey, setShowApiKey] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);

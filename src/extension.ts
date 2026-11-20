@@ -2184,7 +2184,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         // reconciles the index and opens this screen. Re-entering that queue
         // would leave startup (and Start chat) waiting on itself forever.
         await this._restoreLocalSessionNow();
-        await this._sendSavedCredentials();
+        try { await this._sendSavedCredentials(); } catch (error) { console.error('Failed to refresh saved credentials:', error); }
         this._restoreChatUI();
         // workspaceKind picks the empty-state suggestion set: the default chips
         // all assume an established project ("tour this codebase", "hunt for
@@ -3552,10 +3552,20 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     async _deleteLlmCredential(id: string, oauthCleared = false, refresh = true): Promise<void> {
-        if (this._sessionConnectionId === id) this._sessionConnectionConfirmed = false;
         const credentials = await this._getSavedCredentials();
         const target = credentials.find((c) => c.id === id);
         if (target?.oauthProviderId && !oauthCleared) return this._oauthSignOut(id);
+        await this._serializeSessionTransition(() => this._deleteLlmCredentialNow(id));
+        if (refresh) {
+            await this._fetchModels();
+            await this._sendSavedCredentials();
+            await this._sendOAuthState();
+        }
+    }
+
+    private async _deleteLlmCredentialNow(id: string): Promise<void> {
+        if (this._sessionConnectionId === id) this._sessionConnectionConfirmed = false;
+        const credentials = await this._getSavedCredentials();
         const next = credentials.filter((c) => c.id !== id);
         if (next.length === credentials.length) return;
 
@@ -3583,11 +3593,6 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             await this._secrets.store('xratu.llmApiKey', active.apiKey);
             await this._secrets.store('xratu.llmBaseUrl', active.baseUrl);
             await this._globalState.update('xratu.activeLlmCredentialId', active.id);
-        }
-        if (refresh) {
-            await this._fetchModels();
-            await this._sendSavedCredentials();
-            await this._sendOAuthState();
         }
     }
 
@@ -5727,11 +5732,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             // Runtime collapse: every credential - remote BYOK or on-machine
             // runtime - is an OpenAI-compatible endpoint the extension probes
             // and chats with directly.
+            const generation = llm.credential ? this._nextComposerCatalogGeneration(llm.credential.id) : 0;
             const entry = await this._probeLocalModelCatalog(llm.llm_base_url, llm, true);
             const legacy = !this._selectedModel ? await this._secrets.get('xratu.selectedModel') : undefined;
             const activeId = await this._resolveActiveCredentialId();
             if (!current() || activeId !== credentialId) return false;
-            if (llm.credential && !entry.fromCache) this._cacheComposerCatalog(llm.credential, entry.models, epoch);
+            if (llm.credential && this._composerCatalogGenerations.get(llm.credential.id) !== generation) return false;
+            if (llm.credential && !entry.fromCache && this._composerCatalogGenerations.get(llm.credential.id) === generation) this._cacheComposerCatalog(llm.credential, entry.models, epoch);
             const catalog = this._describeLocalModels(llm.llm_base_url, entry.models);
             const preferred = [this._credentialModelMap()[credentialId ?? ''], this._selectedModel, legacy]
                 .find(model => model && catalog.models.includes(model));
@@ -5754,15 +5761,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         const modelsDev = modelsDevProviderKey(providerIdForUrl(baseUrl)) ? await this._ensureModelsDevCatalog() : null;
         const probed = llm.discoverModels ? await llm.discoverModels()
             : await probeLocalEndpoint(baseUrl, undefined, llm.llm_api_key, getProxyDispatcher(baseUrl), modelsDev, llm.extra_headers);
-        if (probed) return { models: probed.models, fromCache: false };
-        const cached = allowCached && catalogEntryFor(this._modelCatalog, baseUrlHost(baseUrl), Date.now());
-        if (cached) return { models: cached.models, fromCache: true };
+        if (probed) return { models: probed.models, fromCache: false, fetchedAt: Date.now() };
+        const credential = llm.credential;
+        const cached = allowCached && credential && this._composerCatalogs.get(credential.id);
+        if (cached && this._sameModelCredential(cached.credential, credential)) return { models: cached.models, fromCache: true, fetchedAt: cached.fetchedAt };
         throw new EngineError('localUnreachable');
     }
 
     private _describeLocalModels(baseUrl: string, entries: LocalModelInfo[]): ProviderModelCatalog {
         const models = [...new Set(entries.map(model => model.id).filter(id => id && !(isOpenCodeHost(baseUrl) && isNonChatModel(id))))];
-        const contextWindows = new Map(Object.entries(this._contextWindowsFor(baseUrlHost(baseUrl))));
+        const contextWindows = new Map<string, number>();
         const capabilities = new Map<string, ModelCapability>();
         for (const model of entries) {
             if (!model.id) continue;
@@ -5780,13 +5788,11 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             displayNames: Object.fromEntries(entries.flatMap(model => model.displayName ? [[model.id, model.displayName]] : [])) };
     }
 
-    private _publishLocalModelCatalog(baseUrl: string, credentialId: string | null, entry: { models: LocalModelInfo[]; fromCache: boolean }, catalog: ProviderModelCatalog): void {
-        if (!entry.fromCache) {
-            const host = baseUrlHost(baseUrl);
-            this._modelCatalog = setCatalogEntry(this._modelCatalog, host, entry.models, Date.now());
-            void this._saveModelCatalog();
-            this._rememberContextWindows(host, entry.models);
-        }
+    private _publishLocalModelCatalog(baseUrl: string, credentialId: string | null, entry: { models: LocalModelInfo[]; fromCache: boolean; fetchedAt: number }, catalog: ProviderModelCatalog): void {
+        const host = baseUrlHost(baseUrl);
+        this._modelCatalog = setCatalogEntry(this._modelCatalog, host, entry.models, entry.fetchedAt);
+        void this._saveModelCatalog();
+        this._rememberContextWindows(host, entry.models);
         this._setCostCurrencyFor(baseUrl);
         this._view?.webview.postMessage({
             type: 'modelInfo', credentialId, ...catalog, defaultModel: catalog.models[0] ?? '',
@@ -5798,6 +5804,13 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     }
 
     private _composerCatalogs = new Map<string, { credential: StoredCredential; models: LocalModelInfo[]; epoch: number; fetchedAt: number }>();
+    private _composerCatalogGenerations = new Map<string, number>();
+
+    private _nextComposerCatalogGeneration(id: string): number {
+        const generation = (this._composerCatalogGenerations.get(id) ?? 0) + 1;
+        this._composerCatalogGenerations.set(id, generation);
+        return generation;
+    }
 
     private _cacheComposerCatalog(credential: StoredCredential, models: LocalModelInfo[], epoch: number): void {
         this._composerCatalogs.delete(credential.id);
@@ -5814,13 +5827,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
         if (isOfflineMode() && !isLoopbackUrl(credential.baseUrl)) throw new EngineError('offlineRemoteBlocked');
         const cached = this._composerCatalogs.get(credential.id);
         if (!refresh && cached?.epoch === epoch && Date.now() - cached.fetchedAt < 60_000 &&
-            this._sameModelCredential(cached.credential, credential)) return { models: cached.models, fromCache: false };
+            this._sameModelCredential(cached.credential, credential)) return { models: cached.models, fromCache: true, fetchedAt: cached.fetchedAt };
+        const generation = this._nextComposerCatalogGeneration(credential.id);
         const llm = await this._modelListingCredentials(credential);
         if (!llm.llm_base_url) throw new EngineError('localUnreachable');
-        // The fallback cache is keyed by host. An inactive account must show
-        // its own catalog, even when another saved account uses the same host.
+        // Inactive account discovery must never fall back to another account.
         const entry = await this._probeLocalModelCatalog(llm.llm_base_url, llm, false);
-        if (epoch === this._sessionEpoch && this._activeEngine === 'xratu') this._cacheComposerCatalog(credential, entry.models, epoch);
+        if (this._composerCatalogGenerations.get(credential.id) !== generation) throw new EngineError('modelPickerUnavailable');
+        if (epoch === this._sessionEpoch && this._activeEngine === 'xratu' && this._composerCatalogGenerations.get(credential.id) === generation) this._cacheComposerCatalog(credential, entry.models, epoch);
         return entry;
     }
 
@@ -5848,13 +5862,14 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             (!sessionKey || sessionKey === this._browserSessionId());
         let errorKey: string | undefined;
         try {
+            if (!current()) throw new EngineError('sessionSwitchStale');
+            const credential = (await this._getSavedCredentials()).find(item => item.id === credentialId);
+            if (!credential) throw new EngineError('modelPickerUnavailable');
+            const entry = await this._loadComposerCatalog(credential, epoch);
+            const catalog = this._describeLocalModels(credential.baseUrl, entry.models);
             await this._serializeSessionTransition(async () => {
                 if (!current()) throw new EngineError('sessionSwitchStale');
                 if (this._localRunActive) throw new EngineError('sessionSwitchBusy');
-                const credential = (await this._getSavedCredentials()).find(item => item.id === credentialId);
-                if (!credential) throw new EngineError('modelPickerUnavailable');
-                const entry = await this._loadComposerCatalog(credential, epoch);
-                const catalog = this._describeLocalModels(credential.baseUrl, entry.models);
                 const latest = (await this._getSavedCredentials()).find(item => item.id === credentialId);
                 if (!current()) throw new EngineError('sessionSwitchStale');
                 if (!latest || !this._sameModelCredential(credential, latest) || !catalog.models.includes(model)) {

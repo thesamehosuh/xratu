@@ -36,6 +36,7 @@ interface Row {
     providerLabel?: string;
     capability?: ModelCapability;
     window?: number;
+    unavailable?: boolean;
 }
 
 interface Props extends ComposerModelPickerConnections {
@@ -100,7 +101,7 @@ export function ComposerModelPicker({
             if (row) return [row];
             const label = native ? nativeProviderLabel(favorite.provider) : byProvider.get(favorite.provider);
             return !label ? [] :
-                [{ model: favorite.model, label: favorite.label || favorite.model, provider: favorite.provider, providerLabel: label }];
+                [{ model: favorite.model, label: favorite.label || favorite.model, provider: favorite.provider, providerLabel: label, unavailable: native }];
         });
     };
     const rows: Row[] = visibleScope === 'favorites' ? favoriteRows()
@@ -115,7 +116,7 @@ export function ComposerModelPicker({
     const options = filtered.map((row, index) => ({ row, id: `${listId}-${index}`, key: rowKey(row) }));
     const highlighted = options.findIndex(option => option.key === activeRow);
     const choose = (row: Row) => {
-        if (!selectingModel && !(selectionDisabled && !native && row.provider)) onSelect?.(row.model, native ? undefined : row.provider);
+        if (!row.unavailable && !selectingModel && !(selectionDisabled && !native && row.provider)) onSelect?.(row.model, native ? undefined : row.provider);
     };
 
     function browse(next: Scope) {
@@ -159,7 +160,7 @@ export function ComposerModelPicker({
                     <div className="model-search">
                         <Search size={13} aria-hidden="true" />
                         <input type="text" role="combobox" aria-autocomplete="list" aria-controls={listId} aria-expanded="true"
-                            aria-activedescendant={options[highlighted]?.id} dir={query ? 'auto' : getLocale() === 'fa' ? 'rtl' : 'ltr'}
+                            aria-activedescendant={options[highlighted]?.id} dir={query ? 'auto' : undefined}
                             placeholder={t('searchModel')} value={query} autoFocus aria-label={t('searchModelAria')}
                             onKeyDown={navigate} onChange={event => { setQuery(event.target.value); setActiveRow(undefined); }} />
                     </div>
@@ -183,7 +184,7 @@ export function ComposerModelPicker({
                         const PingIcon = ping?.status === 'checking' ? RefreshCw : ping?.status === 'available' ? Check : ping ? TriangleAlert : Activity;
                         return <div className="model-row" key={key} dir="ltr" role="presentation" data-highlighted={highlighted === index || undefined}>
                             <button id={id} type="button" role="option" aria-selected={current(row)} className={`model-item${current(row) ? ' selected' : ''}`}
-                                disabled={selectingModel || (selectionDisabled && !native && !!row.provider)} onClick={() => choose(row)}>
+                                disabled={row.unavailable || selectingModel || (selectionDisabled && !native && !!row.provider)} onClick={() => choose(row)}>
                                 <span className="model-item-label" title={!isCodex && row.window ? `${row.model} · ${t('modelWindowTitle')} ${formatWindow(row.window)}` : row.model}>
                                     <span className="model-item-name">{row.label}</span>
                                     {visibleScope === 'favorites' && row.providerLabel && <span className="model-provider provider-brand-label" title={row.providerLabel}>

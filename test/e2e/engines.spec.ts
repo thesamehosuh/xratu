@@ -158,11 +158,10 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await post(page, { type: 'modelInfo', defaultModel: 'opencode/free', selectedModel: 'opencode/free', models: ['opencode/free', 'openrouter/free', 'opencode/paid'], displayNames: { 'opencode/free': 'Free Model', 'openrouter/free': 'Router Free', 'opencode/paid': 'Paid Model' }, capabilities: { 'opencode/free': { provider: 'opencode', free: true }, 'openrouter/free': { provider: 'openrouter', free: true }, 'opencode/paid': { provider: 'opencode', free: false } } });
         await page.locator('.picker-chip').click();
         await expect(page.locator('.model-picker-scope').nth(1)).toHaveText(locale === 'en' ? 'Free models' : 'مدل های رایگان');
+        await page.locator('.model-picker-scope').nth(1).click();
         await expect(page.locator('.model-picker-scope').nth(1)).toHaveAttribute('aria-pressed', 'true');
         await expect(page.getByRole('option')).toHaveCount(2);
-        await expect(page.locator('.model-provider').filter({ hasText: 'OpenRouter' })).toBeVisible();
         await expect(page.locator('.model-picker-scope').filter({ hasText: 'OpenRouter' }).locator('.provider-brand-logo')).toHaveCSS('mask-image', /data:image\/svg\+xml/);
-        await expect(page.locator('.model-provider').filter({ hasText: 'OpenRouter' }).locator('.provider-brand-logo')).toBeVisible();
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toEqual([{ type: 'pingFreeModel', model: 'opencode/free', automatic: true }, { type: 'pingFreeModel', model: 'openrouter/free', automatic: true }]);
         expect((await sent(page)).filter((message) => (message as { type: string }).type === 'selectModel')).toHaveLength(0);
         await post(page, { type: 'modelPing', model: 'opencode/free', state: { status: 'checking' } });
@@ -275,6 +274,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         const rail = page.locator('.model-picker-rail');
         await expect(rail.getByRole('button').first()).toHaveText(locale === 'en' ? 'Favorites' : 'علاقه مندی ها');
         await expect(page.locator('.model-picker-catalog .model-search')).toBeVisible();
+        await rail.getByRole('button', { name: 'OpenAI' }).click();
         await page.locator('.model-favorite').click();
         await rail.getByRole('button', { name: 'OpenRouter' }).click();
         const browse = (await sent(page)).find((message) => (message as { type: string }).type === 'browseProviderModels') as { requestId: string };
@@ -322,6 +322,7 @@ test('arriving models probe eligible free entries once and paid-only catalogs st
     await post(page, { type: 'showChat' });
     await post(page, { type: 'enginesState', state: { active: 'opencode', phase: 'ready', customPath: '', installedByXratu: false, busy: false } });
     await page.locator('.picker-chip').click();
+    await page.getByRole('button', { name: 'Free models' }).click();
     const info = { type: 'modelInfo', models: ['opencode/free', 'opencode/paid', 'opencode/unknown'], capabilities: { 'opencode/free': { provider: 'opencode', free: true }, 'opencode/paid': { provider: 'opencode', free: false }, 'opencode/unknown': { provider: 'opencode' } } };
     await post(page, info);
     await expect.poll(async () => (await sent(page)).filter((message) => (message as { type: string }).type === 'pingFreeModel')).toEqual([{ type: 'pingFreeModel', model: 'opencode/free', automatic: true }]);

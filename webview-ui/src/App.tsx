@@ -427,6 +427,7 @@ export function App() {
     const steerSeq = useRef(0);
     const [queuedSteers, setQueuedSteers] = useState<Array<{ id: string; value: string; attachments: AttachmentMeta[] }>>([]);
     const [queuedEdit, setQueuedEdit] = useState<{ id: string; value: string; attachments: ComposerAttachment[] } | null>(null);
+    const [releasedQueuedEdit, setReleasedQueuedEdit] = useState<string | null>(null);
     const [dispatchingSteers, setDispatchingSteers] = useState<string[]>([]);
     const [queuedAction, setQueuedAction] = useState<string | null>(null);
     const queuedActionRef = useRef<string | null>(null);
@@ -442,6 +443,7 @@ export function App() {
         if (!entry) return undefined;
         pendingSteers.current.delete(id);
         setQueuedSteers((prev) => prev.filter((s) => s.id !== id));
+        setReleasedQueuedEdit(id);
         setQueuedEdit(previous => previous?.id === id ? null : previous);
         setDispatchingSteers(previous => previous.filter(item => item !== id));
         return entry;
@@ -2072,6 +2074,7 @@ export function App() {
                 onHostErrorApplied={() => setComposerError(null)}
                 editDraft={queuedEdit ?? editDraft}
                 editingQueued={!!queuedEdit}
+                releasedQueuedEdit={releasedQueuedEdit}
                 queuedEditPending={queuedAction === queuedEdit?.id}
                 onCancelEdit={() => queuedEdit ? setQueuedEdit(null) : setEditDraft(null)}
                 workspaceFiles={workspaceFiles}

@@ -403,6 +403,9 @@ function emitToWebview(msg: FromExtensionMessage, delayMs = 0): void {
 
 function handleStandaloneMessage(message: ToExtensionMessage): void {
     switch (message.type) {
+        case 'selectProviderModel':
+            emitToWebview({ type: 'providerModelSelection', requestId: message.requestId, errorKey: 'modelPickerUnavailable' });
+            break;
         case 'webviewReady':
             emitToWebview({ type: 'connectionStatus', status: 'connected', details: { version: '2.3.3' } });
             emitToWebview({

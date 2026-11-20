@@ -568,9 +568,11 @@ test('steering queues during tools and delegated work without cancelling and ren
     await hostMessage(page, { type: 'steerEditResult', accepted: true, steerId: edit.steerId, value: edit.value });
     await expect(lastQueued).toContainText('An edited correction');
     await expect(input).toHaveValue('Keep this ordinary draft');
-    await lastQueued.getByRole('button', { name: 'Cancel queued message' }).click();
-    await expect(page.locator('.queued-message')).toHaveCount(2);
-    await hostMessage(page, { type: 'steerApplied', mode: 'drop', steerId: edit.steerId });
+    await lastQueued.getByRole('button', { name: 'Edit queued message' }).click();
+    await input.fill('Unsaved correction');
+    await hostMessage(page, { type: 'steerApplied', mode: 'steer', steerId: edit.steerId });
+    await expect(input).toHaveValue('Keep this ordinary draft');
+    await expect(page.getByText('Unsaved correction', { exact: true })).toBeVisible();
     await expect(page.locator('.queued-message')).toHaveCount(1);
     const afterDelegated = await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages as Array<{ type: string }>);
     expect(afterDelegated.filter(message => message.type === 'steerRun')).toHaveLength(3);
