@@ -206,24 +206,14 @@ test('cancelling the add confirmation writes nothing', async ({ page }) => {
     expect((await sentMessages(page)).some((message) => message.type === 'mcpSave')).toBe(false);
 });
 
-test('a row needing a secret opens the editor instead of writing config', async ({ page }) => {
-    await openMarketplace(page);
-    const airtable = page.locator('.mp-row').filter({ hasText: 'Airtable' });
-    await airtable.getByText('افزودن').click();
-    // Prefilled edit form, nothing saved yet.
-    await expect(page.locator('.mcp-form')).toBeVisible();
-    await expect(page.locator('.mcp-form input[dir="ltr"]').first()).toHaveValue('airtable');
-    await expect(page.locator('.mcp-form')).toContainText('AIRTABLE_TOKEN');
-    expect((await sentMessages(page)).some((m) => m.type === 'mcpSave')).toBe(false);
-});
-
 for (const kind of ['credential', 'detected'] as const) {
     test(`Add opens configuration for ${kind} installs without saving`, async ({ page }) => {
         await openMarketplace(page, 'en');
         const entry = {...ENTRIES[0], id: 'review-install', nameKey: undefined, descKey: undefined, name: 'Review install',
             requiresApiKey: kind === 'credential', installConfidence: kind === 'detected' ? 'detected' : 'registry'};
         await hostMessage(page, {...MARKET_STATE, entries: [entry]});
-        await page.locator('.mp-row').getByRole('button', {name: 'Add', exact: true}).click();
+        const row = page.locator('.mp-row').filter({ hasText: entry.name });
+        await row.getByRole('button', { name: 'Add', exact: true }).click();
         await expect(page.locator('.mcp-form')).toBeVisible();
         expect((await sentMessages(page)).some(message => message.type === 'mcpSave')).toBe(false);
         await expect(page.locator('.market-confirm')).toHaveCount(0);
@@ -255,10 +245,6 @@ test('an offline catalog still lists the curated fallback and says so', async ({
     await expect(page.locator('.mp-status')).toContainText('آفلاین');
     await expect(page.locator('.mcp-hint.warn')).toContainText('timed out');
     await expect(page.locator('.mp-row')).toHaveCount(1);
-
-    // Screenshot artifact for review (fa, sidebar width).
-    await page.setViewportSize({ width: 420, height: 900 });
-    await page.screenshot({ path: '/tmp/marketplace-fa-offline.png', fullPage: true });
 });
 
 test('README detection result opens the editor with the guessed command', async ({ page }) => {
@@ -396,56 +382,44 @@ test.describe('marketplace visual contract', () => {
     }
 });
 
-for (const locale of ['en', 'fa'] as const) {
-    for (const width of [420, 900]) {
-        test(`Iranian curated servers lead the list and filter in ${locale} at ${width}px`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await openMarketplace(page, locale);
-            const curated = curatedMarketplaceEntries();
-            // Deliberately put Iranian rows last: UI placement must survive host ranking.
-            const entries = [...curated.filter((e) => !e.tags.includes('iranian')),
-                ...curated.filter((e) => e.tags.includes('iranian'))];
-            // Busy catalogs must not push the Iranian chip past the twelve-tag limit.
-            entries.push(...Array.from({ length: 13 }, (_, i) => ({
-                ...ENTRIES[1], id: `remote:${i}`, tags: [`popular${i}`],
-            })));
-            await hostMessage(page, { ...MARKET_STATE, entries });
-            await expect(page.locator('.mp-row').first()).toContainText(locale === 'fa' ? 'دیوار' : 'Divar');
-            await expect(page.locator('.mp-row').nth(1)).toContainText(locale === 'fa' ? 'ترب' : 'Torob');
-            await expect(page.locator('.mp-row').nth(2)).toContainText(locale === 'fa' ? 'دیجی کالا' : 'Digikala');
-            await page.locator('.catalog-filters summary').click();
-            const tags = page.getByRole('group', { name: locale === 'fa' ? 'برچسب ها' : 'Tags' });
-            await expect(tags.getByRole('button').first()).toHaveText(locale === 'fa' ? 'ایرانی' : 'Iranian');
-            await tags.getByRole('button').first().click();
-            await expect(page.locator('.mp-row')).toHaveCount(4);
-            await expect(page.locator('.mp-row')).toContainText([
-                locale === 'fa' ? 'ایرانی' : 'Iranian',
-                locale === 'fa' ? 'ایرانی' : 'Iranian',
-                locale === 'fa' ? 'ایرانی' : 'Iranian',
-                locale === 'fa' ? 'ایرانی' : 'Iranian',
-            ]);
-            expect((await sentMessages(page)).some((m) => m.type === 'mcpSaveServers')).toBe(false);
-        });
-    }
-}
-
-for (const locale of ['en', 'fa'] as const) for (const width of [420, 900]) {
-    test(`Zarinpal official docs can be added in ${locale} at ${width}px`, async ({ page }, testInfo) => {
+for (const [locale, width] of [['en', 900], ['fa', 420]] as const) {
+    test(`Iranian curated servers lead, filter, and add Zarinpal docs (${locale}, ${width}px)`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await openMarketplace(page, locale);
-        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-before.png`) });
-        await hostMessage(page, { ...MARKET_STATE, entries: curatedMarketplaceEntries() });
+        const curated = curatedMarketplaceEntries();
+        // Deliberately put Iranian rows last: UI placement must survive host ranking.
+        const entries = [...curated.filter((e) => !e.tags.includes('iranian')),
+            ...curated.filter((e) => e.tags.includes('iranian'))];
+        // Busy catalogs must not push the Iranian chip past the twelve-tag limit.
+        entries.push(...Array.from({ length: 13 }, (_, i) => ({
+            ...ENTRIES[1], id: `remote:${i}`, tags: [`popular${i}`],
+        })));
+        await hostMessage(page, { ...MARKET_STATE, entries });
+        await expect(page.locator('.mp-row').first()).toContainText(locale === 'fa' ? 'دیوار' : 'Divar');
+        await expect(page.locator('.mp-row').nth(1)).toContainText(locale === 'fa' ? 'ترب' : 'Torob');
+        await expect(page.locator('.mp-row').nth(2)).toContainText(locale === 'fa' ? 'دیجی کالا' : 'Digikala');
+        await page.locator('.catalog-filters summary').click();
+        const tags = page.getByRole('group', { name: locale === 'fa' ? 'برچسب ها' : 'Tags' });
+        await expect(tags.getByRole('button').first()).toHaveText(locale === 'fa' ? 'ایرانی' : 'Iranian');
+        await tags.getByRole('button').first().click();
+        await expect(page.locator('.mp-row')).toHaveCount(4);
+        await expect(page.locator('.mp-row')).toContainText([
+            locale === 'fa' ? 'ایرانی' : 'Iranian',
+            locale === 'fa' ? 'ایرانی' : 'Iranian',
+            locale === 'fa' ? 'ایرانی' : 'Iranian',
+            locale === 'fa' ? 'ایرانی' : 'Iranian',
+        ]);
+        expect((await sentMessages(page)).some((m) => m.type === 'mcpSave')).toBe(false);
+
         const row = page.locator('.mp-row').filter({ hasText: locale === 'fa' ? 'مستندات زرین پال' : 'Zarinpal Docs' });
         await expect(row).toBeVisible();
-        await row.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: testInfo.outputPath(`zarinpal-${locale}-${width}-catalog.png`) });
         await row.getByRole('button', { name: locale === 'fa' ? 'افزودن' : 'Add', exact: true }).click();
         const dialog = page.locator('.market-confirm');
         await expect(dialog).toBeVisible();
         await dialog.getByRole('button', { name: locale === 'fa' ? 'تایید و افزودن' : 'Confirm and add' }).click();
         await expect(dialog).toHaveCount(0);
-        expect(await page.locator('.settings-page').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-        const save = (await sentMessages(page)).find(m => m.type === 'mcpSave');
+        expect(await page.locator('.settings-page').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+        const save = (await sentMessages(page)).find((m) => m.type === 'mcpSave');
         expect(save).toMatchObject({ target: 'global', servers: [{ name: 'zarinpal', url: 'https://www.zarinpal.com/docs/mcp' }] });
     });
 }

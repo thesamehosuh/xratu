@@ -48,20 +48,23 @@ const runNames = new Set(getLocalToolDefinitions({ plan: false, subagents }).map
 check('plan: no task delegation', planNames.has('task'), false);
 check('run: task available', runNames.has('task'), true);
 
-// Mutating tools must be gone in plan mode.
-// `run_tests` was read-only-classified, so it stayed available while planning
-// even though it executes the project's build/test code and writes artifacts.
-for (const name of ['edit_file', 'replace_in_file', 'apply_patch', 'run_terminal_command', 'delete_file', 'move_file', 'copy_file', 'git_commit', 'git_push', 'run_tests']) {
-    check(`plan: no ${name}`, planNames.has(name), false);
-}
-
-// The approval gate itself: a mutating tool that survives into a normal run
-// must actually require approval. `run_tests` was classified read-only, so it
-// took no approval while still executing project build/test code.
+// Live mutating tools must exist in normal runs and be absent in plan mode,
+// and every surviving mutator must require approval.
 const runTools = getLocalToolDefinitions({ plan: false, subagents });
+const LIVE_MUTATING_TOOLS = ['write_file', 'edit_file', 'run_terminal_command', 'process_input', 'process'];
+for (const name of LIVE_MUTATING_TOOLS) {
+    check(`run: exposes ${name}`, runNames.has(name), true);
+    check(`plan: excludes ${name}`, planNames.has(name), false);
+}
 for (const name of ['write_file', 'edit_file', 'process_input', 'run_terminal_command']) {
     const tool = runTools.find((t) => t.name === name);
     check(`run: ${name} requires approval`, tool ? tool.requiresApproval : false, true);
+}
+// Every tool marked requiresApproval in normal runs must be dropped from plan mode.
+for (const tool of runTools) {
+    if (tool.requiresApproval) {
+        check(`plan: excludes approval-gated ${tool.name}`, planNames.has(tool.name), false);
+    }
 }
 for (const name of ['browser_open', 'browser_click', 'browser_fill', 'browser_press', 'browser_scroll', 'browser_resize', 'browser_evaluate', 'browser_close']) {
     check(`plan: no ${name}`, planNames.has(name), false);

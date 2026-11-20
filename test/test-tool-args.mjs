@@ -118,44 +118,84 @@ eq('no path at all leaves args unchanged', withPathAlias({ other: 1 }).path, und
         console.log('skip  path guard: symlink escape (this host forbids symlink creation)');
     } else {
         const base = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-paths-'));
-        const ws = path.join(base, 'ws');
-        const outside = path.join(base, 'outside');
-        fs.mkdirSync(path.join(ws, 'real'), { recursive: true });
-        fs.mkdirSync(outside, { recursive: true });
-        fs.writeFileSync(path.join(ws, 'real', 'inside.txt'), 'x\n');
-        fs.symlinkSync(outside, path.join(ws, 'escape'), 'dir');
-        fs.symlinkSync(path.join(ws, 'real'), path.join(ws, 'alias'), 'dir');
-        fs.symlinkSync(path.join(base, 'no-such-target'), path.join(ws, 'dangle'));
-
-        const refused = (p) => {
-            try { sanitizePath(p, ws); return false; } catch (e) { return /outside the workspace|symlink/.test(e.message); }
-        };
-        ok('symlink escape: direct target refused', refused('escape/x.txt'));
-        ok('symlink escape: NEW dir under the link refused', refused('escape/sub/x.txt'));
-        ok('symlink escape: 2 new levels refused', refused('escape/sub/deep/x.txt'));
-        ok('dangling symlink refused as the final component', refused('dangle'));
-        ok('dangling symlink refused inside it', refused('dangle/planted.txt'));
-
-        // The guard must not start rejecting ordinary work: a symlink whose target
-        // is INSIDE the workspace still resolves, and new files still pass.
-        ok('symlink that stays inside the workspace is allowed',
-            sanitizePath('alias/new.txt', ws) === path.join(fs.realpathSync(path.join(ws, 'real')), 'new.txt'));
-        ok('new nested file in a plain dir allowed',
-            sanitizePath('real/a/b/c.txt', ws).endsWith(path.join('real', 'a', 'b', 'c.txt')));
-        ok('existing file resolves', sanitizePath('real/inside.txt', ws).endsWith('inside.txt'));
-
-        // And the full write path a tool performs must never land outside.
-        let escapedWrite = false;
         try {
-            const escaped = sanitizePath('escape/sub/written.txt', ws);
-            fs.mkdirSync(path.dirname(escaped), { recursive: true });
-            fs.writeFileSync(escaped, 'x');
-            escapedWrite = fs.existsSync(path.join(outside, 'sub', 'written.txt'));
-        } catch { /* refused before the write - which is the point */ }
-        ok('write through the link does NOT land outside', !escapedWrite);
+            const ws = path.join(base, 'ws');
+            const outside = path.join(base, 'outside');
+            fs.mkdirSync(path.join(ws, 'real'), { recursive: true });
+            fs.mkdirSync(outside, { recursive: true });
+            fs.writeFileSync(path.join(ws, 'real', 'inside.txt'), 'x\n');
+            fs.symlinkSync(outside, path.join(ws, 'escape'), 'dir');
+            fs.symlinkSync(path.join(ws, 'real'), path.join(ws, 'alias'), 'dir');
+            fs.symlinkSync(path.join(base, 'no-such-target'), path.join(ws, 'dangle'));
 
-        fs.rmSync(base, { recursive: true, force: true });
+            const refused = (p) => {
+                try { sanitizePath(p, ws); return false; } catch (e) { return /outside the workspace|symlink/.test(e.message); }
+            };
+            ok('symlink escape: direct target refused', refused('escape/x.txt'));
+            ok('symlink escape: NEW dir under the link refused', refused('escape/sub/x.txt'));
+            ok('symlink escape: 2 new levels refused', refused('escape/sub/deep/x.txt'));
+            ok('dangling symlink refused as the final component', refused('dangle'));
+            ok('dangling symlink refused inside it', refused('dangle/planted.txt'));
+
+            // The guard must not start rejecting ordinary work: a symlink whose target
+            // is INSIDE the workspace still resolves, and new files still pass.
+            ok('symlink that stays inside the workspace is allowed',
+                sanitizePath('alias/new.txt', ws) === path.join(fs.realpathSync(path.join(ws, 'real')), 'new.txt'));
+            ok('new nested file in a plain dir allowed',
+                sanitizePath('real/a/b/c.txt', ws).endsWith(path.join('real', 'a', 'b', 'c.txt')));
+            ok('existing file resolves', sanitizePath('real/inside.txt', ws).endsWith('inside.txt'));
+
+            // And the full write path a tool performs must never land outside.
+            let escapedWrite = false;
+            try {
+                const escaped = sanitizePath('escape/sub/written.txt', ws);
+                fs.mkdirSync(path.dirname(escaped), { recursive: true });
+                fs.writeFileSync(escaped, 'x');
+                escapedWrite = fs.existsSync(path.join(outside, 'sub', 'written.txt'));
+            } catch { /* refused before the write - which is the point */ }
+            ok('write through the link does NOT land outside', !escapedWrite);
+        } finally {
+            fs.rmSync(base, { recursive: true, force: true });
+        }
     }
+}
+
+// --- write_file / editFileArgs mode & content resolution --------------------
+{
+    const { resolveEditMode, resolveEditContent, EDIT_FILE_MODES, EDIT_FILE_DEFAULT_MODE } = require('../out/tooling/editFileArgs.js');
+    const isErr = (r) => typeof r === 'object' && r !== null && typeof r.error === 'string';
+    eq('exactly three modes', EDIT_FILE_MODES.join(','), 'overwrite,create,append');
+    eq('documented default is overwrite', EDIT_FILE_DEFAULT_MODE, 'overwrite');
+    for (const mode of ['create', 'overwrite', 'append']) {
+        const r = resolveEditMode(mode);
+        eq(`accepts ${mode}`, r.mode, mode);
+        ok(`${mode} resolves without error`, !isErr(r));
+    }
+    for (const absent of [undefined, null, '']) {
+        eq(`absent mode ${String(absent)} -> overwrite`, resolveEditMode(absent).mode, 'overwrite');
+    }
+    for (const bad of ['replace', 'overwrit', 'write', 'Overwrite', 'CREATE', 'overwrite ', 1, 0, true, false, {}, [], ['overwrite'], () => {}]) {
+        const r = resolveEditMode(bad);
+        ok(`rejects invalid mode ${String(bad)}`, isErr(r) && r.mode === undefined);
+    }
+    const modeErr = resolveEditMode('replace').error;
+    ok('mode error mentions all valid modes & edit_file',
+        ['"overwrite"', '"create"', '"append"', '"replace"', 'use edit_file', 'default'].every((s) => modeErr.includes(s)) && !modeErr.includes('\n'));
+    const circular = {}; circular.self = circular;
+    const hostile = { toJSON() { throw new Error('a'); }, toString() { throw new Error('b'); }, valueOf() { throw new Error('c'); } };
+    for (const weird of [circular, hostile, Symbol('s'), 10n, Number.NaN, Infinity]) {
+        ok(`resolveEditMode survives ${typeof weird}`, isErr(resolveEditMode(weird)));
+        ok(`resolveEditContent survives ${typeof weird}`, isErr(resolveEditContent(weird)));
+    }
+    ok('hostile toString prints placeholder', resolveEditMode(hostile).error.includes('<unprintable>'));
+    eq('accepts empty string content', resolveEditContent('').content, '');
+    eq('accepts multiline content', resolveEditContent('a\nb').content, 'a\nb');
+    for (const bad of [undefined, null, 1, 0, true, false, {}, [], ['a'], { content: 'a' }, () => {}]) {
+        ok(`resolveEditContent rejects ${typeof bad}`, isErr(resolveEditContent(bad)));
+    }
+    const contentErr = resolveEditContent(undefined).error;
+    ok('content error names new_content and edit_file',
+        contentErr.includes('new_content') && contentErr.includes('use edit_file') && !contentErr.includes('\n'));
 }
 
 // --- tool-name resolution (live: "Unknown tool: write_file" dead ends)

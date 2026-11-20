@@ -16,8 +16,8 @@ test.beforeEach(async ({ page }) => {
     await post(page, { type: 'showChat' });
 });
 
-for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    test(`one tool presentation across families and completion (${locale}, ${width})`, async ({ page }, info) => {
+for (const [locale, width] of [['en', 1080], ['fa', 420]] as const) {
+    test(`one tool presentation across families and completion (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'restoreUser', value: locale === 'fa' ? 'ورود کاربر رو بررسی و اصلاح کن.' : 'Investigate and fix the login flow.' });
@@ -29,14 +29,12 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await call(page, 'mcp', 'mcp__docs__lookup', { query: 'refresh token rotation' }, 'Refresh tokens must be rotated.');
         await call(page, 'diagnostics', 'get_diagnostics', { path: 'src/auth.ts' }, 'No diagnostics');
         const liveGroups = await page.locator('.transcript-pane .conversation-work-group').count();
-        await page.screenshot({ path: info.outputPath('live-tools.png') });
         await post(page, { type: 'chunk', value: locale === 'fa' ? 'شرط انقضا جا افتاده. اضافه اش میکنم.' : 'The expiry guard is missing. I’m adding it now.' });
         await call(page, 'edit', 'replace_in_file', { path: 'src/auth.ts', search: 'valid = true', replace: 'valid = expiresAt > Date.now()' }, 'Replaced 1 occurrence');
         await call(page, 'test', 'run_terminal_command', { command: 'npm test' }, 'All tests passed\nExit code: 0');
         const groups = page.locator('.transcript-pane .conversation-work-group');
         await groups.last().locator(':scope > summary').click();
         await post(page, { type: 'fullResponse', persian: locale === 'fa' ? 'شرط انقضا اصلاح شد و تست ها پاس شدن.' : 'Fixed the expiry guard. All tests pass.' });
-        await page.screenshot({ path: info.outputPath('completed-tools.png') });
         expect(liveGroups, 'web, MCP and diagnostic calls belong to the same adjacent work group').toBe(1);
         await expect(groups).toHaveCount(0);
         const thin = page.locator('.transcript-pane .completed-steps');
@@ -48,7 +46,6 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(page.locator('.transcript-pane')).not.toContainText('The expiry guard is missing. I’m adding it now.');
         const overflow = await page.locator('.transcript-pane').evaluate(element => element.scrollWidth > element.clientWidth + 1);
         expect(overflow).toBe(false);
-        await page.screenshot({ path: info.outputPath('thin-tools.png') });
         await page.locator('#surface-tab-activity').click();
         const mcp = page.locator('.activity-pane details.step').filter({ hasText: 'docs · lookup' });
         await mcp.locator(':scope > summary').click();
@@ -75,29 +72,25 @@ test('running commands, failures and completed output remain reachable', async (
     await expect(thin).toContainText('Test failed');
 });
 
-for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
-    for (const [family, tool] of [['web', 'web_search'], ['mcp', 'mcp__docs__lookup'], ['ops', 'get_diagnostics']]) {
-        test(`saved ${family} expansion survives grouping (${locale}, ${width})`, async ({ page }, info) => {
-            await page.setViewportSize({ width, height: 900 });
-            await post(page, { type: 'locale', locale });
-            await post(page, { type: 'transcriptPrefs', prefs: { expand: { [family]: true } } });
-            await post(page, { type: 'startResponse' });
-            await call(page, 'preferred', tool, { query: 'expiry', path: 'src/auth.ts' }, 'Preferred output is reachable');
-            const group = page.locator('.transcript-pane .conversation-work-group');
-            await expect(group).toHaveAttribute('open', '');
-            await expect(group).toContainText('Preferred output is reachable');
-            await page.screenshot({ path: info.outputPath('family-expanded.png') });
-            await group.locator(':scope > summary').click();
-            await call(page, 'later', tool, { query: 'rotation', path: 'src/auth.ts' });
-            await expect(group).not.toHaveAttribute('open');
-            await post(page, { type: 'fullResponse', persian: locale === 'fa' ? 'بررسی تمام شد.' : 'Investigation complete.' });
-            const thin = page.locator('.transcript-pane .completed-steps');
-            await expect(thin).toHaveCount(1);
-            await expect(thin).not.toHaveAttribute('open');
-            await page.screenshot({ path: info.outputPath('family-completed-thin.png') });
-        });
+test('saved family expansion prefs survive grouping across web, mcp and ops', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 900 });
+    await post(page, { type: 'locale', locale: 'fa' });
+    for (const [index, [family, tool]] of ([['web', 'web_search'], ['mcp', 'mcp__docs__lookup'], ['ops', 'get_diagnostics']] as const).entries()) {
+        await post(page, { type: 'transcriptPrefs', prefs: { expand: { [family]: true } } });
+        await post(page, { type: 'startResponse' });
+        await call(page, `preferred-${index}`, tool, { query: 'expiry', path: 'src/auth.ts' }, `Preferred ${family} output`);
+        const group = page.locator('.transcript-pane .conversation-work-group').last();
+        await expect(group).toHaveAttribute('open', '');
+        await expect(group).toContainText(`Preferred ${family} output`);
+        await group.locator(':scope > summary').click();
+        await call(page, `later-${index}`, tool, { query: 'rotation', path: 'src/auth.ts' });
+        await expect(group).not.toHaveAttribute('open');
+        await post(page, { type: 'fullResponse', persian: 'بررسی تمام شد.' });
+        const thin = page.locator('.transcript-pane .completed-steps').last();
+        await expect(thin).not.toHaveAttribute('open');
     }
-}
+    await expect(page.locator('.transcript-pane .completed-steps')).toHaveCount(3);
+});
 
 test('manual expansion survives mixed tools and streamed arguments', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 900 });

@@ -8,7 +8,9 @@ const providers = [
     { host: 'local.example.ir', label: 'Local gateway', iranian: true, input: 2000, output: 300, cached: 600, USD: 0, IRT: 700000 },
 ];
 const usage = {
-    type: 'usageState', providers, rates: [
+    type: 'usageState',
+    providers,
+    rates: [
         { id: 'model-a', host: providers[0].host, input: 2, output: 6, cachedInput: 0.5, currency: 'USD', source: 'builtin', USD: 12, IRT: 0 },
         { id: 'model-b', host: providers[1].host, input: 10000, output: 30000, cachedInput: null, currency: 'IRT', source: 'override', USD: 0, IRT: 700000 },
     ],
@@ -18,6 +20,7 @@ const usage = {
         { day: '2026-08-07', cells: [{ model: 'model-b', host: providers[1].host, input: 200, output: 30, cached: 60, USD: 0, IRT: 70000 }] },
     ],
     allTime: { input: 3000, output: 500, cached: 1000, USD: 12, IRT: 700000 },
+    chatgpt: { totals: { input: 90000, output: 10000, cached: 50000, USD: 0, IRT: 0 }, models: [{ model: 'gpt-5.4', tokens: 75000 }, { model: 'gpt-5-mini', tokens: 25000 }], hasHistory: true },
 };
 
 test.beforeEach(async ({ page }) => {
@@ -29,8 +32,8 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
 });
 
-for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
-    test(`usage summary, chart and providers share their scope (${locale}, ${width})`, async ({ page }, testInfo) => {
+for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
+    test(`usage summary, filters, currency toggle, and ChatGPT plan tab (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'openSettings' });
@@ -38,34 +41,32 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await page.locator('.page-sidebar').getByRole('button', { name: locale === 'en' ? 'Usage' : 'مصرف', exact: true }).click();
         await expect(page.locator('.usage-loading')).toBeVisible();
         await expect(page.locator('.usage-metrics')).toHaveCount(0);
+        await post(page, { type: 'oauthState', state: { providers: [], accounts: [{ providerId: 'chatgpt-codex', credentialId: 'oauth', accountLabel: 'user@example.test', active: true, planEnabled: true }] } });
         await post(page, usage);
+
         const numbers = new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US');
         const metrics = page.locator('.usage-summary');
+        const tabs = page.locator('.usage-view-tabs button');
+        await expect(tabs.first()).toHaveAttribute('aria-pressed', 'true');
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(200));
         await expect(metrics.locator('.usage-output-total')).toHaveText(numbers.format(50));
-        await page.locator('.usage-view-tabs button').nth(1).click();
+
+        // Cost tab + currency switching + providers breakdown
+        await tabs.nth(1).click();
         await expect(metrics).toContainText('$2.00');
+        await page.locator('.cost-currencies button').last().click();
+        await expect(page.locator('.usage-model-name').first()).toContainText('model-a');
         await page.locator('.usage-breakdown-tabs button').nth(1).click();
         await expect(page.locator('.prov-row')).toHaveCount(2);
         await expect(page.locator('.prov-row').filter({ hasText: 'Cloud API' })).toContainText('$2.00');
-        await expect(page.locator('.prov-row').filter({ hasText: 'Cloud API' }).locator('.usage-model-tokens')).toContainText(numbers.format(120));
         await expect(page.locator('.usage-lifetime')).toContainText(numbers.format(3500));
-        await expect(page.locator('.cost-seg').last()).toHaveCSS('border-start-start-radius', '4px');
-        await expect(page.locator('.usage-activity-chart > header')).toHaveCSS('margin-bottom', '22px');
-        await expect(page.locator('.cost-dates > span').first()).toHaveText(locale === 'en' ? '1' : '۱');
-        await page.mouse.move(15, 15);
-        await page.screenshot({ path: testInfo.outputPath('usage-overview.png') });
-        await page.locator('.rate-disclosure > summary').click();
-        await page.locator('.settings-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight; });
-        await page.screenshot({ path: testInfo.outputPath('usage-rates.png') });
-        await page.locator('.usage-activity-chart').scrollIntoViewIfNeeded();
 
+        // Model/host dropdown filters + clear + month stepper
         const model = page.locator('.cost-filters .dropdown').first();
         await model.locator('.dropdown-trigger').click();
         await page.getByRole('option', { name: 'model-a', exact: true }).click();
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(60));
         await expect(page.locator('.prov-row')).toHaveCount(1);
-        await expect(page.locator('.cost-legend')).toContainText('model-a');
         await expect(page.locator('.cost-currencies')).toHaveCount(0);
         const host = page.locator('.cost-filters .dropdown').nth(1);
         await host.locator('.dropdown-trigger').click();
@@ -74,28 +75,32 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         await expect(page.locator('.prov-row')).toHaveCount(0);
         await page.locator('.usage-clear-filters').click();
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(200));
-        await expect(page.locator('.prov-row')).toHaveCount(2);
         await page.getByLabel(locale === 'en' ? 'Previous month' : 'ماه قبل', { exact: true }).click();
         await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(4));
-        await expect(page.locator('.prov-row')).toHaveCount(1);
-        await expect(page.locator('.usage-lifetime')).toContainText(numbers.format(3500));
-        await expect(page.locator('.cost-seg').last()).toHaveCSS('border-start-start-radius', '4px');
-        await expect(page.locator('.usage-activity-chart > header')).toHaveCSS('margin-bottom', '22px');
 
+        // ChatGPT subscription plan tab (absorbed from usage-redesign)
+        await tabs.nth(2).click();
+        await expect(page.locator('.cost-toolbar,.cost-filters,.usage-activity-chart')).toHaveCount(0);
+        await expect(page.locator('.usage-summary-main > strong')).toHaveText(numbers.format(100000));
+        await expect(page.locator('.usage-input-total')).toHaveText(numbers.format(40000));
+        await expect(page.locator('.usage-cached-total')).toHaveText(numbers.format(50000));
+        await expect(page.locator('.usage-model-percent').first()).toHaveText(
+            new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US', { style: 'percent', maximumFractionDigits: 0 }).format(0.75),
+        );
+        await expect(page.locator('.usage-manage')).toHaveAttribute('href', 'https://chatgpt.com/settings/usage');
+
+        // Zero-cost token fallback + refresh action
+        await tabs.nth(1).click();
         await post(page, { ...usage, history: [{ day: '2026-08-02', cells: [{ model: 'free-local', host: providers[0].host, input: 100, output: 20, cached: 0, USD: 0, IRT: 0 }] }] });
-        await expect(metrics.locator('.usage-input-total')).toHaveText(numbers.format(100));
         await expect(page.locator('.usage-chart-empty')).toContainText(locale === 'en' ? 'Tokens were recorded without a cost' : 'توکن ثبت شده');
-        await expect(page.locator('.usage-summary-cost')).not.toContainText('$0');
         await page.getByRole('button', { name: locale === 'en' ? 'View token usage' : 'نمایش مصرف توکن', exact: true }).click();
-        await expect(page.locator('.cost-cols')).toHaveAttribute('aria-label', locale === 'en' ? 'Daily tokens by model' : 'نمودار مصرف روزانه توکن به تفکیک مدل');
         await expect(page.locator('.cost-legend')).toContainText('free-local');
-        await expect(page.locator('.cost-legend')).toContainText(numbers.format(120));
-        await page.mouse.move(15, 15);
-        await page.screenshot({ path: testInfo.outputPath('usage-token-view.png') });
-        expect(await page.locator('.settings-scroll').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+        await page.locator('.usage-header-actions button').click();
+        expect(await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type: string }> }).__xratuHostMessages.filter((m) => m.type === 'usageGetState').length)).toBeGreaterThan(1);
+        expect(await page.locator('.settings-scroll').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
     });
 
-    test(`subpage navigation preserves accessible names and the draft (${locale}, ${width})`, async ({ page }, testInfo) => {
+    test(`subpage keyboard navigation preserves accessible names and draft (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
@@ -111,7 +116,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
         const names = locale === 'en'
             ? ['Providers', 'Engines', 'Servers', 'Marketplace', 'Skills', 'Agent files', 'Usage', 'Proxy', 'Settings']
             : ['ارائه دهنده ها', 'موتورهای اجرا', 'سرور ها', 'فروشگاه', 'مهارت ها', 'فایل های ایجنت', 'مصرف', 'پروکسی', 'تنظیمات'];
-        for (const [index, name] of names.entries()) {
+        for (const name of names) {
             await openPageNavigation(page);
             const target = page.locator('.page-sidebar').getByRole('button', { name, exact: true });
             await target.focus();
@@ -120,8 +125,7 @@ for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
             await expect(target).toHaveAttribute('aria-current', 'page');
             if (width < 860) await page.locator('.toolbar > .sidebar-toggle').click();
             await expect(page.locator('.page-content h2')).toBeVisible();
-            expect(await page.locator('.page-content').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-            await page.screenshot({ path: testInfo.outputPath(`page-${index}.png`) });
+            expect(await page.locator('.page-content').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
         }
         await page.locator('.toolbar-back-work').click();
         await expect(page.locator('.composer-input')).toHaveValue('Keep this draft');

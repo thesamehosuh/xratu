@@ -221,5 +221,74 @@ const ok = (name, cond, detail = '') => {
     ok('macOS bash 3.2 form still yields a hint', terminalFailureHint('darwin', 'bash: nosuchcmd: command not found') !== null);
 }
 
+// --- Windows command-quoting regression (merged from test-shell-quoting) ----
+{
+    const { terminalSpawn } = require('../out/tooling/shellPlatform.js');
+    const cp = require('node:child_process');
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const eqJson = (name, actual, expected) => check(name, JSON.stringify(actual), JSON.stringify(expected));
+
+    const win = terminalSpawn('win32', 'echo hi');
+    check('win32 runs cmd.exe', win.file, 'cmd.exe');
+    eqJson('win32 keeps /d /s /c', win.args.slice(0, 3), ['/d', '/s', '/c']);
+    check('win32 passes command untouched', win.args[3], 'echo hi');
+    check('win32 asks for verbatim arguments', win.windowsVerbatimArguments, true);
+
+    const linux = terminalSpawn('linux', 'echo hi');
+    check('linux runs bash', linux.file, '/bin/bash');
+    eqJson('linux passes -c', linux.args, ['-c', 'echo hi']);
+    check('linux does not ask for verbatim arguments', linux.windowsVerbatimArguments, false);
+
+    const mac = terminalSpawn('darwin', 'echo hi');
+    check('darwin runs bash', mac.file, '/bin/bash');
+    check('darwin does not ask for verbatim arguments', mac.windowsVerbatimArguments, false);
+
+    if (process.platform === 'win32') {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-quoting-'));
+        try {
+            const echo = path.join(tmp, 'argv-echo.mjs');
+            fs.writeFileSync(echo, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+            const batch = path.join(tmp, 'ref.bat');
+            const viaSpawn = (command) => new Promise((resolve) => {
+                const { file, args, windowsVerbatimArguments } = terminalSpawn('win32', command);
+                const child = cp.spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments });
+                let out = '';
+                child.stdout.on('data', d => out += d);
+                child.on('close', () => resolve(out.trim()));
+            });
+            const viaBatch = (command) => new Promise((resolve) => {
+                fs.writeFileSync(batch, `@echo off\r\n${command}\r\n`);
+                const child = cp.spawn('cmd.exe', ['/d', '/s', '/c', batch], { stdio: ['ignore', 'pipe', 'pipe'] });
+                let out = '';
+                child.stdout.on('data', d => out += d);
+                child.on('close', () => resolve(out.trim()));
+            });
+            const node = `node "${echo}"`;
+            const cases = [
+                `${node} --title "fix(windows): discover ripgrep" --body-file pr.md`,
+                `${node} "C:\\Program Files\\VS Code\\resources" rg`,
+                `${node} plain args`,
+                `${node} "quoted" "also quoted" tail`,
+                `${node} "it's got an apostrophe"`,
+                `${node} "percent %PATH% literal"`,
+                `${node} --pattern "*.ts" path`,
+                `${node} "quoted arg" & echo after-amp`,
+                `${node} "quoted arg" && echo after-andamp`,
+                `${node} "a & b"`,
+            ];
+            for (const command of cases) {
+                const [spawned, batched] = await Promise.all([viaSpawn(command), viaBatch(command)]);
+                check(`argv survives cmd.exe: ${command.slice(node.length).trim()}`, spawned, batched);
+            }
+            const split = await viaSpawn(`${node} --title "fix(windows): discover ripgrep" --body-file pr.md`);
+            eqJson('quoted title arrives as ONE argument', JSON.parse(split), ['--title', 'fix(windows): discover ripgrep', '--body-file', 'pr.md']);
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        }
+    }
+}
+
 console.log(failed === 0 ? '\nshell-platform tests: all passed' : `\nshell-platform tests: ${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

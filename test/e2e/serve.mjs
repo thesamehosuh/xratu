@@ -33,6 +33,8 @@ try {
     process.exit(1);
 }
 
+const fileCache = new Map();
+
 const server = createServer(async (req, res) => {
     try {
         const url = new URL(req.url ?? '/', 'http://localhost');
@@ -46,9 +48,24 @@ const server = createServer(async (req, res) => {
             res.writeHead(403).end();
             return;
         }
-        const body = await readFile(abs);
-        res.writeHead(200, { 'Content-Type': MIME[extname(abs).toLowerCase()] ?? 'application/octet-stream' });
-        res.end(body);
+        const { mtimeNs, size, ino } = await stat(abs, { bigint: true });
+        let cached = fileCache.get(abs);
+        if (!cached || cached.mtimeNs !== mtimeNs || cached.size !== size || cached.ino !== ino) {
+            const body = await readFile(abs);
+            cached = {
+                body,
+                mtimeNs,
+                size,
+                ino,
+                contentType: MIME[extname(abs).toLowerCase()] ?? 'application/octet-stream',
+            };
+            fileCache.set(abs, cached);
+        }
+        res.writeHead(200, {
+            'Content-Type': cached.contentType,
+            'Content-Length': cached.body.length,
+        });
+        res.end(cached.body);
     } catch {
         res.writeHead(404).end('Not found');
     }
