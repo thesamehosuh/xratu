@@ -360,25 +360,25 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     check('release settles the slot (cancel cannot hang a caller)', released, '');
 }
 
-// Windows rename can return EPERM while another process removes the lock.
+// Windows mkdir can return EPERM while another process removes the lock.
 // Inject it so every CI platform covers recovery, timeout, and cancellation.
 {
     const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
     const lock = oauthLockPath(tmp, 'windows-delete-race');
     const nativeFs = require('node:fs');
-    const oldRename = nativeFs.renameSync;
+    const oldMkdir = nativeFs.mkdirSync;
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     let failures = 0;
     let entered = 0;
     let waits = 0;
     let clock = 0;
-    nativeFs.renameSync = (source, target) => {
+    nativeFs.mkdirSync = (target, ...args) => {
         if (target === lock && failures-- > 0) {
             const error = new Error('directory deletion pending');
             error.code = 'EPERM';
             throw error;
         }
-        return oldRename(source, target);
+        return oldMkdir(target, ...args);
     };
     const opts = {
         timeoutMs: 15, sleepMs: 5, nowMs: () => clock,
@@ -390,7 +390,7 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
         failures = 2;
         check('Windows deletion race retries then acquires', await withDirectoryLock(lock, opts, work), 'ok');
         check('Windows deletion race yields between attempts', waits, 2);
-        check('Windows deletion race enters only after rename succeeds', entered, 1);
+        check('Windows deletion race enters only after mkdir succeeds', entered, 1);
         check('Windows deletion race releases the acquired lock', fs.existsSync(lock), false);
 
         failures = Infinity;
@@ -412,7 +412,7 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
         const denied = await withDirectoryLock(lock, opts, work).catch((e) => e);
         check('POSIX EPERM is still propagated', denied.code, 'EPERM');
     } finally {
-        nativeFs.renameSync = oldRename;
+        nativeFs.mkdirSync = oldMkdir;
         Object.defineProperty(process, 'platform', platform);
     }
 }
@@ -515,6 +515,7 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
 {
     const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
     const lock = oauthLockPath(tmp, 'release-removal-race');
+    const retired = `${lock}.retired`;
     const ownerFile = path.join(lock, 'owner.json');
     const nativeFs = require('node:fs');
     const oldUnlink = nativeFs.unlinkSync;
@@ -524,7 +525,7 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
         attemptedFiles.push(target);
         if (attemptedFiles.length !== 1) return oldUnlink(target);
         setImmediate(() => {
-            fs.rmSync(lock, { recursive: true });
+            fs.renameSync(lock, retired);
             fs.mkdirSync(lock);
             fs.writeFileSync(ownerFile, JSON.stringify({ token: 'replacement', acquiredAt: Date.now(), pid: process.pid }));
         });
@@ -534,16 +535,85 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     };
     try {
         await withDirectoryLock(lock, {}, async () => {});
-        check('release retries after a busy unlink', attemptedFiles.length, 2);
-        check('release retries only its original owner file', attemptedFiles[1], attemptedFiles[0]);
+        check('release skips a retry after the directory is replaced', attemptedFiles.length, 1);
         check('release preserves the replacement owner', fs.existsSync(ownerFile), true);
     } finally {
         nativeFs.unlinkSync = oldUnlink;
+        fs.rmSync(lock, { recursive: true, force: true });
+        fs.rmSync(retired, { recursive: true, force: true });
+    }
+}
+{
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'mixed-version-acquire');
+    const nativeFs = require('node:fs');
+    const oldMkdir = nativeFs.mkdirSync;
+    const oldLstat = nativeFs.lstatSync;
+    let legacyDirectory;
+    const acquireLegacy = () => {
+        oldMkdir(lock);
+        legacyDirectory = oldLstat(lock);
+    };
+    nativeFs.mkdirSync = (target, ...args) => {
+        if (target === lock && !legacyDirectory) acquireLegacy();
+        return oldMkdir(target, ...args);
+    };
+    nativeFs.lstatSync = (target, ...args) => {
+        const observed = oldLstat(target, ...args);
+        // Interpose the legacy mkdir even if acquisition first checks for
+        // absence before trying to move a prepared directory into place.
+        if (target === lock && !observed && !legacyDirectory) acquireLegacy();
+        return observed;
+    };
+    let clock = Date.now();
+    const opts = { timeoutMs: 15, sleepMs: 5, nowMs: () => clock, sleep: async ms => { clock += ms; } };
+    try {
+        const blocked = await withDirectoryLock(lock, opts, async () => 'entered').catch(error => error.name);
+        check('an old host can win mkdir before writing its owner record', Boolean(legacyDirectory), true);
+        check('the new host cannot enter while the legacy directory is empty', blocked, 'LockTimeoutError');
+        check('the winning legacy directory remains in place', oldLstat(lock, { throwIfNoEntry: false })?.ino, legacyDirectory?.ino);
+        fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, token: 'legacy', acquiredAt: clock }));
+        fs.rmSync(lock, { recursive: true });
+        check('the new host can acquire after the legacy host releases', await withDirectoryLock(lock, opts, async () => 'entered'), 'entered');
+    } finally {
+        nativeFs.mkdirSync = oldMkdir;
+        nativeFs.lstatSync = oldLstat;
         fs.rmSync(lock, { recursive: true, force: true });
     }
 }
 const exitedOwner = require('cross-spawn').sync(process.execPath, ['-e', '']);
 check('recovery fixture owner has exited', exitedOwner.status, 0);
+{
+    const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
+    const lock = oauthLockPath(tmp, 'busy-empty-recovery');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: exitedOwner.pid, token: 'legacy', acquiredAt: Date.now() }));
+    const nativeFs = require('node:fs');
+    const oldRmdir = nativeFs.rmdirSync;
+    let busy = true;
+    nativeFs.rmdirSync = target => {
+        if (target === lock && busy) {
+            busy = false;
+            const error = new Error('busy');
+            error.code = 'EBUSY';
+            throw error;
+        }
+        return oldRmdir(target);
+    };
+    let clock = Date.now();
+    let waits = 0;
+    try {
+        const result = await withDirectoryLock(lock, {
+            recoverDeadOwner: true, timeoutMs: 15, sleepMs: 5, nowMs: () => clock,
+            sleep: async ms => { waits++; clock += ms; },
+        }, async () => 'entered');
+        check('dead owner recovery retries a busy empty directory', result, 'entered');
+        check('busy empty directory recovery yields before retrying', waits, 1);
+    } finally {
+        nativeFs.rmdirSync = oldRmdir;
+        fs.rmSync(lock, { recursive: true, force: true });
+    }
+}
 for (const legacy of [false, true]) {
     const { withDirectoryLock, oauthLockPath } = require('../out/oauth/refreshLock.js');
     const lock = oauthLockPath(tmp, `competing-recovery-${legacy}`);
