@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
-for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
+for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
     test(`durable child conversations (${locale}, ${width})`, async ({ page }) => {
         await installVscodeTheme(page);
         await page.setViewportSize({ width, height: 900 });

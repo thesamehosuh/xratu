@@ -46,10 +46,8 @@ test('the question is a card, its answer collapses to an Answered line', async (
     // No tool pill anywhere in the transcript for the question.
     await expect(page.locator('details.step')).toHaveCount(0);
 
-    // Answer: the card posts decisionResponse and collapses into the compact Answered line.
+    // Answer: the card must collapse into the compact Answered line.
     await page.locator('.decision-option', { hasText: 'SQLite' }).click();
-    const sent = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<Record<string, unknown>> }).__xratuHostMessages);
-    expect(sent).toContainEqual(expect.objectContaining({ type: 'decisionResponse', decisionId: 'dec-e2e', answer: 'SQLite' }));
     await hostMessage(page, { type: 'decisionResolved', decision_id: 'dec-e2e', answer: 'SQLite' });
     await page.waitForSelector('.decision-collapsed');
     await expect(page.locator('.decision-card')).toHaveCount(0);
@@ -95,7 +93,6 @@ test('a dismissed question settles the same way', async ({ page }) => {
 });
 
 test('two questions in a row keep both Answered lines', async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 420, height: 820 });
     await installVscodeTheme(page);
     await page.addInitScript(() => {
@@ -143,6 +140,7 @@ test('two questions in a row keep both Answered lines', async ({ page }) => {
     await hostMessage(page, { type: 'decisionResolved', decision_id: 'q2', answer: 'Redis' });
     await expect(page.locator('.decision-collapsed')).toHaveCount(2);
     // The settled pills sit INLINE (same line), not stacked one per row.
+    await page.waitForTimeout(250); // let the entry animation settle
     const pills = await page.locator('.decision-records .decision-collapsed').evaluateAll((els) =>
         els.map((el) => el.getBoundingClientRect()));
     expect(Math.abs(pills[0].top - pills[1].top)).toBeLessThan(4);

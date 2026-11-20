@@ -12,8 +12,8 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
 });
 
-for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
-    test(`native child decisions retain attribution and observation (${locale}, ${width})`, async ({ page }) => {
+for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
+    test(`native child decisions retain attribution and observation (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale }); await post(page, { type: 'showChat' });
         await post(page, { type: 'restoreUser', value: 'Delegate the review' }); await post(page, { type: 'startResponse' });
@@ -24,6 +24,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await post(page, { type: 'decisionRequest', decision_id: 'native-form', header: locale === 'en' ? 'Review scope' : 'محدوده بررسی', question: locale === 'en' ? 'Which area should the child inspect?' : 'زیرعامل کدوم بخش رو بررسی کنه؟', options: [{ label: 'Permissions' }, { label: 'Sessions' }], allowCustomAnswer: false, source });
         const card = page.locator('.decision-card.pending');
         await expect(card).toBeVisible();
+        await page.screenshot({ path: info.outputPath('native-question.png') });
         await expect(card.locator('.approval-source')).toContainText('general');
         await expect(card.locator('.approval-source')).toContainText('Review permissions');
         expect(await card.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
@@ -41,6 +42,7 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await stop.click();
         const sent = await page.evaluate(() => (window as unknown as { __xratuHostMessages: Array<{ type?: string; callId?: string }> }).__xratuHostMessages);
         expect(sent.some(message => message.type === 'stopAgent' && message.callId === 'native-parent')).toBe(true);
+        await page.screenshot({ path: info.outputPath('native-observation.png') });
         await page.locator('#surface-tab-conversation').click();
         await post(page, { type: 'decisionResolved', decision_id: 'native-form', answer: null });
         await expect(page.locator('.decision-card.pending')).toHaveCount(0);

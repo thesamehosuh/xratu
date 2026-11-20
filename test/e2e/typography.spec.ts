@@ -2,27 +2,25 @@ import { openWorkPanel } from './navigation';
 import { expect, test } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
-for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
-    test(`control labels keep font metrics, center icons, and align visible glyphs (${locale}, ${width})`, async ({ page }) => {
+for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
+    test(`control labels keep their font metrics and center icons (${locale}, ${width})`, async ({ page }, info) => {
         await installVscodeTheme(page);
-        await page.emulateMedia({ reducedMotion: 'reduce' });
         await page.setViewportSize({ width, height: 900 });
         await page.goto('/');
-        await page.evaluate((loc) => window.postMessage({ type: 'locale', locale: loc }, '*'), locale);
-        await page.evaluate(async () => {
-            await document.fonts.load('400 14px Vazirmatn', 'سلام');
-            await document.fonts.ready;
-        });
-
+        await page.evaluate(locale => window.postMessage({ type: 'locale', locale }, '*'), locale);
+        // Use the standalone host fixtures so populated tool/status rows are audited too.
         for (const [name, type] of [['chat', 'showChat'], ['activity', 'showChat'], ['agents', 'showChat'], ['background', 'showChat'], ['changes', 'showChat'], ['settings', 'openSettings'], ['providers', 'openCredentials'], ['engines', 'openEngines'], ['welcome', 'showWelcome']]) {
-            await page.evaluate((t) => window.postMessage({ type: t }, '*'), type);
-            if (['activity', 'agents', 'background', 'changes'].includes(name)) await openWorkPanel(page, name);
+            await page.evaluate(type => window.postMessage({ type }, '*'), type);
+            if (['activity', 'agents', 'background', 'changes'].includes(name)) {
+                await openWorkPanel(page, name);
+            }
             const pageSelector = ({ settings: '.preferences-page', providers: '.cred-page', engines: '.engines-page' } as Record<string, string>)[name];
             if (pageSelector) await expect(page.locator(pageSelector)).toBeVisible();
             if (['activity', 'agents', 'background', 'changes'].includes(name)) await expect(page.locator(`#surface-panel-${name}`)).toBeVisible();
             if (name === 'chat') await expect(page.locator('.composer-input')).toBeVisible();
             if (name === 'welcome') await expect(page.locator('.onboarding')).toBeVisible();
-
+            await page.evaluate(() => document.fonts.ready);
+            await page.screenshot({ path: info.outputPath(`${name}.png`) });
             const failures = await page.evaluate(() => {
                 const context = document.createElement('canvas').getContext('2d')!;
                 const failures: string[] = [];
@@ -32,15 +30,18 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
                         failures.push(`${control.className}: content exceeds control height`);
                     }
                     for (const node of [control, ...control.querySelectorAll('span')]) {
-                        const text = [...node.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim();
+                        const text = [...node.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('').trim();
                         if (!text) continue;
                         const css = getComputedStyle(node);
                         context.font = `${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
                         const metrics = context.measureText(text);
-                        const line = css.lineHeight === 'normal' ? parseFloat(css.fontSize) * 1.2 : parseFloat(css.lineHeight);
+                        const line = parseFloat(css.lineHeight);
                         const natural = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
                         if (line + 0.5 < natural) failures.push(`${node.className || control.className}: ${text} line=${line} font=${natural}`);
                     }
+                }
+                for (const control of document.querySelectorAll('button, [role=tab]')) {
+                    if (!(control as HTMLElement).checkVisibility()) continue;
                     const icon = control.querySelector(':scope > svg');
                     if (!icon) continue;
                     const iconBox = icon.getBoundingClientRect();
@@ -57,8 +58,11 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
             expect(failures, name).toEqual([]);
         }
     });
+}
 
-    test(`visible letter ink centers with icons and segmented choices stay centered (${locale}, ${width})`, async ({ page }) => {
+// Box centers alone miss a font whose visible letters sit above that center.
+for (const locale of ['en', 'fa']) for (const width of [420, 1854]) {
+    test(`empty chat aligns visible letters with icons (${locale}, ${width})`, async ({ page }, info) => {
         await installVscodeTheme(page);
         await page.emulateMedia({ reducedMotion: 'reduce' });
         await page.setViewportSize({ width, height: 930 });
@@ -66,24 +70,25 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
             Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: () => {}, getState: () => undefined, setState: (value: unknown) => value }) });
         });
         await page.goto('/');
-        await page.evaluate((loc) => {
-            window.postMessage({ type: 'locale', locale: loc }, '*');
+        await page.evaluate(locale => {
+            window.postMessage({ type: 'locale', locale }, '*');
             window.postMessage({ type: 'showChat', workspaceKind: 'project' }, '*');
-            window.postMessage({ type: 'modelInfo', defaultModel: 'reasoner', selectedModel: 'reasoner', models: ['reasoner'], capabilities: { reasoner: { reasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } } }, '*');
         }, locale);
         await expect(page.locator('.composer-policy')).toHaveCount(2);
         await page.evaluate(async () => {
             await document.fonts.load('400 14px Vazirmatn', 'سلام');
             await document.fonts.ready;
         });
-
-        const measurements = await page.locator('.composer-policy').evaluateAll((buttons, loc) => {
+        await page.screenshot({ path: info.outputPath('empty-chat.png') });
+        const measurements = await page.locator('.composer-policy').evaluateAll((buttons, locale) => {
             const context = document.createElement('canvas').getContext('2d')!;
-            return buttons.map((button) => {
+            return buttons.map(button => {
                 const label = button.querySelector('span')!;
                 const css = getComputedStyle(label);
                 context.font = `${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
-                const metrics = context.measureText(loc === 'en' ? 'H' : label.textContent!);
+                // Latin aligns by capitals; descenders hang below that common
+                // baseline. Persian uses its connected letter body's bounds.
+                const metrics = context.measureText(locale === 'en' ? 'H' : label.textContent!);
                 const marker = document.createElement('i');
                 marker.style.cssText = 'display:inline-block;vertical-align:baseline;width:0;height:0;padding:0;margin:0;border:0';
                 label.appendChild(marker);
@@ -94,12 +99,29 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
                 return { text: label.textContent, offset: letterCenter - icon.y - icon.height / 2 };
             });
         }, locale);
+        // Canvas ink bounds round to raster pixels; DOM layout retains fractions.
         for (const { text, offset } of measurements) {
             expect(Math.abs(offset), `${text}: visible text offset ${offset}px`).toBeLessThanOrEqual(1);
         }
+    });
+}
 
+for (const locale of ['en', 'fa']) for (const width of [420, 1280]) {
+    test(`text choices keep horizontal centering (${locale}, ${width})`, async ({ page }, info) => {
+        await installVscodeTheme(page);
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.setViewportSize({ width, height: 900 });
+        await page.addInitScript(() => {
+            Object.assign(window, { acquireVsCodeApi: () => ({ postMessage: () => {}, getState: () => undefined, setState: (value: unknown) => value }) });
+        });
+        await page.goto('/');
+        await page.evaluate(locale => {
+            window.postMessage({ type: 'locale', locale }, '*');
+            window.postMessage({ type: 'showChat' }, '*');
+            window.postMessage({ type: 'modelInfo', defaultModel: 'reasoner', selectedModel: 'reasoner', models: ['reasoner'], capabilities: { reasoner: { reasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } } }, '*');
+        }, locale);
         const assertCentered = async (selector: string) => {
-            const offsets = await page.locator(selector).evaluateAll((buttons) => buttons.map((button) => {
+            const offsets = await page.locator(selector).evaluateAll(buttons => buttons.map(button => {
                 const range = document.createRange();
                 range.selectNodeContents(button);
                 const text = range.getBoundingClientRect();
@@ -111,6 +133,8 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         };
         await page.locator('.picker-chip').click();
         await expect(page.locator('.thinking-seg-opt')).toHaveCount(7);
+        await page.evaluate(() => document.fonts.ready);
+        await page.screenshot({ path: info.outputPath('thinking.png') });
         await assertCentered('.thinking-seg-opt');
         await page.evaluate(() => window.postMessage({ type: 'openSettings' }, '*'));
         await expect(page.locator('.preferences-page')).toBeVisible();

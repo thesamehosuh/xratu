@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test';
 import { existsSync, readdirSync } from 'node:fs';
-import { availableParallelism, homedir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const PORT = Number(process.env.XRATU_E2E_PORT ?? 4173);
@@ -45,13 +45,30 @@ function localChromiumExecutable(): string | undefined {
 
 export default defineConfig({
     testDir: __dirname,
-    // Each test gets its own browser context, so parallel workers are safe.
+    // `approval-prototypes.spec.ts` and `approval-shots.spec.ts` are manual
+    // review harnesses, not gates: they only write PNGs of the states a human
+    // needs to look at. Running them in CI would produce screenshot artifacts
+    // nobody reads while still reporting green. Opt in with
+    // XRATU_SCREENSHOTS=1.
+    //
+    // `screenshots.spec.ts` is NOT ignored any more: it carries the theme
+    // contract (the CI gate for webview-ui/src/styles/theme.css) - computed
+    // styles rather than pixels, because committed PNG baselines turned out to
+    // be machine-specific. Its own manual half skips itself unless
+    // XRATU_SCREENSHOTS is set.
+    testIgnore: process.env.XRATU_SCREENSHOTS
+        ? []
+        : ['**/approval-prototypes.spec.ts', '**/approval-shots.spec.ts'],
+    // The webview mounts once per page load; parallel workers each get their
+    // own browser context, so workers are safe - but keep the run small.
     fullyParallel: true,
-    // Keep one worker on Windows to avoid loopback socket-buffer exhaustion
-    // when repeatedly fetching the single-file (~6 MB) webview bundle.
-    workers: process.platform === 'win32'
-        ? 1
-        : (process.env.CI ? 4 : Math.max(2, Math.min(4, availableParallelism() - 1))),
+    // ONE worker on Windows. The built bundle is a single ~12MB HTML file, so
+    // every `page.goto` pulls 12MB over loopback; two concurrent workers
+    // exhausted the runner's socket buffers and the run died on
+    // `net::ERR_NO_BUFFER_SPACE` - a transport failure, not an assertion.
+    // Serializing fixes the cause instead of retrying over it, because a
+    // blanket `retries` would also re-run real assertion failures and hide them.
+    workers: process.platform === 'win32' ? 1 : 2,
     use: {
         // Preserve the action timeline for CI failures, including test timeouts.
         trace: process.env.CI ? 'retain-on-failure' : 'off',
@@ -62,7 +79,7 @@ export default defineConfig({
             // Host fontconfig defaults differ even on Linux. Keep snapshot
             // text grayscale and unhinted so the bundled font renders alike.
             // Exercise Windows middle-click autoscroll on every OS so Linux
-            // catches tab-closing regressions too.
+            // and macOS catch tab-closing regressions before the Windows leg.
             const args = ['--enable-blink-features=MiddleClickAutoscroll', ...(process.env.XRATU_VISUAL === '1'
                 ? ['--disable-lcd-text', '--font-render-hinting=none'] : [])];
             return { launchOptions: { executablePath, args } };

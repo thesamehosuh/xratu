@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
     await expect.poll(async () => (await messages(page)).some((value) => value.type === 'webviewReady')).toBe(true);
 });
 
-for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
     test(`onboarding choices, free installation, model handoff and draft preservation (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await post(page, { type: 'locale', locale });
@@ -55,43 +55,15 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await post(page, { type: 'showWelcome', path: 'free', canBack: true });
         await expect.poll(async () => (await request(page)).requestId).not.toBe(previousRequest);
         await state(page, { phase: 'ready', models: [available()] });
+        await page.screenshot({ path: test.info().outputPath('onboarding-ready.png') });
         await page.locator('.setup-start').click();
         const current = await request(page);
         expect(await messages(page)).toContainEqual({ type: 'setupComplete', requestId: current.requestId, model: 'opencode/free' });
         await post(page, { type: 'showChat' });
         await expect(page.locator('.onboarding')).toHaveCount(0);
+        await page.screenshot({ path: test.info().outputPath('onboarding-chat.png') });
     });
 }
-
-test('welcome scans local runtime, saves credentials, enters chat, and re-opens provider setup', async ({ page }) => {
-    await page.setViewportSize({ width: 420, height: 760 });
-    await post(page, { type: 'locale', locale: 'fa' });
-    await post(page, { type: 'showWelcome' });
-    await expect(page.locator('.onboarding')).toBeVisible();
-    await expect(page.locator('.composer-input')).toBeHidden();
-    await page.locator('.setup-path').nth(2).click();
-    const local = await request(page);
-    await post(page, { type: 'runtimeSetupState', state: { requestId: local.requestId, engine: 'xratu', path: 'local', phase: 'connect', models: [] } });
-    await post(page, { type: 'localModelsDiscovered', runtimes: [{ id: 'ollama', runtime: 'ollama', name: 'Ollama', modelCount: 1, supportsTools: true, supportsVision: false, baseUrl: 'http://127.0.0.1:11434/v1', models: ['coder'] }] });
-    await expect(page.locator('.setup-runtime')).toContainText('Ollama');
-    await page.locator('.setup-runtime button').click();
-    await expect.poll(() => messages(page)).toContainEqual({ type: 'saveLlmCredentials', base_url: 'http://127.0.0.1:11434/v1', api_key: '', returnToChat: false });
-    await post(page, { type: 'credentialsSaved', credentialId: 'local', returnToChat: false });
-    await expect.poll(async () => (await request(page)).requestId).not.toBe(local.requestId);
-    const ready = await request(page);
-    await post(page, { type: 'runtimeSetupState', state: { requestId: ready.requestId, engine: 'xratu', path: 'local', phase: 'ready', credentialId: 'local', models: [{ id: 'coder', name: 'coder', provider: 'Ollama' }] } });
-    await page.locator('.setup-start').click();
-    expect(await messages(page)).toContainEqual({ type: 'setupComplete', requestId: ready.requestId, model: 'coder' });
-    await post(page, { type: 'showChat' });
-    await expect(page.locator('.composer-input')).toBeVisible();
-    await post(page, { type: 'showWelcome' });
-    await page.locator('.setup-path').nth(1).click();
-    await expect.poll(async () => (await request(page)).requestId).not.toBe(ready.requestId);
-    const provider = await request(page);
-    await post(page, { type: 'runtimeSetupState', state: { requestId: provider.requestId, engine: 'xratu', path: 'provider', phase: 'connect', models: [] } });
-    await expect(page.locator('.setup-credentials')).toBeVisible();
-    expect(await page.locator('.app').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-});
 
 test('all free models rate limited: retry and another path remain usable', async ({ page }) => {
     await post(page, { type: 'locale', locale: 'en' });

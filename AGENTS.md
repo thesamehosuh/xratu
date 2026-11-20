@@ -230,8 +230,8 @@ Inspect the actual UI in both locales at narrow and wide widths as above.
   engine. Keep the composer controls and setup header LTR in both locales;
   model names/radio controls stay left and localized free badges stay right.
 - Engine/setup changes require `npm run test:engines`, webview suites, and
-  relevant `test/e2e/engines.spec.ts` and `onboarding.spec.ts` coverage in both
-  locales and narrow/wide layouts.
+  relevant `test/e2e/engines.spec.ts`, `onboarding.spec.ts`, and
+  `welcome-flow.spec.ts` coverage in both locales and narrow/wide layouts.
   Keep English/Persian READMEs and `THIRD_PARTY_NOTICES.txt` accurate.
 
 ## Releasing

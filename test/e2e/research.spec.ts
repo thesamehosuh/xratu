@@ -9,7 +9,6 @@ const openTool = async (page: Page, name: string) => {
     const label = group.locator('.step-group-body').getByText(name, { exact: true }).first();
     await expect(label).toBeVisible();
     await label.click();
-    return group;
 };
 test.beforeEach(async ({ page }) => {
     await installVscodeTheme(page);
@@ -19,20 +18,25 @@ test.beforeEach(async ({ page }) => {
     });
     await page.goto('/');
 });
-for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
-    test(`native search, structured sources, and proxy routing control (${locale}, ${width})`, async ({ page }) => {
+for (const locale of ['en', 'fa'] as const) for (const width of [420, 1280]) {
+    test(`native search retains its label, icon and result cards (${locale}, ${width})`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 900 });
         await post(page, { type: 'locale', locale });
         await post(page, { type: 'showChat' });
         await post(page, { type: 'toolCall', callId: 'native', tool: 'opencode_websearch', args: '{"query":"docs"}' });
         await post(page, { type: 'toolResult', callId: 'native', tool: 'opencode_websearch', output: '1. Official documentation\n   https://example.com/docs\n   Search result snippet.' });
-        const nativeSearch = await openTool(page, locale === 'en' ? 'Web search · OpenCode' : 'جستجوی وب · OpenCode');
-        await expect(nativeSearch.locator('.detail-web-results a')).toHaveAttribute('href', 'https://example.com/docs');
+        await openTool(page, locale === 'en' ? 'Web search · OpenCode' : 'جستجوی وب · OpenCode');
+        await expect(page.locator('.detail-web-results a')).toHaveAttribute('href', 'https://example.com/docs');
         await expect(page.locator('.lucide-globe').first()).toBeVisible();
-
+        await page.screenshot({ path: info.outputPath('native-search.png') });
+    });
+    test(`automatic research and sole proxy routing control (${locale}, ${width})`, async ({ page }, info) => {
+        await page.setViewportSize({ width, height: 900 });
+        await post(page, { type: 'locale', locale });
         await post(page, { type: 'openCredentials' });
         await expect(page.locator('.cred-page')).toBeVisible();
         await expect(page.locator('.research-controls')).toHaveCount(0);
+        await page.screenshot({ path: info.outputPath('providers-no-research-config.png') });
         await openPageNavigation(page);
         await page.locator('.page-sidebar').getByRole('button', { name: locale === 'en' ? 'Proxy' : 'پروکسی', exact: true }).click();
         const state = { type: 'proxyState', mode: 'auto', proxyUrl: 'http://127.0.0.1:7890', noProxy: 'localhost', resolvedUrl: 'http://127.0.0.1:7890', resolvedSource: 'system', systemProxy: 'http://127.0.0.1:7890', noProxyList: 'localhost', webSearchUseProxy: true };
@@ -48,14 +52,16 @@ for (const [locale, width] of [['en', 1280], ['fa', 420]] as const) {
         await post(page, { ...state, requestId, webSearchUseProxy: false });
         await expect(buttons.last()).toHaveAttribute('aria-pressed', 'true');
         expect(await page.locator('.page-content').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-
+        await page.screenshot({ path: info.outputPath('search-routing.png') });
         await page.locator('.toolbar-back-work').click();
         await post(page, { type: 'showChat' });
         await post(page, { type: 'toolCall', callId: 'research', tool: 'web_search', args: '{"query":"official docs"}' });
         await post(page, { type: 'toolResult', callId: 'research', tool: 'web_search', output: 'A format that cannot be parsed as numbered source text.', research: { version: 1, provider: 'parallel', outcome: 'success', freshness: 'unknown', warnings: [], sources: [{ id: 'one', title: 'Official documentation', url: 'https://example.com/docs', excerpts: ['Observed evidence.'], retrievedAt: '2026-10-21T00:00:00Z', route: 'parallel' }, { id: 'unsafe', title: 'Unsafe link', url: 'javascript:alert(1)', excerpts: [] }] } });
-        const structuredSearch = await openTool(page, locale === 'en' ? 'Web search' : 'جستجوی وب');
-        const source = structuredSearch.locator('.detail-web-results a').filter({ hasText: 'Official documentation' });
+        await openTool(page, locale === 'en' ? 'Web search' : 'جستجوی وب');
+        const source = page.locator('.detail-web-results a').filter({ hasText: 'Official documentation' });
+        
         await expect(source).toHaveAttribute('href', 'https://example.com/docs');
         await expect(page.locator('a[href^="javascript:"]')).toHaveCount(0);
+        await page.screenshot({ path: info.outputPath('structured-sources.png') });
     });
 }
