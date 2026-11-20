@@ -48,11 +48,15 @@ const server = createServer(async (req, res) => {
             res.writeHead(403).end();
             return;
         }
+        const { mtimeNs, size, ino } = await stat(abs, { bigint: true });
         let cached = fileCache.get(abs);
-        if (!cached) {
+        if (!cached || cached.mtimeNs !== mtimeNs || cached.size !== size || cached.ino !== ino) {
             const body = await readFile(abs);
             cached = {
                 body,
+                mtimeNs,
+                size,
+                ino,
                 contentType: MIME[extname(abs).toLowerCase()] ?? 'application/octet-stream',
             };
             fileCache.set(abs, cached);

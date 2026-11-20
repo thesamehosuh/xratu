@@ -139,7 +139,6 @@ for (const [locale, width] of [['en', 1080], ['fa', 420]] as const) {
         expect(await sent(page)).toContainEqual({ type: 'killBackgroundJob', jobId: 'watch' });
 
         await page.locator('#surface-tab-activity').click();
-        await expect(page.locator('.activity-pane .icon-btn-mini')).toHaveCount(0);
         await post(page, { type: 'backgroundJobFinished', jobId: 'job', status: 'exited', exitCode: 2, output: 'Exit code: 2\nSTDOUT:\n(empty)\nSTDERR:\nPort already in use' });
         await post(page, { type: 'backgroundJobs', jobs: [
             { jobId: 'job', command: 'npm run dev -- --host localhost --port 5173', running: false, status: 'exited', exitCode: 2, uptimeSeconds: 66, output: 'Port already in use' },
@@ -148,6 +147,7 @@ for (const [locale, width] of [['en', 1080], ['fa', 420]] as const) {
         const pill = page.locator('.activity-pane details.step');
         await expect(pill.locator('.detail-terminal .detail-output')).toHaveText('Port already in use');
         await expect(pill.locator('.detail-exit')).toContainText('2');
+        await expect(page.locator('.activity-pane .icon-btn-mini')).toHaveCount(0);
         await expect(page.locator('.bg-job')).toHaveCount(2);
 
         await page.locator('#surface-tab-background').click();

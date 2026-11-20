@@ -52,9 +52,9 @@ test('provider onboarding, Ollama download progress, cancellation and confirmed 
     await page.locator('.cred-provider-box input').fill('Avalai');
     await page.keyboard.press('Enter');
     await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');
-    await page.locator('.drawer-head .icon-btn').click();
     await expect(page.locator('.provider-comparison')).toHaveCount(0);
     expect((await sent(page)).some(message => message.type === 'benchmarkProvider')).toBe(false);
+    await page.locator('.drawer-head .icon-btn').click();
     const management = page.getByText('Manage Ollama models', { exact: true });
     if (!await management.evaluate((el) => el.parentElement?.hasAttribute('open'))) await management.click();
     await page.getByRole('textbox', { name: 'Model name to download' }).fill('qwen2.5-coder:7b');

@@ -5,6 +5,7 @@
  * envelopes posted via `window.postMessage` — no VS Code host required.
  */
 import { installVscodeTheme } from './vscodeTheme';
+import { postHostMessageAndWait } from './hostMessages';
 import { openPageNavigation, openSettingsFromWork } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -211,12 +212,16 @@ test('appending while scrolled up keeps the reader anchor', async ({ page }) => 
     await expect(bubbles).toHaveCount(40);
     await page.locator('.messages').evaluate((el) => { el.scrollTop = 0; });
     await expect(page.locator('.jump-btn')).toBeVisible();
+    const first = page.getByText('msg 0', { exact: true });
+    const anchor = () => first.evaluate(el => el.getBoundingClientRect().top - el.closest('.messages')!.getBoundingClientRect().top);
+    const originalTop = await anchor();
     await page.evaluate(() => {
         window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg x' } }));
         window.dispatchEvent(new MessageEvent('message', { data: { type: 'restoreUser', value: 'msg y' } }));
     });
     await expect(bubbles).toHaveCount(42);
-    await expect(page.getByText('msg 0', { exact: true })).toBeVisible();
+    await expect(first).toBeInViewport();
+    expect(await anchor()).toBeCloseTo(originalTop, 0);
     await expect(page.locator('.show-earlier')).toHaveCount(0);
 });
 
@@ -274,7 +279,8 @@ test('edit pill open-diff, turn outcome review vs no-diff turn, and checkpoint r
     }).toBe(true);
     const req = ((await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages)) as Array<Record<string, unknown>>)
         .filter((message) => message.type === 'changesGetState' && message.sha === 'def5678').at(-1)!;
-    await hostMessage(page, { ...req, type: 'changesState', files: [] });
+    await postHostMessageAndWait(page, { ...req, type: 'changesState', files: [] });
+    await expect(page.locator('.review-current .surface-empty-state')).toContainText('No changes since this checkpoint.');
     await expect(page.locator('.turn-outcome')).toHaveCount(0);
 });
 

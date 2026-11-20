@@ -1,4 +1,5 @@
 import { openPageNavigation } from './navigation';
+import { postHostMessageAndWait } from './hostMessages';
 import { setLocale as setTestLocale, t } from '../../webview-ui/src/i18n';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme, VSCODE_LIGHT_THEME_CSS } from './vscodeTheme';
@@ -1084,7 +1085,6 @@ test.describe('work surface', () => {
         const current = requests.find(m => m.sha === otherSha)!;
         const historical = requests.find(m => m.sha === sha && m.toSha === otherSha)!;
         await post(page, { ...historical, type: 'changesState', files: [] });
-        await post(page, { ...previous, type: 'changesState', files: [{ ...changes[0], path: 'stale.ts' }] });
         await post(page, { ...current, type: 'changesState', files: changes });
         await page.locator('#surface-tab-changes').click();
         await replyFile(page);
@@ -1095,8 +1095,12 @@ test.describe('work surface', () => {
         await expect(page.locator('.composer-input')).toHaveValue('My existing draft');
 
         // Settled requests never time out later; stale file rejected.
+        const currentFiles = page.locator('.review-current .review-files');
+        await expect(currentFiles.locator('.review-file')).toHaveCount(changes.length);
+        await postHostMessageAndWait(page, { ...previous, type: 'changesState', files: [{ ...changes[0], path: 'stale.ts' }] });
+        for (const change of changes) await expect(currentFiles).toContainText(change.path);
+        await expect(currentFiles).not.toContainText('stale.ts');
         await page.clock.fastForward(46_000);
-        await expect(page.locator('.review-files')).not.toContainText('stale.ts');
         await expect(page.locator('.changes-review [role="alert"]')).toHaveCount(0);
 
         // Open in editor & incremental refresh only reloads changed files.
@@ -1311,23 +1315,29 @@ test.describe('work surface', () => {
         for (let i = 0; i < 24; i++) await add(i);
         await dragToSidebar(page, '#surface-tab-activity');
         const pane = page.locator('.activity-pane');
+        const completed = pane.locator('.activity-entry details.step:not(.running)');
         const bottom = () => pane.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+        await expect(completed).toHaveCount(24);
         await expect.poll(bottom).toBeLessThan(2);
         await add(24);
+        await expect(completed).toHaveCount(25);
         await expect.poll(bottom).toBeLessThan(2);
         await pane.hover();
         await page.mouse.wheel(0, -300);
         await expect.poll(bottom).toBeGreaterThan(100);
         const top = await pane.evaluate((el) => el.scrollTop);
         await add(25);
+        await expect(completed).toHaveCount(26);
         await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeCloseTo(top, 0);
         await page.mouse.wheel(0, 10_000);
         await expect.poll(bottom).toBeLessThan(2);
         await add(26);
+        await expect(completed).toHaveCount(27);
         await expect.poll(bottom).toBeLessThan(2);
         await page.locator('#surface-tab-activity').dragTo(page.locator('.dock-tabs.main'));
         await expect.poll(bottom).toBeLessThan(2);
         await add(27);
+        await expect(completed).toHaveCount(28);
         await expect.poll(bottom).toBeLessThan(2);
     });
 
@@ -1438,6 +1448,7 @@ test('composer collapses monotonically without bounce and hidden tabs never over
     await input.focus();
     await input.evaluate(el => { (el as HTMLTextAreaElement).setSelectionRange(2, 7); });
     await expect(page.locator('.composer')).toHaveCSS('border-radius', '11px');
+    const expanded = await page.locator('.composer').evaluate(el => el.getBoundingClientRect().height);
     const frames = await input.evaluate(el => new Promise<Array<{ height: number; settled: boolean }>>((resolve, reject) => {
         const card = el.closest('.input-bar')!.querySelector('.composer')!;
         const samples: Array<{ height: number; settled: boolean }> = [];
@@ -1484,6 +1495,7 @@ test('composer collapses monotonically without bounce and hidden tabs never over
     }));
     for (let i = 1; i < frames.length; i++) expect(frames[i].height).toBeLessThanOrEqual(frames[i - 1].height + 0.6);
     const final = frames.at(-1)!.height;
+    expect(final).toBeLessThan(expanded);
     for (const sample of frames.filter(frame => frame.settled)) expect(Math.abs(sample.height - final)).toBeLessThan(1);
     await input.focus();
     await expect(input).toHaveValue('Three lines\nof text\nremain intact');

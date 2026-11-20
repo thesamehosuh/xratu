@@ -155,6 +155,7 @@ test('tall transcript + live subagent updates never squash or overlap rows', asy
         await hostMessage(page, { type: 'toolOutput', callId: 'call_task1', value: `↳ read_file game/engine.py chunk ${i}\n` });
     }
     await expect(page.locator('.messages-inner > *')).toHaveCount(13);
+    await expect(page.locator('.messages .sum-live')).toHaveText('read_file game/engine.py chunk 19');
     const probe = await page.evaluate(() => {
         const messages = document.querySelector('.messages')!;
         const inner = document.querySelector('.messages-inner')!;

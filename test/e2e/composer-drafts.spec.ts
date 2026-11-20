@@ -1,14 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
+import { postHostMessageAndWait } from './hostMessages';
 
 const post = (page: Page, msg: Record<string, unknown>) => page.evaluate(message => window.postMessage(message, '*'), msg);
 async function session(page: Page, id: string | null, workspace = '/project', browserSessionId = id ?? 'fresh') {
-    await page.evaluate(message => new Promise<void>(resolve => {
-        // postMessage delivery is asynchronous. Wait for delivery and React's
-        // commit before a fill can target the previous session's textarea.
-        window.addEventListener('message', () => requestAnimationFrame(() => requestAnimationFrame(() => resolve())), { once: true });
-        window.postMessage(message, '*');
-    }), { type: 'sessionState', id, title: id, workspace, browserSessionId });
+    await postHostMessageAndWait(page, { type: 'sessionState', id, title: id, workspace, browserSessionId });
 }
 
 test('drafts isolate sessions and survive reload (fa, 420)', async ({ page }) => {
@@ -100,8 +96,9 @@ test('send receipts preserve newer typing and reject stale replies (en, 1100)', 
     await input.press('Enter');
     const switched = await latest();
     await session(page, 'B'); await input.fill('belongs to B');
-    await post(page, { type: 'sendReceipt', requestId: switched.requestId, sessionKey: 'A', status: 'rejected' });
+    await postHostMessageAndWait(page, { type: 'sendReceipt', requestId: switched.requestId, sessionKey: 'A', status: 'rejected' });
     await expect(input).toHaveValue('belongs to B');
+    await expect(page.locator('.composer .attach-error')).toHaveCount(0);
     await session(page, null); await input.fill('promoted send'); await input.press('Enter');
     const promoted = await latest();
     await session(page, 'saved-new', '/project', 'fresh');

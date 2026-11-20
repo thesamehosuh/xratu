@@ -307,21 +307,15 @@ test('settings sidebar routes request each destination page state on entry', asy
     await page.waitForSelector('.settings-page');
     await expect(page.locator('.settings-page').getByRole('switch', { name: 'Offline mode', exact: true })).toBeVisible();
 
-    await openPageNavigation(page);
-    await page.locator('.page-sidebar').getByRole('button', { name: 'Proxy', exact: true }).click();
-    let sent = await sentMessages(page);
-    expect(sent.some((m) => m.type === 'proxyGetState')).toBe(true);
-    expect(sent.some((m) => m.type === 'mcpGetState')).toBe(true);
-    expect(sent.some((m) => m.type === 'proxyDetect')).toBe(true);
-
-    await openPageNavigation(page);
-    await page.locator('.page-sidebar').getByRole('button', { name: 'Providers', exact: true }).click();
-    sent = await sentMessages(page);
-    expect(sent.some((m) => m.type === 'openCredentials')).toBe(true);
-
-    await openPageNavigation(page);
-    await page.locator('.page-sidebar').getByRole('button', { name: 'Servers', exact: true }).click();
-    sent = await sentMessages(page);
-    expect(sent.some((m) => m.type === 'mcpGetState')).toBe(true);
-    expect(sent.some((m) => m.type === 'skillsGetState')).toBe(true);
+    for (const [destination, requests] of [
+        ['Proxy', ['proxyGetState', 'mcpGetState', 'proxyDetect']],
+        ['Providers', ['openCredentials']],
+        ['Servers', ['mcpGetState', 'skillsGetState']],
+    ] as const) {
+        await openPageNavigation(page);
+        const before = (await sentMessages(page)).length;
+        await page.locator('.page-sidebar').getByRole('button', { name: destination, exact: true }).click();
+        await expect.poll(async () => (await sentMessages(page)).slice(before).map(message => message.type))
+            .toEqual(expect.arrayContaining([...requests]));
+    }
 });
