@@ -908,6 +908,23 @@ try {
     assert.equal(pickerHost._sessionConnectionConfirmed, true);
     assert.equal(pickerHost._sessionTransitionsPending, 0);
     console.log('ok composer provider browsing is read-only and selection commits the validated connection/model pair');
+    const failedHost = new sandbox.Host(), failedMessages = [];
+    const first = { id: 'first', baseUrl: 'https://example.test/v1', apiKey: 'a' };
+    const second = { id: 'second', baseUrl: first.baseUrl, apiKey: 'b' };
+    Object.assign(failedHost, {
+        _activeEngine: 'xratu', _sessionEpoch: 1, _selectedModel: 'first-only',
+        _view: { webview: { postMessage: message => failedMessages.push(message) } },
+        _resolveActiveCredentialId: async () => second.id,
+        _getLlmCredentials: async () => ({ credential: second, llm_base_url: second.baseUrl }),
+        _nextComposerCatalogGeneration: () => 1,
+        _probeLocalModelCatalog: async () => { throw new Error('probe failed'); },
+    });
+    assert.equal(await failedHost._fetchModels(), false);
+    assert.equal(failedHost._selectedModel, null);
+    assert.equal(failedMessages.find(message => message.type === 'modelInfo').models.length, 0);
+    assert.equal(failedMessages.find(message => message.type === 'modelInfo').credentialId, 'second');
+    assert.equal(failedMessages.findLast(message => message.type === 'byokCredentialError').valueKey, 'localUnreachableDetail');
+    console.log('ok failed discovery clears the previous account model list');
     const refreshHost = new sandbox.Host();
     refreshHost._activeEngine = 'opencode';
     refreshHost._sessionEpoch = 1;

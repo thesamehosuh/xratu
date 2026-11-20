@@ -1134,7 +1134,6 @@ export function App() {
                 case 'credentialsSaved':
                     if (setupScreenRef.current) { if (msg.credentialId) setSetupCredentialId(msg.credentialId); setSetupRefresh((value) => value + 1); }
                     else if (msg.returnToChat) setScreen('chat');
-                    setByokError(null);
                     break;
                 case 'localModelsDiscovered':
                     if (onLocalModelsDiscovered) onLocalModelsDiscovered(msg.runtimes, msg.error);

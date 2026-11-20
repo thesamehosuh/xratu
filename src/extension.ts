@@ -5746,6 +5746,9 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             this._publishLocalModelCatalog(llm.llm_base_url, credentialId, entry, catalog);
             return true;
         } catch (e) {
+            if (!current() || await this._resolveActiveCredentialId() !== credentialId || !current()) return false;
+            this._selectedModel = null;
+            post({ type: 'modelInfo', credentialId, defaultModel: '', selectedModel: '', models: [], contextWindows: {}, visionCapable: false });
             // Probe failure - tell the user instead of failing silently.
             post(e instanceof EngineError ? { type: 'byokCredentialError', valueKey: e.valueKey }
                 : { type: 'byokCredentialError', valueKey: 'localUnreachableDetail', params: { detail: e instanceof Error ? e.message : String(e) } });

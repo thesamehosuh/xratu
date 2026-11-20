@@ -419,6 +419,24 @@ test('favorites remain visible when the active model catalog changes', async ({ 
     await expect(page.getByRole('option').filter({ hasText: 'Two' })).toBeVisible();
 });
 
+test('failed discovery clears the previous account models and keeps the error', async ({ page }) => {
+    await post(page, { type: 'locale', locale: 'en' });
+    await post(page, { type: 'showChat' });
+    const credentials = [
+        { id: 'first', providerId: 'openai', label: 'First', baseUrl: 'https://example.test/v1', maskedKey: '••••', active: true },
+        { id: 'second', providerId: 'openai', label: 'Second', baseUrl: 'https://example.test/v1', maskedKey: '••••', active: false },
+    ];
+    await post(page, { type: 'savedCredentials', credentials });
+    await post(page, { type: 'modelInfo', credentialId: 'first', defaultModel: 'first-only', selectedModel: 'first-only', models: ['first-only'] });
+    await post(page, { type: 'openCredentials' });
+    await post(page, { type: 'modelInfo', credentialId: 'second', defaultModel: '', selectedModel: '', models: [] });
+    await post(page, { type: 'byokCredentialError', value: 'Discovery failed' });
+    await post(page, { type: 'savedCredentials', credentials: credentials.map(c => ({ ...c, active: c.id === 'second' })) });
+    await post(page, { type: 'credentialsSaved' });
+    await expect(page.getByRole('alert').filter({ hasText: 'Discovery failed' })).toBeVisible();
+    await expect(page.locator('.cred-page')).not.toContainText('first-only');
+});
+
 test('providers follow the active engine without a separate selector', async ({ page }) => {
     await post(page, { type: 'locale', locale: 'en' });
     await post(page, { type: 'showChat' });
