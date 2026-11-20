@@ -142,7 +142,7 @@ OpenCode's model picker shows each model's provider and defaults to **Free model
 
 ## Checkpoints and reviewing changes
 
-Before each send and edit, Xratu snapshots your workspace into a separate **shadow git** repository inside extension storage. Your project's own `.git` index, working tree status, and commit history are never modified.
+Before each send and edit, Xratu snapshots your workspace into a separate **shadow git** repository inside extension storage. Your project's own `.git` index and commit history are never modified.
 
 - **Review inline**: Open **Changes** (or click **Review changes** on a turn) to inspect per-file diffs, mark files as reviewed, attach review notes to your composer draft, or open the full native VS Code diff editor.
 - **Restore**: Run **Xratu: Restore Checkpoint…** from the Command Palette. Restoring applies to the whole workspace and saves a safety snapshot first so you can undo a restore. Stop active workspace processes from **Background** before restoring. Files-only restore keeps your conversation transcript intact.
@@ -334,7 +334,7 @@ Open **Settings → Proxy** to control outbound routing:
 - **Automatic web research**: Web research runs automatically (including in Plan mode) with no account or search API key required.
   - `web_search` sends public queries to anonymous Parallel Search MCP, falling back to anonymous Exa if unavailable or rate-limited.
   - `fetch_url` reads public pages directly (returning Markdown, code, links, and bounded PDF text). Clean URLs observed in that chat's public search results can fall back to Parallel extraction; URLs with query strings or fragments stay direct-only.
-  - Hosted search services receive only the query (or eligible public URL) and a random per-chat ID — never provider keys, cookies, local paths, or native session IDs. Pages are held briefly in memory (5 minutes) and never cached to disk. OpenCode uses this same Xratu research layer.
+  - Hosted search services receive the query text (or eligible public URL) and a random per-chat ID. Query text is sent unchanged, so avoid including local paths in `web_search` queries. Provider keys, cookies, and native session IDs are never sent. Pages are held briefly in memory (5 minutes) and never cached to disk. OpenCode uses this same Xratu research layer.
   - Legacy Brave/SearXNG search settings are retired; if you saved old search keys in VS Code settings, remove them manually.
 - **Offline mode**: Restricts Xratu-managed network traffic to loopback endpoints and disables cloud models, OpenCode, web research, and external MCP. Terminal commands and browser links you open yourself remain unrestricted.
 - **Reporting vulnerabilities**: Please report security issues privately through [SECURITY.md](../SECURITY.md), not in a public issue.

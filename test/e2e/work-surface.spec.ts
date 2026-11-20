@@ -1086,6 +1086,7 @@ test.describe('work surface', () => {
         const divider = page.locator('.messages-inner .compaction-divider');
         await expect(divider).toBeVisible();
         await post(page, { type: 'fullResponse', persian: 'Continuing after compaction.', renderedHtml: '<p>Continuing after compaction.</p>' });
+        await expect(page.locator('.messages-inner')).toContainText('Continuing after compaction.');
         await expect(divider).toBeVisible();
         const dividerBox = await divider.boundingBox();
         const innerBox = await page.locator('.messages-inner').boundingBox();

@@ -5517,6 +5517,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 break;
             case 'compactionCheckpoint': {
                 const timestamp = Date.now();
+                this._flushLiveSegment();
                 outcome.events.push({ ...persistedEventFromAgentEvent(event), timestamp });
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({ type: 'compactionState', active: false, completed: true, timestamp });
@@ -5540,6 +5541,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                 const replay = Math.max(0, Math.min(base - dropped, total));
                 this._localReplayUserTurns = replay >= total ? null : replay;
                 const timestamp = Date.now();
+                this._flushLiveSegment();
                 outcome.events.push({ type: 'compaction_done', timestamp });
                 this._scheduleLocalPartialPersist();
                 this._view?.webview.postMessage({ type: 'compactionState', active: false, completed: true, timestamp });
@@ -5569,6 +5571,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
                     const completed = event.valueKey === 'engineCompacted';
                     const timestamp = Date.now();
                     if (completed) {
+                        this._flushLiveSegment();
                         outcome.events.push({ type: 'compaction_done', timestamp });
                         this._scheduleLocalPartialPersist();
                     }

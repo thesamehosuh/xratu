@@ -15,7 +15,7 @@ This guide ships inside Xratu and opens without an internet connection.
 
 - **Allowed**: Loopback HTTP(S) endpoints only (`localhost`, `127.0.0.1`, `::1`), local workspace tools, local history/checkpoints, and cached/bundled MCP Marketplace listings.
 - **Blocked**: Cloud providers, OpenCode, LAN/remote runtimes, web research, external MCP servers, live catalog refreshes, proxy routing, and HTTP redirects. Existing saved connections stay intact.
-- **Immediate effect**: Turning Offline mode on cancels active chat turns, downloads, latency tests, and OAuth flows, and closes external MCP and open browser connections (reopened browser tabs permit loopback URLs only).
+- **Immediate effect**: Turning Offline mode on cancels active remote chat requests, OpenCode runs, downloads, Ollama pulls, remote latency tests, and OAuth flows, and closes external MCP and open browser connections (reopened browser tabs permit loopback URLs only). A built-in chat running against a local loopback model is not cancelled and can continue running tools — stop it explicitly if you want it to stop.
 - **Not an OS firewall**: Offline mode governs Xratu-managed network traffic only. Terminal commands you approve and links you open in your own browser can still access the network.
 
 ## Choose a model size for your hardware
