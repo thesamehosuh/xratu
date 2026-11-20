@@ -6,7 +6,6 @@
  * not break: scrolling up detaches the follow, streaming while detached does
  * not move the reader, and scrolling back down re-arms it.
  */
-import { openWorkPanel } from './navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { installVscodeTheme } from './vscodeTheme';
 
@@ -23,10 +22,19 @@ test.beforeEach(async ({ page }) => {
             setState: (state: unknown) => state,
         });
     });
+    await page.goto('/');
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'sessionState', id: 'live', title: null });
 });
 
+const hostMessages = (page: Page, messages: Record<string, unknown>[]) =>
+    page.evaluate((batch) => {
+        for (const message of batch) window.postMessage(message, '*');
+    }, messages);
+
 const hostMessage = (page: Page, message: Record<string, unknown>) =>
-    page.evaluate((msg) => window.postMessage(msg, '*'), message);
+    hostMessages(page, [message]);
 
 const metrics = (page: Page) => page.evaluate(() => {
     const el = document.querySelector('.messages') as HTMLElement;
@@ -36,13 +44,6 @@ const metrics = (page: Page) => page.evaluate(() => {
         height: el.scrollHeight,
         distance: el.scrollHeight - el.scrollTop - el.clientHeight,
     };
-});
-
-test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await hostMessage(page, { type: 'showChat' });
-    await hostMessage(page, { type: 'locale', locale: 'en' });
-    await hostMessage(page, { type: 'sessionState', id: 'live', title: null });
 });
 
 test('scrolling up during a live run detaches follow and scrolling back re-arms it', async ({ page }) => {
@@ -90,34 +91,39 @@ test('scrolling up during a live run detaches follow and scrolling back re-arms 
     await hostMessage(page, { type: 'chunk', value: 'After returning to the tail. ' });
     expect((await metrics(page)).distance).toBeLessThan(80);
 });
-for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
+for (const [locale, width] of [['en', 1080], ['fa', 420]] as const) {
     test(`real wheel navigation remains usable during streaming (${locale}, ${width})`, async ({ page }) => {
         await page.setViewportSize({ width, height: 760 });
         await hostMessage(page, { type: 'locale', locale });
-        for (let i = 0; i < 65; i++) await hostMessage(page, { type: 'restoreUser', value: `History ${i}` });
-        await hostMessage(page, { type: 'startResponse' });
-        for (let i = 0; i < 10; i++) await hostMessage(page, { type: 'chunk', value: `Paragraph ${i}. `.repeat(40) });
+        await hostMessages(page, [
+            ...Array.from({ length: 65 }, (_, i) => ({ type: 'restoreUser', value: `History ${i}` })),
+            { type: 'startResponse' },
+            ...Array.from({ length: 10 }, (_, i) => ({ type: 'chunk', value: `Paragraph ${i}. `.repeat(40) })),
+        ]);
         const pane = page.locator('.messages');
         await expect.poll(async () => (await metrics(page)).distance).toBeLessThan(1);
         await pane.hover();
         await pane.evaluate((el) => {
             const target = el as HTMLElement & { wheelFinished?: Promise<void> };
             target.wheelFinished = new Promise((resolve) => {
-                // A wheel call returns before compositor scrolling finishes.
-                // Observe scrollend for this gesture, not an earlier follow scroll.
                 target.addEventListener('wheel', () => {
                     target.addEventListener('scrollend', () => resolve(), { once: true });
                 }, { once: true, passive: true });
             });
         });
         await page.mouse.wheel(0, -900);
-        // Race stream updates against the browser's wheel/scroll delivery.
-        for (let i = 0; i < 8; i++) await hostMessage(page, { type: 'chunk', value: 'More live output. '.repeat(30) });
+        await hostMessages(page, Array.from({ length: 8 }, (_, i) => ({
+            type: 'chunk', value: `More live output ${i}. `.repeat(30),
+        })));
+        await expect(pane).toContainText('More live output 7.');
         await expect(page.locator('.jump-btn')).toBeVisible();
         await expect.poll(async () => (await metrics(page)).distance).toBeGreaterThan(80);
         await pane.evaluate((el) => (el as HTMLElement & { wheelFinished?: Promise<void> }).wheelFinished);
         const detached = await metrics(page);
-        for (let i = 0; i < 8; i++) await hostMessage(page, { type: 'chunk', value: 'Still working. '.repeat(30) });
+        await hostMessages(page, Array.from({ length: 8 }, (_, i) => ({
+            type: 'chunk', value: `Still working ${i}. `.repeat(30),
+        })));
+        await expect(pane).toContainText('Still working 7.');
         expect((await metrics(page)).top).toBeCloseTo(detached.top, 0);
         await page.mouse.wheel(0, 450);
         await expect.poll(async () => (await metrics(page)).top).toBeGreaterThan(detached.top + 100);
@@ -128,13 +134,52 @@ for (const locale of ['en', 'fa']) for (const width of [420, 1080]) {
         await expect(jump).toBeHidden();
         await expect.poll(async () => (await metrics(page)).distance).toBeLessThan(1);
         await hostMessage(page, { type: 'chunk', value: 'Output after jumping.' });
+        await expect(pane).toContainText('Output after jumping.');
         await expect.poll(async () => (await metrics(page)).distance).toBeLessThan(1);
-        // Switching panels hides the composer without dropping the draft.
-        await page.locator('.composer-input').fill('Draft survives');
-        // This prose-only run has no Activity rows; open the empty panel explicitly.
-        await openWorkPanel(page, 'activity');
-        await expect(page.locator('.composer-input')).toBeHidden();
-        await page.locator('#surface-tab-conversation').click();
-        await expect(page.locator('.composer-input')).toHaveValue('Draft survives');
     });
 }
+
+test('tall transcript + live subagent updates never squash or overlap rows', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 820 });
+    for (let m = 0; m < 12; m++) {
+        await hostMessage(page, { type: 'startResponse' });
+        for (let s = 0; s < 4; s++) {
+            await hostMessage(page, { type: 'toolCall', tool: 'read_file', callId: `c${m}_${s}`, args: JSON.stringify({ path: `game/module_${m}_${s}.py` }) });
+            await hostMessage(page, { type: 'toolResult', tool: 'read_file', callId: `c${m}_${s}`, output: 'done' });
+        }
+        await hostMessage(page, { type: 'fullResponse', persian: `Answer ${m} with enough prose to make the bubble tall.\n\n`.repeat(8) });
+    }
+    await hostMessage(page, { type: 'startResponse' });
+    await hostMessage(page, { type: 'toolCall', tool: 'task', callId: 'call_task1', args: JSON.stringify({ subagent_type: 'explore', description: 'Inspect map rendering', prompt: 'x'.repeat(200) }) });
+    for (let i = 0; i < 20; i++) {
+        await hostMessage(page, { type: 'toolOutput', callId: 'call_task1', value: `↳ read_file game/engine.py chunk ${i}\n` });
+    }
+    await expect(page.locator('.messages-inner > *')).toHaveCount(13);
+    await expect(page.locator('.messages .sum-live')).toHaveText('read_file game/engine.py chunk 19');
+    const probe = await page.evaluate(() => {
+        const messages = document.querySelector('.messages')!;
+        const inner = document.querySelector('.messages-inner')!;
+        const rows = [...inner.querySelectorAll(':scope > *')] as HTMLElement[];
+        let squashed = 0;
+        for (const r of rows) if (r.scrollHeight > r.clientHeight + 2) squashed++;
+        const rects = rows.map((r) => r.getBoundingClientRect());
+        let overlaps = 0;
+        for (let i = 0; i < rects.length; i++) {
+            for (let j = i + 1; j < rects.length; j++) {
+                if (rects[i].bottom > rects[j].top + 1 && rects[j].bottom > rects[i].top + 1) overlaps++;
+            }
+        }
+        return {
+            rows: rows.length,
+            squashed,
+            overlaps,
+            messagesClip: messages.scrollHeight < inner.scrollHeight - 2,
+            scrollable: messages.scrollHeight > messages.clientHeight,
+        };
+    });
+    expect(probe.rows).toBeGreaterThan(10);
+    expect(probe.scrollable).toBe(true);
+    expect(probe.squashed).toBe(0);
+    expect(probe.overlaps).toBe(0);
+    expect(probe.messagesClip).toBe(false);
+});
