@@ -29,6 +29,8 @@
  * Run:  npm run test:shiki-langs
  */
 import { readFileSync } from 'fs';
+import { createRequire } from 'module';
+import Module from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createHighlighter } from 'shiki';
@@ -125,30 +127,51 @@ for (const theme of themes) {
 }
 
 // --------------------------------------------------------- unknown languages
-
-// `highlightCode` guards membership and falls back to the plaintext grammar,
-// because shiki's own `fallbackLanguage` does NOT stop the throw for a
-// grammar that is not loaded at all.
+// Exercise the REAL compiled `out/markdownRender.js` (with `vscode` stubbed)
+// so an unloaded language fence must actually fall back to a themed plaintext
+// block instead of throwing or emitting monochrome `<pre><code>`.
 const unknown = 'a-language-that-does-not-exist';
 ok('the sentinel really is unloaded', !loaded.has(unknown));
-const fallbackLang = loaded.has(unknown) ? unknown : 'plaintext';
-let fallbackHtml = '';
+highlighter.dispose();
+
+const origLoad = Module._load;
+let activeThemeKind = 2; // ColorThemeKind.Dark
+Module._load = function (request, parent, isMain) {
+    if (request === 'vscode') {
+        return {
+            ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
+            window: { get activeColorTheme() { return { kind: activeThemeKind }; } },
+        };
+    }
+    return origLoad.call(this, request, parent, isMain);
+};
 try {
-    fallbackHtml = highlighter.codeToHtml(SAMPLE, { lang: fallbackLang, theme: themes[0] });
-    ok('an unloaded language still renders without throwing', true);
-} catch (err) {
-    ok('an unloaded language still renders without throwing', false, String(err?.message ?? err));
+    const require = createRequire(import.meta.url);
+    const { ensureShiki, md } = require('../out/markdownRender.js');
+    await ensureShiki();
+
+    activeThemeKind = 2;
+    const darkTs = md.render('```tsx\nconst x = 1;\n```\n');
+    ok('real renderer highlights tsx with token colors in dark theme',
+        darkTs.includes('class="shiki') && /color:#[0-9a-f]{3,8}/i.test(darkTs));
+
+    activeThemeKind = 1;
+    const lightTs = md.render('```tsx\nconst x = 1;\n```\n');
+    ok('real renderer switches to github-light when editor theme is light',
+        lightTs.includes('github-light') && /background-color/.test(lightTs));
+
+    const fallbackHtml = md.render(`\`\`\`${unknown}\n${SAMPLE}\`\`\`\n`);
+    ok('real renderer renders an unloaded language as a themed block instead of throwing',
+        fallbackHtml.includes('<pre') && /background-color/.test(fallbackHtml));
+} finally {
+    Module._load = origLoad;
 }
-ok('and it still yields a themed block, not bare text',
-    fallbackHtml.includes('<pre') && /background-color/.test(fallbackHtml));
 
 // The alias map must not reintroduce an unloaded target for the tags above.
 console.log('\n--- the renderer logs instead of swallowing (source check) ---');
 ok('highlightCode no longer has an empty catch',
     !/\}\s*catch\s*\{\s*return `<pre><code>/.test(src),
     'the bare catch that hid every one of these failures is back');
-
-highlighter.dispose();
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

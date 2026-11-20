@@ -124,5 +124,61 @@ try {
     assert.equal(unknown.isError, true);
     assert.ok(unknown.content.includes('Completion is unknown'));
     assert.ok(repaired.indexOf(unknown) < repaired.findIndex(row => row.content === 'Resume'), 'the missing result precedes the next user turn');
-    console.log('wire-protocols: finalized calls, budget aliases, foreign carriers, Google reasoning usage and native call IDs passed');
+
+    // --- Prompt-cache tail-note shape (merged from test-prompt-cache-shape) ---
+    const { appendTailNote, withReasoningContent } = require('../out/local/localAgent.js');
+    const alternates = (msgs) => msgs.every((m, i) => i === 0 || m.role !== msgs[i - 1].role);
+    const commonPrefix = (a, b) => { let i = 0; while (i < a.length && i < b.length && JSON.stringify(a[i]) === JSON.stringify(b[i])) i++; return i; };
+    const sys = t => ({ role: 'system', content: t });
+    const usr = t => ({ role: 'user', content: t });
+    const ast = t => ({ role: 'assistant', content: t });
+    const tl = t => ({ role: 'tool', content: t, tool_call_id: 'c1' });
+    const note1 = '[Context status: 12%]';
+    const note2 = '[Context status: 13%]';
+    const note3 = '[Context status: 15%]';
+    {
+        const toolEnding = [sys('S'), usr('hi'), ast('call'), tl('RESULT')];
+        const wire = appendTailNote(toolEnding, note1);
+        assert.equal(wire.length, toolEnding.length + 1);
+        assert.equal(wire.at(-1).role, 'user');
+        assert.ok(String(wire.at(-1).content).includes('Context status'));
+        assert.ok(!JSON.stringify(toolEnding).includes('Context status'));
+        assert.ok(alternates(wire));
+
+        const userEnding = [sys('S'), usr('hi')];
+        const merged = appendTailNote(userEnding, note1);
+        assert.equal(merged.length, userEnding.length);
+        assert.ok(String(merged.at(-1).content).includes('Context status'));
+        assert.ok(alternates(merged));
+
+        const stored2 = [sys('S'), usr('u'), ast('a1'), tl('TOOL RESULT 1')];
+        const stored3 = [...stored2, ast('a2'), tl('TOOL RESULT 2')];
+        assert.equal(commonPrefix(appendTailNote(stored2, note2), appendTailNote(stored3, note3)), stored2.length);
+        assert.equal(appendTailNote([], note1).length, 0);
+        assert.equal(appendTailNote(userEnding, '').length, userEnding.length);
+        const arr = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
+        assert.equal(appendTailNote(arr, note1)[0].content.length, 2);
+    }
+
+    // --- Reasoning replay on Chat Completions (merged from test-reasoning-replay) ---
+    {
+        const tc = { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } };
+        const plain = [sys('sys'), usr('hi'), { role: 'assistant', content: 'x', tool_calls: [tc] }, tl('r')];
+        assert.strictEqual(withReasoningContent(plain), plain, 'no reasoning -> same reference');
+
+        const withR = [usr('hi'), { role: 'assistant', content: 'x', tool_calls: [tc], reasoningContent: 'thought', providerBlocks: [{ type: 'thinking' }] }];
+        const out = withReasoningContent(withR);
+        assert.equal(out[1].reasoning_content, 'thought');
+        assert.equal('reasoningContent' in out[1], false);
+        assert.equal('providerBlocks' in out[1], false);
+        assert.equal(withR[1].reasoning_content, undefined);
+
+        const padded = withReasoningContent([usr('hi'), { role: 'assistant', content: 'x', tool_calls: [tc] }, tl('r')], true);
+        assert.equal(padded[1].reasoning_content, '');
+        assert.equal('reasoning_content' in withReasoningContent([{ role: 'assistant', content: 'plain' }], true)[0], false);
+        assert.equal(withReasoningContent([{ role: 'assistant', content: 'x', tool_calls: [tc], reasoningContent: '' }], true)[0].reasoning_content, '');
+        assert.equal(withReasoningContent([{ role: 'assistant', content: 'x', tool_calls: [tc], reasoningContent: 'x'.repeat(50_000) }])[0].reasoning_content.length, 50_000);
+    }
+
+    console.log('wire-protocols: finalized calls, budget aliases, foreign carriers, cache tail-note, reasoning replay and Google IDs passed');
 } finally { globalThis.fetch = originalFetch; }

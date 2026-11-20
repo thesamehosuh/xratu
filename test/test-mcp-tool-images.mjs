@@ -231,8 +231,6 @@ function base64OfBytes(n) {
     // Regression: the isError path read `c.text` off unvalidated entries, so a
     // null block threw INSIDE the try and the catch turned the server's real
     // error into a generic "MCP Call Error" after a wasted reconnect retry.
-    ok('a null block in an ERROR payload does not throw',
-        (() => { try { mapMcpToolContent([null], 'browser_click'); return true; } catch { return false; } })());
     ok('a null block in an ERROR payload keeps the sibling text',
         mapMcpToolContent([null, { type: 'text', text: 'element not found' }], 'browser_click').text
             === 'element not found');
@@ -283,7 +281,6 @@ function base64OfBytes(n) {
     ok('the aggregate BYTE total is capped',
         kept <= MAX_TOOL_IMAGE_TOTAL_BYTES, `kept ${(kept / 1024 / 1024).toFixed(1)} MB of ${MAX_TOOL_IMAGE_TOTAL_BYTES / 1024 / 1024} MB`);
     ok('the byte overflow is stated in text', /per-result total/.test(h.text), h.text.slice(0, 160));
-    ok('the caps did not swallow the text', typeof h.text === 'string');
 }
 {
     // A result with exactly the cap is not truncated by it.
@@ -315,8 +312,6 @@ eq('empty base64 is zero bytes', base64ByteLength(''), 0);
     const img = { mimeType: 'image/png', dataBase64: PNG_1x1 };
     eq('no images means a plain string result', toolResultContent('done', undefined, 'data-uri'), 'done');
     eq('an empty image array means a plain string result', toolResultContent('done', [], 'data-uri'), 'done');
-    eq('text alone with images present is unchanged',
-        toolResultContent('done', [], 'data-uri'), 'done');
 
     const parts = toolResultContent('done', [img], 'data-uri');
     ok('a multimodal result is an array', Array.isArray(parts));

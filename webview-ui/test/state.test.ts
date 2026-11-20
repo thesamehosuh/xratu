@@ -30,7 +30,7 @@ for (const end of ['fullResponse', 'byokReset', 'error']) {
 // 2. Happy path
 s = createInitialChatState();
 s = reduceChat(s, M('startResponse'));
-ok(s.busy && s.streamingId, 'startResponse sets busy+streaming');
+ok(Boolean(s.busy && s.streamingId), 'startResponse sets busy+streaming');
 const sid = s.streamingId!;
 s = reduceChat(s, M('chunk', { value: 'سلام' }));
 s = reduceChat(s, M('chunk', { value: ' دنیا' }));
@@ -106,7 +106,7 @@ s = reduceChat(s, M('error', { value: 'tools failed' }));
 st = s.messages.find((m) => m.id === sid4)!;
 ok(st.status === 'error' && st.steps.length === 1, 'steps content preserved');
 ok(
-    st.steps[0].kind === 'toolCall' && st.steps[0].callId === 'tc1' && st.steps[0].result,
+    Boolean(st.steps[0].kind === 'toolCall' && st.steps[0].callId === 'tc1' && st.steps[0].result),
     'error path keeps the original tool step with its result'
 );
 ok(st.errorText === 'tools failed', 'steps-only failure reason kept');
@@ -121,7 +121,7 @@ s = reduceChat(s, M('sendFailed', { value: 'rejected' }));
 st = s.messages.find((m) => m.id === sid5)!;
 ok(st.status === 'error' && st.errorText === 'rejected', 'sendFailed steps-only reason kept');
 ok(
-    st.steps.length === 1 && st.steps[0].kind === 'toolCall' && st.steps[0].callId === 'tc2' && st.steps[0].result,
+    Boolean(st.steps.length === 1 && st.steps[0].kind === 'toolCall' && st.steps[0].callId === 'tc2' && st.steps[0].result),
     'sendFailed path keeps the original tool step with its result'
 );
 
@@ -133,7 +133,7 @@ ok(s.messages.length === 1 && s.messages[0].role === 'user', 'restoreUser append
 // 9. Out-of-order thinking before startResponse
 s = createInitialChatState();
 s = reduceChat(s, M('thinking', { value: 'pre' }));
-ok(s.streamingId, 'thinking creates streaming msg');
+ok(Boolean(s.streamingId), 'thinking creates streaming msg');
 s = reduceChat(s, M('fullResponse', { persian: 'x' }));
 ok(s.streamingId === null, 'fullResponse after pre-stream thinking');
 
@@ -168,7 +168,7 @@ ok(s.streamingId === null, 'stress fullResponse clears');
 s = createInitialChatState();
 s = reduceChat(s, M('needsApproval', { approval_id: 'a1', approvals: [{ tool_call_id: 't1', tool_name: 'edit_file' }] }));
 ok(s.messages.length === 1 && s.messages[0].tone === 'pending', 'needsApproval pending msg');
-ok(s.messages[0].approval && s.messages[0].approval.approval_id === 'a1', 'approval payload attached');
+ok(Boolean(s.messages[0].approval && s.messages[0].approval.approval_id === 'a1'), 'approval payload attached');
 s = reduceChat(s, M('needsApproval', { approval_id: 'a2', approvals: [{ tool_call_id: 't2', tool_name: 'edit_file' }] }));
 ok(s.messages.length === 2, 'two stacked approvals both visible');
 s = reduceChat(s, M('approvalResolved', { approval_id: 'a1' }));
@@ -532,7 +532,7 @@ s = reduceChat(s, M('decisionRequest', {
 const twoQ = s.messages.find((m) => m.id === twoQStreamingId)!;
 ok(s.messages.length === 1, 'both questions live on the same bubble');
 ok(twoQ.decisions?.length === 2, 'second question appends beside the first');
-ok(twoQ.decisions?.[0]?.decision_id === 'q1' && twoQ.decisions[0].answered, 'first record survives and is settled');
+ok(Boolean(twoQ.decisions?.[0]?.decision_id === 'q1' && twoQ.decisions[0].answered), 'first record survives and is settled');
 ok(twoQ.decisions?.[1]?.decision_id === 'q2' && !twoQ.decisions[1].answered, 'second question is the open card');
 s = reduceChat(s, M('decisionResolved', { decision_id: 'q2', answer: 'D' }));
 ok(

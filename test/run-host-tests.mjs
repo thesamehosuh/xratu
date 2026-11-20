@@ -249,8 +249,9 @@ if (fresh) {
     compileSkipped = true;
     console.log('host-tests: out/ is already current (fingerprint match) - skipping tsc');
 } else {
-    console.log('host-tests: compiling host (npm run compile-tests)');
-    const compile = crossSpawnSync('npm', ['run', '--silent', 'compile-tests'], {
+    const tscBin = require.resolve('typescript/bin/tsc');
+    console.log('host-tests: compiling host (tsc -p . --outDir out)');
+    const compile = crossSpawnSync(process.execPath, [tscBin, '-p', '.', '--outDir', 'out'], {
         cwd: repoRoot,
         stdio: 'inherit',
     });
@@ -351,6 +352,12 @@ function modulesLoadedBy(file, seen = new Set()) {
             for (const m of modulesLoadedBy(abs, seen)) modules.add(m);
         }
     }
+    // Also detect AST-sliced or esbuild-bundled `src/*.ts` source references
+    // (e.g. `new URL('../src/extension.ts', ...)` or `'src/engines/...'`).
+    const srcRe = /['"](?:\.\.?[\\/])*src[\\/]([^'"]+?)\.ts['"]/g;
+    while ((match = srcRe.exec(source)) !== null) {
+        modules.add(match[1].replace(/\\/g, '/'));
+    }
     return modules;
 }
 
@@ -436,27 +443,53 @@ if (opts.changedRequested) console.log(`host-tests: --changed: ${selection.reaso
  * 4. Run them
  * ------------------------------------------------------------------ */
 
-function defaultJobs() {
-    // WINDOWS DEFAULTS TO SERIAL, on purpose.
-    //
-    // `test:background-jobs` and `test:background-recovery` spawn REAL
-    // processes and assert wall-clock windows (idle timeout, output retention,
-    // a start token appearing within a deadline). In a worker pool they starve
-    // each other and those timing assertions flake - observed on CI: main is
-    // green with a serial runner, and the parallel run went red on
-    // windows-latest while ubuntu and macos stayed green.
-    //
-    // WINDOWS-FIRST means the default must be the one that cannot flake, not
-    // the one that is fastest. `--jobs N` / XRATU_TEST_JOBS still opt into
-    // parallelism for anyone who wants it.
-    if (process.platform === 'win32') return 1;
+// Suites that spawn real background processes and assert wall-clock windows
+// (idle timeout, output retention, live-process death). On Windows, running
+// these concurrently in a worker pool starves process startup and flakes.
+// Run ONLY these serially on Windows; all other isolated suites run in parallel.
+const TIMING_SENSITIVE_SUITES = new Set([
+    'background-jobs',
+    'background-recovery',
+    'process-tree',
+]);
 
+// Slowest suites start first (Longest Job First) so they never sit at the tail
+// of the parallel worker queue while every other worker sits idle.
+const SLOW_SUITE_PRIORITY = new Map([
+    ['background-jobs', 1],
+    ['engines', 2],
+    ['downloads', 3],
+    ['shadow-checkpoint', 4],
+    ['shiki-langs', 5],
+    ['web-research', 6],
+    ['subagent-runner', 7],
+    ['opencode-coordinator', 8],
+    ['session-coordinator', 9],
+    ['browser', 10],
+    ['archives', 11],
+    ['pull-requests', 12],
+    ['vsix-contents', 13],
+    ['session-store', 14],
+    ['oauth-token-manager', 15],
+    ['proxy', 16],
+]);
+
+function orderByDuration(list) {
+    return [...list].sort((a, b) => {
+        const pa = SLOW_SUITE_PRIORITY.get(a) ?? 999;
+        const pb = SLOW_SUITE_PRIORITY.get(b) ?? 999;
+        return pa !== pb ? pa - pb : a.localeCompare(b);
+    });
+}
+
+function defaultJobs() {
     let n;
     try {
         n = os.availableParallelism();
     } catch {
         n = os.cpus().length;
     }
+    if (process.platform === 'win32') return Math.min(4, Math.max(2, n - 1));
     return Math.min(8, Math.max(2, n - 1));
 }
 
@@ -464,18 +497,30 @@ const envJobs = Number(process.env.XRATU_TEST_JOBS);
 const requestedJobs = opts.jobs > 0 ? opts.jobs : (envJobs > 0 ? envJobs : defaultJobs());
 const jobs = Math.max(1, Math.min(suites.length || 1, requestedJobs));
 
-function runSuite(script) {
+/**
+ * Resolve a `test:*` script to a direct `node <file>` invocation whenever the
+ * script is a simple `node <path>` command. Skipping `npm run` avoids ~88
+ * `npm.cmd` + node wrapper startups on Windows (saving >60s per CI leg).
+ */
+function resolveSuiteCommand(script) {
+    const raw = (pkg.scripts?.[script] ?? '').trim();
+    const match = /^node\s+(\S+)$/.exec(raw);
+    if (match) {
+        return { cmd: process.execPath, args: [match[1]] };
+    }
+    return { cmd: 'npm', args: ['run', '--silent', script] };
+}
+
+function runSuite(script, serial) {
     const started = Date.now();
-    if (jobs === 1) {
-        // Serial mode keeps the original streaming behaviour verbatim, so
-        // `--jobs 1` is a faithful escape hatch when interleaving is what you
-        // are actually trying to debug.
+    const { cmd, args } = resolveSuiteCommand(script);
+    if (serial) {
         process.stdout.write(`\n=== ${script} ===\n`);
-        const res = crossSpawnSync('npm', ['run', '--silent', script], { cwd: repoRoot, stdio: 'inherit' });
+        const res = crossSpawnSync(cmd, args, { cwd: repoRoot, stdio: 'inherit' });
         return Promise.resolve({ script, passed: res.status === 0, status: res.status, ms: Date.now() - started, output: '' });
     }
     return new Promise((resolve) => {
-        const child = crossSpawn('npm', ['run', '--silent', script], {
+        const child = crossSpawn(cmd, args, {
             cwd: repoRoot,
             stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -501,25 +546,43 @@ function runSuite(script) {
 }
 
 const startedAt = Date.now();
-const results = new Array(suites.length);
-let cursor = 0;
+const orderedSuites = orderByDuration(suites);
+const serialSuites = (process.platform === 'win32' && jobs > 1)
+    ? orderedSuites.filter((s) => TIMING_SENSITIVE_SUITES.has(s))
+    : [];
+const parallelSuites = (process.platform === 'win32' && jobs > 1)
+    ? orderedSuites.filter((s) => !TIMING_SENSITIVE_SUITES.has(s))
+    : orderedSuites;
 
-async function worker() {
-    for (;;) {
-        const index = cursor++;
-        if (index >= suites.length) return;
-        const script = `${PREFIX}${suites[index]}`;
-        const result = await runSuite(script);
-        results[index] = result;
-        if (jobs > 1) {
-            process.stdout.write(
-                `${result.passed ? 'ok  ' : 'FAIL'} ${result.script} (${(result.ms / 1000).toFixed(1)}s)\n`,
-            );
+const results = [];
+
+async function runPool(list, workerCount) {
+    if (list.length === 0) return;
+    const poolResults = new Array(list.length);
+    let cursor = 0;
+    const streamDirect = workerCount === 1 && jobs === 1;
+    async function worker() {
+        for (;;) {
+            const index = cursor++;
+            if (index >= list.length) return;
+            const script = `${PREFIX}${list[index]}`;
+            const result = await runSuite(script, streamDirect);
+            poolResults[index] = result;
+            if (!streamDirect) {
+                process.stdout.write(
+                    `${result.passed ? 'ok  ' : 'FAIL'} ${result.script} (${(result.ms / 1000).toFixed(1)}s)\n`,
+                );
+            }
         }
     }
+    await Promise.all(Array.from({ length: Math.min(workerCount, list.length) }, worker));
+    results.push(...poolResults);
 }
 
-await Promise.all(Array.from({ length: jobs }, worker));
+await runPool(parallelSuites, jobs);
+if (serialSuites.length > 0) {
+    await runPool(serialSuites, 1);
+}
 
 const durationMs = Date.now() - startedAt;
 const failed = results.filter((r) => !r.passed);

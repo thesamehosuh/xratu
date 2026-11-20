@@ -64,7 +64,7 @@ function handler(refresh, overrides = {}) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'xratu-oauth-test-'));
 const managerFor = (store, extra = {}) => new OAuthTokenManager({ store, lockDir: tmp, ...extra });
 const ctx = { fetch: async () => { throw new Error('handler.fetch unused in these tests'); } };
-const noStore = memoryStore();
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } });
 
 // --- happy paths -----------------------------------------------------------------
 {
@@ -574,7 +574,6 @@ const endpointOpts = (fetchImpl, tokens = EXPIRED) => ({
     await Promise.all([refresh, signIn]);
     check('sign-in shares refresh mutation discipline', store.data.get('k'), RENEWED);
 }
-check('fixture store readable', typeof noStore.read, 'function');
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failed === 0 ? '\noauth-token-manager tests: all passed' : `\noauth-token-manager tests: ${failed} FAILED`);
