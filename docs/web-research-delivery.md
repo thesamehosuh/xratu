@@ -106,6 +106,7 @@ user's choice to require approvals. Plan still deterministically rejects mutatio
   p50 3.2 s / p95 7.9 s. Do not count zero-time cooldown refusals as fast retrieval.
   No conversation IDs were rotated to bypass quotas. Anonymous services are
   useful for light research, not guaranteed production capacity.
+- See the [release readiness audit](release-audit.md) for the broader release review.
 - Native public search was exercised in isolated configuration/data directories
   against pinned 2.0.30 and custom 2.1.2. The pinned runtime accepted Exa but did
   not expose a Parallel provider; custom 2.1.2 accepted both. Xratu therefore

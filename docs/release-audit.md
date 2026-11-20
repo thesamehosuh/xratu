@@ -140,10 +140,9 @@ Summary counts: **2 Blockers (P0)**, **17 High (P1)**, **22 Medium (P2)**, plus 
   - **Google Gemini (`wireAdapters.ts:1638`):** When `recent[0]` lacks `providerBlocks`, line 1638 pushes a separate `{ role: 'model', parts }` without merging into the preceding `role: 'model'` checkpoint (unlike line 1615) → Gemini HTTP 400.
 - **Suggested fix:** In `toMessagesBody`, avoid prepending a `text` block ahead of `thinking`/`redacted_thinking` blocks (or place checkpoint as a `user` context turn); in `toGoogleBody:1638`, merge consecutive `role: 'model'` entries as line 1615 does.
 
-#### H14. SSRF bypass for `localhost` / `*.localhost` via `start_download` with `route: 'proxy'`
-- **Files:** `src/webTools.ts:111-141`, `src/downloads/manager.ts:238-241, 437-446`, `src/proxy.ts:166-176`
-- **Failure scenario:** `validatePublicUrl()` checks IP literals unconditionally, but skips hostname validation when `proxyConfigured === true`. With any configured proxy (e.g. Clash/v2rayN), `start_download` with `route: 'proxy'` skips `isLikelyLocalUrl` (`proxy.ts:172`), passes `proxied = true` to `validatePublicUrl()`, and allows `http://localhost:11434/...` or `http://foo.localhost:9229/...` through the local proxy into the workspace.
-- **Suggested fix:** Unconditionally refuse `bare === 'localhost' || bare.endsWith('.localhost')` (RFC 6761 loopback names) before the `else if (!proxyConfigured)` branch in `validatePublicUrl()`.
+#### H14. Download destination validation
+
+Review download destination validation before release. Keep reproduction details in the maintainer security workflow.
 
 ---
 
@@ -222,7 +221,7 @@ Summary counts: **2 Blockers (P0)**, **17 High (P1)**, **22 Medium (P2)**, plus 
 
 ### R1. Version / Tag / Release Notes / CI Gate Mismatch (Must Resolve Before Tagging)
 - **Version drift:** `package.json` is `"3.0.1"`, latest git tag is `v2.4.3`, and `.github/release-notes/v3.1.0.md` exists (no `v3.0.0.md` or `v3.0.1.md`). Pick one final stable version and align `package.json`, the git tag, and `.github/release-notes/<tag>.md`.
-- **`.github/workflows/release.yml` gaps:**
+- **`.github/workflows/release.yml` gaps at the audited baseline:** The tag workflow runs the host and webview type checks and webview unit tests before packaging. Pull request CI also runs lint, host tests, and browser tests.
   - Never verifies `package.json`'s `"version"` equals `${RELEASE_TAG#v}` — tagging `v3.1.0` with `package.json` at `3.0.1` silently publishes `xratu-v3.1.0.vsix` carrying manifest version `3.0.1`.
   - Omits `HUSKY: '0'` (which `.github/workflows/ci.yml:27` sets to prevent `npm ci` prepare failures), `npm run lint`, and `npm run test:host` (including `test:vsix-contents`).
   - Publishes only to GitHub Releases — VS Code Marketplace publishing (`vsce publish`) is manual; remember to upload or wire it deliberately.
@@ -265,7 +264,7 @@ Measured on `xratu-3.0.1.vsix` (**41.4 MB uncompressed / 9.1 MB VSIX**):
 ## Post-Release Repo Cleanup Checklist (After Tagging Stable, Before Desktop App)
 
 1. **Local workspace clutter:** Delete 7 root `.vsix` files (`xratu-3.0.0.vsix`–`xratu-3.1.2.vsix`, ~63 MB) plus local `test-results/`, `output/`, `dist-tests/`.
-2. **Tracked repo artifacts:** Delete tracked AI Studio leftover `metadata.json`; decide whether to delete or archive `docs/design/` (75 files, 5.3 MB) and `docs/completion/` (v2.2.4 audit docs).
+2. **Tracked repo artifacts:** Delete tracked AI Studio leftover `metadata.json`; decide whether to delete or archive `docs/design/` (75 files, 5.3 MB).
 3. **Git hygiene:** Delete stale local branches (58 total, ~50 merged/squash-merged), prune 5 stale worktrees (`git worktree prune` + remove `xratu-warning-error-layout`), and close/merge the 5 open Dependabot PRs. (`.git` is 172 MB largely due to `assets/brand/` video/GIF history — leave history alone and start the desktop app repo fresh.)
 
 ---
