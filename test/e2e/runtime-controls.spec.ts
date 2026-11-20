@@ -49,6 +49,7 @@ test('provider onboarding, Ollama download progress, cancellation and confirmed 
     await host(page, { type: 'savedCredentials', credentials: [] });
     await host(page, { type: 'openCredentials' });
     await host(page, { type: 'localModelsDiscovered', runtimes: [runtime] });
+    await page.getByRole('button', { name: 'Add connection', exact: true }).click();
     await page.locator('.cred-provider-box input').fill('Avalai');
     await page.keyboard.press('Enter');
     await expect(page.getByRole('link', { name: 'Sign up and add credit · Avalai' })).toHaveAttribute('href', 'https://chat.avalai.ir/platform');

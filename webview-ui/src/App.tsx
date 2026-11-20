@@ -1499,12 +1499,12 @@ export function App() {
                         send({ type: 'listModels' });
                     }}
                     modelsRefreshing={modelsRefreshing}
-                    onSave={(base_url, api_key) => send({ type: 'saveLlmCredentials', base_url, api_key, returnToChat: !embedded && savedCredentials.length === 0 })}
+                    onSave={(base_url, api_key) => { setByokError(null); send({ type: 'saveLlmCredentials', base_url, api_key, returnToChat: !embedded && savedCredentials.length === 0 }); }}
                     onSelectCredential={(id) => embedded ? setSetupCredentialId(id) : send({ type: 'selectLlmCredential', id })}
                     onDeleteCredential={(id) => send({ type: 'deleteLlmCredential', id })}
                     onUpdateCredential={(id, api_key) => send({ type: 'updateLlmCredential', id, api_key })}
                     onDiscoverLocalModels={startLocalScan}
-                    onSaveLocalRuntime={(baseUrl, apiKey) => send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: !embedded && savedCredentials.length === 0 })}
+                    onSaveLocalRuntime={(baseUrl, apiKey) => { setByokError(null); send({ type: 'saveLlmCredentials', base_url: baseUrl, api_key: apiKey ?? '', returnToChat: !embedded && savedCredentials.length === 0 }); }}
                     oauthState={oauthState}
             onOAuthSignIn={(providerId, method, credentialId) => { setOauthCopyResult(null); send({ type: 'oauthSignIn', providerId, method, credentialId }); }}
             onOAuthCopy={(value, requestId) => { setOauthCopyResult(null); send({ type: 'copyToClipboard', value, requestId }); }}
