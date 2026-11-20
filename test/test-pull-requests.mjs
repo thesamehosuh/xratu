@@ -123,7 +123,7 @@ test('withdrawing all events releases failed/interrupted deliveries and lets ano
         f.update({ mergeability: 'conflicting' });
         await f.service.sweep();
         const ids = (await f.load()).events.map(event => event.id);
-        await f.service.beginDelivery(context, ids);
+        const claim = await f.service.beginDelivery(context, ids);
         if (status !== 'running') await f.store.update(context.sessionId, context.workspace, state => { state.delivery.status = status; });
         await f.service[cancel](context, target);
         assert.deepEqual((await f.load()).events, []);
@@ -137,11 +137,11 @@ test('withdrawing all events releases failed/interrupted deliveries and lets ano
         const nextIds = (await f.load()).events.map(event => event.id);
         assert.ok(nextIds.length);
         if (status === 'running') {
-            assert.deepEqual(await f.service.beginDelivery(context, nextIds), []);
-            await f.service.finishDelivery(context, ids, false);
+            assert.equal(await f.service.beginDelivery(context, nextIds), undefined);
+            await f.service.finishDelivery(context, claim.attemptId, false);
         }
         assert.equal((await f.load()).delivery, undefined);
-        assert.equal((await f.service.beginDelivery(context, nextIds)).length, nextIds.length);
+        assert.equal((await f.service.beginDelivery(context, nextIds)).events.length, nextIds.length);
     }
 });
 
@@ -152,8 +152,8 @@ test('withdrawing only part of a failed delivery retains the remaining PR update
     f.update({ mergeability: 'conflicting' });
     await f.service.sweep();
     const ids = (await f.load()).events.map(event => event.id);
-    await f.service.beginDelivery(context, ids);
-    await f.service.finishDelivery(context, ids, false);
+    const claim = await f.service.beginDelivery(context, ids);
+    await f.service.finishDelivery(context, claim.attemptId, false);
     await f.service.unwatch(context, target);
     const state = await f.load();
     assert.equal(state.events.length, 1);
@@ -282,13 +282,23 @@ test('another window cannot claim an already-running delivery', async () => {
     f.update({ mergeability: 'conflicting' });
     await f.service.sweep();
     const ids = (await f.load()).events.map(event => event.id);
-    assert.equal((await f.service.beginDelivery(context, ids)).length, 1);
+    const first = await f.service.beginDelivery(context, ids);
+    assert.equal(first.events.length, 1);
+    const savedToken = (await f.load()).delivery.ownerToken;
+    await f.store.update(context.sessionId, context.workspace, state => { delete state.delivery.ownerToken; });
+    await f.service.sweep();
+    assert.equal((await f.load()).delivery.status, 'running', 'legacy deliveries protect a still-live owner');
+    await f.store.update(context.sessionId, context.workspace, state => { state.delivery.ownerToken = savedToken; });
     const second = new PullRequestService(new PullRequestStore(f.storage), f.provider);
-    assert.deepEqual(await second.beginDelivery(context, ids), []);
-    await f.service.finishDelivery(context, ids, false);
+    assert.equal(await second.beginDelivery(context, ids), undefined);
+    await f.service.finishDelivery(context, first.attemptId, false);
     assert.equal((await f.load()).delivery.status, 'failed');
-    assert.equal((await second.beginDelivery(context, ids, true)).length, 1);
-    await second.finishDelivery(context, ids, true);
+    const retry = await second.beginDelivery(context, ids, true);
+    assert.equal(retry.events.length, 1);
+    await f.service.finishDelivery(context, first.attemptId, true);
+    assert.equal((await f.load()).delivery.attemptId, retry.attemptId);
+    assert.equal((await f.load()).events.length, 1);
+    await second.finishDelivery(context, retry.attemptId, true);
     assert.deepEqual((await f.load()).events, []);
 });
 

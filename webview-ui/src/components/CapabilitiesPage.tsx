@@ -400,7 +400,7 @@ export function CapabilitiesPage({
     } | null>(null);
     const sentMarketQuery = useRef('');
     const [draft, setDraft] = useState<Draft | null>(null);
-    const [discardDraft, setDiscardDraft] = useState(false);
+    const [discardDraft, setDiscardDraft] = useState<'close' | 'back' | null>(null);
     const [draftInitial, setDraftInitial] = useState<Draft | null>(null);
     const [draftError, setDraftError] = useState<string | null>(null);
     /** Amber, non-blocking note in the editor (e.g. a guessed install). */
@@ -479,7 +479,7 @@ export function CapabilitiesPage({
     };
 
     const clearEditor = () => {
-        setDiscardDraft(false);
+        setDiscardDraft(null);
         setDraft(null);
         setDraftInitial(null);
         setDraftError(null);
@@ -488,13 +488,24 @@ export function CapabilitiesPage({
 
     const draftName = useRef<HTMLInputElement>(null);
     const resumeEditing = () => {
-        setDiscardDraft(false);
+        setDiscardDraft(null);
         requestAnimationFrame(() => draftName.current?.focus());
     };
     const closeEditor = () => {
         if (discardDraft) resumeEditing();
-        else if (draftDirty) setDiscardDraft(true);
+        else if (draftDirty) setDiscardDraft('close');
         else clearEditor();
+    };
+
+    const goBack = () => {
+        if (draftDirty) setDiscardDraft('back');
+        else onBack();
+    };
+
+    const discardEditor = () => {
+        const leavePage = discardDraft === 'back';
+        clearEditor();
+        if (leavePage) onBack();
     };
 
     const stripView = (s: McpServerView | McpServerPayload): McpServerPayload => {
@@ -799,7 +810,7 @@ export function CapabilitiesPage({
                 <h3>{t('mcpDiscardConfirm')}</h3>
                 <div className="mcp-form-actions">
                     <button type="button" className="settings-ghost-action" ref={button => { button?.focus(); }} onClick={resumeEditing}>{t('mcpKeepEditing')}</button>
-                    <button type="button" className="mcp-save" onClick={clearEditor}>{t('mcpDiscard')}</button>
+                    <button type="button" className="mcp-save" onClick={discardEditor}>{t('mcpDiscard')}</button>
                 </div>
             </div>
         );
@@ -1346,7 +1357,7 @@ export function CapabilitiesPage({
                 <button
                     type="button"
                     className="ghost-btn small"
-                    onClick={onBack}
+                    onClick={goBack}
                     aria-label={t('credBack')}
                     title={t('credBack')}
                 >

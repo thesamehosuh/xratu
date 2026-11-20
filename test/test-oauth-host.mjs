@@ -295,6 +295,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     const h = hostMethods(['_manageLocalModel', '_forgetCredentialModel', '_credentialModelMap'], {
         isLoopbackUrl: require('../out/networkPolicy.js').isLoopbackUrl,
         manageOllamaModel: async () => {},
+        sameOllamaEndpoint: require('../out/local/ollamaManagement.js').sameOllamaEndpoint,
     });
     h._globalState = { get: (key) => state.get(key), update: async (key, value) => state.set(key, value) };
     h._secrets = { delete: async (key) => deletedSecrets.push(key) };
@@ -306,7 +307,7 @@ console.log('oauth-host: latency probe preserves the subscription wire contract 
     h._fetchModels = async () => {
         assert.equal(JSON.parse(state.get('xratu.modelsByCredential')).local, undefined, 'deleted model cannot be restored during refresh');
     };
-    await h._manageLocalModel('delete', 'http://localhost:11434/v1', 'deleted-model');
+    await h._manageLocalModel('delete', 'http://localhost:11434', 'deleted-model');
     assert.equal(h._selectedModel, null);
     assert.deepEqual(JSON.parse(state.get('xratu.modelsByCredential')), { other: 'keep-model' });
     assert.deepEqual(deletedSecrets, ['xratu.selectedModel']);

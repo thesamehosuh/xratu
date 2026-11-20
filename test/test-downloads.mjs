@@ -548,6 +548,12 @@ try {
         }
         const manifest = path.join(await metadataDirectory(f), 'manifest.json');
         const records = JSON.parse(await fs.readFile(manifest, 'utf8'));
+        const legacy = { ...records[0], id: 'fcb55263-f1a7-4480-b8cb-a7eb27f5e8c8', path: 'models/aux.bin', status: 'paused' };
+        await fs.writeFile(manifest, JSON.stringify([...records, legacy]));
+        const mixed = await restore(f);
+        assert.equal(mixed.views().find(record => record.id === r.id).status, 'completed');
+        assert.equal(mixed.views().find(record => record.id === legacy.id).status, 'failed');
+        await mixed.dispose();
         records[0].path = '../escape.bin'; await fs.writeFile(manifest, JSON.stringify(records));
         const blocked = new DownloadManager(f.root, f.storage, f.deps); managers.push(blocked);
         await assert.rejects(blocked.ready, /downloadFileError/);

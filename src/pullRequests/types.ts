@@ -50,7 +50,7 @@ export interface PullRequestEvent {
     omittedItems?: number;
     resume?: PullRequestExecution;
 }
-export interface PullRequestDelivery { ids: string[]; status: 'running' | 'interrupted' | 'failed'; owner: number; ownerToken?: string }
+export interface PullRequestDelivery { ids: string[]; status: 'running' | 'interrupted' | 'failed'; owner: number; ownerToken?: string; attemptId?: string }
 export interface PullRequestSession {
     version: 1; sessionId: string; workspace: string; links: PullRequestLink[];
     events: PullRequestEvent[]; delivery?: PullRequestDelivery; deleted?: true;

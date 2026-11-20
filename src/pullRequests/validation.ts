@@ -45,5 +45,6 @@ export function validatePullRequestSession(value: unknown, id: string, workspace
         if (!text(item.id, 150) || item.key !== pullRequestKey(target) || item.number !== target.number || !date(item.createdAt) || !sha(item.headSha) || !Array.isArray(item.changes) || item.changes.length > 4 || !item.changes.every(change) || (item.resume !== undefined && !execution(item.resume)) || (item.reason !== undefined && !['closed', 'merged', 'unreadable', 'comment-limit'].includes(String(item.reason)))) invalid();
     }
     const delivery = state.delivery;
-    if (delivery !== undefined && (!row(delivery) || !strings(delivery.ids) || !['running', 'interrupted', 'failed'].includes(String(delivery.status)) || !Number.isSafeInteger(delivery.owner) || Number(delivery.owner) <= 0 || Number(delivery.owner) > 0x7fffffff || (delivery.ownerToken !== undefined && typeof delivery.ownerToken !== 'string'))) invalid();
+    if (delivery !== undefined && (!row(delivery) || !strings(delivery.ids) || !['running', 'interrupted', 'failed'].includes(String(delivery.status)) || !Number.isSafeInteger(delivery.owner) || Number(delivery.owner) <= 0 || Number(delivery.owner) > 0x7fffffff || (delivery.ownerToken !== undefined && typeof delivery.ownerToken !== 'string')
+        || (delivery.attemptId !== undefined && (typeof delivery.attemptId !== 'string' || !/^[0-9a-f-]{36}$/.test(delivery.attemptId))))) invalid();
 }

@@ -366,16 +366,6 @@ test('the actual agent never approves or executes a damaged partial batch', asyn
     assert.equal(executed, 0);
     assert.equal(approved, 0);
 });
-let failures = 0;
-try {
-    for (const { name, fn } of tests) {
-        try { await fn(); console.log(`PASS ${name}`); }
-        catch (error) { failures++; console.error(`FAIL ${name}: ${error.message}`); }
-    }
-} finally { globalThis.fetch = originalFetch; }
-console.log(`stream-integrity: ${tests.length - failures}/${tests.length} passed`);
-process.exitCode = failures ? 1 : 0;
-
 test('index-less Chat tool calls keep their identity around nullable compatibility deltas', async () => {
     const chat = (delta, finish_reason) => event({ choices: [{ delta, finish_reason }] });
     const run = await read('chat', [
@@ -399,3 +389,13 @@ test('Google anonymous tool IDs survive separate rounds and a partless final can
     const next = await (await read('google', frames)).result;
     assert.notEqual(first.toolCalls[0].id, next.toolCalls[0].id);
 });
+
+let failures = 0;
+try {
+    for (const { name, fn } of tests) {
+        try { await fn(); console.log(`PASS ${name}`); }
+        catch (error) { failures++; console.error(`FAIL ${name}: ${error.message}`); }
+    }
+} finally { globalThis.fetch = originalFetch; }
+console.log(`stream-integrity: ${tests.length - failures}/${tests.length} passed`);
+process.exitCode = failures ? 1 : 0;

@@ -112,7 +112,7 @@ function ripgrepTargets(platform: NodeJS.Platform, arch: string): string[] {
 function searchOperand(root: string, file: string): string {
     const relative = path.relative(root, file);
     if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) return file;
-    return relative || '.';
+    return relative === '-' ? '.' + path.sep + relative : relative || '.';
 }
 
 export function ripgrepCandidates(opts: {

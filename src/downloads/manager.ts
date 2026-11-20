@@ -52,10 +52,11 @@ function contentLength(value: string | null): number | null {
     return Number(value);
 }
 function validator(record: DownloadRecord): string | undefined { return record.etag ?? record.lastModified; }
-function validateRecordPath(value: string): void {
+function validateRecordPath(value: string, requirePortable = true): void {
     const parts = value.split(/[\\/]/);
     if (!value.trim() || path.isAbsolute(value) || path.win32.isAbsolute(value) || /^[a-z]:/i.test(value) || /[\r\n\0]/.test(value)
-        || parts.some(part => !isPortablePathComponent(part) || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))) throw new DownloadFailure('downloadFileError');
+        || parts.every(part => !part || part === '.') || parts.some(part => part === '..' || part.toLowerCase() === '.git' || part.toLowerCase().startsWith('.xratu-download-'))
+        || (requirePortable && parts.some(part => !isPortablePathComponent(part)))) throw new DownloadFailure('downloadFileError');
 }
 
 /** Workspace-owned transfers. Model turns own commands, never transfer lifetimes. */
@@ -148,7 +149,9 @@ export class DownloadManager {
                 || (r.publication !== undefined && (!r.publication || ![r.publication.dev, r.publication.ino, r.publication.size, r.publication.mtimeMs].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0)
                     || r.publication.size !== r.received || r.total !== r.received))
                 || [r.etag, r.lastModified].some(v => v !== undefined && (typeof v !== 'string' || v.length > 1024 || /[\r\n]/.test(v)))) throw new Error('Invalid download record.');
-            validateRecordPath(r.path);
+            // Reject structurally unsafe metadata. A legacy nonportable
+            // destination is handled below as a failure of that transfer.
+            validateRecordPath(r.path, false);
             const source = new URL(r.source);
             if (!['http:', 'https:'].includes(source.protocol) || source.origin !== r.source) throw new Error('Invalid download source.');
             // Never silently restart network/disk work after a host restart.

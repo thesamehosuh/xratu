@@ -19,8 +19,8 @@ VSIX to GitHub Releases. Visual Studio Marketplace publication uses that
 same VSIX through the publisher account. Ask first is now the default when
 there is no saved approval preference.
 
-The fixes are grouped into host and Windows lifecycle, model runtime and
-tools, webview flows, and release packaging. The webview Shiki bundle already
+The release PR covers host and Windows lifecycle, model runtime and tools,
+webview flows, and release packaging. The webview Shiki bundle already
 uses curated grammars and themes on current main. Host Shiki and Playwright
 size reductions can follow the stable release. Packaging now checks that the
 PDF worker and Playwright runtime manifest are present. Checkpoint retention

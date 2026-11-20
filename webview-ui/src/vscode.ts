@@ -703,6 +703,16 @@ function handleStandaloneMessage(message: ToExtensionMessage): void {
             emitToWebview({ type: 'backgroundJobStopped', jobId: message.jobId });
             emitToWebview({ type: 'backgroundJobs', jobs: standaloneJobs });
             break;
+        case 'copyToClipboard': {
+            const requestId = message.requestId;
+            void (async () => {
+                let ok = false;
+                try { await navigator.clipboard.writeText(message.value); ok = true; }
+                catch { /* Standalone clipboard permission was denied. */ }
+                if (requestId) emitToWebview({ type: 'clipboardResult', requestId, ok });
+            })();
+            break;
+        }
         case 'toggleYolo':
             standaloneYolo = !standaloneYolo;
             emitToWebview({ type: 'yoloMode', enabled: standaloneYolo });

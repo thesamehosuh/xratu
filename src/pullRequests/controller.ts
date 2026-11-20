@@ -129,7 +129,7 @@ export class PullRequestController {
         }
         this.delivering = true;
         const generation = this.resumeGeneration;
-        let delivery: { context: PullRequestContext; ids: string[] } | undefined;
+        let delivery: { context: PullRequestContext; attemptId: string } | undefined;
         try {
             const context = { sessionId: before.sessionId, workspace: before.workspace };
             const state = await this.service.store.load(context.sessionId, context.workspace);
@@ -160,14 +160,15 @@ export class PullRequestController {
             }
             const current = this.host.identity();
             if (current.epoch !== before.epoch || current.sessionId !== context.sessionId || current.workspace !== context.workspace || current.busy || current.plan) return;
-            const events = await this.service.beginDelivery(context, candidates.map(event => event.id), manual || existing !== undefined);
-            if (!events.length) return;
-            delivery = { context, ids: events.map(event => event.id) };
+            const claim = await this.service.beginDelivery(context, candidates.map(event => event.id), manual || existing !== undefined);
+            if (!claim) return;
+            const { attemptId, events } = claim;
+            delivery = { context, attemptId };
             if (generation !== this.resumeGeneration) return;
             // The host rechecks admission after the durable claim. A concurrent
             // user turn must not turn this update into an unrelated steer.
             const delivered = await this.host.run(pullRequestEventPrompt(events), before.epoch, [...new Set(events.map(event => event.url))], execution, () => generation === this.resumeGeneration);
-            await this.service.finishDelivery(context, delivery.ids, delivered);
+            await this.service.finishDelivery(context, attemptId, delivered);
             delivery = undefined;
             // Continuing by hand in a new context re-anchors the delivered
             // auto-watches, so the next update resumes here instead of waiting.
@@ -176,7 +177,7 @@ export class PullRequestController {
                 if (keys.length) await this.service.anchorResume(context, keys, execution).catch(this.host.diagnostic);
             }
         } finally {
-            if (delivery) await this.service.finishDelivery(delivery.context, delivery.ids, false);
+            if (delivery) await this.service.finishDelivery(delivery.context, delivery.attemptId, false);
             this.delivering = false;
         }
     }

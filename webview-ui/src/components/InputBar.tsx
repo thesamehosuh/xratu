@@ -982,17 +982,6 @@ export function InputBar({
         };
     }, [ctxOpen]);
 
-    // Host-side attachment rejections render inline in the composer (with the
-    // same auto-dismiss as local errors) - never as chat bubbles.  Keyed by
-    // id so each host post displays exactly once, never a stale repeat.
-    useEffect(() => {
-        if (!hostError) return;
-        // Host posts i18n KEYS in valueKey (value is always ''); tf/tOrRaw
-        // resolves a known key and passes unknown text through unchanged.
-        setAttachError(tf(hostError.valueKey || hostError.value, hostError.params));
-        onHostErrorApplied?.();
-    }, [hostError, onHostErrorApplied]);
-
     const hostAttachmentsApplied = useRef(onInjectedAttachmentsApplied);
     useLayoutEffect(() => { hostAttachmentsApplied.current = onInjectedAttachmentsApplied; });
     // Host-read attachments arriving from an explorer drag (attachUris flow).
@@ -1042,6 +1031,17 @@ export function InputBar({
         })();
         return () => { cancelled = true; };
     }, [injectedAttachments]);
+
+    // Host-side attachment rejections render inline in the composer (with the
+    // same auto-dismiss as local errors) - never as chat bubbles.  Keyed by
+    // id so each host post displays exactly once, never a stale repeat.
+    useEffect(() => {
+        if (!hostError) return;
+        // Host posts i18n KEYS in valueKey (value is always ''); tf/tOrRaw
+        // resolves a known key and passes unknown text through unchanged.
+        setAttachError(tf(hostError.valueKey || hostError.value, hostError.params));
+        onHostErrorApplied?.();
+    }, [hostError, onHostErrorApplied]);
 
     // Paste image data from clipboard.
     const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {

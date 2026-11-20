@@ -644,3 +644,24 @@ test('calm entry hides chips, workspaceKind switches chip sets, and fresh worksp
     expect(await page.evaluate(() => (window as Record<string, unknown>).__xratuHostMessages))
         .toContainEqual(expect.objectContaining({ type: 'askQuestion', value: 'Build a new application' }));
 });
+
+test('message copy shows success only after the host confirms the write', async ({ page }) => {
+    await page.goto('/');
+    await hostMessage(page, { type: 'locale', locale: 'en' });
+    await hostMessage(page, { type: 'showChat' });
+    await hostMessage(page, { type: 'restoreUser', value: 'Copy this message' });
+    const copy = page.locator('article.msg.user').getByRole('button', { name: 'Copy answer' });
+    const latestRequest = () => page.evaluate(() => ((window as Record<string, unknown>).__xratuHostMessages as Array<Record<string, unknown>>)
+        .filter(message => message.type === 'copyToClipboard').at(-1));
+    await copy.click();
+    const failed = await latestRequest();
+    expect(failed).toMatchObject({ requestId: expect.any(String), value: 'Copy this message' });
+    await expect(copy.locator('.lucide-copy')).toBeVisible();
+    await hostMessage(page, { type: 'clipboardResult', requestId: failed?.requestId, ok: false });
+    await expect(copy.locator('.lucide-copy')).toBeVisible();
+    await copy.click();
+    const successful = await latestRequest();
+    expect(successful?.requestId).not.toBe(failed?.requestId);
+    await hostMessage(page, { type: 'clipboardResult', requestId: successful?.requestId, ok: true });
+    await expect(copy.locator('.lucide-check')).toBeVisible();
+});

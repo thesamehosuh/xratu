@@ -16,7 +16,7 @@ import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { isOfflineMode, setOfflineMode, isLoopbackUrl } from './networkPolicy';
-import { manageOllamaModel } from './local/ollamaManagement';
+import { manageOllamaModel, sameOllamaEndpoint } from './local/ollamaManagement';
 import { requestStreamingCompletion } from './local/wireAdapters';
 import { modelStreamErrorMessage } from './local/streamValidation';
 import { getLocalToolDefinitions, createLocalToolExecutor, getOutsideWorkspacePaths } from './mcp';
@@ -1230,11 +1230,16 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
 
     private _attachmentReady = false;
     private _pendingUriAttachments: string[] = [];
+    private _pendingUriAttachmentOverflow = false;
+    private _uriAttachmentTail = Promise.resolve();
 
     _completeWebviewStartup(): void {
-        this._startupPage.complete();
         this._attachmentReady = true;
-        if (this._pendingUriAttachments.length) void this._handleUriAttachments(this._pendingUriAttachments.splice(0));
+        if (this._pendingUriAttachments.length) {
+            this._queueUriAttachments(this._pendingUriAttachments.splice(0), this._pendingUriAttachmentOverflow);
+            this._pendingUriAttachmentOverflow = false;
+        }
+        this._startupPage.complete();
     }
 
     public provideTextDocumentContent(uri: vscode.Uri): string {
@@ -2120,12 +2125,23 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
      *  sidebar webview view cannot receive drag-and-drop, by VS Code design). */
     public async attachUrisPublic(uris: string[]): Promise<void> {
         if (!this._attachmentReady) {
-            this._pendingUriAttachments.push(...uris.slice(0, Math.max(0, ATTACH_MAX_COUNT - this._pendingUriAttachments.length)));
+            const remaining = ATTACH_MAX_COUNT - this._pendingUriAttachments.length;
+            this._pendingUriAttachmentOverflow ||= uris.length > remaining;
+            this._pendingUriAttachments.push(...uris.slice(0, remaining));
             await this.ensureView();
             return;
         }
-        await this.ensureView();
-        await this._handleUriAttachments(uris);
+        await this._queueUriAttachments(uris);
+    }
+
+    private _queueUriAttachments(uris: string[], overflow = false): Promise<void> {
+        const view = this._view;
+        const epoch = this._sessionEpoch;
+        this._uriAttachmentTail = this._uriAttachmentTail.then(async () => {
+            await this.ensureView();
+            if (this._view === view && this._sessionEpoch === epoch) await this._handleUriAttachments(uris, overflow);
+        }).catch(error => diagnosticsChannel?.appendLine(`Attachments: ${String(error)}`));
+        return this._uriAttachmentTail;
     }
 
     /** Palette commands are useless before the panel exists - surface it. */
@@ -4226,7 +4242,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             emit({ busy: false, status: 'success' });
             if (action === 'delete' && this._selectedModel === model) {
                 const active = (await this._getLlmCredentials()).llm_base_url;
-                if (active && new URL(active).origin === new URL(baseUrl).origin) {
+                if (active && sameOllamaEndpoint(active, baseUrl)) {
                     this._selectedModel = null;
                     const credentialId = await this._resolveActiveCredentialId();
                     if (credentialId) await this._forgetCredentialModel(credentialId);
@@ -7690,7 +7706,7 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
     /** Files dragged from the VS Code explorer: the webview only receives
      *  text/uri-list, so the HOST reads the bytes via vscode.workspace.fs,
      *  derives the MIME from the filename and echoes full attachments back. */
-    private async _handleUriAttachments(uris: string[]): Promise<void> {
+    private async _handleUriAttachments(uris: string[], overflow = false): Promise<void> {
         if (!this._view || !uris.length) return;
         const view = this._view;
         const epoch = this._sessionEpoch;
@@ -7763,12 +7779,12 @@ class XratuChatViewProvider implements vscode.WebviewViewProvider, WebviewMessag
             }
         }
         if (!current()) return;
-        if (error) {
-            view.webview.postMessage({ type: 'composerError', value: '', valueKey: error.key, params: error.params });
-        }
         if (attachments.length > 0) {
             view.webview.postMessage({ type: 'attachmentsFromHost', attachments });
         }
+        if (overflow || uris.length > ATTACH_MAX_COUNT) error = { key: 'attachTooMany' };
+        if (error) view.webview.postMessage({ type: 'composerError', value: '', valueKey: error.key, params: error.params });
+
     }
 
     /** Workspace file list for the composer's @-mention popup. Git keep-set

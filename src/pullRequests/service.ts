@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { isOfflineMode } from '../networkPolicy';
-import { captureSelfIdentity, processIdentityStatusAsync } from '../tooling/processIdentity';
+import { captureSelfIdentity, processIdentityStatusAsync, processLivenessStatus } from '../tooling/processIdentity';
 import { PullRequestStore } from './store';
 import { GitHubPullRequests } from './github';
 import { evaluatePullRequestWatch } from './watch';
@@ -45,11 +45,13 @@ export class PullRequestService {
     private async recoverDelivery(context: PullRequestContext, state: PullRequestSession): Promise<PullRequestSession> {
         const delivery = state.delivery;
         if (delivery?.status !== 'running') return state;
-        const status = await processIdentityStatusAsync({ pid: delivery.owner, token: delivery.ownerToken ?? 'unverified' });
+        const identity = { pid: delivery.owner, token: delivery.ownerToken ?? 'unverified' };
+        const status = delivery.ownerToken ? await processIdentityStatusAsync(identity) : processLivenessStatus(identity);
         if (status !== 'gone' && status !== 'different') return state;
         return this.change(context, value => {
             if (value.delivery?.status === 'running' && value.delivery.owner === delivery.owner
-                && value.delivery.ownerToken === delivery.ownerToken && value.delivery.ids.join() === delivery.ids.join()) {
+                && value.delivery.ownerToken === delivery.ownerToken && value.delivery.attemptId === delivery.attemptId
+                && value.delivery.ids.join() === delivery.ids.join()) {
                 value.delivery.status = 'interrupted';
             }
         });
@@ -214,19 +216,21 @@ export class PullRequestService {
             }
         } finally { this.sweeping = false; }
     }
-    async beginDelivery(context: PullRequestContext, ids: string[], retry = false): Promise<PullRequestEvent[]> {
+    async beginDelivery(context: PullRequestContext, ids: string[], retry = false): Promise<{ attemptId: string; events: PullRequestEvent[] } | undefined> {
+        const attemptId = randomUUID();
         let events: PullRequestEvent[] = [];
         const owner = await captureSelfIdentity();
         await this.change(context, state => {
             if (state.delivery && (!retry || state.delivery.status === 'running')) return;
             events = state.events.filter(event => ids.includes(event.id));
-            if (events.length) state.delivery = { ids: events.map(event => event.id), status: 'running', owner: owner.pid, ownerToken: owner.token };
+            if (events.length) state.delivery = { ids: events.map(event => event.id), status: 'running', owner: owner.pid, ownerToken: owner.token, attemptId };
         });
-        return events;
+        return events.length ? { attemptId, events } : undefined;
     }
-    async finishDelivery(context: PullRequestContext, ids: string[], delivered: boolean): Promise<void> {
+    async finishDelivery(context: PullRequestContext, attemptId: string, delivered: boolean): Promise<void> {
         await this.change(context, state => {
-            if (state.delivery?.owner !== process.pid || state.delivery.ids.join() !== ids.join()) return;
+            if (state.delivery?.status !== 'running' || state.delivery.owner !== process.pid || state.delivery.attemptId !== attemptId) return;
+            const ids = state.delivery.ids;
             if (delivered) { state.events = state.events.filter(event => !ids.includes(event.id)); delete state.delivery; }
             else if (!state.delivery.ids.some(id => state.events.some(event => event.id === id))) delete state.delivery;
             else state.delivery.status = 'failed';
