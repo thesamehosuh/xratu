@@ -90,7 +90,7 @@ jobs:
       - name: Cache Playwright Chromium
         id: playwright-cache
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
